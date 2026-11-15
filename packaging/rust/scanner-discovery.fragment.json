@@ -1,0 +1,62 @@
+{
+  "screens": {
+    "min_price": "10",
+    "min_traded_value": "1000000",
+    "min_circuit_distance_bps": "100"
+  },
+  "prefilter": {
+    "enabled": false,
+    "enter_rank": 100,
+    "exit_rank": 150,
+    "shortlist_size": 100,
+    "market_relative_weight": 1.0,
+    "rel_volume_tod_weight": 1.0,
+    "vwap_distance_weight": 1.0,
+    "spread_weight": 1.0
+  },
+  "feature_store": {
+    "max_bars": 375,
+    "min_instruments": 200
+  },
+  "market_feed": {
+    "mode": "ltpc",
+    "depth_mode": "rest",
+    "max_connections": 1,
+    "max_connect_addresses": 2,
+    "connect_timeout_ms": 3000,
+    "handshake_io_timeout_ms": 3000,
+    "read_poll_timeout_ms": 250,
+    "worker_idle_sleep_ms": 25,
+    "shortlist_size": 40,
+    "tick_ms": 2000,
+    "stale_age_ms": 15000,
+    "scan_activity_timeout_ms": 30000,
+    "fresh_drop_alert_fraction": 0.5,
+    "telemetry_window_ms": 60000,
+    "metadata_poll_ms": 8000,
+    "metadata_stale_ms": 300000,
+    "metadata_preload_max_age_ms": 900000,
+    "depth_poll_ms": 8000,
+    "fallback_poll_ms": 8000,
+    "rest_batch_size": 200,
+    "reconnect_initial_ms": 1000,
+    "reconnect_max_ms": 60000,
+    "heartbeat_timeout_ms": 30000,
+    "token_check_ms": 1000
+  },
+  "strategy_selection": {
+    "enabled": false,
+    "library_path": "",
+    "evaluate_ms": 60000,
+    "regime": {},
+    "selector": {}
+  },
+  "shadow_scorer": {
+    "enabled": false,
+    "shortlist_only": false,
+    "scorer_path": "",
+    "params_path": "",
+    "evaluate_ms": 60000,
+    "top_n": 10
+  }
+}

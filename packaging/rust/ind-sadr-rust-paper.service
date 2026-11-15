@@ -1,0 +1,28 @@
+[Unit]
+Description=Ind-SADR Rust PAPER ONLY daily controller and read-only dashboard
+After=network-online.target
+Wants=network-online.target
+OnFailure=ind-sadr-alert@%n.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+[Service]
+Type=simple
+ExecStartPre=%h/ind-sadr-rust-current/sadr-rs preflight --config %h/.config/ind-sadr/rust-paper.json
+ExecStart=%h/ind-sadr-rust-current/sadr-rs paper --config %h/.config/ind-sadr/rust-paper.json
+Restart=on-failure
+RestartSec=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/ind-sadr-data %h/.config/ind-sadr %h/.local/state/ind-sadr
+# Persistent staging shared with transient workers, outside PrivateTmp.
+ReadWritePaths=-/var/lib/ind-sadr-research
+MemoryHigh=1G
+MemoryMax=1280M
+MemorySwapMax=256M
+TasksMax=32
+LimitNOFILE=256
+[Install]
+WantedBy=default.target

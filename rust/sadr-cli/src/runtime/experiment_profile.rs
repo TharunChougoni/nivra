@@ -1,0 +1,544 @@
+//! Operator experiment profile: prompts and bounded runtime tunables outside the binary.
+//!
+//! Profile contents are deliberately excluded from `planner::policy_bytes`. Trading
+//! policy (identities, allowlists, costs, exits and ceilings) stays in the dated
+//! planner config; a profile can only tighten the runtime values it is given.
+use super::discovery::GateSettings;
+use super::planner::{MAX_RUN_MS, ModelRole, PlannerConfig, ToolsSettings};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+};
+
+const PROFILE_BYTES: u64 = 262_144;
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Profile {
+    version: u32,
+    prompts: Prompts,
+    handoff_gate: Option<GateSettings>,
+    tools: Option<ToolsSettings>,
+    cadence: Cadence,
+    roles: BTreeMap<String, RoleCaps>,
+    /// Reserved for the intraday supervisor; validated by that issue.
+    supervisor: Option<Value>,
+    /// Reserved for the directive channel; validated by that issue.
+    directives: Option<Value>,
+}
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Prompts {
+    objective: Option<PathBuf>,
+    digest: Option<PathBuf>,
+    decide: Option<PathBuf>,
+    decision_evidence: Option<PathBuf>,
+    decision_evidence_digest: Option<PathBuf>,
+    supervisor: Option<PathBuf>,
+}
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Cadence {
+    idle_digest_interval_ms: Option<i64>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RoleCaps {
+    max_turns: Option<usize>,
+    max_read_tools: Option<usize>,
+    run_timeout_ms: Option<u64>,
+}
+#[derive(Clone)]
+struct PromptText {
+    text: String,
+    sha256: String,
+}
+impl PromptText {
+    fn embedded(text: &'static str) -> Self {
+        Self::from(text.to_owned())
+    }
+}
+impl From<String> for PromptText {
+    fn from(text: String) -> Self {
+        Self {
+            sha256: digest(text.as_bytes()),
+            text,
+        }
+    }
+}
+/// Loaded prompt text and hashes. Paths are intentionally not retained.
+#[derive(Clone)]
+pub(crate) struct PromptSet {
+    objective: PromptText,
+    digest: PromptText,
+    owner_digest: PromptText,
+    decide: PromptText,
+    decision_evidence: PromptText,
+    decision_evidence_digest: PromptText,
+    supervisor: Option<PromptText>,
+    orchestrator: Option<PromptText>,
+    review: Option<PromptText>,
+    scorer: Option<PromptText>,
+    custom: bool,
+    digest_overridden: bool,
+}
+impl Default for PromptSet {
+    fn default() -> Self {
+        Self {
+            objective: PromptText::embedded(super::harness::OBJECTIVE.trim()),
+            digest: PromptText::embedded(super::harness::DATA_PROMPT),
+            owner_digest: PromptText::embedded(super::harness::DATA_OWNER_PROMPT),
+            decide: PromptText::embedded(super::harness::DECISION_PROMPT),
+            decision_evidence: PromptText::embedded(super::decision_evidence::PROMPT),
+            decision_evidence_digest: PromptText::embedded(super::decision_evidence::DIGEST_PROMPT),
+            supervisor: None,
+            orchestrator: None,
+            review: None,
+            scorer: None,
+            custom: false,
+            digest_overridden: false,
+        }
+    }
+}
+impl PromptSet {
+    /// A complete prompt directory is opt-in by presence. Missing directories
+    /// preserve embedded defaults; incomplete or invalid installations refuse.
+    pub(crate) fn load_directory(
+        base: &Path,
+        max: u64,
+    ) -> std::result::Result<Option<Self>, String> {
+        match fs::metadata(base) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err("planner_prompts_unreadable".into()),
+            Ok(meta) if !meta.is_dir() => return Err("planner_prompts_unreadable".into()),
+            Ok(_) => {}
+        }
+        let read = |name: &str| -> std::result::Result<PromptText, String> {
+            let prompt =
+                read_prompt(base, &Some(name.into()), max)?.ok_or("planner_prompt_missing")?;
+            if prompt.text.trim().is_empty() {
+                return Err("planner_prompt_empty".into());
+            }
+            Ok(prompt)
+        };
+        let prompts = Self {
+            objective: read("objective.md")?,
+            digest: read("data.md")?,
+            owner_digest: read("data_owner.md")?,
+            decide: read("decision.md")?,
+            decision_evidence: read("profit_under_uncertainty.md")?,
+            decision_evidence_digest: read("decision_evidence_digest.md")?,
+            supervisor: Some(read("supervisor.md")?),
+            orchestrator: Some(read("orchestrator.md")?),
+            review: Some(read("review.md")?),
+            scorer: Some(read("scorer.md")?),
+            custom: true,
+            digest_overridden: false,
+        };
+        Ok(Some(prompts))
+    }
+    pub(crate) fn role_for(&self, role: &str, owner: bool) -> Option<&str> {
+        match (role, owner) {
+            ("digest", true) if !self.digest_overridden => Some(&self.owner_digest.text),
+            ("supervisor", true) => self
+                .orchestrator
+                .as_ref()
+                .map(|p| p.text.as_str())
+                .or_else(|| self.role(role)),
+            _ => self.role(role),
+        }
+    }
+    pub(crate) fn objective(&self) -> &str {
+        &self.objective.text
+    }
+    pub(crate) fn role(&self, role: &str) -> Option<&str> {
+        match role {
+            "digest" => Some(&self.digest.text),
+            "decide" => Some(&self.decide.text),
+            "supervisor" => self.supervisor.as_ref().map(|p| p.text.as_str()),
+            "operations" | "strategy" => self.review.as_ref().map(|p| p.text.as_str()),
+            "scorer" => self.scorer.as_ref().map(|p| p.text.as_str()),
+            _ => None,
+        }
+    }
+    pub(crate) fn decision_evidence(&self, digest: bool) -> &str {
+        if digest {
+            &self.decision_evidence_digest.text
+        } else {
+            &self.decision_evidence.text
+        }
+    }
+    pub(crate) fn custom(&self) -> bool {
+        self.custom
+    }
+    pub(crate) fn hashes(&self) -> Value {
+        self.hashes_with_digest(&self.digest.sha256)
+    }
+    fn hashes_with_digest(&self, digest: &str) -> Value {
+        let mut hashes = BTreeMap::new();
+        hashes.insert("digest", digest);
+        hashes.insert("objective", &self.objective.sha256);
+        hashes.insert("decide", &self.decide.sha256);
+        hashes.insert("decision_evidence", &self.decision_evidence.sha256);
+        hashes.insert(
+            "decision_evidence_digest",
+            &self.decision_evidence_digest.sha256,
+        );
+        if let Some(supervisor) = &self.supervisor {
+            hashes.insert("supervisor", &supervisor.sha256);
+        }
+        for (name, prompt) in [
+            ("orchestrator", &self.orchestrator),
+            ("review", &self.review),
+            ("scorer", &self.scorer),
+        ] {
+            if let Some(prompt) = prompt {
+                hashes.insert(name, &prompt.sha256);
+            }
+        }
+        json!(hashes)
+    }
+    /// Prompt identity as actually bound by the runtime. An owner policy with
+    /// no explicit profile digest prompt uses the code-owned owner digest, so
+    /// record that hash instead of the dormant legacy prompt.
+    pub(crate) fn hashes_for(&self, owner: bool) -> Value {
+        if owner && !self.digest_overridden {
+            self.hashes_with_digest(&self.owner_digest.sha256)
+        } else {
+            self.hashes()
+        }
+    }
+}
+/// Profile values applied to one in-memory `PlannerConfig`.
+#[derive(Clone)]
+pub(crate) struct AppliedProfile {
+    pub(crate) sha256: String,
+    pub(crate) prompts: PromptSet,
+    pub(crate) changed_keys: Vec<String>,
+    raw: Profile,
+    tools: Option<ToolsSettings>,
+    gate: Option<GateSettings>,
+    idle: Option<i64>,
+    digest_caps: Option<RoleCaps>,
+    decide_caps: Option<RoleCaps>,
+    base_tools: ToolsSettings,
+    base_gate: Option<GateSettings>,
+    base_digest: ModelRole,
+    base_decide: ModelRole,
+    base_idle: Option<Option<i64>>,
+}
+impl PlannerConfig {
+    /// Load and apply the configured profile. An invalid profile leaves the
+    /// runtime values untouched and returns a bounded reason instead of halting.
+    pub(crate) fn apply_experiment_profile(&mut self) -> std::result::Result<(), String> {
+        let Some(path) = self.experiment_profile.clone() else {
+            return Ok(());
+        };
+        match load_profile(
+            &path,
+            self.prompt_max_bytes,
+            self.file_prompts.clone().unwrap_or_default(),
+        ) {
+            Ok((profile, prompts)) => {
+                let applied = apply(self, profile, prompts)?;
+                self.profile = Some(Box::new(applied));
+                self.profile_error = None;
+                Ok(())
+            }
+            Err(reason) => {
+                self.profile_error = Some(reason.clone());
+                Err(reason)
+            }
+        }
+    }
+    /// Re-apply the previous profile after a rejected reload, over new policy values.
+    pub(crate) fn retain_previous_profile(&mut self, previous: &PlannerConfig) {
+        if let Some(old) = &previous.profile
+            && let Ok(applied) = apply(self, old.raw.clone(), old.prompts.clone())
+        {
+            self.profile = Some(Box::new(applied));
+        }
+    }
+    pub(crate) fn profile_sha256(&self) -> Option<&str> {
+        self.profile.as_ref().map(|p| p.sha256.as_str())
+    }
+    pub(crate) fn prompt_set(&self) -> Option<&PromptSet> {
+        self.profile
+            .as_ref()
+            .map(|p| &p.prompts)
+            .or(self.file_prompts.as_ref())
+    }
+    pub(crate) fn prompt_hashes(&self) -> Option<Value> {
+        self.prompt_set()
+            .map(|p| p.hashes_for(self.orchestrator_owns_decisions()))
+    }
+    pub(crate) fn profile_changed_keys(&self) -> Option<&[String]> {
+        self.profile.as_ref().map(|p| p.changed_keys.as_slice())
+    }
+    pub(crate) fn profile_value(&self, key: &str) -> Option<&Value> {
+        let raw = &self.profile.as_ref()?.raw;
+        match key {
+            "supervisor" => raw.supervisor.as_ref(),
+            "directives" => raw.directives.as_ref(),
+            _ => None,
+        }
+    }
+    /// Policy representation: profile paths, prompt text and applied tuning removed.
+    pub(crate) fn without_experiment_profile(&self) -> Self {
+        let mut cfg = self.clone();
+        cfg.experiment_profile = None;
+        cfg.profile_error = None;
+        cfg.profile = None;
+        if let Some(profile) = &self.profile {
+            cfg.tools = profile.base_tools.clone();
+            cfg.handoff_gate = profile.base_gate.clone();
+            cfg.digest = profile.base_digest.clone();
+            cfg.decide = profile.base_decide.clone();
+            if let Some(base) = profile.base_idle
+                && let Some(discovery) = &mut cfg.discovery
+            {
+                discovery.idle_digest_interval_ms = base;
+            }
+        }
+        cfg
+    }
+}
+fn load_profile(
+    path: &Path,
+    max_prompt_bytes: u64,
+    mut prompts: PromptSet,
+) -> std::result::Result<(Profile, PromptSet), String> {
+    let bytes =
+        crate::read_bounded(path, PROFILE_BYTES).map_err(|_| "experiment_profile_unreadable")?;
+    let profile: Profile =
+        serde_json::from_slice(&bytes).map_err(|_| "experiment_profile_invalid")?;
+    if profile.version != 1 {
+        return Err("experiment_profile_version_invalid".into());
+    }
+    let base = path.parent().ok_or("experiment_profile_path_invalid")?;
+    if let Some(text) = read_prompt(base, &profile.prompts.objective, max_prompt_bytes)? {
+        prompts.objective = text;
+    }
+    if let Some(text) = read_prompt(base, &profile.prompts.digest, max_prompt_bytes)? {
+        prompts.digest = text;
+        prompts.digest_overridden = true;
+    }
+    if let Some(text) = read_prompt(base, &profile.prompts.decide, max_prompt_bytes)? {
+        prompts.decide = text;
+    }
+    if let Some(text) = read_prompt(base, &profile.prompts.decision_evidence, max_prompt_bytes)? {
+        prompts.decision_evidence = text;
+    }
+    if let Some(text) = read_prompt(
+        base,
+        &profile.prompts.decision_evidence_digest,
+        max_prompt_bytes,
+    )? {
+        prompts.decision_evidence_digest = text;
+    }
+    if let Some(prompt) = read_prompt(base, &profile.prompts.supervisor, max_prompt_bytes)? {
+        prompts.supervisor = Some(prompt.clone());
+        prompts.orchestrator = Some(prompt);
+    }
+    prompts.custom = prompts.hashes() != PromptSet::default().hashes();
+    Ok((profile, prompts))
+}
+fn read_prompt(
+    base: &Path,
+    value: &Option<PathBuf>,
+    max_prompt_bytes: u64,
+) -> std::result::Result<Option<PromptText>, String> {
+    let Some(path) = value else { return Ok(None) };
+    let path = if path.is_absolute() {
+        path.clone()
+    } else {
+        base.join(path)
+    };
+    let mut file = fs::File::open(path).map_err(|_| "experiment_profile_prompt_missing")?;
+    if !file
+        .metadata()
+        .map_err(|_| "experiment_profile_prompt_unreadable")?
+        .is_file()
+    {
+        return Err("experiment_profile_prompt_unreadable".into());
+    }
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(max_prompt_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|_| "experiment_profile_prompt_unreadable")?;
+    if bytes.len() as u64 > max_prompt_bytes {
+        return Err("experiment_profile_prompt_oversize".into());
+    }
+    let text = String::from_utf8(bytes).map_err(|_| "experiment_profile_prompt_invalid_utf8")?;
+    Ok(Some(PromptText::from(text)))
+}
+fn apply(
+    cfg: &mut PlannerConfig,
+    profile: Profile,
+    prompts: PromptSet,
+) -> std::result::Result<AppliedProfile, String> {
+    let base_tools = cfg.tools.clone();
+    if let Some(tools) = &profile.tools {
+        tools.validate().map_err(|error| error.to_string())?;
+        if tools.scanner_limit > base_tools.scanner_limit
+            || tools.ranking_limit > base_tools.ranking_limit
+            || tools.history_limit > base_tools.history_limit
+            || tools.max_instrument_keys > base_tools.max_instrument_keys
+            || tools.fill_limit > base_tools.fill_limit
+        {
+            return Err("experiment_profile_tools_exceed_policy".into());
+        }
+    }
+    if let Some(gate) = &profile.handoff_gate {
+        gate.validate().map_err(|error| error.to_string())?;
+    }
+    if profile.cadence.idle_digest_interval_ms.is_some() && cfg.discovery.is_none() {
+        return Err("experiment_profile_cadence_without_discovery".into());
+    }
+    if let Some(caps) = profile.roles.get("digest") {
+        validate_caps(caps, &cfg.digest, "digest")?;
+    }
+    if let Some(caps) = profile.roles.get("decide") {
+        validate_caps(caps, &cfg.decide, "decide")?;
+    }
+    if profile
+        .roles
+        .keys()
+        .any(|role| !matches!(role.as_str(), "digest" | "decide"))
+    {
+        return Err("experiment_profile_role_invalid".into());
+    }
+    let mut changed_keys = Vec::new();
+    if profile.prompts.objective.is_some()
+        || profile.prompts.digest.is_some()
+        || profile.prompts.decide.is_some()
+        || profile.prompts.decision_evidence.is_some()
+        || profile.prompts.decision_evidence_digest.is_some()
+        || profile.prompts.supervisor.is_some()
+    {
+        changed_keys.push("prompts".into());
+    }
+    if profile.tools.is_some() {
+        changed_keys.push("tools".into());
+    }
+    if profile.handoff_gate.is_some() {
+        changed_keys.push("handoff_gate".into());
+    }
+    if profile.cadence.idle_digest_interval_ms.is_some() {
+        changed_keys.push("cadence.idle_digest_interval_ms".into());
+    }
+    if !profile.roles.is_empty() {
+        changed_keys.push("roles".into());
+    }
+    let sha256 = digest(
+        serde_json::to_vec(&json!({
+            "version":profile.version,
+            "prompts":prompts.hashes(),
+            "handoff_gate":profile.handoff_gate,
+            "tools":profile.tools,
+            "cadence":profile.cadence,
+            "roles":profile.roles,
+            "supervisor":profile.supervisor,
+            "directives":profile.directives,
+        }))
+        .map_err(|_| "experiment_profile_invalid")?
+        .as_slice(),
+    );
+    let applied = AppliedProfile {
+        sha256,
+        prompts,
+        changed_keys,
+        raw: profile.clone(),
+        tools: profile.tools.clone(),
+        gate: profile.handoff_gate.clone(),
+        idle: profile.cadence.idle_digest_interval_ms,
+        digest_caps: profile.roles.get("digest").cloned(),
+        decide_caps: profile.roles.get("decide").cloned(),
+        base_tools,
+        base_gate: cfg.handoff_gate.clone(),
+        base_digest: cfg.digest.clone(),
+        base_decide: cfg.decide.clone(),
+        base_idle: cfg
+            .discovery
+            .as_ref()
+            .map(|discovery| discovery.idle_digest_interval_ms),
+    };
+    if let Some(tools) = applied.tools.clone() {
+        cfg.tools = tools;
+    }
+    if let Some(gate) = applied.gate.clone() {
+        cfg.handoff_gate = Some(gate);
+    }
+    if let Some(idle) = applied.idle
+        && let Some(discovery) = &mut cfg.discovery
+    {
+        discovery.idle_digest_interval_ms = Some(idle);
+    }
+    if let Some(caps) = &applied.digest_caps {
+        apply_caps(&mut cfg.digest, caps);
+    }
+    if let Some(caps) = &applied.decide_caps {
+        apply_caps(&mut cfg.decide, caps);
+    }
+    Ok(applied)
+}
+fn validate_caps(caps: &RoleCaps, role: &ModelRole, name: &str) -> std::result::Result<(), String> {
+    let max_run = if name == "digest" {
+        120_000
+    } else {
+        MAX_RUN_MS
+    };
+    if caps
+        .max_turns
+        .is_some_and(|n| n == 0 || n > role.max_turns.unwrap_or(12))
+        || caps
+            .max_read_tools
+            .is_some_and(|n| n == 0 || n > role.max_read_tools.unwrap_or(16))
+        || caps
+            .run_timeout_ms
+            .is_some_and(|n| n < role.timeout_ms || n > max_run)
+    {
+        return Err("experiment_profile_role_exceeds_policy".into());
+    }
+    Ok(())
+}
+fn apply_caps(role: &mut ModelRole, caps: &RoleCaps) {
+    if let Some(value) = caps.max_turns {
+        role.max_turns = Some(value);
+    }
+    if let Some(value) = caps.max_read_tools {
+        role.max_read_tools = Some(value);
+    }
+    if let Some(value) = caps.run_timeout_ms {
+        role.run_timeout_ms = Some(value);
+    }
+}
+fn digest(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+/// Offline `planner profile-check`: validate and print the applied hashes.
+pub(crate) fn check(planner: &Path, profile: &Path) -> std::result::Result<Value, String> {
+    let mut cfg =
+        PlannerConfig::load(planner).map_err(|error| super::failure_code(error.as_ref()))?;
+    cfg.experiment_profile = Some(profile.to_path_buf());
+    cfg.apply_experiment_profile()?;
+    let applied = cfg.profile.as_ref().ok_or("experiment_profile_missing")?;
+    Ok(json!({
+        "status":"experiment_profile_valid",
+        "profile_sha256":applied.sha256,
+        "prompt_sha256":applied.prompts.hashes(),
+        "changed_keys":applied.changed_keys,
+        "policy_sha256":digest(&super::planner::policy_bytes(&cfg).map_err(|error| super::failure_code(error.as_ref()))?),
+        "paper_only":true,
+        "model_calls":0
+    }))
+}

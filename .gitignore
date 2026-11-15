@@ -1,0 +1,38 @@
+# Build output
+/target/
+/target-*/
+dist/
+node_modules/
+
+# Secrets and credentials (never commit)
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+*.p12
+*.token
+token*.txt
+
+# Local runtime data
+/data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.log
+*.jsonl
+
+# Private author audit workspace
+/.audit/
+
+# Stale nested repo copy
+/ind-sadr/
+
+# Editor / OS
+.DS_Store
+.cache/
+.tools/

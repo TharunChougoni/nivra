@@ -1,0 +1,18 @@
+{
+  "cap": "120",
+  "candidate": {
+    "hash": "3767d1a305c126a296c6b1a0ccde99e2058c130854720121f999bb1c9e892e28",
+    "model_json": "{\"candidate_id\":\"reserved-above-cash\",\"strategy\":\"synthetic_ledger_v1\",\"snapshot_id\":\"snapshot-reserved-above-cash\",\"created_at\":\"2026-10-15T09:30:00+05:30\",\"valid_until\":\"2026-10-15T14:00:00+05:30\",\"legs\":[{\"instrument\":{\"key\":\"TEST|LEDGER-CASH\",\"symbol\":\"LEDGER-CASH\",\"kind\":\"cash\",\"lot_size\":1,\"tick_size\":\"0.05\",\"version\":\"synthetic-ledger-v1\",\"expiry\":null,\"strike\":null,\"underlying\":null,\"synthetic\":true},\"side\":\"buy\",\"limit_price\":\"100\"}],\"planned_stop_loss_inr\":\"8\",\"stress_loss_inr\":\"100\",\"payoff_max_loss_inr\":null,\"max_gain_inr\":null}"
+  },
+  "cash_after_fill": "19.45",
+  "derivation": "Python Ledger reserve then fill: capital 120, reservation 110, buy 1 at 100. Committed rows from that book.",
+  "fee": "0.55",
+  "initial_capital": "120",
+  "now": "2026-10-15T10:00:00+05:30",
+  "price": "100",
+  "reference": "python-sadr",
+  "reserved_after_fill": "110",
+  "state_after_fill": "FILLED",
+  "synthetic": true,
+  "verdict_json": "{\"accepted\":true,\"reasons\":[],\"lots\":1,\"reservation\":\"110\"}"
+}

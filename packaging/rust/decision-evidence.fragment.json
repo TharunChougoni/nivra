@@ -1,0 +1,15 @@
+{
+  "decision_evidence": {
+    "max_bars": 20,
+    "lookback_samples": 20,
+    "return_windows_minutes": [1, 5, 15],
+    "max_age_ms": 180000,
+    "metadata_max_age_ms": 300000,
+    "benchmark_min_instruments": 200,
+    "volume_proxy": {
+      "session_minutes": 375.0,
+      "rel_volume_curve_exponent": 0.7,
+      "rel_volume_min_minutes": 5.0
+    }
+  }
+}

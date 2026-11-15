@@ -1,0 +1,2831 @@
+{
+  "cases": [
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "c9f29eac86abe4d905796b67c22526d13772522fc441ff9530ee01fc56007edb",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 4,
+            "bid": "100",
+            "bid_units": 7,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "f07bcd2806d9e38c550fa33b8de56798a4cc1c13abd36faad81be0e161ad8740",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "best-depth-levels",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "dda5a8abdf86e864d7912a3eefcf95bfca8ddac46c6d6ad48e7a9faf62d91b69",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":99,\\\"quantity\\\":2},{\\\"price\\\":100,\\\"quantity\\\":7},{\\\"price\\\":100,\\\"quantity\\\":9}],\\\"sell\\\":[{\\\"price\\\":103,\\\"quantity\\\":3},{\\\"price\\\":101,\\\"quantity\\\":4},{\\\"price\\\":101,\\\"quantity\\\":8}]}}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "deb6b599bb900c0e5d7b60f3fcb4b00dfd7b6cb82723bba2b7a5ca225853b32e",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "43012d2b8e06b067d263b27bec1b517603465098d7c44e0f7df97718d5648fa2",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "zero-depth-padding",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "fcaf72d6d537b536687f60e34fa929aa3e40b61db169286dd4c05945d36bd7da",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":0,\\\"quantity\\\":0},{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":0,\\\"quantity\\\":0},{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "c3ed53ab5cd4011caa36ecdf4d800d45be70875ea8d0c89d7a45d2015643413a",
+        "quotes": [
+          {
+            "ask": "101.2500",
+            "ask_units": 12,
+            "bid": "100.000",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "8c47267bb14b46ebc7e4a430c3c17b300d1f5b598e9f17d11bc11295dfe32e0b",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "decimal-trailing-zeros",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "b2f5e2ff313f9302ad28e54b5369aeea14fe2de07242e7aea975f9c2d655c1a3",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100.000,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101.2500,\\\"quantity\\\":12}]}}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "ed50ff19819c84b52856171ee81e4adec9a5a6608f9a3c459b1a6e91eb64a41f",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "b43c6a1ac33557577a9a48862ecaf667fe241bb4537bbf451739c080d0ae92ab",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "decimal-exponent",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "c8e0a5a189448ea05d3b49d009fd3baa3e618febb0a8fd102c63c17cac671842",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":1.00e2,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":1.01E2,\\\"quantity\\\":12}]}}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "e7fe7e5a955636a20e0dc0f2d5650871fe70bc6a66dc3e11f9bdcf54d65a50e5",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T04:30:00Z"
+          }
+        ],
+        "snapshot_id": "dfda82a86b7bfb7f69c527e074f93dc7bc1018337e9e569044ca6eedb1a2d881",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "timestamp-utc",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "f6e3cd3cd40553e908c88fb19e4c12223a8c2fc72feff5f87a00288ef5c39c44",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T04:30:00+00:00\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "2d4b6f6a8807feaf689027b99821908bcdd4de9cc30d9ac72bb27e4bc5862e57",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "38a3ac78ed3b69e708e45c9bdd5972246f4db0143261c5299c5df191352744dc",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "timestamp-ist",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "d9dd7537242568f647e5c3f2e77f6311f64f2ef04f49eff69bf64651976b88b2",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "c8947dc3c06a09354ad83c363fe8ca5d59ed3d8847fe4e6ec6b403e35b5b0ee5",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "dfdf521055b3e1f38dd65da736059de32ae59cd59a0e2ef1cf44c55dba2d997e",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "timestamp-milliseconds",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "113d412fca785a4753da3538b289105330598be8d04d7d29f8088e061ee1ff60",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":1792038600000,\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "e6f59a9271c6f5b4b56be219b3eefe101ad8e74fd5f2b4d4ce4075446e36959e",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "dc6d8f8f39075617d50ccc7775a508350bf2b3196dc4152010dbabbd329e8144",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "unicode-extra-fields",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "a6e3f9dadf2134facccc753f4641a9f480c0e116a2b4a7c0143ec88d727c6c91",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]},\\\"备注\\\":\\\"synthetic ✓\\\",\\\"extra\\\":{\\\"κλειδί\\\":\\\"値\\\"}}},\\\"trace\\\":\\\"synthetic envelope field\\\"}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "2d4b6f6a8807feaf689027b99821908bcdd4de9cc30d9ac72bb27e4bc5862e57",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "38a3ac78ed3b69e708e45c9bdd5972246f4db0143261c5299c5df191352744dc",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "envelope-extra-fields-accepted",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "fec8e8b705e96820da9ae4b138ef66612dc1ebb307f5861ab55aea127e1b708a",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}},\\\"request_id\\\":\\\"synthetic-id\\\",\\\"version\\\":1}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "0a16511ea85a47f53f4f865f22af1f28ed7503ee1ab812a48b38f5e8009c3144",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 10,
+            "bid": "99",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "c83cde17b7f9666da955e7eb1868de06a156092f2e0bc7879dd8fe91cc68c114",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "zero-level-does-not-win",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "82055077ce6c6567bd71274bd9918a052770097b630566ecaa3b559be9c519f9",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":0},{\\\"price\\\":99,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":0,\\\"quantity\\\":20},{\\\"price\\\":101,\\\"quantity\\\":10}]}}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "bool-price-rejected",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "2d75b919d9cfe8bdaf128cfb6dbea663ed692ee0a5ff5fd37e9f08535ee5d29e",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":true,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}",
+      "rejection_reason": "normalization"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "string-price-rejected",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "d581b1b7c18f228f0515bc3cc3a8a37b9ee8c13a34215e86e692d74a0a303ea4",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":\\\"100\\\",\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}",
+      "rejection_reason": "normalization"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "negative-price-rejected",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "8760a3aa657e3126116bf134221ad3c6ab77ea7397b910b3e586686ac313a6e3",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":-1,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}",
+      "rejection_reason": "normalization"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "bool-quantity-rejected",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "7b9763999dc7feb6b5e2a3585c5339cd588241aac5aed9f0518bc9b7aa39ac43",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":true}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}",
+      "rejection_reason": "normalization"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "negative-quantity-rejected",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "d5b11e00d7b54e99439a74714426b8445654de38a1332bd37ad23c5d96f5322f",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":-1}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}",
+      "rejection_reason": "normalization"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "missing-depth-rejected",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "c1dacf9f643be97f6bcb3dc5ef11ac4075b7194e91c1a133d669e648453d2cb3",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\"}}}\"}",
+      "rejection_reason": "normalization"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "empty-buy-depth-rejected",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "a2cdfd8bb9ada34ae757c1429c77f68cf0643ec189112b341ffea2640740057f",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}",
+      "rejection_reason": "normalization"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "empty-ask-depth-rejected",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "d9525f46c4652f9ee56aa0c3057613598090974f559d949f58718a78905b72a7",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[]}}}}\"}",
+      "rejection_reason": "normalization"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "crossed-market-rejected",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "e578492ee75af289af513d909f18680c8f021070133a77e3a010c76832af78ee",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":102,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}",
+      "rejection_reason": "normalization"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "source-after-receipt-rejected",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "460c8d82fc1a31ce64d36ff20acf775ec0844e08d32997d943fc32e0246961f5",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:01+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}",
+      "rejection_reason": "normalization"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "instrument-token-mismatch",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "63ad6a017ca502a620159040b15983c1a51f3e2c1b1a5495a3932f76eaa4a623",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|OTHER\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}",
+      "rejection_reason": "normalization"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "extra-instrument-response",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "d0a40622b354f924b5404e7c7ab1ef1f283704e2e031ddc88773a62af89ccbc3",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}},\\\"NSE_EQ|OTHER\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|OTHER\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}",
+      "rejection_reason": "normalization"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "duplicate-response-instrument-token",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "a88263903b1f6b7a3c5c59284de3dd108cb82d2e73c84f0bc564b46fba5814fc",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"first\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}},\\\"second\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}",
+      "rejection_reason": "normalization"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "TEST|SYNTH001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "synthetic-instrument-rejected",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "TEST|SYNTH001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": true,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "5af432e00c6c334246ca376416b59ed42fbe6b60b2371a1299cb9081cfbbce7d",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"TEST|SYNTH001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"TEST|SYNTH001\\\":{\\\"instrument_token\\\":\\\"TEST|SYNTH001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}",
+      "rejection_reason": "normalization"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "duplicate-request-instruments",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        },
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "7f1d179a23a8962be76eb343f052ed46586395e45f190175c98fe89ca61b92af",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001,NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}",
+      "rejection_reason": "normalization"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "empty-requested-instruments",
+      "instruments": [],
+      "original_hash": "c41c8a2e10f3eba163364263e1e0955099fed26cd15b196f11a7f8f7b28a75e5",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}",
+      "rejection_reason": "normalization"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "a56a07cfa50c73a6d4ca4a1fcc1d1bd57bf492b10e4535c55f7ace709b44874e",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          },
+          {
+            "ask": "201",
+            "ask_units": 12,
+            "bid": "200",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC002",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v2"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "17c73d63d244962c12dc8638d51fd000f939c261081746dbb74f4e418ef99976",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "two-instruments-request-order",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        },
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC002",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v2"
+        }
+      ],
+      "original_hash": "4778ab29da89e17bf52a2776c654a528ebe6db9f9b8b3ab44de929df47e5ac42",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001,NSE_EQ|SYNTHETIC002\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC002\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC002\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":200,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":201,\\\"quantity\\\":12}]}},\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T04:30:00.123000Z",
+        "payload_hash": "00d90e93b9b7486eab22af9c045716b9e07725a55bd31cb1bf5b2ca52cfd4b32",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T04:30:00.123000Z",
+            "source_at": "2026-10-15T04:30:00Z"
+          }
+        ],
+        "snapshot_id": "1d81fa5a033903899f58f39d03d164961d96b6172df878cd96051091b0b3183e",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "received-utc-z-microseconds",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "178f4a33c07b9c32251107f3417e2425e4911c9a260e74d822ac8640ba8bb04a",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T04:29:59.999999Z\",\"received_at\":\"2026-10-15T04:30:00.123000Z\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T04:30:00Z\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "3792aff1adb6691e5832933677951807a2ded8581c8e369c04621a5b7c6eaea6",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T09:59:00+05:30"
+          }
+        ],
+        "snapshot_id": "ff0b94ad40cffa7d78276d5f1193794cc6083b089dcff09418bbd91c98346e0b",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "old-quote-structurally-valid",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "41266abb06bf9299abd5b4817d1fbbbcd5888133233825e3c1fca8b60a0c21c7",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T09:59:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "wrong-source",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "b6454767a7bf45882082c4bdc2b7a230ec37c96cd9b4e826864b7a0d52e45449",
+      "original_json": "{\"source\":\"kotak-readonly-v1\",\"path\":\"/script-details/1.0/quotes/neosymbol/nse_cm|1/all\",\"params\":{},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"[{}]\"}",
+      "rejection_reason": "source_mismatch"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "wrong-endpoint",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "c95edb916b712f3b6b27e2b48f8b68acf27b4e4f05688dfb6920f7faef534887",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/option/chain\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}",
+      "rejection_reason": "endpoint_mismatch"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "wrong-request-params",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "23f5f401cafa45a54258b47fd37097dbf2890937d4f7de53bb1e64101f3eb4c0",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|OTHER\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}",
+      "rejection_reason": "params_mismatch"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|OTHER",
+          "instrument_version": "other-version",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "calendar-binding-mismatch",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "d9dd7537242568f647e5c3f2e77f6311f64f2ef04f49eff69bf64651976b88b2",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}",
+      "rejection_reason": "calendar_binding"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "duplicate-top-level-body-key",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "7a6f9657e906232cfbc2ca170697137703d9b87bc7562394da41bbf20d33f29f",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"status\\\":\\\"success\\\",\\\"data\\\":{}}\"}",
+      "rejection_reason": "capture"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "duplicate-nested-body-key",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "eafc5f96d16c9ccf0132a6552c353ed188cf72670d524758f06252a97797376d",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"a\\\":{\\\"x\\\":1,\\\"x\\\":2}}}\"}",
+      "rejection_reason": "capture"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "nonfinite-body-number",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "f2d750ab43d80d821b40bad0a578b188fa60687bc5658a2d690c608530d7630d",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":NaN}\"}",
+      "rejection_reason": "capture"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "malformed-body",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "3f205434121a48bbd727aef726e457c180289d72b0213ef8699574076cfc68be",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"not-json\"}",
+      "rejection_reason": "capture"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": true,
+      "expected_snapshot": null,
+      "id": "received-before-requested",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "8f64fa9f81c677d344eea9ce9518b598ab768d5656f36a01d3d2f70587ae9d3e",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:01+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]}}}}\"}",
+      "rejection_reason": "capture"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "3194f40f417e355fe8de24d37a884a4238c0d3c682b9a9008042d90fa62de989",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "a1a7fd673e2c438659e3bedc794f25bed756fcac33b47f7bf583f97fbe6f4e82",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "extra-number-zero-decimal",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "3d76ce9dfc4473d88e429b810aa8bda72690050ccf319f8c029859074adc78df",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]},\\\"ignored_number\\\":0.0}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "61a34c2cf7247f5d3e47c741ce724983913e9f0c11e9f24d50439122d4c31cc5",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "5d9edf4467f49526967c1be0113f25be70b897e49761ad13d5dc7f2d6cd9aae7",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "extra-number-negative-zero-decimal",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "24d35fed765e32d4434a5bc1e2ed812f6957a0e819e924471ece3d714d9df11d",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]},\\\"ignored_number\\\":-0.0}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "323498fe0e25b97d9b8f0280570814e506bac595b89c4c7de09f4bd11aad21fc",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "5669c9285f028cfb60d792054739acb5eea3d8ceb0e954a792595ac72f4ed33b",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "extra-number-one-e-minus-six",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "a8ec3be39eaa5ae32f77a7c7e15cc22f5eb48414a785da5341047386f947f729",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]},\\\"ignored_number\\\":1e-6}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "6f785328a4252c9a941f7d26ca2e6d573cedd7c0c66ff193f958f20ae4c646c0",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "9db800568ba02d844d7168fd0fa2466e6ba238f49a5d731ba0b350566d12563c",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "extra-number-one-e-minus-seven",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "76da90fdc1af9b9b516538734648dc31fdccf50dfe3777b491a8d59afc5ef810",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]},\\\"ignored_number\\\":1e-7}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "21dcc21fdbf00da19362d44f010fc43ea224e2e170b8a5157d78f1a95cde24bb",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "f59214d5db89e678ed4a78276534292b33fb89c248a482e2ad2447a4e20b085a",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "extra-number-one-e-plus-eight",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "3dceaa218d38c5c1a13ec3decda11805cca0e155ac532231d44f95edd72e7fad",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]},\\\"ignored_number\\\":1e+8}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "d598b9615446d87683c9d546a316c18ec8f0612dc8e501bb34bfe3f4b3c5719f",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "b47dbca37d6433a5b8dec28a287506dc9e30e11e331673693da88e62780b8e03",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "extra-number-trailing-zero-e-minus-three",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "848592aabfb462b312c26b4327badb447bbd9144e7a45745584b4380d365d815",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]},\\\"ignored_number\\\":1.2300e-3}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "8d1f215a8bc0e5749f323a37bf90d1623d868a0700fae52e43f4234d6558662c",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "ce7bd97b81f5178c1aa92525745523920157a568111e94dcdbd35a2dfa08a6a5",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "extra-number-trailing-zero-e-plus-three",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "05068d86d5dd1846ce5215178ac0091717a33ed0a8a1dfcdc9cb855c400ee747",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]},\\\"ignored_number\\\":1.2300e+3}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "f1c399f4d1e53f8f55d23f1a99e1533f221ccbf7e6296710efff43ee6bb1a487",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "b279f3e031d47e605997017aeaad093f08feebf0e890370eeb460d480ee6f763",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "extra-number-trailing-zero-e-plus-ten",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "13b9b76be56b599644824e3e115b5f081f0d8aaa950c2c559f555fac77490b92",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]},\\\"ignored_number\\\":1.2300e+10}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "ae8ae8770f9a627c5064bf9bcdc2099e4e273d165d614b83983c7cbe009a7044",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "e334f826b8bc17e0bc25a3766166634e6430c8c49e55b164d9837f529636e2e9",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "extra-number-zero-e-plus-two",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "98886184f4e0e9efae7a2636113c713ea8bc1c4bd8eaaecc02a516f91934c89b",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]},\\\"ignored_number\\\":0e+2}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "876575be8ca6021ccf45fc35937a1c44dd4c18202360bb1c68d73dd97cd33a7e",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "9d761111748e6f6c3dbefbf873e3dfd73fae6880777160b8f0cdf10c60f14d6b",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "extra-number-zero-seven-decimals",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "dd44033f09f05787edc2f63d9e6a356e9fa2939cb333a4513e979689f0730c81",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]},\\\"ignored_number\\\":0.0000000}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "81d77e999c6b5838523f9551f169c29e57ff75c981048973dc5e514422f37a46",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "5759ffb79da550158316c2601957513eadb28ef6ddf318cecabea4a3d1b87d65",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "extra-number-large-integer",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "18a25b0269fccaf19e2272f5dc7675f9aebaa3c71f532ea25504886044251a84",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]},\\\"ignored_number\\\":123456789012345678901234567890123456789}}}\"}"
+    },
+    {
+      "account_source": {
+        "account_alias": "synthetic",
+        "archive_source": "upstox-readonly-v1",
+        "broker": "upstox",
+        "quote_source": "upstox-full-quotes-v2"
+      },
+      "calendar": {
+        "continuous_session": {
+          "closing": "15:30:00",
+          "instrument_key": "NSE_EQ|SYNTHETIC001",
+          "instrument_version": "fixture-v1",
+          "opening": "09:15:00",
+          "review_ref": "synthetic-only-fixture-binding"
+        },
+        "holidays": [],
+        "source": "synthetic-fixture-calendar-not-exchange-certification",
+        "special": {},
+        "synthetic": true,
+        "valid_from": "2026-10-15",
+        "valid_to": "2026-10-15"
+      },
+      "expected_rejected": false,
+      "expected_snapshot": {
+        "captured_at": "2026-10-15T10:00:00+05:30",
+        "payload_hash": "52364bd27881dc9bede8379e278d21f43d4263aa57200f61cdc55a3e60402385",
+        "quotes": [
+          {
+            "ask": "101",
+            "ask_units": 12,
+            "bid": "100",
+            "bid_units": 10,
+            "instrument": {
+              "expiry": null,
+              "key": "NSE_EQ|SYNTHETIC001",
+              "kind": "cash",
+              "lot_size": 1,
+              "strike": null,
+              "symbol": "SYNTHETIC-CASH",
+              "synthetic": false,
+              "tick_size": "0.05",
+              "underlying": null,
+              "version": "fixture-v1"
+            },
+            "received_at": "2026-10-15T10:00:00+05:30",
+            "source_at": "2026-10-15T10:00:00+05:30"
+          }
+        ],
+        "snapshot_id": "0c29f12eebabec9cc420fae8d86c2d54775a6775787eda296dc001c5ff47523c",
+        "source": "upstox-full-quotes-v2"
+      },
+      "id": "unicode-controls-extra-object",
+      "instruments": [
+        {
+          "expiry": null,
+          "key": "NSE_EQ|SYNTHETIC001",
+          "kind": "cash",
+          "lot_size": 1,
+          "strike": null,
+          "symbol": "SYNTHETIC-CASH",
+          "synthetic": false,
+          "tick_size": "0.05",
+          "underlying": null,
+          "version": "fixture-v1"
+        }
+      ],
+      "original_hash": "16cbd23a09df2e8d34bbf4de62b13e0e644f11c73cb24dcd4de4375097f23a14",
+      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC001\"},\"requested_at\":\"2026-10-15T10:00:00+05:30\",\"received_at\":\"2026-10-15T10:00:00+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"NSE_EQ|SYNTHETIC001\\\":{\\\"instrument_token\\\":\\\"NSE_EQ|SYNTHETIC001\\\",\\\"timestamp\\\":\\\"2026-10-15T10:00:00+05:30\\\",\\\"depth\\\":{\\\"buy\\\":[{\\\"price\\\":100,\\\"quantity\\\":10}],\\\"sell\\\":[{\\\"price\\\":101,\\\"quantity\\\":12}]},\\\"key \\\\\\\" with \\\\\\\\ slash\\\":{\\\"astral\\\":\\\"🛰️\\\",\\\"line_separator\\\":\\\" \\\",\\\"quote\\\\\\\"and\\\\\\\\key\\\":\\\"backslash \\\\\\\\ and quote \\\\\\\"\\\",\\\"controls\\\":\\\"\\\\b\\\\f\\\\n\\\\r\\\\t\\\"}}}}\"}"
+    }
+  ],
+  "reference": "python-sadr",
+  "reference_domain_sha256": "77fb5231a242cbce0ac5ac2301cfd37435376d978a77f42497c28b571a0229c6",
+  "reference_market_archive_sha256": "4728ccbf7c34f7f0f57c8c89b86acef90197e6f953e1d10dd0846ee09bbee09f",
+  "reference_market_sha256": "1b3b555347b41111a0525b8aff72f5f2ab17d022f80f9cd011d71a9aa16b9930",
+  "reference_paper_source_sha256": "d578e2253c3cc1f939ac76511e60124d6ed73aa067f0081944c578ddbc6b8dc6",
+  "schema_sql": [
+    "CREATE TABLE market_captures (id TEXT PRIMARY KEY, payload TEXT NOT NULL)"
+  ],
+  "schema_version": 1,
+  "synthetic": true
+}

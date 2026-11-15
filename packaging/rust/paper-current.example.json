@@ -1,0 +1,29 @@
+{
+  "account": "tharun-upstox",
+  "session": "${ORIGINAL_SESSION}",
+  "previous_session": "${ORIGINAL_PREVIOUS_SESSION}",
+  "calendar_source": "NSE/CMTR/71775",
+  "directory": "${ORIGINAL_BOOK_DIRECTORY}",
+  "sessions_root": "${ORIGINAL_SESSIONS_ROOT}",
+  "history_directory": "${ORIGINAL_HISTORY_DIRECTORY}",
+  "planner_config": "${CONFIG_DIR}/planner.json",
+  "token_file": "/REVIEWED/APP_MARKET_GRANT",
+  "dashboard_token_file": "/REVIEWED/APP_DASHBOARD_GRANT",
+  "read_journal": "${ORIGINAL_READ_JOURNAL}",
+  "read_scope": "upstox-market-tharun-upstox",
+  "read_journal_device": "${ORIGINAL_DEVICE_AS_INTEGER}",
+  "read_journal_inode": "${ORIGINAL_INODE_AS_INTEGER}",
+  "strategy": "model_planner_v1",
+  "capital": "${ORIGINAL_CONFIG_CAPITAL}",
+  "paper_costs": {
+    "per_order": "0.01",
+    "buy_bps": "5",
+    "sell_bps": "7",
+    "slippage_bps": "5",
+    "rounding_increment": "0.01"
+  },
+  "daily_history_sessions": 21,
+  "history_preparation_enabled": true,
+  "history_preparation_start_minute": 480,
+  "history_preparation_cutoff_minute": 550
+}

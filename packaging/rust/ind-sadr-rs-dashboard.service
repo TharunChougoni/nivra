@@ -1,0 +1,18 @@
+[Unit]
+Description=Ind-SADR persistent read-only Rust registry dashboard
+After=network-online.target
+[Service]
+Type=simple
+ExecStart=%h/ind-sadr-rust-current/sadr-rs dashboard --registry %h/ind-sadr-data/controller.sqlite --token-file %h/.config/ind-sadr/rust-dashboard.token
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+MemoryMax=64M
+MemorySwapMax=0
+TasksMax=4
+[Install]
+WantedBy=default.target

@@ -1,0 +1,9 @@
+{
+  "paper_costs": {
+    "per_order": "0.01",
+    "buy_bps": "5",
+    "sell_bps": "7",
+    "slippage_bps": "5",
+    "rounding_increment": "0.01"
+  }
+}

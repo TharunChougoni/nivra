@@ -1,0 +1,8 @@
+{
+  "research_tools": {
+    "admission_limits": {
+      "max_trials_per_input": 2,
+      "max_session_trials": 32
+    }
+  }
+}

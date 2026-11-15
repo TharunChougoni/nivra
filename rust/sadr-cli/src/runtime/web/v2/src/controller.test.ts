@@ -1,0 +1,316 @@
+import type { SummaryResponse } from "./types";
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createController } from "./controller";
+import { JSDOM } from "jsdom";
+const json = (v: unknown) =>
+  new Response(JSON.stringify(v), {
+    headers: { "Content-Type": "application/json" },
+  });
+const wait = async (fn: () => unknown) => {
+  for (let i = 0; i < 200; i++) {
+    if (fn()) return;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  throw Error("timed out");
+};
+const projections = (
+  summary: SummaryResponse,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> => {
+  const body = {
+    v: 1,
+    mode: "paper",
+    account: "test",
+    session: "2026-10-29",
+    as_of_ms: 1000,
+    capital: "5000",
+    ...summary,
+  };
+  return {
+    "/api/v1/summary": body,
+    "/api/v1/portfolio": {
+      ...body,
+      cash: "5000",
+      equity: "5000",
+      positions: [],
+      recorded_fees: "0",
+    },
+    "/api/v1/fills": { ...body, total: 0, items: [], next: null },
+    "/api/v1/plans": {
+      ...body,
+      planner: { status: "ready", decision_id: null, pending_events: 0 },
+      actions: [],
+      execution: [],
+    },
+    "/api/v1/scanner": {
+      ...body,
+      segment: "prospects",
+      total: 0,
+      items: [],
+      next: null,
+      coverage: { fresh: 0, stale: 0, unseen: 0, universe: 0 },
+      screen_reasons: {},
+    },
+    "/api/v1/sessions": { ...body, total: 0, items: [], next: null },
+    "/api/v1/approvals": {
+      ...body,
+      models: { roles: [] },
+      identities: [],
+    },
+    ...extra,
+  };
+};
+test("lock discards pending financial responses and clears chart/session evidence", async () => {
+  const dom = new JSDOM("", { url: "http://localhost" });
+  let complete: ((response: Response) => void) | undefined;
+  let cleared = 0;
+  const app = createController(dom.window, {
+    connect: false,
+    cache: {
+      get: async () => null,
+      put: async () => true,
+      clear: async () => {
+        cleared++;
+      },
+      close: () => {},
+    },
+    fetch: async (url) => {
+      if (url === "/api/v1/meta") return json({ mode: "paper" });
+      if (url === "/api/v1/summary")
+        return new Promise((resolve) => {
+          complete = resolve;
+        });
+      return json({
+        account: "private-fixture",
+        portfolio: { cash: "5000" },
+      });
+    },
+  });
+  await app.authenticate("fixture-token");
+  await wait(() => complete);
+  app.watch("TEST|1");
+  app.selectSession("broker|account|date");
+  app.lock();
+  assert.ok(complete);
+  complete(json({ account: "private-fixture", portfolio: { cash: "5000" } }));
+  await new Promise((r) => setTimeout(r, 10));
+  const snapshot = app.getSnapshot();
+  assert.equal(snapshot.summary, null);
+  assert.equal(snapshot.snapshotState, "idle");
+  assert.equal(snapshot.session, "");
+  assert.deepEqual(snapshot.points, []);
+  assert.deepEqual(snapshot.series.price, []);
+  assert.equal(cleared, 1);
+  assert.equal(dom.window.sessionStorage.getItem("paperToken"), null);
+  app.stop();
+  dom.window.close();
+});
+test("v1 projection reads coalesce and selected chart observations preserve original sample time", async () => {
+  const dom = new JSDOM("", { url: "http://localhost" });
+  let summaryReads = 0;
+  const requests: string[] = [];
+  const app = createController(dom.window, {
+    connect: false,
+    fetch: async (url) => {
+      requests.push(url);
+      if (url === "/api/v1/meta")
+        return json({ mode: "paper", broker: { data: "fixture" } });
+      if (url.startsWith("/api/v1/series"))
+        return json({ points: [], coverage: null });
+      if (url === "/api/v1/summary") {
+        summaryReads++;
+        return json({
+          account: "test",
+          session: "2026-10-29",
+          as_of_ms: summaryReads * 1000,
+          capital: "5000",
+          status: "open",
+          state: { stopped: false, halted: false, closed: false },
+        });
+      }
+      if (url.startsWith("/api/v1/scanner"))
+        return json({
+          items: [
+            {
+              instrument_key: "TEST|1",
+              latest_screening_price: String(100 + summaryReads),
+              sampled_price_ms: summaryReads * 1000 - 100,
+              observed_ms: summaryReads * 1000,
+            },
+          ],
+          coverage: { fresh: 1, universe: 1 },
+        });
+      return json(projections({})[url.split("?")[0]] || {});
+    },
+  });
+  await app.authenticate("fixture");
+  await wait(() => app.getSnapshot().scannerState === "ready");
+  app.watch("TEST|1");
+  await app.refresh();
+  assert.deepEqual(
+    app.getSnapshot().points.map((v) => v.at),
+    [900, 1900],
+  );
+  assert.equal(app.getSnapshot().equityPoints.length, 2);
+  assert.equal(
+    requests.some((url) => String(url).startsWith("/api/status")),
+    false,
+  );
+  app.stop();
+  dom.window.close();
+});
+test("a failed projection clears its data without reusing a prior financial value", async () => {
+  const dom = new JSDOM("", { url: "http://localhost" });
+  let failPortfolio = false;
+  const app = createController(dom.window, {
+    connect: false,
+    fetch: async (url) => {
+      if (url === "/api/v1/meta") return json({ mode: "paper" });
+      if (url === "/api/v1/portfolio" && failPortfolio)
+        throw Error("portfolio_unavailable");
+      if (url === "/api/v1/summary")
+        return json({
+          account: "test",
+          session: "2026-10-29",
+          as_of_ms: 1000,
+          capital: "5000",
+          state: { stopped: false, halted: false, closed: false },
+        });
+      return json(projections({})[url.split("?")[0]] || {});
+    },
+  });
+  await app.authenticate("fixture");
+  await wait(() => app.getSnapshot().portfolioState === "ready");
+  assert.equal(app.getSnapshot().portfolio?.cash, "5000");
+  assert.equal(app.getSnapshot().equityPoints.length, 1);
+  failPortfolio = true;
+  await app.refresh();
+  const snapshot = app.getSnapshot();
+  assert.equal(snapshot.portfolio, null);
+  assert.equal(snapshot.portfolioState, "error");
+  assert.equal(snapshot.summaryState, "ready");
+  assert.equal(snapshot.snapshotState, "unavailable");
+  assert.deepEqual(snapshot.equityPoints, []);
+  assert.deepEqual(
+    snapshot.issues.map((v) => v.source),
+    ["portfolio"],
+  );
+  app.stop();
+  dom.window.close();
+});
+test("a failed scanner projection clears tab-local points while preserving the summary", async () => {
+  const dom = new JSDOM("", { url: "http://localhost" });
+  let failScanner = false;
+  const app = createController(dom.window, {
+    connect: false,
+    fetch: async (url) => {
+      if (url === "/api/v1/meta") return json({ mode: "paper" });
+      if (url.startsWith("/api/v1/scanner") && failScanner)
+        throw Error("scanner_unavailable");
+      if (url === "/api/v1/summary")
+        return json({
+          account: "test",
+          session: "2026-10-29",
+          as_of_ms: 1000,
+          capital: "5000",
+          state: { stopped: false, halted: false, closed: false },
+        });
+      if (url.startsWith("/api/v1/scanner"))
+        return json({
+          items: [
+            {
+              instrument_key: "TEST|1",
+              latest_screening_price: "100",
+              sampled_price_ms: 900,
+              observed_ms: 1000,
+            },
+          ],
+          coverage: { fresh: 1, universe: 1 },
+        });
+      return json(projections({})[url.split("?")[0]] || {});
+    },
+  });
+  await app.authenticate("fixture");
+  await wait(
+    () =>
+      app.getSnapshot().scannerState === "ready" &&
+      app.getSnapshot().points.length === 1,
+  );
+  app.watch("TEST|1");
+  failScanner = true;
+  await app.refresh();
+  const snapshot = app.getSnapshot();
+  assert.equal(snapshot.scanner, null);
+  assert.equal(snapshot.scannerState, "error");
+  assert.equal(snapshot.summaryState, "ready");
+  assert.deepEqual(snapshot.points, []);
+  assert.deepEqual(
+    snapshot.issues.map((v) => v.source),
+    ["scanner"],
+  );
+  app.stop();
+  dom.window.close();
+});
+test("cached series evidence is marked stale and survives a failed series read", async () => {
+  const dom = new JSDOM("", { url: "http://localhost" });
+  let cacheReads = 0;
+  const cached = {
+    body: {
+      points: [
+        {
+          at: 5000,
+          close: "101",
+          tick_count: 2,
+          price_kind: "receipt_price",
+          certified_ohlcv: false,
+        },
+      ],
+      coverage: { gaps: [] },
+      watermark_ms: 5000,
+      source: "receipt_derived_feature_store",
+    },
+  };
+  const app = createController(dom.window, {
+    connect: false,
+    cache: {
+      get: async (key) => {
+        cacheReads++;
+        return key.includes("receipt-minute-bar") ? cached : null;
+      },
+      put: async () => true,
+      clear: async () => {},
+      close: () => {},
+    },
+    fetch: async (url) => {
+      if (url === "/api/v1/meta")
+        return json({ mode: "paper", broker: { data: "fixture" } });
+      if (url.startsWith("/api/v1/series")) throw Error("series_unavailable");
+      if (url === "/api/v1/summary")
+        return json({
+          account: "test",
+          session: "2026-10-29",
+          as_of_ms: 10_000,
+          capital: "5000",
+          state: { stopped: false, halted: false, closed: false },
+        });
+      if (url.startsWith("/api/v1/scanner"))
+        return json({
+          items: [{ instrument_key: "TEST|1" }],
+          coverage: { fresh: 1, universe: 1 },
+        });
+      return json(projections({})[url.split("?")[0]] || {});
+    },
+  });
+  await app.authenticate("fixture");
+  await wait(() => app.getSnapshot().series.price.length === 1);
+  const series = app.getSnapshot().series;
+  assert.equal(series.price[0].at, 5000);
+  assert.equal(series.price[0].value, 101);
+  assert.equal(series.priceCached, true);
+  assert.equal(series.priceState, "cached");
+  assert.ok(cacheReads >= 1);
+  app.lock();
+  app.stop();
+  dom.window.close();
+});

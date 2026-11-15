@@ -1,0 +1,112 @@
+{
+  "v": 1,
+  "run": "harness-decide-50-legacy",
+  "legacy": true,
+  "running": false,
+  "events": [
+    {
+      "v": 1,
+      "run": "harness-decide-50-legacy",
+      "seq": 0,
+      "at_ms": 1789996800000,
+      "kind": "run_started",
+      "role": "decide",
+      "model": "legacy",
+      "trigger": { "kind": "timer" },
+      "session": "2026-09-21",
+      "mode": null,
+      "prompt_sha": null
+    },
+    {
+      "v": 1,
+      "run": "harness-decide-50-legacy",
+      "seq": 1,
+      "at_ms": 1789996800000,
+      "kind": "input",
+      "turn": 0,
+      "bytes": null,
+      "summary": {},
+      "blob": "input.json"
+    },
+    {
+      "v": 1,
+      "run": "harness-decide-50-legacy",
+      "seq": 2,
+      "at_ms": 1789996800000,
+      "kind": "tool_call",
+      "turn": 0,
+      "call": "legacy-one",
+      "name": "read_evidence",
+      "args": "{}",
+      "instruments": [],
+      "legacy_call": false
+    },
+    {
+      "v": 1,
+      "run": "harness-decide-50-legacy",
+      "seq": 3,
+      "at_ms": 1789996800000,
+      "kind": "tool_result",
+      "turn": 0,
+      "call": "legacy-one",
+      "name": "read_evidence",
+      "status": "ok",
+      "duration_ms": null,
+      "bytes": 15,
+      "summary": { "status": "ok", "cash": 15 },
+      "blob": "tool-legacy.result.json"
+    },
+    {
+      "v": 1,
+      "run": "harness-decide-50-legacy",
+      "seq": 4,
+      "at_ms": 1789996800000,
+      "kind": "assistant_text",
+      "turn": 0,
+      "text": "Legacy output: abstain",
+      "truncated": false
+    },
+    {
+      "v": 1,
+      "run": "harness-decide-50-legacy",
+      "seq": 5,
+      "at_ms": 1789996800000,
+      "kind": "final_output",
+      "output": {
+        "actions": [
+          {
+            "side": "sell",
+            "instrument": "NSE:TCS",
+            "units": 2,
+            "max_price": null,
+            "rationale": "legacy plan"
+          }
+        ]
+      }
+    },
+    {
+      "v": 1,
+      "run": "harness-decide-50-legacy",
+      "seq": 6,
+      "at_ms": 1789996800000,
+      "kind": "host_note",
+      "text": "Legacy, partial archive; unavailable host validation and timing fields remain unknown"
+    },
+    {
+      "v": 1,
+      "run": "harness-decide-50-legacy",
+      "seq": 7,
+      "at_ms": 1789996800000,
+      "kind": "run_ended",
+      "outcome": "abstain",
+      "reason": null,
+      "duration_ms": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cost_estimate_inr": null,
+      "cost_basis": null,
+      "tool_calls": null,
+      "tool_failures": null
+    }
+  ]
+}

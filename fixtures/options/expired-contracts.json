@@ -1,0 +1,24 @@
+{
+ "status": "success",
+ "data": [
+  {
+   "name": "NIFTY",
+   "segment": "NSE_FO",
+   "exchange": "NSE",
+   "expiry": "2026-10-13",
+   "instrument_key": "NSE_FO|EXPIRED26000CE",
+   "exchange_token": "EXPIRED26000CE",
+   "trading_symbol": "NIFTY 26000 CE 13 OCT 26",
+   "tick_size": 5,
+   "lot_size": 65,
+   "instrument_type": "CE",
+   "freeze_quantity": 1800,
+   "underlying_key": "NSE_INDEX|Nifty 50",
+   "underlying_type": "INDEX",
+   "underlying_symbol": "NIFTY",
+   "strike_price": 26000,
+   "minimum_lot": 65,
+   "weekly": true
+  }
+ ]
+}

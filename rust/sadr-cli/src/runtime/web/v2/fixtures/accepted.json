@@ -1,0 +1,120 @@
+{
+  "v": 1,
+  "run": "harness-digest-100-normal",
+  "legacy": false,
+  "running": false,
+  "events": [
+    {
+      "v": 1,
+      "run": "harness-digest-100-normal",
+      "seq": 0,
+      "at_ms": 1793160300000,
+      "kind": "run_started",
+      "role": "digest",
+      "model": "fixture",
+      "trigger": { "kind": "fill" },
+      "session": "2026-10-28",
+      "mode": "paper",
+      "prompt_sha": null
+    },
+    {
+      "v": 1,
+      "run": "harness-digest-100-normal",
+      "seq": 1,
+      "at_ms": 1793160300100,
+      "kind": "system_prompt",
+      "sha": "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+      "bytes": 2048
+    },
+    {
+      "v": 1,
+      "run": "harness-digest-100-normal",
+      "seq": 2,
+      "at_ms": 1793160300200,
+      "kind": "input",
+      "turn": 0,
+      "bytes": 4096,
+      "summary": { "input_items": 3 },
+      "blob": "turn-00-request.json#/request/input"
+    },
+    {
+      "v": 1,
+      "run": "harness-digest-100-normal",
+      "seq": 3,
+      "at_ms": 1793160300300,
+      "kind": "tool_call",
+      "turn": 0,
+      "call": "one",
+      "name": "read_evidence",
+      "args": { "evidence_id": "bundle" },
+      "instruments": []
+    },
+    {
+      "v": 1,
+      "run": "harness-digest-100-normal",
+      "seq": 4,
+      "at_ms": 1793160300400,
+      "kind": "tool_result",
+      "turn": 0,
+      "call": "one",
+      "name": "read_evidence",
+      "status": "ok",
+      "duration_ms": 12,
+      "bytes": 8192,
+      "summary": { "cash": "10" },
+      "blob": "tool-one.result.json"
+    },
+    {
+      "v": 1,
+      "run": "harness-digest-100-normal",
+      "seq": 5,
+      "at_ms": 1793160300500,
+      "kind": "assistant_text",
+      "turn": 0,
+      "text": "Digest complete. **3** instruments reviewed.",
+      "truncated": false
+    },
+    {
+      "v": 1,
+      "run": "harness-digest-100-normal",
+      "seq": 6,
+      "at_ms": 1793160300600,
+      "kind": "final_output",
+      "output": {
+        "actions": [
+          {
+            "side": "buy",
+            "instrument_key": "NSE:INFY",
+            "units": 10,
+            "max_price": 1500.5,
+            "rationale": "cheap"
+          }
+        ]
+      }
+    },
+    {
+      "v": 1,
+      "run": "harness-digest-100-normal",
+      "seq": 7,
+      "at_ms": 1793160300700,
+      "kind": "host_note",
+      "text": "Risk checks passed."
+    },
+    {
+      "v": 1,
+      "run": "harness-digest-100-normal",
+      "seq": 8,
+      "at_ms": 1793160301500,
+      "kind": "run_ended",
+      "outcome": "accepted",
+      "reason": null,
+      "tokens_in": 1200,
+      "tokens_out": 300,
+      "cost_estimate_inr": "1.25",
+      "cost_basis": "fixture",
+      "duration_ms": 1500,
+      "tool_calls": 1,
+      "tool_failures": 0
+    }
+  ]
+}

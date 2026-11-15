@@ -1,0 +1,276 @@
+name: Fast musl release
+
+# Dispatch on main so the musl cache can be reused between releases.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Annotated version tag on the commit tested by the calling CI run
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing annotated stable tag whose exact commit passed main CI
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: rust-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  prebuilt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_INCREMENTAL: '0'
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Validate release selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+      - name: Materialize release tooling from the workflow revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The checked-out tag may predate these helpers. Always run the helper
+          # revision that belongs to the workflow definition, never the tag tree.
+          if ! git cat-file -e "$GITHUB_SHA^{commit}" 2>/dev/null; then
+            git fetch --no-tags origin "$GITHUB_SHA"
+          fi
+          tooling="$RUNNER_TEMP/release-tooling"
+          test ! -e "$tooling"
+          mkdir -m 700 "$tooling"
+          for file in release-ci.mjs release-recovery.mjs; do
+            git show "$GITHUB_SHA:.github/scripts/$file" > "$tooling/$file"
+          done
+      - name: Verify tag and determine immutable publication mode
+        id: publication
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git cat-file -t "refs/tags/$RELEASE_TAG")" = tag
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{}")"
+          if test "$GITHUB_EVENT_NAME" = push; then
+            test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          fi
+          git merge-base --is-ancestor HEAD origin/main
+          test -z "$(git status --porcelain --untracked-files=no)"
+          remote_tag=$(git ls-remote origin "refs/tags/$RELEASE_TAG")
+          test "${remote_tag%%$'\t'*}" = "$(git rev-parse "refs/tags/$RELEASE_TAG")"
+          asset_ref="refs/release-assets/$RELEASE_TAG"
+          remote_asset=$(git ls-remote origin "$asset_ref")
+          if test -n "$remote_asset"; then
+            test "$(wc -l <<< "$remote_asset")" -eq 1
+            asset_ref_oid=${remote_asset%%$'\t'*}
+            [[ "$asset_ref_oid" =~ ^[0-9a-f]{40}$ ]]
+            echo "resume_assets=true" >> "$GITHUB_OUTPUT"
+            echo "asset_ref_oid=$asset_ref_oid" >> "$GITHUB_OUTPUT"
+          else
+            echo "resume_assets=false" >> "$GITHUB_OUTPUT"
+            echo "asset_ref_oid=" >> "$GITHUB_OUTPUT"
+          fi
+          # A duplicate or unavailable release lookup must not become permission to overwrite.
+          releases=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name')
+          if grep -Fxq "$RELEASE_TAG" <<< "$releases" && test -z "$remote_asset"; then
+            echo 'GitHub release exists without its immutable asset ref; refusing repair by rebuild.' >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          import os, pathlib, tomllib
+          version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['workspace']['package']['version']
+          assert os.environ['RELEASE_TAG'] == 'v' + version, 'tag/version mismatch'
+          assert any(line.split()[:2] == ['##', version] for line in pathlib.Path('CHANGELOG.md').read_text().splitlines()), 'changelog mismatch'
+          PY
+      - name: Require passed exact-source CI checks
+        id: ci
+        uses: actions/github-script@v8
+        env:
+          RELEASE_TOOLING: ${{ runner.temp }}/release-tooling
+        with:
+          script: |
+            const { verifiedCiRun } = await import(`${process.env.RELEASE_TOOLING}/release-ci.mjs`);
+            const { execFileSync } = await import('node:child_process');
+            const sha = execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+            const run = await verifiedCiRun({github, ...context.repo, sha,
+              inProgressRunId: context.eventName === 'push' ? context.runId : undefined,
+              allowFailedAggregate: context.eventName === 'workflow_dispatch'});
+            core.setOutput('run_id', String(run.id));
+            core.notice(`Reusing exact-source required CI checks from ${run.html_url} for ${sha}; no tests are rerun.`);
+      - name: Reuse artifact assembler built and tested by CI
+        if: steps.publication.outputs.resume_assets != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: release-tools
+          path: ${{ runner.temp }}/release-tools
+          run-id: ${{ steps.ci.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - uses: Swatinem/rust-cache@v2
+        if: steps.publication.outputs.resume_assets != 'true'
+        with:
+          shared-key: release-musl-v1
+          cache-workspace-crates: 'true'
+      - name: Install musl target
+        if: steps.publication.outputs.resume_assets != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          rustup target add x86_64-unknown-linux-musl
+      - name: Build musl binaries and assemble immutable assets
+        if: steps.publication.outputs.resume_assets != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --target x86_64-unknown-linux-musl -p sadr-cli --bin sadr-rs --bin sadr-analysis
+          target/x86_64-unknown-linux-musl/release/sadr-rs self-check --expected-version "$RELEASE_TAG"
+          chmod +x "$RUNNER_TEMP/release-tools/sadr-tools"
+          "$RUNNER_TEMP/release-tools/sadr-tools" release-artifact --tag "$RELEASE_TAG" --binary target/x86_64-unknown-linux-musl/release/sadr-rs --output "$RUNNER_TEMP/release-dist"
+          install -m755 target/x86_64-unknown-linux-musl/release/sadr-analysis "$RUNNER_TEMP/release-dist/sadr-analysis-x86_64-unknown-linux-musl"
+          (cd "$RUNNER_TEMP/release-dist" && sha256sum sadr-analysis-x86_64-unknown-linux-musl > sadr-analysis-x86_64-unknown-linux-musl.sha256)
+      - name: Publish deploy-key-readable immutable asset ref
+        if: steps.publication.outputs.resume_assets != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_tag=$(git ls-remote origin "refs/tags/$RELEASE_TAG")
+          test "${remote_tag%%$'\t'*}" = "$(git rev-parse "refs/tags/$RELEASE_TAG")"
+          asset_ref="refs/release-assets/$RELEASE_TAG"
+          test -z "$(git ls-remote origin "$asset_ref")"
+          index="$RUNNER_TEMP/release-assets.index"
+          test ! -e "$index"
+          export GIT_INDEX_FILE="$index"
+          git read-tree --empty
+          for file in sadr-rs-x86_64-unknown-linux-musl sadr-rs-x86_64-unknown-linux-musl.sha256 release.json default-prompts.json default-prompts.sha256 sadr-analysis-x86_64-unknown-linux-musl sadr-analysis-x86_64-unknown-linux-musl.sha256; do
+            blob=$(git hash-object -w "$RUNNER_TEMP/release-dist/$file")
+            git update-index --add --cacheinfo "100644,$blob,$file"
+          done
+          tree=$(git write-tree)
+          export GIT_AUTHOR_NAME=nivra-release GIT_COMMITTER_NAME=nivra-release
+          export GIT_AUTHOR_EMAIL=release@users.noreply.github.com GIT_COMMITTER_EMAIL=release@users.noreply.github.com
+          commit=$(git commit-tree "$tree" -m "Assets for $RELEASE_TAG")
+          git push --force-with-lease="$asset_ref:" origin "$commit:$asset_ref"
+
+      - name: Fetch and verify immutable release assets
+        id: verified-assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset_ref="refs/release-assets/$RELEASE_TAG"
+          remote_asset=$(git ls-remote origin "$asset_ref")
+          test -n "$remote_asset"
+          test "$(wc -l <<< "$remote_asset")" -eq 1
+          asset_ref_oid=${remote_asset%%$'\t'*}
+          if test "${{ steps.publication.outputs.resume_assets }}" = true; then
+            test "$asset_ref_oid" = "${{ steps.publication.outputs.asset_ref_oid }}"
+          fi
+          git fetch --atomic --no-tags --no-auto-maintenance origin \
+            "$asset_ref:refs/assets/$RELEASE_TAG"
+          test "$(git rev-parse "refs/assets/$RELEASE_TAG")" = "$asset_ref_oid"
+          out="$RUNNER_TEMP/verified-release-assets"
+          test ! -e "$out"
+          mkdir -m 700 "$out"
+          if git cat-file -e "refs/assets/$RELEASE_TAG:default-prompts.sha256" 2>/dev/null; then
+            expected=$(printf '%s\n' \
+              sadr-rs-x86_64-unknown-linux-musl \
+              sadr-rs-x86_64-unknown-linux-musl.sha256 \
+              release.json default-prompts.json default-prompts.sha256 \
+              sadr-analysis-x86_64-unknown-linux-musl \
+              sadr-analysis-x86_64-unknown-linux-musl.sha256 | sort)
+          else
+            expected=$(printf '%s\n' \
+              sadr-rs-x86_64-unknown-linux-musl \
+              sadr-rs-x86_64-unknown-linux-musl.sha256 \
+              release.json \
+              sadr-analysis-x86_64-unknown-linux-musl \
+              sadr-analysis-x86_64-unknown-linux-musl.sha256 | sort)
+          fi
+          actual=$(git ls-tree -r --name-only "refs/assets/$RELEASE_TAG" | sort)
+          test "$actual" = "$expected"
+          while IFS= read -r file; do
+            git show "refs/assets/$RELEASE_TAG:$file" > "$out/$file"
+          done <<< "$expected"
+          node "$RUNNER_TEMP/release-tooling/release-recovery.mjs" verify \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$(git rev-parse HEAD)" \
+            --directory "$out"
+          chmod 755 "$out/sadr-rs-x86_64-unknown-linux-musl"
+          "$out/sadr-rs-x86_64-unknown-linux-musl" self-check --expected-version "$RELEASE_TAG"
+
+      - name: Create release or append only verified missing attachments
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            sadr-rs-x86_64-unknown-linux-musl
+            sadr-rs-x86_64-unknown-linux-musl.sha256
+            release.json
+            default-prompts.json
+            default-prompts.sha256
+            sadr-analysis-x86_64-unknown-linux-musl
+            sadr-analysis-x86_64-unknown-linux-musl.sha256
+          )
+          assets_dir="$RUNNER_TEMP/verified-release-assets"
+          if test ! -f "$assets_dir/default-prompts.json"; then
+            files=(
+              sadr-rs-x86_64-unknown-linux-musl
+              sadr-rs-x86_64-unknown-linux-musl.sha256
+              release.json
+              sadr-analysis-x86_64-unknown-linux-musl
+              sadr-analysis-x86_64-unknown-linux-musl.sha256
+            )
+          fi
+          releases=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name')
+          if ! grep -Fxq "$RELEASE_TAG" <<< "$releases"; then
+            gh release create "$RELEASE_TAG" "${files[@]/#/$assets_dir/}" \
+              --verify-tag --title "$RELEASE_TAG" \
+              --notes "Prebuilt musl artifacts from an exact commit with passed required CI checks. CI run: ${{ steps.ci.outputs.run_id }}. Installation does not authorize trading."
+            exit 0
+          fi
+
+          release_json="$RUNNER_TEMP/github-release.json"
+          gh release view "$RELEASE_TAG" --json tagName,isDraft,isPrerelease,assets \
+            --jq '{tagName:.tagName,isDraft:.isDraft,isPrerelease:.isPrerelease,assets:[.assets[].name]}' \
+            > "$release_json"
+          existing_dir="$RUNNER_TEMP/existing-release-assets"
+          mkdir -m 700 "$existing_dir"
+          for file in "${files[@]}"; do
+            if jq -e --arg file "$file" '.assets | index($file) != null' "$release_json" > /dev/null; then
+              gh release download "$RELEASE_TAG" --pattern "$file" --dir "$existing_dir"
+            fi
+          done
+          missing_file="$RUNNER_TEMP/missing-release-assets.txt"
+          node "$RUNNER_TEMP/release-tooling/release-recovery.mjs" plan \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$(git rev-parse HEAD)" \
+            --directory "$assets_dir" \
+            --release-json "$release_json" \
+            --existing-directory "$existing_dir" > "$missing_file"
+          mapfile -t missing < "$missing_file"
+          # An empty plan must not turn into an upload of the assets directory.
+          if ((${#missing[@]} == 1)) && test -z "${missing[0]}"; then
+            missing=()
+          fi
+          if ((${#missing[@]})); then
+            upload=()
+            for file in "${missing[@]}"; do
+              upload+=("$assets_dir/$file")
+            done
+            # Never pass --clobber: concurrent or pre-existing names must fail closed.
+            gh release upload "$RELEASE_TAG" "${upload[@]}"
+          fi

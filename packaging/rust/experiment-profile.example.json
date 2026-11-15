@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "prompts": {
+    "objective": "prompts/objective.md",
+    "digest": "prompts/data.md",
+    "decide": "prompts/decision.md",
+    "decision_evidence": "prompts/profit_under_uncertainty.md",
+    "decision_evidence_digest": "prompts/decision_evidence_digest.md"
+  },
+  "handoff_gate": {
+    "material_move_bps": 75,
+    "exit_proximity_bps": 50,
+    "anti_loop_floor_ms": 60000,
+    "material_quote_change_bps": 75
+  },
+  "tools": {
+    "scanner_limit": 40,
+    "ranking_limit": 50,
+    "history_limit": 5,
+    "max_instrument_keys": 20
+  },
+  "cadence": {
+    "idle_digest_interval_ms": 900000
+  },
+  "roles": {
+    "digest": {
+      "max_turns": 8,
+      "max_read_tools": 16
+    },
+    "decide": {
+      "max_turns": 12,
+      "max_read_tools": 16,
+      "run_timeout_ms": 450000
+    }
+  },
+  "supervisor": {
+    "run_first": {
+      "on_session_start": true,
+      "on_resume": true,
+      "on_change": true,
+      "hold_luna_ms": 120000
+    },
+    "change_min_gap_ms": 600000
+  },
+  "directives": {}
+}

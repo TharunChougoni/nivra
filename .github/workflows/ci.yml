@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  release-selection:
+    name: Select tagged release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.select.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Match annotated version tag to this exact commit
+        id: select
+        run: node .github/scripts/release-selection.mjs
+
+  dashboard-js:
+    name: Dashboard JS tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install dashboard dependencies
+        run: |
+          npm ci --prefix rust/sadr-cli/src/runtime/web/v2
+      - name: Test release CI admission and recovery
+        run: node --test .github/scripts/release-ci.test.mjs .github/scripts/release-selection.test.mjs .github/scripts/release-recovery.test.mjs
+      - name: Run dashboard tests
+        run: npm test --prefix rust/sadr-cli/src/runtime/web/v2
+
+  rust-fmt-clippy:
+    name: Rust fmt + clippy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-clippy-v2
+          cache-workspace-crates: "true"
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  rust-test:
+    name: Rust tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      SADR_REQUIRE_SCORER_SANDBOX: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-test-v2
+          cache-workspace-crates: "true"
+      - name: Install sandbox dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      # Build every target once so test and tool runs reuse the same feature set.
+      - name: Build all targets
+        run: cargo build --workspace --all-targets --locked
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Test budget
+        run: target/debug/sadr-tools test-budget
+      - name: Check release links
+        run: target/debug/sadr-tools check-release
+      - name: Check frozen goldens
+        run: target/debug/sadr-tools golden-check
+      # Reuse this exact tested assembler in the musl release; no second GNU build.
+      - name: Save release artifact assembler
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-tools
+          path: target/debug/sadr-tools
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Build and publish tagged musl release
+    needs: [release-selection, dashboard-js, rust-fmt-clippy, rust-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.release-selection.outputs.tag != ''
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/rust-release.yml
+    with:
+      tag: ${{ needs.release-selection.outputs.tag }}

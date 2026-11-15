@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "reference": "legacy/sadr/market.py normalize_minute_capture historical window and _minute_rows; synthetic fixture",
+  "capture": {
+    "source": "upstox-readonly-v1",
+    "path": "/v3/historical-candle/NSE_EQ%7CFIXTURE/minutes/1/2026-10-01/2026-10-01",
+    "params": {},
+    "requested_at": "2026-10-02T03:45:00Z",
+    "received_at": "2026-10-02T03:46:00Z",
+    "body": "{\"status\":\"success\",\"data\":{\"candles\":[[\"2026-10-01T09:15:00+05:30\",100,101,99,100,10,0],[\"2026-10-01T09:16:00+05:30\",100,101,99,100,12,0]]}}"
+  },
+  "cases": [
+    {"id": "two-complete-prior-minutes", "mutation": "none", "accepted": true, "bars": 2},
+    {"id": "skips-closed-days", "mutation": "skip-closed", "accepted": true, "bars": 2},
+    {"id": "closed-window", "mutation": "closed-window", "accepted": true, "bars": 0},
+    {"id": "missing-minute", "mutation": "missing", "accepted": false},
+    {"id": "request-day-included", "mutation": "request-day", "accepted": false},
+    {"id": "span-too-long", "mutation": "span", "accepted": false},
+    {"id": "before-availability", "mutation": "before-2022", "accepted": false},
+    {"id": "reversed-window", "mutation": "reversed", "accepted": false},
+    {"id": "unexpected-params", "mutation": "params", "accepted": false},
+    {"id": "intraday-route", "mutation": "intraday", "accepted": false},
+    {"id": "weekend-candle", "mutation": "weekend-candle", "accepted": false},
+    {"id": "non-minute-session", "mutation": "odd-session", "accepted": false},
+    {"id": "conflicting-duplicate", "mutation": "conflict", "accepted": false},
+    {"id": "off-grid", "mutation": "off-grid", "accepted": false},
+    {"id": "over-limit", "mutation": "over-limit", "accepted": false}
+  ]
+}

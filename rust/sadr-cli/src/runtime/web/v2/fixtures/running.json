@@ -1,0 +1,54 @@
+{
+  "v": 1,
+  "run": "harness-digest-200-running",
+  "legacy": false,
+  "running": true,
+  "events": [
+    {
+      "v": 1,
+      "run": "harness-digest-200-running",
+      "seq": 0,
+      "at_ms": 1793163000000,
+      "kind": "run_started",
+      "role": "digest",
+      "model": "fixture",
+      "trigger": { "kind": "fill" },
+      "session": "2026-10-28",
+      "mode": "paper",
+      "prompt_sha": null
+    },
+    {
+      "v": 1,
+      "run": "harness-digest-200-running",
+      "seq": 1,
+      "at_ms": 1793163000100,
+      "kind": "input",
+      "turn": 0,
+      "bytes": 2048,
+      "summary": { "input_items": 1 },
+      "blob": "turn-00-request.json#/request/input"
+    },
+    {
+      "v": 1,
+      "run": "harness-digest-200-running",
+      "seq": 2,
+      "at_ms": 1793163000200,
+      "kind": "tool_call",
+      "turn": 0,
+      "call": "live-one",
+      "name": "read_evidence",
+      "args": { "evidence_id": "live" },
+      "instruments": []
+    },
+    {
+      "v": 1,
+      "run": "harness-digest-200-running",
+      "seq": 3,
+      "at_ms": 1793163000300,
+      "kind": "assistant_text",
+      "turn": 0,
+      "text": "Reading evidence…",
+      "truncated": false
+    }
+  ]
+}

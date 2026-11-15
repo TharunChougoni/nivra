@@ -1,0 +1,35 @@
+[workspace]
+members = ["rust/sadr-core", "rust/sadr-cli", "rust/sadr-store", "rust/sadr-tools", "rust/sadr-research", "rust/sadr-sandbox"]
+resolver = "2"
+
+[workspace.package]
+version = "0.9.25"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[workspace.dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.151", features = ["raw_value", "float_roundtrip"] }
+clap = { version = "=4.6.6", features = ["derive"] }
+libc = "=0.2.189"
+tempfile = "=3.27.0"
+rust_decimal = { version = "=1.43.0", default-features = false, features = ["std"] }
+chrono = { version = "=0.4.45", default-features = false, features = ["std", "serde"] }
+chrono-tz = "=0.10.4"
+sha2 = "=0.11.0"
+rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "hooks", "limits"] }
+csv = "=1.4.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "deny"
+
+[profile.release]
+# Keep thin LTO, but allow parallel codegen. The paper bot is I/O-bound; the
+# small binary-size increase is not worth a multi-minute serial release build.
+codegen-units = 16
+lto = "thin"
+strip = "debuginfo"

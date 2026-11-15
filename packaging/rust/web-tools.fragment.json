@@ -1,0 +1,17 @@
+{
+  "web_tools": {
+    "enabled": false,
+    "provider": "none",
+    "search_url": null,
+    "api_key_file": null,
+    "news_feeds": [],
+    "timeout_ms": 8000,
+    "max_calls_per_run": 6,
+    "min_interval_ms": 1000,
+    "max_query_chars": 512,
+    "max_results": 8,
+    "max_fetch_bytes": 1048576,
+    "max_text_chars": 20000,
+    "news_max_items": 10
+  }
+}

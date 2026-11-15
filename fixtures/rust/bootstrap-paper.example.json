@@ -1,0 +1,22 @@
+{
+  "account": "tharun-upstox",
+  "session": "2026-10-16",
+  "previous_session": "2026-10-15",
+  "calendar_source": "NSE/CMTR/71775",
+  "directory": "/home/nivra-example/ind-sadr-data/rust-paper-20261016",
+  "token_file": "/home/nivra-example/.config/ind-sadr/upstox_analytics.token",
+  "dashboard_token_file": "/home/nivra-example/.config/ind-sadr/rust-dashboard.token",
+  "read_journal": "/home/nivra-example/.config/ind-sadr/upstox-shared-reads.db",
+  "read_scope": "upstox-market-tharun-upstox",
+  "strategy": "model_planner_v1",
+  "capital": "5000",
+  "read_journal_device": 1,
+  "read_journal_inode": 1,
+  "paper_costs": {
+    "per_order": "0.01",
+    "buy_bps": "5",
+    "sell_bps": "7",
+    "slippage_bps": "5",
+    "rounding_increment": "0.01"
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "schema": 1,
+  "baseline": "df20719",
+  "files": [
+    {
+      "path": "fixtures/rust/analytics_token_vectors.json",
+      "sha256": "36baa345171a54acfa835cd95a26ea696867d4bd83ac16b2e55213dea5c06c8c"
+    },
+    {
+      "path": "fixtures/rust/archive_vectors.json",
+      "sha256": "a8fa084a4fd94bd019a658816f5f4c97be52c4b8f058a8932aac5e0218d21c64"
+    },
+    {
+      "path": "fixtures/rust/bootstrap_vectors.json",
+      "sha256": "30dd36d4591790b9ca7517e2a87909455269a5ba1139868c1e1e7f73717cc8bc"
+    },
+    {
+      "path": "fixtures/rust/captured_source_vectors.json",
+      "sha256": "aa910da028114b329499524356eb9f277f83513ebb1c2e77497bcd9548ae49d1"
+    },
+    {
+      "path": "fixtures/rust/cash_risk_vectors.json",
+      "sha256": "7444fc1e4cc34e95119070d95eb8f480ac9eb39b32abde38ff0dbcb7d9c36af4"
+    },
+    {
+      "path": "fixtures/rust/financial_vectors.json",
+      "sha256": "682bb9543c0c4f637de3970f84e1109d2ec3b001968b1d5808ee04ddfd5e7b8c"
+    },
+    {
+      "path": "fixtures/rust/ledger_vectors.json",
+      "sha256": "419f6a7988d580f914f5a2bc95e0e827974a274093706f2b4279a34b0ee7d60a"
+    },
+    {
+      "path": "fixtures/rust/market_archive_vectors.json",
+      "sha256": "bbcad941fee73764674af7836b39526d58938c6a21c9b09208562558bdcd07d7"
+    },
+    {
+      "path": "fixtures/rust/market_vectors.json",
+      "sha256": "f203d451be2a4497161bd8ee4d89cca127f840921cceaa38100cd3ee32a098bd"
+    },
+    {
+      "path": "fixtures/rust/paper_contract_vectors.json",
+      "sha256": "9e9cd90985578d2bcb5858c4f6e23feace2e3da112550e90ec488c3adc57871c"
+    },
+    {
+      "path": "fixtures/rust/preflight_vectors.json",
+      "sha256": "a4e7beb27bd422ee2cade42eca10d61bb7dc88c4cc9fdb2235913a3200f76b1d"
+    },
+    {
+      "path": "fixtures/rust/pristine_install_vectors.json",
+      "sha256": "416e41f89077c9da50f77ab1baaa492812b6aacdd2ab1319fbdd228e154e8e83"
+    },
+    {
+      "path": "fixtures/rust/protection_dashboard_vectors.json",
+      "sha256": "05f6b1b09a2470b101b6bcedeb3159f2e08218d85f67b717b61ed716eea5bcf4"
+    },
+    {
+      "path": "fixtures/rust/protection_vectors.json",
+      "sha256": "e61ef6e60f5071c37485d73cfa38f2b121d1c217d11196cbf8573b8a10c499fa"
+    },
+    {
+      "path": "fixtures/rust/upstox_history_vectors.json",
+      "sha256": "3fdfe87873a27d84ec3504702014b9a756d52ec3aaa01607d96b49858d3688aa"
+    },
+    {
+      "path": "fixtures/rust/upstox_intraday_vectors.json",
+      "sha256": "0ef0c36ddebe161fe25db09aa4bfc45405d4b9f9af98a968a3e1bab73d69aba3"
+    },
+    {
+      "path": "fixtures/rust/writer_exposure.json",
+      "sha256": "689afdd3b6bb9486926d70be3f134fbc194d825ac97754d61e4c160ba1b62b60"
+    }
+  ]
+}

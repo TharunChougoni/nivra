@@ -1,0 +1,2591 @@
+{
+  "schema_version": 1,
+  "reference": "python-sadr",
+  "synthetic": true,
+  "reference_domain_sha256": "77fb5231a242cbce0ac5ac2301cfd37435376d978a77f42497c28b571a0229c6",
+  "reference_decimal_precision": 28,
+  "fee_cases": [
+    {
+      "id": "fee-p0-b-0",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "side": "buy",
+      "turnover": "0",
+      "expected_charge": "0"
+    },
+    {
+      "id": "fee-p0-b-1",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "side": "buy",
+      "turnover": "0.01",
+      "expected_charge": "0.000001"
+    },
+    {
+      "id": "fee-p0-b-2",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "side": "buy",
+      "turnover": "0.05",
+      "expected_charge": "0.000005"
+    },
+    {
+      "id": "fee-p0-b-3",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "side": "buy",
+      "turnover": "99.99",
+      "expected_charge": "0.009999"
+    },
+    {
+      "id": "fee-p0-b-4",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "side": "buy",
+      "turnover": "100",
+      "expected_charge": "0.01"
+    },
+    {
+      "id": "fee-p0-b-5",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "side": "buy",
+      "turnover": "5000",
+      "expected_charge": "0.5"
+    },
+    {
+      "id": "fee-p0-s-0",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "side": "sell",
+      "turnover": "0",
+      "expected_charge": "0"
+    },
+    {
+      "id": "fee-p0-s-1",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "side": "sell",
+      "turnover": "0.01",
+      "expected_charge": "0.000002"
+    },
+    {
+      "id": "fee-p0-s-2",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "side": "sell",
+      "turnover": "0.05",
+      "expected_charge": "0.00001"
+    },
+    {
+      "id": "fee-p0-s-3",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "side": "sell",
+      "turnover": "99.99",
+      "expected_charge": "0.019998"
+    },
+    {
+      "id": "fee-p0-s-4",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "side": "sell",
+      "turnover": "100",
+      "expected_charge": "0.02"
+    },
+    {
+      "id": "fee-p0-s-5",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "side": "sell",
+      "turnover": "5000",
+      "expected_charge": "1"
+    },
+    {
+      "id": "fee-p1-b-0",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "side": "buy",
+      "turnover": "0",
+      "expected_charge": "0.03"
+    },
+    {
+      "id": "fee-p1-b-1",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "side": "buy",
+      "turnover": "0.01",
+      "expected_charge": "0.04"
+    },
+    {
+      "id": "fee-p1-b-2",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "side": "buy",
+      "turnover": "0.05",
+      "expected_charge": "0.04"
+    },
+    {
+      "id": "fee-p1-b-3",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "side": "buy",
+      "turnover": "99.99",
+      "expected_charge": "0.04"
+    },
+    {
+      "id": "fee-p1-b-4",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "side": "buy",
+      "turnover": "100",
+      "expected_charge": "0.04"
+    },
+    {
+      "id": "fee-p1-b-5",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "side": "buy",
+      "turnover": "5000",
+      "expected_charge": "0.53"
+    },
+    {
+      "id": "fee-p1-s-0",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "side": "sell",
+      "turnover": "0",
+      "expected_charge": "0.03"
+    },
+    {
+      "id": "fee-p1-s-1",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "side": "sell",
+      "turnover": "0.01",
+      "expected_charge": "0.04"
+    },
+    {
+      "id": "fee-p1-s-2",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "side": "sell",
+      "turnover": "0.05",
+      "expected_charge": "0.04"
+    },
+    {
+      "id": "fee-p1-s-3",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "side": "sell",
+      "turnover": "99.99",
+      "expected_charge": "0.05"
+    },
+    {
+      "id": "fee-p1-s-4",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "side": "sell",
+      "turnover": "100",
+      "expected_charge": "0.05"
+    },
+    {
+      "id": "fee-p1-s-5",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "side": "sell",
+      "turnover": "5000",
+      "expected_charge": "1.03"
+    },
+    {
+      "id": "fee-p2-b-0",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "side": "buy",
+      "turnover": "0",
+      "expected_charge": "0.10"
+    },
+    {
+      "id": "fee-p2-b-1",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "side": "buy",
+      "turnover": "0.01",
+      "expected_charge": "0.15"
+    },
+    {
+      "id": "fee-p2-b-2",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "side": "buy",
+      "turnover": "0.05",
+      "expected_charge": "0.15"
+    },
+    {
+      "id": "fee-p2-b-3",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "side": "buy",
+      "turnover": "99.99",
+      "expected_charge": "0.15"
+    },
+    {
+      "id": "fee-p2-b-4",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "side": "buy",
+      "turnover": "100",
+      "expected_charge": "0.15"
+    },
+    {
+      "id": "fee-p2-b-5",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "side": "buy",
+      "turnover": "5000",
+      "expected_charge": "0.75"
+    },
+    {
+      "id": "fee-p2-s-0",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "side": "sell",
+      "turnover": "0",
+      "expected_charge": "0.10"
+    },
+    {
+      "id": "fee-p2-s-1",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "side": "sell",
+      "turnover": "0.01",
+      "expected_charge": "0.15"
+    },
+    {
+      "id": "fee-p2-s-2",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "side": "sell",
+      "turnover": "0.05",
+      "expected_charge": "0.15"
+    },
+    {
+      "id": "fee-p2-s-3",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "side": "sell",
+      "turnover": "99.99",
+      "expected_charge": "0.20"
+    },
+    {
+      "id": "fee-p2-s-4",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "side": "sell",
+      "turnover": "100",
+      "expected_charge": "0.20"
+    },
+    {
+      "id": "fee-p2-s-5",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "side": "sell",
+      "turnover": "5000",
+      "expected_charge": "2.85"
+    },
+    {
+      "id": "fee-p3-b-0",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "side": "buy",
+      "turnover": "0",
+      "expected_charge": "1"
+    },
+    {
+      "id": "fee-p3-b-1",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "side": "buy",
+      "turnover": "0.01",
+      "expected_charge": "1"
+    },
+    {
+      "id": "fee-p3-b-2",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "side": "buy",
+      "turnover": "0.05",
+      "expected_charge": "1"
+    },
+    {
+      "id": "fee-p3-b-3",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "side": "buy",
+      "turnover": "99.99",
+      "expected_charge": "1"
+    },
+    {
+      "id": "fee-p3-b-4",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "side": "buy",
+      "turnover": "100",
+      "expected_charge": "1"
+    },
+    {
+      "id": "fee-p3-b-5",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "side": "buy",
+      "turnover": "5000",
+      "expected_charge": "1"
+    },
+    {
+      "id": "fee-p3-s-0",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "side": "sell",
+      "turnover": "0",
+      "expected_charge": "1"
+    },
+    {
+      "id": "fee-p3-s-1",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "side": "sell",
+      "turnover": "0.01",
+      "expected_charge": "1"
+    },
+    {
+      "id": "fee-p3-s-2",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "side": "sell",
+      "turnover": "0.05",
+      "expected_charge": "1"
+    },
+    {
+      "id": "fee-p3-s-3",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "side": "sell",
+      "turnover": "99.99",
+      "expected_charge": "1"
+    },
+    {
+      "id": "fee-p3-s-4",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "side": "sell",
+      "turnover": "100",
+      "expected_charge": "1"
+    },
+    {
+      "id": "fee-p3-s-5",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "side": "sell",
+      "turnover": "5000",
+      "expected_charge": "2"
+    }
+  ],
+  "cash_cases": [
+    {
+      "id": "cash-p0-a0-rt0-sl0",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "0",
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_requirement": "0"
+    },
+    {
+      "id": "cash-p0-a0-rt0-sl1",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "0",
+      "round_trip": false,
+      "slippage_legs": 1,
+      "expected_requirement": "0"
+    },
+    {
+      "id": "cash-p0-a0-rt0-sl2",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "0",
+      "round_trip": false,
+      "slippage_legs": 2,
+      "expected_requirement": "0"
+    },
+    {
+      "id": "cash-p0-a0-rt1-sl0",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "0",
+      "round_trip": true,
+      "slippage_legs": 0,
+      "expected_requirement": "0"
+    },
+    {
+      "id": "cash-p0-a0-rt1-sl1",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "0",
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_requirement": "0"
+    },
+    {
+      "id": "cash-p0-a0-rt1-sl2",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "0",
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_requirement": "0"
+    },
+    {
+      "id": "cash-p0-a1-rt0-sl0",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "0.01",
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_requirement": "0.010001"
+    },
+    {
+      "id": "cash-p0-a1-rt0-sl1",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "0.01",
+      "round_trip": false,
+      "slippage_legs": 1,
+      "expected_requirement": "0.010001"
+    },
+    {
+      "id": "cash-p0-a1-rt0-sl2",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "0.01",
+      "round_trip": false,
+      "slippage_legs": 2,
+      "expected_requirement": "0.010001"
+    },
+    {
+      "id": "cash-p0-a1-rt1-sl0",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "0.01",
+      "round_trip": true,
+      "slippage_legs": 0,
+      "expected_requirement": "0.010003"
+    },
+    {
+      "id": "cash-p0-a1-rt1-sl1",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "0.01",
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_requirement": "0.010003"
+    },
+    {
+      "id": "cash-p0-a1-rt1-sl2",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "0.01",
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_requirement": "0.010003"
+    },
+    {
+      "id": "cash-p0-a2-rt0-sl0",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "100",
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_requirement": "100.01"
+    },
+    {
+      "id": "cash-p0-a2-rt0-sl1",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "100",
+      "round_trip": false,
+      "slippage_legs": 1,
+      "expected_requirement": "100.01"
+    },
+    {
+      "id": "cash-p0-a2-rt0-sl2",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "100",
+      "round_trip": false,
+      "slippage_legs": 2,
+      "expected_requirement": "100.01"
+    },
+    {
+      "id": "cash-p0-a2-rt1-sl0",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "100",
+      "round_trip": true,
+      "slippage_legs": 0,
+      "expected_requirement": "100.03"
+    },
+    {
+      "id": "cash-p0-a2-rt1-sl1",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "100",
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_requirement": "100.03"
+    },
+    {
+      "id": "cash-p0-a2-rt1-sl2",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "100",
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_requirement": "100.03"
+    },
+    {
+      "id": "cash-p0-a3-rt0-sl0",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "5000",
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_requirement": "5000.5"
+    },
+    {
+      "id": "cash-p0-a3-rt0-sl1",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "5000",
+      "round_trip": false,
+      "slippage_legs": 1,
+      "expected_requirement": "5000.5"
+    },
+    {
+      "id": "cash-p0-a3-rt0-sl2",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "5000",
+      "round_trip": false,
+      "slippage_legs": 2,
+      "expected_requirement": "5000.5"
+    },
+    {
+      "id": "cash-p0-a3-rt1-sl0",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "5000",
+      "round_trip": true,
+      "slippage_legs": 0,
+      "expected_requirement": "5001.5"
+    },
+    {
+      "id": "cash-p0-a3-rt1-sl1",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "5000",
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_requirement": "5001.5"
+    },
+    {
+      "id": "cash-p0-a3-rt1-sl2",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover": "5000",
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_requirement": "5001.5"
+    },
+    {
+      "id": "cash-p1-a0-rt0-sl0",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "0",
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_requirement": "0.03"
+    },
+    {
+      "id": "cash-p1-a0-rt0-sl1",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "0",
+      "round_trip": false,
+      "slippage_legs": 1,
+      "expected_requirement": "0.03"
+    },
+    {
+      "id": "cash-p1-a0-rt0-sl2",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "0",
+      "round_trip": false,
+      "slippage_legs": 2,
+      "expected_requirement": "0.03"
+    },
+    {
+      "id": "cash-p1-a0-rt1-sl0",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "0",
+      "round_trip": true,
+      "slippage_legs": 0,
+      "expected_requirement": "0.06"
+    },
+    {
+      "id": "cash-p1-a0-rt1-sl1",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "0",
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_requirement": "0.06"
+    },
+    {
+      "id": "cash-p1-a0-rt1-sl2",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "0",
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_requirement": "0.06"
+    },
+    {
+      "id": "cash-p1-a1-rt0-sl0",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "0.01",
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_requirement": "0.0500"
+    },
+    {
+      "id": "cash-p1-a1-rt0-sl1",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "0.01",
+      "round_trip": false,
+      "slippage_legs": 1,
+      "expected_requirement": "0.05000025"
+    },
+    {
+      "id": "cash-p1-a1-rt0-sl2",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "0.01",
+      "round_trip": false,
+      "slippage_legs": 2,
+      "expected_requirement": "0.0500005"
+    },
+    {
+      "id": "cash-p1-a1-rt1-sl0",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "0.01",
+      "round_trip": true,
+      "slippage_legs": 0,
+      "expected_requirement": "0.0900"
+    },
+    {
+      "id": "cash-p1-a1-rt1-sl1",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "0.01",
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_requirement": "0.09000025"
+    },
+    {
+      "id": "cash-p1-a1-rt1-sl2",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "0.01",
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_requirement": "0.0900005"
+    },
+    {
+      "id": "cash-p1-a2-rt0-sl0",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "100",
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_requirement": "100.04"
+    },
+    {
+      "id": "cash-p1-a2-rt0-sl1",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "100",
+      "round_trip": false,
+      "slippage_legs": 1,
+      "expected_requirement": "100.0425"
+    },
+    {
+      "id": "cash-p1-a2-rt0-sl2",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "100",
+      "round_trip": false,
+      "slippage_legs": 2,
+      "expected_requirement": "100.045"
+    },
+    {
+      "id": "cash-p1-a2-rt1-sl0",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "100",
+      "round_trip": true,
+      "slippage_legs": 0,
+      "expected_requirement": "100.09"
+    },
+    {
+      "id": "cash-p1-a2-rt1-sl1",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "100",
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_requirement": "100.0925"
+    },
+    {
+      "id": "cash-p1-a2-rt1-sl2",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "100",
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_requirement": "100.095"
+    },
+    {
+      "id": "cash-p1-a3-rt0-sl0",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "5000",
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_requirement": "5000.53"
+    },
+    {
+      "id": "cash-p1-a3-rt0-sl1",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "5000",
+      "round_trip": false,
+      "slippage_legs": 1,
+      "expected_requirement": "5000.655"
+    },
+    {
+      "id": "cash-p1-a3-rt0-sl2",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "5000",
+      "round_trip": false,
+      "slippage_legs": 2,
+      "expected_requirement": "5000.78"
+    },
+    {
+      "id": "cash-p1-a3-rt1-sl0",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "5000",
+      "round_trip": true,
+      "slippage_legs": 0,
+      "expected_requirement": "5001.56"
+    },
+    {
+      "id": "cash-p1-a3-rt1-sl1",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "5000",
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_requirement": "5001.685"
+    },
+    {
+      "id": "cash-p1-a3-rt1-sl2",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover": "5000",
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_requirement": "5001.81"
+    },
+    {
+      "id": "cash-p2-a0-rt0-sl0",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "0",
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_requirement": "0.10"
+    },
+    {
+      "id": "cash-p2-a0-rt0-sl1",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "0",
+      "round_trip": false,
+      "slippage_legs": 1,
+      "expected_requirement": "0.10"
+    },
+    {
+      "id": "cash-p2-a0-rt0-sl2",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "0",
+      "round_trip": false,
+      "slippage_legs": 2,
+      "expected_requirement": "0.10"
+    },
+    {
+      "id": "cash-p2-a0-rt1-sl0",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "0",
+      "round_trip": true,
+      "slippage_legs": 0,
+      "expected_requirement": "0.20"
+    },
+    {
+      "id": "cash-p2-a0-rt1-sl1",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "0",
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_requirement": "0.20"
+    },
+    {
+      "id": "cash-p2-a0-rt1-sl2",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "0",
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_requirement": "0.20"
+    },
+    {
+      "id": "cash-p2-a1-rt0-sl0",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "0.01",
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_requirement": "0.16"
+    },
+    {
+      "id": "cash-p2-a1-rt0-sl1",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "0.01",
+      "round_trip": false,
+      "slippage_legs": 1,
+      "expected_requirement": "0.160003"
+    },
+    {
+      "id": "cash-p2-a1-rt0-sl2",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "0.01",
+      "round_trip": false,
+      "slippage_legs": 2,
+      "expected_requirement": "0.160006"
+    },
+    {
+      "id": "cash-p2-a1-rt1-sl0",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "0.01",
+      "round_trip": true,
+      "slippage_legs": 0,
+      "expected_requirement": "0.31"
+    },
+    {
+      "id": "cash-p2-a1-rt1-sl1",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "0.01",
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_requirement": "0.310003"
+    },
+    {
+      "id": "cash-p2-a1-rt1-sl2",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "0.01",
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_requirement": "0.310006"
+    },
+    {
+      "id": "cash-p2-a2-rt0-sl0",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "100",
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_requirement": "100.15"
+    },
+    {
+      "id": "cash-p2-a2-rt0-sl1",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "100",
+      "round_trip": false,
+      "slippage_legs": 1,
+      "expected_requirement": "100.18"
+    },
+    {
+      "id": "cash-p2-a2-rt0-sl2",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "100",
+      "round_trip": false,
+      "slippage_legs": 2,
+      "expected_requirement": "100.21"
+    },
+    {
+      "id": "cash-p2-a2-rt1-sl0",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "100",
+      "round_trip": true,
+      "slippage_legs": 0,
+      "expected_requirement": "100.35"
+    },
+    {
+      "id": "cash-p2-a2-rt1-sl1",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "100",
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_requirement": "100.38"
+    },
+    {
+      "id": "cash-p2-a2-rt1-sl2",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "100",
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_requirement": "100.41"
+    },
+    {
+      "id": "cash-p2-a3-rt0-sl0",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "5000",
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_requirement": "5000.75"
+    },
+    {
+      "id": "cash-p2-a3-rt0-sl1",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "5000",
+      "round_trip": false,
+      "slippage_legs": 1,
+      "expected_requirement": "5002.25"
+    },
+    {
+      "id": "cash-p2-a3-rt0-sl2",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "5000",
+      "round_trip": false,
+      "slippage_legs": 2,
+      "expected_requirement": "5003.75"
+    },
+    {
+      "id": "cash-p2-a3-rt1-sl0",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "5000",
+      "round_trip": true,
+      "slippage_legs": 0,
+      "expected_requirement": "5003.60"
+    },
+    {
+      "id": "cash-p2-a3-rt1-sl1",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "5000",
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_requirement": "5005.10"
+    },
+    {
+      "id": "cash-p2-a3-rt1-sl2",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover": "5000",
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_requirement": "5006.60"
+    },
+    {
+      "id": "cash-p3-a0-rt0-sl0",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "0",
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_requirement": "1.0"
+    },
+    {
+      "id": "cash-p3-a0-rt0-sl1",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "0",
+      "round_trip": false,
+      "slippage_legs": 1,
+      "expected_requirement": "1.0"
+    },
+    {
+      "id": "cash-p3-a0-rt0-sl2",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "0",
+      "round_trip": false,
+      "slippage_legs": 2,
+      "expected_requirement": "1.0"
+    },
+    {
+      "id": "cash-p3-a0-rt1-sl0",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "0",
+      "round_trip": true,
+      "slippage_legs": 0,
+      "expected_requirement": "2.0"
+    },
+    {
+      "id": "cash-p3-a0-rt1-sl1",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "0",
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_requirement": "2.0"
+    },
+    {
+      "id": "cash-p3-a0-rt1-sl2",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "0",
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_requirement": "2.0"
+    },
+    {
+      "id": "cash-p3-a1-rt0-sl0",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "0.01",
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_requirement": "1.010"
+    },
+    {
+      "id": "cash-p3-a1-rt0-sl1",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "0.01",
+      "round_trip": false,
+      "slippage_legs": 1,
+      "expected_requirement": "1.0100004"
+    },
+    {
+      "id": "cash-p3-a1-rt0-sl2",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "0.01",
+      "round_trip": false,
+      "slippage_legs": 2,
+      "expected_requirement": "1.0100008"
+    },
+    {
+      "id": "cash-p3-a1-rt1-sl0",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "0.01",
+      "round_trip": true,
+      "slippage_legs": 0,
+      "expected_requirement": "2.010"
+    },
+    {
+      "id": "cash-p3-a1-rt1-sl1",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "0.01",
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_requirement": "2.0100004"
+    },
+    {
+      "id": "cash-p3-a1-rt1-sl2",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "0.01",
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_requirement": "2.0100008"
+    },
+    {
+      "id": "cash-p3-a2-rt0-sl0",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "100",
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_requirement": "101.0"
+    },
+    {
+      "id": "cash-p3-a2-rt0-sl1",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "100",
+      "round_trip": false,
+      "slippage_legs": 1,
+      "expected_requirement": "101.004"
+    },
+    {
+      "id": "cash-p3-a2-rt0-sl2",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "100",
+      "round_trip": false,
+      "slippage_legs": 2,
+      "expected_requirement": "101.008"
+    },
+    {
+      "id": "cash-p3-a2-rt1-sl0",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "100",
+      "round_trip": true,
+      "slippage_legs": 0,
+      "expected_requirement": "102.0"
+    },
+    {
+      "id": "cash-p3-a2-rt1-sl1",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "100",
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_requirement": "102.004"
+    },
+    {
+      "id": "cash-p3-a2-rt1-sl2",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "100",
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_requirement": "102.008"
+    },
+    {
+      "id": "cash-p3-a3-rt0-sl0",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "5000",
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_requirement": "5001.0"
+    },
+    {
+      "id": "cash-p3-a3-rt0-sl1",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "5000",
+      "round_trip": false,
+      "slippage_legs": 1,
+      "expected_requirement": "5001.2"
+    },
+    {
+      "id": "cash-p3-a3-rt0-sl2",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "5000",
+      "round_trip": false,
+      "slippage_legs": 2,
+      "expected_requirement": "5001.4"
+    },
+    {
+      "id": "cash-p3-a3-rt1-sl0",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "5000",
+      "round_trip": true,
+      "slippage_legs": 0,
+      "expected_requirement": "5003.0"
+    },
+    {
+      "id": "cash-p3-a3-rt1-sl1",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "5000",
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_requirement": "5003.2"
+    },
+    {
+      "id": "cash-p3-a3-rt1-sl2",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover": "5000",
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_requirement": "5003.4"
+    }
+  ],
+  "lot_cases": [
+    {
+      "id": "lot-p0-negative-budget",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover_per_lot": "1.01",
+      "budget": "-1",
+      "maximum_lots": 10,
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_lots": 0
+    },
+    {
+      "id": "lot-p0-zero-budget",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover_per_lot": "1.01",
+      "budget": "0",
+      "maximum_lots": 10,
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_lots": 0
+    },
+    {
+      "id": "lot-p0-tiny-budget",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover_per_lot": "0.01",
+      "budget": "0.05",
+      "maximum_lots": 10,
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_lots": 4
+    },
+    {
+      "id": "lot-p0-one-lot-boundary",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover_per_lot": "1.01",
+      "budget": "1.02",
+      "maximum_lots": 10,
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_lots": 1
+    },
+    {
+      "id": "lot-p0-fee-boundary",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover_per_lot": "10.05",
+      "budget": "25",
+      "maximum_lots": 10,
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_lots": 2
+    },
+    {
+      "id": "lot-p0-large-cap",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover_per_lot": "100",
+      "budget": "5000",
+      "maximum_lots": 100,
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_lots": 49
+    },
+    {
+      "id": "lot-p0-tight-cap",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover_per_lot": "1",
+      "budget": "100",
+      "maximum_lots": 1,
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_lots": 1
+    },
+    {
+      "id": "lot-p0-zero-cap",
+      "policy": {
+        "per_order": "0",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0",
+        "rounding_increment": null
+      },
+      "turnover_per_lot": "1",
+      "budget": "100",
+      "maximum_lots": 0,
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_lots": 0
+    },
+    {
+      "id": "lot-p1-negative-budget",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover_per_lot": "1.01",
+      "budget": "-1",
+      "maximum_lots": 10,
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_lots": 0
+    },
+    {
+      "id": "lot-p1-zero-budget",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover_per_lot": "1.01",
+      "budget": "0",
+      "maximum_lots": 10,
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_lots": 0
+    },
+    {
+      "id": "lot-p1-tiny-budget",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover_per_lot": "0.01",
+      "budget": "0.05",
+      "maximum_lots": 10,
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_lots": 0
+    },
+    {
+      "id": "lot-p1-one-lot-boundary",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover_per_lot": "1.01",
+      "budget": "1.02",
+      "maximum_lots": 10,
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_lots": 0
+    },
+    {
+      "id": "lot-p1-fee-boundary",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover_per_lot": "10.05",
+      "budget": "25",
+      "maximum_lots": 10,
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_lots": 2
+    },
+    {
+      "id": "lot-p1-large-cap",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover_per_lot": "100",
+      "budget": "5000",
+      "maximum_lots": 100,
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_lots": 49
+    },
+    {
+      "id": "lot-p1-tight-cap",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover_per_lot": "1",
+      "budget": "100",
+      "maximum_lots": 1,
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_lots": 1
+    },
+    {
+      "id": "lot-p1-zero-cap",
+      "policy": {
+        "per_order": "0.03",
+        "buy_bps": "1",
+        "sell_bps": "2",
+        "slippage_bps": "0.25",
+        "rounding_increment": "0.01"
+      },
+      "turnover_per_lot": "1",
+      "budget": "100",
+      "maximum_lots": 0,
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_lots": 0
+    },
+    {
+      "id": "lot-p2-negative-budget",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover_per_lot": "1.01",
+      "budget": "-1",
+      "maximum_lots": 10,
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_lots": 0
+    },
+    {
+      "id": "lot-p2-zero-budget",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover_per_lot": "1.01",
+      "budget": "0",
+      "maximum_lots": 10,
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_lots": 0
+    },
+    {
+      "id": "lot-p2-tiny-budget",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover_per_lot": "0.01",
+      "budget": "0.05",
+      "maximum_lots": 10,
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_lots": 0
+    },
+    {
+      "id": "lot-p2-one-lot-boundary",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover_per_lot": "1.01",
+      "budget": "1.02",
+      "maximum_lots": 10,
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_lots": 0
+    },
+    {
+      "id": "lot-p2-fee-boundary",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover_per_lot": "10.05",
+      "budget": "25",
+      "maximum_lots": 10,
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_lots": 2
+    },
+    {
+      "id": "lot-p2-large-cap",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover_per_lot": "100",
+      "budget": "5000",
+      "maximum_lots": 100,
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_lots": 49
+    },
+    {
+      "id": "lot-p2-tight-cap",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover_per_lot": "1",
+      "budget": "100",
+      "maximum_lots": 1,
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_lots": 1
+    },
+    {
+      "id": "lot-p2-zero-cap",
+      "policy": {
+        "per_order": "0.10",
+        "buy_bps": "1.25",
+        "sell_bps": "5.5",
+        "slippage_bps": "3",
+        "rounding_increment": "0.05"
+      },
+      "turnover_per_lot": "1",
+      "budget": "100",
+      "maximum_lots": 0,
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_lots": 0
+    },
+    {
+      "id": "lot-p3-negative-budget",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover_per_lot": "1.01",
+      "budget": "-1",
+      "maximum_lots": 10,
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_lots": 0
+    },
+    {
+      "id": "lot-p3-zero-budget",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover_per_lot": "1.01",
+      "budget": "0",
+      "maximum_lots": 10,
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_lots": 0
+    },
+    {
+      "id": "lot-p3-tiny-budget",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover_per_lot": "0.01",
+      "budget": "0.05",
+      "maximum_lots": 10,
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_lots": 0
+    },
+    {
+      "id": "lot-p3-one-lot-boundary",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover_per_lot": "1.01",
+      "budget": "1.02",
+      "maximum_lots": 10,
+      "round_trip": false,
+      "slippage_legs": 0,
+      "expected_lots": 0
+    },
+    {
+      "id": "lot-p3-fee-boundary",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover_per_lot": "10.05",
+      "budget": "25",
+      "maximum_lots": 10,
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_lots": 2
+    },
+    {
+      "id": "lot-p3-large-cap",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover_per_lot": "100",
+      "budget": "5000",
+      "maximum_lots": 100,
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_lots": 49
+    },
+    {
+      "id": "lot-p3-tight-cap",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover_per_lot": "1",
+      "budget": "100",
+      "maximum_lots": 1,
+      "round_trip": true,
+      "slippage_legs": 1,
+      "expected_lots": 1
+    },
+    {
+      "id": "lot-p3-zero-cap",
+      "policy": {
+        "per_order": "0.5",
+        "buy_bps": "0.5",
+        "sell_bps": "1.5",
+        "slippage_bps": "0.4",
+        "rounding_increment": "1"
+      },
+      "turnover_per_lot": "1",
+      "budget": "100",
+      "maximum_lots": 0,
+      "round_trip": true,
+      "slippage_legs": 2,
+      "expected_lots": 0
+    }
+  ],
+  "order_cases": [
+    {
+      "id": "order-unit-one-aligned",
+      "lot_size": 1,
+      "tick_size": "0.01",
+      "units": 1,
+      "price": "10.01",
+      "expected_valid": true
+    },
+    {
+      "id": "order-unit-one-off-tick",
+      "lot_size": 1,
+      "tick_size": "0.05",
+      "units": 1,
+      "price": "10.01",
+      "expected_valid": false
+    },
+    {
+      "id": "order-lot-ten-valid",
+      "lot_size": 10,
+      "tick_size": "0.05",
+      "units": 20,
+      "price": "10.05",
+      "expected_valid": true
+    },
+    {
+      "id": "order-lot-ten-nonmultiple",
+      "lot_size": 10,
+      "tick_size": "0.05",
+      "units": 11,
+      "price": "10.05",
+      "expected_valid": false
+    },
+    {
+      "id": "order-lot-twenty-five-valid",
+      "lot_size": 25,
+      "tick_size": "1",
+      "units": 50,
+      "price": "100",
+      "expected_valid": true
+    },
+    {
+      "id": "order-lot-twenty-five-off-tick",
+      "lot_size": 25,
+      "tick_size": "1",
+      "units": 50,
+      "price": "100.5",
+      "expected_valid": false
+    },
+    {
+      "id": "order-zero-units",
+      "lot_size": 1,
+      "tick_size": "0.01",
+      "units": 0,
+      "price": "10",
+      "expected_valid": false
+    },
+    {
+      "id": "order-negative-units",
+      "lot_size": 1,
+      "tick_size": "0.01",
+      "units": -1,
+      "price": "10",
+      "expected_valid": false
+    },
+    {
+      "id": "order-zero-price",
+      "lot_size": 1,
+      "tick_size": "0.01",
+      "units": 1,
+      "price": "0",
+      "expected_valid": false
+    },
+    {
+      "id": "order-negative-price",
+      "lot_size": 1,
+      "tick_size": "0.01",
+      "units": 1,
+      "price": "-0.01",
+      "expected_valid": false
+    },
+    {
+      "id": "order-decimal-boundary-valid",
+      "lot_size": 5,
+      "tick_size": "0.05",
+      "units": 5,
+      "price": "0.15",
+      "expected_valid": true
+    },
+    {
+      "id": "order-decimal-boundary-invalid",
+      "lot_size": 5,
+      "tick_size": "0.05",
+      "units": 5,
+      "price": "0.16",
+      "expected_valid": false
+    }
+  ]
+}
