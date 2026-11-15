@@ -16,12 +16,6 @@ original quote receipt no more than two seconds old.
 > system. Source, CI, artifacts and host operation are separate facts: a passing
 > build or install does not qualify a host or authorize a session.
 
-## Status
-
-This is a source-only public snapshot. No Nivra binary release has been
-published yet; build from source with the commands below. The initial version is
-retained for CLI, configuration and on-disk compatibility.
-
 ## Scope
 
 - **Paper execution:** NSE cash equities/ETFs and a bounded, buy-only Nifty
@@ -43,16 +37,7 @@ retained for CLI, configuration and on-disk compatibility.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-  D[Verified market data] --> F[Factual digest<br/>Luna]
-  F --> O[Decision owner<br/>typed actions]
-  O --> E[Paper engine<br/>identity, cash, fees, 2s freshness]
-  E --> J[(SQLite journal)]
-  J --> U[Read-only dashboard]
-  R[Research lane] --> S[Sandboxed worker]
-  S --> V[Evidence and replay]
-```
+![Nivra architecture: paper execution and independent sandboxed research](docs/assets/architecture.svg)
 
 The trading and research lanes are independent. A research result cannot place,
 size or promote a trade. The shared financial engine is also used by offline
@@ -161,11 +146,3 @@ performance claims:
 See [Testing](docs/TESTING.md) and [Development](docs/DEVELOPMENT.md) for
 commands. CI runs the Rust and dashboard checks; a tagged commit can build the
 musl artifacts.
-
-## Project status
-
-This is an experimental research project. It does not claim production adoption,
-profitability, benchmark performance, or that any model output is correct. Future
-work belongs in [GitHub Issues](https://github.com/TharunChougoni/nivra/issues);
-the initial snapshot is described in [CHANGELOG.md](CHANGELOG.md) and repository
-working rules are in [AGENTS.md](AGENTS.md).

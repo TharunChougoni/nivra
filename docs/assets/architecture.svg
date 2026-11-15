@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 280" role="img" aria-labelledby="title description">
+  <title id="title">Nivra architecture</title>
+  <desc id="description">Verified market data flows through a factual Luna digest and decision owner to the paper engine, SQLite journal and read-only dashboard. A separate research lane runs a sandboxed worker and produces evidence and replay.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#aeb8c4"/></marker>
+    <style>
+      .box { fill: #161b22; stroke: #7d8590; stroke-width: 1.5; }
+      .label { fill: #e6edf3; font: 15px Arial, sans-serif; text-anchor: middle; }
+      .flow { fill: none; stroke: #aeb8c4; stroke-width: 1.5; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect width="1100" height="280" rx="8" fill="#0d1117"/>
+  <g class="box">
+    <rect x="20" y="24" width="145" height="100" rx="5"/>
+    <rect x="195" y="24" width="145" height="100" rx="5"/>
+    <rect x="370" y="24" width="145" height="100" rx="5"/>
+    <rect x="545" y="24" width="180" height="100" rx="5"/>
+    <path d="M755 40 A72.5 16 0 0 0 900 40 V108 A72.5 16 0 0 1 755 108 Z"/>
+    <ellipse cx="827.5" cy="40" rx="72.5" ry="16"/>
+    <rect x="930" y="24" width="145" height="100" rx="5"/>
+    <rect x="20" y="190" width="145" height="64" rx="5"/>
+    <rect x="195" y="190" width="145" height="64" rx="5"/>
+    <rect x="370" y="190" width="145" height="64" rx="5"/>
+  </g>
+  <g class="label">
+    <text x="92.5" y="68"><tspan x="92.5">Verified market</tspan><tspan x="92.5" dy="23">data</tspan></text>
+    <text x="267.5" y="68"><tspan x="267.5">Factual digest</tspan><tspan x="267.5" dy="23">Luna</tspan></text>
+    <text x="442.5" y="68"><tspan x="442.5">Decision owner</tspan><tspan x="442.5" dy="23">typed actions</tspan></text>
+    <text x="635" y="52"><tspan x="635">Paper engine</tspan><tspan x="635" dy="22">identity, cash, fees</tspan><tspan x="635" dy="22">2s freshness</tspan></text>
+    <text x="827.5" y="85">SQLite journal</text>
+    <text x="1002.5" y="68"><tspan x="1002.5">Read-only</tspan><tspan x="1002.5" dy="23">dashboard</tspan></text>
+    <text x="92.5" y="228">Research lane</text>
+    <text x="267.5" y="216"><tspan x="267.5">Sandboxed</tspan><tspan x="267.5" dy="23">worker</tspan></text>
+    <text x="442.5" y="216"><tspan x="442.5">Evidence and</tspan><tspan x="442.5" dy="23">replay</tspan></text>
+  </g>
+  <g class="flow">
+    <path d="M165 74H193"/><path d="M340 74H368"/><path d="M515 74H543"/><path d="M725 74H753"/><path d="M900 74H928"/>
+    <path d="M165 222H193"/><path d="M340 222H368"/>
+  </g>
+</svg>
