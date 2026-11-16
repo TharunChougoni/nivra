@@ -31,7 +31,7 @@ pub(crate) fn runs(
     }
     let identity = match query.get("identity") {
         None | Some("all") => None,
-        Some("digest" | "decide" | "orchestrator") => query.get("identity").map(str::to_owned),
+        Some("digest" | "orchestrator") => query.get("identity").map(str::to_owned),
         Some(_) => return error("400 Bad Request", "run_identity_invalid"),
     };
     let filter = RunFilter {

@@ -10,11 +10,11 @@ Unfinished work and telemetry qualification are tracked in
 ## Sources and authentication
 
 The paper worker serves its own bound current snapshot on `127.0.0.1:8771`.
-For a separate history workspace, use an existing private token file:
+For a separate research-only workspace (Backtest lab and verification, no
+controller state), use an existing private token file:
 
 ```sh
-sadr-rs dashboard --token-file /private/dashboard-token \
-  --registry /original/controller.sqlite --history /archive/dashboard-history.json
+sadr-rs dashboard --token-file /private/dashboard-token [--model-config PAPER_CONFIG]
 ```
 
 Do not compete with the worker's listener. Open the loopback URL and enter the
@@ -27,20 +27,6 @@ The standalone dashboard also reads `dashboard_public_host` from its optional
 `--model-config`; only that exact HTTPS Funnel authority is admitted in addition
 to loopback. Any other Host or origin remains refused, and without a configured
 host the server stays local-only. Public trading controls are absent; unknown non-v1 paths return 404.
-
-Registry checkpoints expose lifecycle, not balances or process health. Financial
-history uses an explicit bounded index, never directory discovery:
-
-```json
-{"schema":1,"sessions":[{"id":{"broker":"upstox","account":"alias","date":"2026-10-16"},"report":"/archive/session/report.json","report_sha256":"<original-sha256>"}]}
-```
-
-Optional `reviews`/`reviews_sha256` must appear together. Absolute original paths,
-expected filenames, no symlink ancestors, at most 100 sessions/8 MiB total reads.
-Reports require explicit identity, paper/live flags and reconciled portfolio.
-Unsupported legacy shapes are unavailable, never inferred/rewritten. A bad review
-hides that artifact, not a valid financial report. Duplicate review/job IDs refuse.
-Hash matching proves consistency with the index, not source authenticity.
 
 Financial views distinguish continuing cash, dated P&L, marks, fees and unresolved
 holdings; never add daily allocations as wealth. Scanner shows fresh/stale/unseen
@@ -56,8 +42,8 @@ Radix UI, Lucide icons and uPlot. It is a presentation layer; the Rust runtime
 owns trading. The operator builds pinned npm dependencies
 locally; the generated static `bundle/` is committed and embedded in the Rust
 binary. There is no Node service, SSR, CDN, remote font or runtime package
-installation. `/v2/` and `/v2/<asset>` remain compatibility aliases for the
-same React bundle; new links use `/`.
+installation. The bundle is served from `/`; the former `/v2/` aliases return 404.
+`/SOURCES.md` and `/LICENSES.txt` carry the vendored-source and licence manifest.
 
 The eight sections are Overview, Models, Portfolio & fills, Sessions, Market
 scanner, Strategies, Backtest lab and System health. A compact sidebar, persistent
@@ -73,19 +59,18 @@ wordmark and standalone arrow are retained.
 - **Overview** combines account figures, a price/equity chart workspace,
   recent run links and a separate model/readiness rail.
 - **Models** groups exactly two live identities: Digest and the
-  Orchestrator. Strategy, operations and scorer remain tasks, not new identities.
+  Orchestrator.
   A **Web tool activity** panel lists the current session's recorded
   `web_search` / `web_fetch` / `news_lookup` calls with their original query or
   URL, latency, bytes and outcome; it is display evidence only and exposes no
   provider key or order authority.
-  Legacy grants and allowances are separately labelled and never added together.
   Search/date/trigger/outcome/failure filters use the existing archive API;
-  the `identity` parameter groups operations, strategy, scorer and supervisor
-  runs under Orchestrator before paging, so `next` never skips older rows behind
+  the `identity` parameter (`digest` or `orchestrator`) groups supervisor
+  and scorer runs under Orchestrator before paging, so `next` never skips older rows behind
   digest volume. Supervisor and scorer calls are archived through the harness
   with their trigger reason, transcript and parsed directives. Instrument/trigger text filters apply
   on Enter or blur. A selected run replaces the archive with its full transcript,
-  retaining a back path. `#/runs/<id>` and legacy `#/now` links still work.
+  retaining a back path. `#/runs/<id>` links still work.
 - **Portfolio & fills** separates positions, fills and plans/validation using
   tabs. Instrument-class filters derive only from recorded `instrument.kind`
   values in the loaded projection (`index`, `cash`, `etf`, `future`, `call`,
@@ -461,8 +446,7 @@ example is labelled. Limits: 512 KiB manifest, 4 MiB events, 500 symbols, 5,000 
 50,000 observations, three-second HTTP compute deadline (five seconds for CLI).
 
 Stateless requests accept content, never host paths; they change no trading state.
-The paper-worker view and a standalone registry showing active/pending trading
-refuse compute. Host/origin checks still apply; this is not resource qualification.
+The paper-worker view refuses compute; only the research-only dashboard admits it. Host/origin checks still apply; this is not resource qualification.
 At most ten reports are stored in the browser without silent eviction; export
 preserves a convenience copy, not an authoritative experiment record.
 
@@ -572,10 +556,7 @@ remain unavailable. Legacy adapters retain unknown durations, usage and tool
 statuses; intermediate prose alone never establishes terminal completion.
 
 The live model roster and approval identity list contain Digest and Orchestrator
-only. Legacy Decide rows remain labeled in read-only run archives; their
-usage is never combined with the orchestrator allowance. An enabled legacy
-planner reports migration-required rather than advertising an executable third
-peer.
+only.
 
 ## Instrument metadata and F&O contract chains
 

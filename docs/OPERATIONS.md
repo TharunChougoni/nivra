@@ -14,7 +14,7 @@ upgrade compatibility; Nivra is the public project name.
 | --- | --- |
 | `ind-sadr-rust-paper.service` | `sadr-rs paper --config PAPER_CONFIG` |
 | `ind-sadr-rust-update.timer` / `.service` | Guarded update check every 30 minutes |
-| `ind-sadr-rs-dashboard.service` | Optional standalone registry dashboard using the installed `sadr-rs` |
+| `ind-sadr-rs-dashboard.service` | Optional research-only dashboard (Backtest lab) using the installed `sadr-rs` |
 | `PAPER_CONFIG` | Account/capital, original book/read journal, source/history/planner paths |
 | `SESSIONS_ROOT/current.json` | Application-owned committed dated-book pointer |
 | `<session>/paper.sqlite` | Original ledger, control and planner/review journals |
@@ -688,7 +688,7 @@ Invalid numeric values and model-price decimals fail as
 `dashboard_settings_invalid`; unknown keys fail strict config deserialization.
 
 The last four keys live in nested `market_data_transport`, `storage` and
-`dashboard` objects. The registry dashboard reads storage/refresh settings from
+`dashboard` objects. The research dashboard reads dashboard refresh settings from
 its optional `--model-config` runtime config; without it, defaults apply. Default
 values are omitted on serialization to preserve existing sealed book bindings;
 custom values participate in the binding. HTTP timeout applies to all runtime
@@ -1674,7 +1674,7 @@ bearer authentication. There are no trading control endpoints. Avoid a competing
 standalone server on the same port. See [dashboard](DASHBOARD.md).
 
 The paper worker's embedded dashboard is canonical. Enable the standalone
-`ind-sadr-rs-dashboard.service` only when a separate registry/history view is
+`ind-sadr-rs-dashboard.service` only when the research-only Backtest lab is
 needed while the paper worker is stopped. Its unit uses
 the installed `sadr-rs`, the same release pointer as paper and updater;
 do not run both dashboard servers on port 8771. Host unit enablement and symlink
@@ -1689,7 +1689,7 @@ before writing the new token. Service restart is required to load it.
 
 The workspace is `/`. Legacy `/legacy/` and `/api/model-*` paths are not served.
 The updater probes `/api/v1/health`; no legacy `/api/status` alias is served.
-`/v2/` is a compatibility alias for the same React bundle.
+`/v2/` is not served.
 Its static shell and vendored modules load before login, but every `/api/v1/*`
 read still needs the bearer token. **Lock** clears the token, ETag cache and page
 state. The workspace holds one SSE stream while live (or one held long-poll per

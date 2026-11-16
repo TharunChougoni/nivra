@@ -62,8 +62,6 @@ const PENDING_KINDS = new Set([
   "change",
   "pre_close",
   "post_fill",
-  "post_decide",
-  "luna_no_decide_streak",
   "failure_streak",
   "decision",
   "review",

@@ -434,18 +434,16 @@ export function ModelRoster({ compact = false }) {
     state.approvalsState === "error" || state.approvalsState === "unavailable";
   return (
     <div className={compact ? "model-roster compact-roster" : "model-roster"}>
-      {identities(state).map(({ id, label, role, legacy }) => (
+      {identities(state).map(({ id, label, role }) => (
         <div key={id} className={"model-identity " + id}>
           <div className="model-avatar">{id === "digest" ? "L" : "O"}</div>
           <div className="model-info">
             <strong>{label}</strong>
             <small>
               {role?.model ||
-                (legacy.length
-                  ? "Legacy review identities"
-                  : approvalsUnavailable
-                    ? "Approval projection unavailable"
-                    : "Model not reported")}
+                (approvalsUnavailable
+                  ? "Approval projection unavailable"
+                  : "Model not reported")}
             </small>
             {!compact && (
               <p>
@@ -465,15 +463,9 @@ export function ModelRoster({ compact = false }) {
               <small>
                 {role
                   ? count(role.remaining_current) + " remaining"
-                  : legacy
-                      .map(
-                        (v) =>
-                          words(v.role) + ": " + count(v.remaining_current),
-                      )
-                      .join(" · ") ||
-                    (approvalsUnavailable
-                      ? "Allowance unavailable"
-                      : "Allowance unknown")}
+                  : approvalsUnavailable
+                    ? "Allowance unavailable"
+                    : "Allowance unknown"}
               </small>
             )}
           </div>

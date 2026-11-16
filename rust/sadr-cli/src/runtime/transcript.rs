@@ -750,10 +750,7 @@ enum ListRow {
 }
 fn identity_matches(role: &str, identity: &str) -> bool {
     match identity {
-        "orchestrator" => matches!(
-            role,
-            "operations" | "strategy" | "scorer" | "supervisor" | "orchestrator"
-        ),
+        "orchestrator" => matches!(role, "scorer" | "supervisor" | "orchestrator"),
         other => role == other,
     }
 }
@@ -1026,18 +1023,18 @@ mod list_tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("sessions");
         for date in ["2026-10-28", "2026-10-27"] {
-            for (index, role) in ["digest", "decide", "operations", "strategy"]
+            for (index, role) in ["digest", "supervisor", "scorer", "orchestrator"]
                 .iter()
                 .enumerate()
             {
                 indexed(&root.join(date).join("model"), index, role);
             }
         }
-        let legacy = root.join("2026-10-26/model/harness-strategy-100-old");
+        let legacy = root.join("2026-10-26/model/harness-supervisor-100-old");
         std::fs::create_dir_all(&legacy).unwrap();
         std::fs::write(
             legacy.join("run.json"),
-            br#"{"role":"strategy","model":"legacy","trigger":{"kind":"fill"}}"#,
+            br#"{"role":"supervisor","model":"legacy","trigger":{"kind":"fill"}}"#,
         )
         .unwrap();
         std::fs::write(
@@ -1095,13 +1092,13 @@ mod list_tests {
                 .count(),
             1
         );
-        filter.role = Some("operations".into());
+        filter.role = Some("supervisor".into());
         assert_eq!(
             list_runs(&source, &filter, &settings).unwrap().body["runs"]
                 .as_array()
                 .unwrap()
                 .len(),
-            2
+            3
         );
         filter.role = None;
         // The identity filter is applied before paging: every orchestrator group
@@ -1118,7 +1115,7 @@ mod list_tests {
             assert!(rows.iter().all(|row| {
                 matches!(
                     row["role"].as_str(),
-                    Some("operations" | "strategy" | "scorer" | "supervisor" | "orchestrator")
+                    Some("scorer" | "supervisor" | "orchestrator")
                 )
             }));
             orchestrator.extend(rows.iter().map(|row| row["run"].clone()));
@@ -1127,7 +1124,7 @@ mod list_tests {
                 break;
             }
         }
-        assert_eq!(orchestrator.len(), 5);
+        assert_eq!(orchestrator.len(), 7);
         filter = RunFilter {
             limit: 100,
             ..RunFilter::default()

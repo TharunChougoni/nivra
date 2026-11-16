@@ -163,14 +163,6 @@ export interface Planner {
   actions?: PlanAction[];
   execution?: Execution[];
 }
-export interface Job {
-  id?: string;
-  kind?: string;
-  role?: string;
-  status?: string;
-  result_hash?: string;
-  session?: string | null;
-}
 export interface ResearchCandidate {
   candidate_id: string;
   parent_candidate_id?: string | null;
@@ -523,7 +515,6 @@ export interface SummaryResponse extends Envelope {
   market_feed?: MarketFeed | null;
   readiness?: Readiness | null;
   planner?: Planner | null;
-  post_close?: { jobs?: Job[] } | null;
   oldest_scan_age_ms?: number | null;
   alerts?: Alert[];
   alert_count?: number;
@@ -676,17 +667,11 @@ export interface SessionRecord extends Availability {
   provenance?: string;
   trading_controls?: false;
   stale?: boolean;
-  research_jobs?: Job[];
-  model_reviews?: Job[];
-  post_close?: { jobs?: Job[] };
 }
-export interface SessionsResponse extends Page<SessionRecord> {
-  history_unavailable?: boolean;
-}
+export type SessionsResponse = Page<SessionRecord>;
 export interface IdentityApproval {
   identity: string;
   role?: RoleApproval | null;
-  tasks?: RoleApproval[];
 }
 export interface ApprovalsResponse extends Envelope {
   models?: { roles?: RoleApproval[] } | null;

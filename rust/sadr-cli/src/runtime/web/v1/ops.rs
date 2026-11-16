@@ -53,7 +53,7 @@ pub(crate) fn sessions(
     };
     let p = &view["portfolio"];
     let current_envelope = envelope(&view);
-    let mut rows = vec![serde_json::json!({
+    let rows = vec![serde_json::json!({
         "id":{"broker":"upstox","account":view["account"],"date":view["authorized_session"]},
         "mode":current_envelope["mode"],"paper_only":current_envelope["paper_only"],"live_enabled":current_envelope["live_enabled"],
         "status":if p["stopped"]==true {"stopped"} else if p["halted"]==true {"halted"} else if p["closed"]==true {"closed"} else {"open_snapshot"},
@@ -63,20 +63,6 @@ pub(crate) fn sessions(
         "fills":p["fills"].as_array().map_or(0,|v|v.len()),
         "provenance":"live_controller_snapshot","trading_controls":false
     })];
-    let history = &view["history"];
-    let mut history_unavailable = false;
-    if let Some(records) = history["records"].as_array() {
-        for record in records {
-            if rows.iter().any(|row| row["id"] == record["id"]) {
-                continue;
-            }
-            let mut record = record.clone();
-            record["current"] = serde_json::json!(false);
-            rows.push(record);
-        }
-    } else if history["unavailable"] == true {
-        history_unavailable = true;
-    }
     let total = rows.len();
     let mut body = envelope(&view);
     body["total"] = serde_json::json!(total);
@@ -91,7 +77,6 @@ pub(crate) fn sessions(
     } else {
         serde_json::Value::Null
     };
-    body["history_unavailable"] = serde_json::json!(history_unavailable);
     drop(view);
     json_reply(head, body)
 }
@@ -145,7 +130,6 @@ pub(crate) fn health_at(head: &str, view: &Arc<Mutex<serde_json::Value>>, now_ms
     if let Some(value) = view.get("research_tasks") {
         body["research_tasks"] = value.clone();
     }
-    body["post_close"] = view["post_close"].clone();
     body["owner_review"] = view["owner_review"].clone();
     body["retention"] = view["retention"].clone();
     body["planner"] = serde_json::json!({
@@ -171,31 +155,21 @@ pub(crate) fn approvals(head: &str, view: &Arc<Mutex<serde_json::Value>>) -> Res
     body["current_usage"] = readiness["current_usage"].clone();
     body["future_usage"] = readiness["future_usage"].clone();
     body["note"] = serde_json::json!(
-        "Role approvals and trigger-task identities are distinct. Separate legacy grants are never added together."
+        "Digest and orchestrator approvals are separate and are never added together."
     );
     body["identities"] = serde_json::json!([]);
     if let Some(roles) = readiness["models"]["roles"].as_array() {
-        body["identities"] = serde_json::json!(["digest", "orchestrator"]
-            .into_iter()
-            .map(|identity| {
-                let role = if identity == "orchestrator" {
-                    roles
-                        .iter()
-                        .find(|role| role["role"] == "orchestrator")
-                        .or_else(|| roles.iter().find(|role| role["role"] == "operations"))
-                } else {
-                    roles.iter().find(|role| role["role"] == identity)
-                };
-                serde_json::json!({
-                    "identity":identity,
-                    "role":role,
-                    "tasks":match identity {
-                        "orchestrator" => roles.iter().filter(|role| ["operations","strategy","scorer"].contains(&role["role"].as_str().unwrap_or(""))).cloned().collect::<Vec<_>>(),
-                        _ => Vec::<serde_json::Value>::new()
-                    }
+        body["identities"] = serde_json::json!(
+            ["digest", "orchestrator"]
+                .into_iter()
+                .map(|identity| {
+                    serde_json::json!({
+                        "identity":identity,
+                        "role":roles.iter().find(|role| role["role"] == identity)
+                    })
                 })
-            })
-            .collect::<Vec<_>>());
+                .collect::<Vec<_>>()
+        );
     }
     drop(view);
     json_reply(head, body)

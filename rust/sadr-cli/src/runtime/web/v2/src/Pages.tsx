@@ -10,7 +10,6 @@ import type {
   CatalogInstrument,
   ContractStrike,
   StrategyReference,
-  Job,
   ReplayPayload,
   ReplayResult,
   Instrument as InstrumentRecord,
@@ -1844,9 +1843,6 @@ export function Sessions() {
             {state.sessions?.next != null
               ? " · more archive pages available"
               : ""}
-            {state.sessions?.history_unavailable
-              ? " · archive history unavailable"
-              : ""}
           </span>
           <span>Daily allocations are never summed as wealth.</span>
         </div>
@@ -1916,17 +1912,7 @@ export function Sessions() {
 export function Strategies() {
   const [state] = useWorkspace(),
     [tab, setTab] = useState("references"),
-    [selected, setSelected] = useState<StrategyReference | Job | null>(null);
-  const records = sessions(state, state.meta);
-  const jobs = records.flatMap((r) =>
-    (r.research_jobs || []).map((v) => ({ ...v, session: r.id?.date })),
-  );
-  const reviews = records.flatMap((r) =>
-    [...(r.model_reviews || []), ...(r.post_close?.jobs || [])].map((v) => ({
-      ...v,
-      session: r.id?.date,
-    })),
-  );
+    [selected, setSelected] = useState<StrategyReference | null>(null);
   const references = strategyReferences(state.scanner?.items);
   const library = state.summary?.research_library;
   return (
@@ -1964,8 +1950,6 @@ export function Strategies() {
             onChange={setTab}
             items={[
               ["references", "Strategy references"],
-              ["jobs", "Research jobs"],
-              ["reviews", "Reviews"],
               ["library", "Library & switches"],
             ]}
           />
@@ -2034,7 +2018,7 @@ export function Strategies() {
               }
             />
           </>
-        ) : tab === "library" ? (
+        ) : (
           <>
             <p className="panel-note">
               Original registered-research ledger · current controller session.
@@ -2084,31 +2068,6 @@ export function Strategies() {
               }
             />
           </>
-        ) : (
-          <Table
-            rows={tab === "jobs" ? jobs : reviews}
-            onSelect={(row) => setSelected(row)}
-            columns={[
-              {
-                key: "id",
-                label: "Artifact",
-                render: (r) => (
-                  <Instrument symbol={r.kind || words(r.role)} sub={r.id} />
-                ),
-              },
-              { key: "session", label: "Session" },
-              {
-                key: "status",
-                label: "State",
-                render: (r) => <Status value={r.status} />,
-              },
-              {
-                key: "result_hash",
-                label: "Result reference",
-                render: (r) => <code>{r.result_hash || "Not reported"}</code>,
-              },
-            ]}
-          />
         )}
       </Panel>
       <div className="panel-note">
@@ -2548,7 +2507,7 @@ export function Health() {
       </Panel>
       <Panel
         title="Approval evidence"
-        note="Three identities; trigger-keyed usage and legacy grants remain separate."
+        note="Two identities; digest and orchestrator usage remain separate."
       >
         {approvalUnavailable && (
           <Notice>

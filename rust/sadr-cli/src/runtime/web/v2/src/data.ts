@@ -420,21 +420,14 @@ export const identityLabels: Record<string, string> = {
   digest: "Digest",
   orchestrator: "Orchestrator",
 };
-const legacyRoles = ["operations", "strategy", "scorer", "supervisor"];
 export function identities(source?: IdentitySource | null) {
   const groups = source?.approvals?.identities || source?.identities;
   if (Array.isArray(groups) && groups.length)
-    return groups
-      .filter((group) => group.identity !== "decide")
-      .map((group) => ({
-        id: group.identity,
-        label: identityLabels[group.identity] || words(group.identity),
-        role: group.role || null,
-        legacy:
-          group.identity === "orchestrator"
-            ? (group.tasks || []).filter((v) => legacyRoles.includes(v.role))
-            : [],
-      }));
+    return groups.map((group) => ({
+      id: group.identity,
+      label: identityLabels[group.identity] || words(group.identity),
+      role: group.role || null,
+    }));
   const roles =
     source?.approvals?.models?.roles ||
     source?.models?.roles ||
@@ -443,27 +436,8 @@ export function identities(source?: IdentitySource | null) {
   return ["digest", "orchestrator"].map((id) => ({
     id,
     label: identityLabels[id],
-    role:
-      roles.find((v) => v.role === id) ||
-      (id === "orchestrator"
-        ? roles.find((v) => v.role === "operations")
-        : undefined),
-    legacy:
-      id === "orchestrator"
-        ? roles.filter((v) => legacyRoles.includes(v.role))
-        : [],
+    role: roles.find((v) => v.role === id),
   }));
-}
-export function groupRole(role: string) {
-  return [
-    "operations",
-    "strategy",
-    "scorer",
-    "supervisor",
-    "orchestrator",
-  ].includes(role)
-    ? "orchestrator"
-    : role;
 }
 export function observation(row?: ScannerRow | null) {
   const value = numeric(row?.latest_screening_price ?? row?.latest_sampled_bid);
@@ -693,7 +667,7 @@ export function downsamplePoints(points: Point[], maxPoints = 1200): Point[] {
 export function route(hash: string): { name: string; run?: string } {
   const raw = String(hash || "").replace(/^#\/?/, "");
   if (!raw) return { name: "overview" };
-  const aliases: Record<string, string> = { now: "overview", runs: "models" };
+  const aliases: Record<string, string> = { runs: "models" };
   if (raw.startsWith("runs/")) {
     let id;
     try {

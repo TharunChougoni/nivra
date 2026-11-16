@@ -119,28 +119,10 @@ const approvals = {
         remaining_current: 10,
       },
       {
-        role: "decide",
-        model: "grok",
-        status: "ready",
-        remaining_current: 9,
-      },
-      {
-        role: "operations",
+        role: "orchestrator",
         model: "shared",
         status: "ready",
         remaining_current: 8,
-      },
-      {
-        role: "strategy",
-        model: "shared",
-        status: "ready",
-        remaining_current: 7,
-      },
-      {
-        role: "scorer",
-        model: "shared",
-        status: "ready",
-        remaining_current: 6,
       },
     ],
   },
@@ -155,42 +137,13 @@ const approvals = {
       },
     },
     {
-      identity: "decide",
-      role: {
-        role: "decide",
-        model: "grok",
-        status: "ready",
-        remaining_current: 9,
-      },
-    },
-    {
       identity: "orchestrator",
       role: {
-        role: "operations",
+        role: "orchestrator",
         model: "shared",
         status: "ready",
         remaining_current: 8,
       },
-      tasks: [
-        {
-          role: "operations",
-          model: "shared",
-          status: "ready",
-          remaining_current: 8,
-        },
-        {
-          role: "strategy",
-          model: "shared",
-          status: "ready",
-          remaining_current: 7,
-        },
-        {
-          role: "scorer",
-          model: "shared",
-          status: "ready",
-          remaining_current: 6,
-        },
-      ],
     },
   ],
 };
@@ -378,7 +331,6 @@ const splits: Record<
       },
     ],
     next: null,
-    history_unavailable: false,
   },
   "/api/v1/session": {
     v: 1,
@@ -509,7 +461,7 @@ function fetchFixture(
 }
 test("client renders eight sections, two identities, archived books and private lock state", async () => {
   const dom = new JSDOM('<div id="root"></div>', {
-    url: "http://localhost/v2/",
+    url: "http://localhost/",
     pretendToBeVisual: true,
   });
   for (const key of [
@@ -793,7 +745,7 @@ test("client renders eight sections, two identities, archived books and private 
 });
 test("archived model text stays inert and full tool evidence is fetched only when expanded", async () => {
   const dom = new JSDOM('<div id="root"></div>', {
-    url: "http://localhost/v2/#/runs/harness-digest-100-normal",
+    url: "http://localhost/#/runs/harness-digest-100-normal",
     pretendToBeVisual: true,
   });
   for (const key of [
@@ -878,7 +830,7 @@ test("archived model text stays inert and full tool evidence is fetched only whe
 
 test("operational panel keeps the published capture and separates operational evidence", async () => {
   const dom = new JSDOM('<div id="root"></div>', {
-    url: "http://localhost/v2/",
+    url: "http://localhost/",
     pretendToBeVisual: true,
   });
   for (const key of [
