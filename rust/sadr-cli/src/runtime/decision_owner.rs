@@ -418,9 +418,13 @@ pub(crate) fn queued(
         return Err(format!("owner_work_refused_{reason}").into());
     }
     let base = base_plan(context.db, c, &claim)?;
+    // Luna's raw tool observations stay on the durable digest plan and are read
+    // on demand with `get_luna_tool_results`; embedding them here made the owner
+    // prompt grow with every digest tool call.
     let facts = json!({"digest":base["owner_digest"]["digest"],"digest_id":claim.digest_id,
         "facts_sha256":base["owner_digest"]["facts_sha256"],
-        "digest_tool_results":base["owner_digest"]["tool_results"],"cash":base["input"]["cash"],
+        "digest_tool_result_count":base["owner_digest"]["tool_results"].as_array().map_or(0,Vec::len),
+        "cash":base["input"]["cash"],
         "fees":base["input"]["fees"],"evidence_input_hash":base["input_hash"],
         "strategy_attribution":base["strategy_attribution"],
         "selection_provenance":selected_version(&base),

@@ -1,5 +1,15 @@
 # Source snapshot
 
+## 0.9.31 — 2026-11-16
+
+Keep the owner prompt small. The decision facts embedded Luna's raw digest tool
+observations, so the prompt grew with every digest tool call (about 211 KB on the
+live host) even after the digest itself became a short brief. The owner prompt now
+carries only the brief, the digest identity/count and host facts; the observations
+stay on the durable digest plan and are read on demand through
+`get_luna_tool_results`. No evidence is deleted, and the owner can still cite or
+re-read any observation through its tools.
+
 ## 0.9.30 — 2026-11-16
 
 Wait for a slow but healthy controller restart before calling an activation
