@@ -73,7 +73,6 @@ pub(crate) struct PromptSet {
     digest: PromptText,
     supervisor: Option<PromptText>,
     orchestrator: Option<PromptText>,
-    review: Option<PromptText>,
     scorer: Option<PromptText>,
     custom: bool,
 }
@@ -84,7 +83,6 @@ impl Default for PromptSet {
             digest: PromptText::embedded(super::harness::DATA_OWNER_PROMPT),
             supervisor: None,
             orchestrator: None,
-            review: None,
             scorer: None,
             custom: false,
         }
@@ -116,7 +114,6 @@ impl PromptSet {
             digest: read("data_owner.md")?,
             supervisor: Some(read("supervisor.md")?),
             orchestrator: Some(read("orchestrator.md")?),
-            review: Some(read("review.md")?),
             scorer: Some(read("scorer.md")?),
             custom: true,
         };
@@ -141,7 +138,6 @@ impl PromptSet {
         match role {
             "digest" => Some(&self.digest.text),
             "supervisor" => self.supervisor.as_ref().map(|p| p.text.as_str()),
-            "operations" | "strategy" => self.review.as_ref().map(|p| p.text.as_str()),
             "scorer" => self.scorer.as_ref().map(|p| p.text.as_str()),
             _ => None,
         }
@@ -158,7 +154,6 @@ impl PromptSet {
         }
         for (name, prompt) in [
             ("orchestrator", &self.orchestrator),
-            ("review", &self.review),
             ("scorer", &self.scorer),
         ] {
             if let Some(prompt) = prompt {

@@ -90,7 +90,7 @@ pub fn publish_tool(role: &str, model: &str, run: &str, kind: &str, tool: &str, 
     publish_inner(role, model, run, kind, Some(tool), text);
 }
 fn publish_inner(role: &str, model: &str, run: &str, kind: &str, tool: Option<&str>, text: &str) {
-    if !["digest", "decide", "operations", "strategy", "orchestrator"].contains(&role) {
+    if !["digest", "decide", "orchestrator"].contains(&role) {
         return;
     }
     let at = std::time::SystemTime::now()

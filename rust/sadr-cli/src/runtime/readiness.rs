@@ -13,31 +13,6 @@ fn remaining_calls(budget: u32, used: Option<u64>) -> Option<u32> {
         .map(|n| budget.saturating_sub(n))
 }
 
-fn post_close_deadline(
-    session: NaiveDate,
-    now: DateTime<FixedOffset>,
-    close: DateTime<FixedOffset>,
-    cutoff_minute: u32,
-    operations: &planner::ModelRole,
-    strategy: &planner::ModelRole,
-) -> Result<DateTime<FixedOffset>> {
-    // Queued reviews may start late; cover the configured host cutoff,
-    // rather than assuming both roles run immediately after close.
-    let cutoff_at = DateTime::parse_from_rfc3339(&format!(
-        "{session}T{:02}:{:02}:00+05:30",
-        cutoff_minute / 60,
-        cutoff_minute % 60
-    ))?;
-    // Readiness covers the next scheduled work window. A later
-    // invocation re-reads the same app grant under its refresh owner.
-    let start_at = now.max(close);
-    Ok((start_at
-        + chrono::Duration::milliseconds(
-            (operations.run_budget_ms() + strategy.run_budget_ms()) as i64,
-        ))
-    .min(cutoff_at))
-}
-
 fn role_report(
     name: &str,
     role: &planner::ModelRole,
@@ -126,7 +101,7 @@ pub(super) fn credential_warnings(models: &Value) -> Vec<Value> {
                 return None;
             }
             let name = role["role"].as_str()?;
-            if !["digest", "operations", "strategy", "orchestrator"].contains(&name) {
+            if !["digest", "orchestrator"].contains(&name) {
                 return None;
             }
             let credential = &role["credential_check"];
@@ -216,48 +191,15 @@ pub(super) fn report(c: &Config, now_ms: i64) -> Result<Value> {
                 ));
                 if let Some(orchestrator) = cfg.orchestrator.as_ref() {
                     use super::orchestrator_model::Trigger;
-                    let mut deadline = close;
-                    for trigger in [Trigger::Operations, Trigger::Strategy] {
-                        if !orchestrator
-                            .triggers
-                            .get(&trigger)
-                            .is_some_and(|settings| settings.enabled)
-                        {
-                            continue;
-                        }
-                        let role = orchestrator.role_for(trigger);
-                        deadline = deadline.max(
-                            close
-                                + chrono::Duration::milliseconds(
-                                    role.run_budget_ms().max(role.timeout_ms) as i64,
-                                ),
-                        );
-                    }
-                    if let Some(review) = cfg.post_close.as_ref() {
-                        let post_close = post_close_deadline(
-                            session,
-                            now,
-                            close,
-                            review.cutoff_minute,
-                            &orchestrator.role_for(Trigger::Operations),
-                            &orchestrator.role_for(Trigger::Strategy),
-                        )?;
-                        deadline = deadline.max(post_close);
-                    }
-                    let trigger = [
-                        Trigger::Supervisor,
-                        Trigger::Operations,
-                        Trigger::Strategy,
-                        Trigger::Scorer,
-                    ]
-                    .into_iter()
-                    .find(|trigger| {
-                        orchestrator
-                            .triggers
-                            .get(trigger)
-                            .is_some_and(|settings| settings.enabled)
-                    })
-                    .unwrap_or(Trigger::Operations);
+                    let trigger = [Trigger::Supervisor, Trigger::Scorer]
+                        .into_iter()
+                        .find(|trigger| {
+                            orchestrator
+                                .triggers
+                                .get(trigger)
+                                .is_some_and(|settings| settings.enabled)
+                        })
+                        .unwrap_or(Trigger::Supervisor);
                     let mut role = orchestrator.role_for(trigger);
                     role.enabled = orchestrator.enabled
                         && orchestrator
@@ -269,33 +211,8 @@ pub(super) fn report(c: &Config, now_ms: i64) -> Result<Value> {
                         "orchestrator",
                         &role,
                         now,
-                        deadline,
-                        trigger_usage.as_ref(),
-                        fallback.as_deref(),
-                    ));
-                } else if let Some(review) = cfg.post_close {
-                    let deadline = post_close_deadline(
-                        session,
-                        now,
                         close,
-                        review.cutoff_minute,
-                        &review.operations,
-                        &review.strategy,
-                    )?;
-                    roles.push(role_report(
-                        "operations",
-                        &review.operations,
-                        now,
-                        deadline,
-                        usage_result.as_ref(),
-                        fallback.as_deref(),
-                    ));
-                    roles.push(role_report(
-                        "strategy",
-                        &review.strategy,
-                        now,
-                        deadline,
-                        usage_result.as_ref(),
+                        trigger_usage.as_ref(),
                         fallback.as_deref(),
                     ));
                 }
@@ -590,10 +507,10 @@ mod warning_tests {
         assert!(credential_warnings(&json!({})).is_empty());
         assert_eq!(
             credential_warnings(&json!({"roles":[
-                {"role":"strategy","enabled":true,"status":"blocked",
+                {"role":"orchestrator","enabled":true,"status":"blocked",
                  "reason":"provider text is not an alert code"}
             ]})),
-            vec![json!({"model":"strategy","reason":"model_credential_validation_failed"})]
+            vec![json!({"model":"orchestrator","reason":"model_credential_validation_failed"})]
         );
         assert!(
             credential_warnings(&json!({"roles":[

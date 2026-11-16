@@ -155,13 +155,8 @@ pub(crate) fn check_boundaries() {
     );
     assert_eq!(data_tools.len(), 8);
     assert!(definitions("digest", &["web_search".into()], true).is_err());
-    assert!(definitions("operations", &["shell".into()], true).is_err());
-    let tools = definitions(
-        "operations",
-        &["web_search".into(), "x_search".into()],
-        true,
-    )
-    .unwrap();
+    assert!(definitions("operations", &[], true).is_err());
+    let tools = definitions("digest", &[], true).unwrap();
     for tool in tools.iter().filter(|t| t["type"] == "function") {
         assert_eq!(tool["strict"], true);
         assert_eq!(tool["parameters"]["additionalProperties"], false);
@@ -352,7 +347,7 @@ pub(crate) fn check_boundaries() {
     );
     assert!(exhausted.requests.is_empty());
     assert_eq!(instructions("digest").unwrap(), DATA_OWNER_PROMPT);
-    assert_eq!(instructions("strategy").unwrap(), REVIEW_PROMPT);
+    assert!(instructions("strategy").is_err());
     let abstain = json!({"actions":[],"stance":"abstain","notes":"no trade"});
     let grok = json!({"output":[
         {"type":"reasoning","status":"completed"},

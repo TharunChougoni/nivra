@@ -44,7 +44,6 @@ fn packaged_owner_policy_binds_prompt_content_and_refuses_removed_keys() {
         "data_owner.md",
         "supervisor.md",
         "orchestrator.md",
-        "review.md",
         "scorer.md",
     ] {
         std::fs::copy(packaged.join(name), prompts.join(name)).unwrap();
@@ -66,6 +65,7 @@ fn packaged_owner_policy_binds_prompt_content_and_refuses_removed_keys() {
             serde_json::json!({"version": 1, "owner": "orchestrator"}),
         ),
         ("handoff_gate", serde_json::json!({})),
+        ("post_close", serde_json::json!({"enabled": false})),
     ] {
         let mut old: serde_json::Value = serde_json::from_str(&current).unwrap();
         old[key] = value;
@@ -262,7 +262,7 @@ fn policy_hash_tracks_prompt_text_not_paths_or_defaults() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = policy_test_config(policy_test_prompts(dir.path(), "change", "first"));
     let before = super::policy_bytes(&cfg).unwrap();
-    let prompt = cfg.orchestrator.as_ref().unwrap().triggers[&Trigger::Operations]
+    let prompt = cfg.orchestrator.as_ref().unwrap().triggers[&Trigger::Scorer]
         .prompt
         .clone();
     std::fs::write(prompt, "second").unwrap();
@@ -302,7 +302,7 @@ fn policy_hash_tracks_prompt_text_not_paths_or_defaults() {
             .as_mut()
             .unwrap()
             .triggers
-            .get_mut(&Trigger::Operations)
+            .get_mut(&Trigger::Scorer)
             .unwrap()
             .prompt = dir.path().join("does-not-exist.md");
         assert_eq!(
@@ -324,7 +324,7 @@ fn orchestrator_policy_excludes_budgets_but_includes_tools_and_sandbox() {
     settings.daily_call_budget += 100;
     settings
         .triggers
-        .get_mut(&Trigger::Operations)
+        .get_mut(&Trigger::Scorer)
         .unwrap()
         .daily_call_budget = Some(999);
     assert_eq!(super::policy_bytes(&budgets).unwrap(), original);
@@ -372,7 +372,7 @@ fn orchestrator_policy_excludes_budgets_but_includes_tools_and_sandbox() {
     fallback.digest.fallback = Some(deepseek.clone());
     assert_ne!(super::policy_bytes(&fallback).unwrap(), original);
     assert_eq!(
-        fallback.role(Trigger::Operations).fallback.as_ref(),
+        fallback.role(Trigger::Scorer).fallback.as_ref(),
         Some(&deepseek)
     );
     assert_eq!(
@@ -406,7 +406,7 @@ fn orchestrator_policy_excludes_budgets_but_includes_tools_and_sandbox() {
         .as_mut()
         .unwrap()
         .triggers
-        .get_mut(&Trigger::Operations)
+        .get_mut(&Trigger::Scorer)
         .unwrap()
         .tools = Some(vec!["web_search".into()]);
     assert_ne!(super::policy_bytes(&tools).unwrap(), original);
@@ -685,12 +685,7 @@ fn quota_burst_and_review_roles() {
         duration: None,
         started_wall_ms: None,
     };
-    let roles = [
-        ("digest", 50),
-        ("supervisor", 10),
-        ("operations", 8),
-        ("strategy", 8),
-    ];
+    let roles = [("digest", 50), ("supervisor", 10), ("scorer", 16)];
     let mut backend = CountingBackend(0);
     let mut digest = ModelRole {
         model_id: crate::model::LUNA.into(),
@@ -750,8 +745,7 @@ fn quota_burst_and_review_roles() {
     let counts = usage(&c).unwrap();
     assert_eq!(counts["digest"], 50);
     assert_eq!(counts["supervisor"], 10);
-    assert_eq!(counts["operations"], 8);
-    assert_eq!(counts["strategy"], 8);
+    assert_eq!(counts["scorer"], 16);
 
     let identity_path = c.directory.join("model/usage-identity.json");
     let manifest_path = c.directory.join("model/usage-reservations.json");
@@ -1127,14 +1121,6 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
             .get("run_timeout_ms")
             .is_none()
     );
-    let mut settings = postclose::Settings::default();
-    settings.operations.timeout_ms = 120000;
-    settings.operations.run_timeout_ms = Some(600000);
-    settings.validate().unwrap();
-    settings.operations.run_timeout_ms = Some(1800001);
-    assert!(settings.validate().is_err());
-    settings.operations.run_timeout_ms = Some(119999);
-    assert!(settings.validate().is_err());
     live::tests::freshness_and_cash();
     super::super::harness::check_boundaries();
     let d = tempfile::tempdir().unwrap();
@@ -1994,9 +1980,6 @@ fn tools_only_digest_sees_only_the_trigger_envelope() {
         ..Default::default()
     };
     orchestrator.model.model_id = "grok-4.7".into();
-    for trigger in [Trigger::Operations, Trigger::Strategy] {
-        orchestrator.triggers.get_mut(&trigger).unwrap().enabled = false;
-    }
     // Policy hashing loads every configured trigger's prompt; use durable
     // fixture files instead of the checkout's relative default paths.
     let prompt_dir = tempfile::tempdir().unwrap();
@@ -2598,7 +2581,7 @@ fn unconfigured_orchestrator_trigger_is_disabled() {
         enabled: true,
         ..OrchestratorModelSettings::default()
     };
-    settings.triggers.remove(&Trigger::Strategy);
+    settings.triggers.remove(&Trigger::Scorer);
     let cfg = super::PlannerConfig {
         orchestrator: Some(settings),
         digest: super::ModelRole {
@@ -2608,17 +2591,9 @@ fn unconfigured_orchestrator_trigger_is_disabled() {
         },
         ..super::PlannerConfig::default()
     };
-    assert!(!cfg.role(Trigger::Strategy).enabled);
+    assert!(!cfg.role(Trigger::Scorer).enabled);
     assert_eq!(cfg.role(Trigger::Digest).model_id, "luna");
     let mut cfg = cfg;
-    cfg.orchestrator
-        .as_mut()
-        .unwrap()
-        .triggers
-        .get_mut(&Trigger::Operations)
-        .unwrap()
-        .enabled = false;
-    assert!(!cfg.role(Trigger::Operations).enabled);
     cfg.orchestrator = None;
     assert!(!cfg.role(Trigger::Supervisor).enabled);
 }

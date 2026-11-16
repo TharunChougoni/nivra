@@ -23,17 +23,18 @@ Two prompt layers, both part of the sealed trading-policy hash:
 | `supervisor.md` | system fallback | legacy supervisor only; not selected by the owner policy | keep for migration/archive |
 | `decision_evidence_digest.md` | none | no longer read by the binary | shipped only for the fixed release list |
 | `profit_under_uncertainty.md` | none | no longer read by the binary | shipped only for the fixed release list |
-| `review.md` | system | post-session `operations` / `strategy` review roles | keep |
+| `review.md` | none | no longer read by the binary | shipped only for the fixed release list |
 | `scorer.md` | system | strategy scorer role | keep |
-| `operations.md` | legacy trigger default | legacy `operations` trigger | kept byte-identical to `review.md` |
-| `strategy.md` | legacy trigger default | legacy `strategy` trigger | kept byte-identical to `review.md` |
+| `operations.md` | none | no longer read by the binary | shipped only for the fixed release list |
+| `strategy.md` | none | no longer read by the binary | shipped only for the fixed release list |
 
 The owner policy does **not** append `decision_evidence_digest.md` or
 `profit_under_uncertainty.md`; `data_owner.md` and `orchestrator.md` carry their
-own evidence rules. The runtime maps `operations`/`strategy` to `review.md`, so
-the two legacy trigger-default files are retained only because the release
-bundle and the installed updater validate the fixed 12-file list. They are not
-read for the owner policy.
+own evidence rules. The retired post-close `operations` and `strategy` review
+roles were the only readers of `review.md`, `operations.md` and `strategy.md`.
+Those files stay only because the release bundle and the installed updater
+validate the fixed 12-file list. The owner's session review uses its own
+compiled prompt.
 
 ## Trigger templates
 

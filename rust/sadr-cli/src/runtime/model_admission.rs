@@ -1,7 +1,7 @@
 //! Exact configured role/profile admission before a real provider reservation.
 //! Catalog membership and a structurally valid profile do not prove entitlement;
 //! the model transport still validates the application grant.
-use super::{Config, Result, model_selection, orchestrator_model::Trigger, planner};
+use super::{Config, Result, model_selection, planner};
 use sadr_cli::native_transport::Transport;
 use std::path::Path;
 
@@ -59,18 +59,10 @@ pub(super) fn validate(
                 ),
             }
         }
-        "operations" | "strategy" | "scorer" if cfg.orchestrator.is_some() => (
+        "scorer" if cfg.orchestrator.is_some() => (
             "orchestrator.default".into(),
             model_selection::binding(cfg, "default").map_err(str::to_owned)?,
         ),
-        "operations" | "strategy" => {
-            let trigger = if name == "operations" {
-                Trigger::Operations
-            } else {
-                Trigger::Strategy
-            };
-            (format!("legacy.{name}"), inline(cfg, &cfg.role(trigger))?)
-        }
         _ => return Err("harness_role_model_profile_required".into()),
     };
     binding_shape(&expected).map_err(str::to_owned)?;

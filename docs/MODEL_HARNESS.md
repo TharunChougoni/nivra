@@ -1208,23 +1208,11 @@ archives inputs/hashes, instruction hash, actual rounds, tool/citation output an
 validation. `model/usage/` retains reservations/results. SQLite per-action rows
 commit with paper fills; JSON status/execution projections cannot revive a plan.
 
-Post-close operations and strategy jobs start after the sealed report and before
-the configured cutoff (default 18:00 IST). Failed/interrupted jobs are retained, never recreated. Only verified
-immediate-predecessor memory available before the next attempt can contribute.
-Advisory findings never alter financial carry, policy or code.
-
-`planner.post_close` settings accept these optional keys; omitted keys retain
-existing defaults:
-
-| Key | Default | Valid range |
-| --- | --- | --- |
-| `cutoff_minute` | 1080 (18:00 IST) | 931–1439 (minutes after midnight IST) |
-| `max_fill_evidence` | 128 | 1–128 individual session fills |
-| `max_planner_evidence_rows` | 24 | 1–24 recent rows per planner table |
-| `max_tick_evidence_rows` | 48 | 1–48 recent journal ticks |
-
-The cutoff also controls readiness coverage and review deadlines. Evidence caps
-preserve the sealed-input ceiling; coverage labels reflect the configured limits.
+The separate post-close `operations` and `strategy` review lane is retired. A
+planner config that still carries `post_close` or an `orchestrator.triggers`
+entry named `operations` or `strategy` is refused at load. The owner's session
+review (`owner_tasks.review`) seals the closed report with fixed evidence bounds
+(128 session fills, 24 rows per planner table, 48 journal ticks).
 
 Owner review artifacts are versioned. New writes use
 `ReviewCompletedV1` with `{version,task,receipt,output,failure,evidence,clock}`;

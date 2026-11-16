@@ -815,12 +815,7 @@ pub(super) fn consider(
         Err(error) if error.to_string() == "owner_review_source_missing" => {}
         Err(error) => return Err(error),
     }
-    let sealed = super::super::postclose::seal_evidence(
-        context.db,
-        c,
-        context.portfolio,
-        &super::super::postclose::Settings::default(),
-    )?;
+    let sealed = super::super::postclose::seal_evidence(context.db, c, context.portfolio)?;
     let identity = ReviewIdentity {
         version: 1,
         session: c.session.to_string(),
@@ -1834,13 +1829,7 @@ pub(super) fn exercise() {
         serde_json::to_vec(&fcfg).unwrap(),
     )
     .unwrap();
-    let frame_sealed = super::super::postclose::seal_evidence(
-        &fdb,
-        &fc,
-        &fp,
-        &super::super::postclose::Settings::default(),
-    )
-    .unwrap();
+    let frame_sealed = super::super::postclose::seal_evidence(&fdb, &fc, &fp).unwrap();
     let frame_identity = ReviewIdentity {
         version: 1,
         session: fc.session.to_string(),
@@ -2705,13 +2694,7 @@ pub(super) fn exercise() {
     // A recorded review remains valid evidence after the binary prompt changes.
     let old_dir = tempfile::tempdir().unwrap();
     let (oc, ocfg, odb, op, oend, onow) = review_fixture(old_dir.path());
-    let old_sealed = super::super::postclose::seal_evidence(
-        &odb,
-        &oc,
-        &op,
-        &super::super::postclose::Settings::default(),
-    )
-    .unwrap();
+    let old_sealed = super::super::postclose::seal_evidence(&odb, &oc, &op).unwrap();
     let old_prompt = digest(b"review prompt from an older binary");
     let old_identity = ReviewIdentity {
         version: 1,

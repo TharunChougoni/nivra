@@ -19,7 +19,6 @@ pub(crate) use research::{
 
 pub(crate) const DATA_OWNER_PROMPT: &str =
     include_str!("../../../../packaging/rust/prompts/data_owner.md");
-pub(crate) const REVIEW_PROMPT: &str = include_str!("../../../../packaging/rust/prompts/review.md");
 pub(crate) const SCORER_PROMPT: &str = include_str!("../../../../packaging/rust/prompts/scorer.md");
 pub(crate) const SUPERVISOR_PROMPT: &str =
     include_str!("../../../../packaging/rust/prompts/supervisor.md");
@@ -49,7 +48,6 @@ pub(crate) fn publish_validated(c: &Config, name: &str, role: &ModelRole, raw: &
 pub(crate) fn instructions(role: &str) -> Result<&'static str> {
     match role {
         "digest" => Ok(DATA_OWNER_PROMPT),
-        "operations" | "strategy" => Ok(REVIEW_PROMPT),
         "scorer" => Ok(SCORER_PROMPT),
         "supervisor" => Ok(SUPERVISOR_PROMPT),
         _ => Err("harness_role_invalid".into()),
@@ -131,26 +129,11 @@ fn system_instructions_with(
     } else {
         base.to_owned()
     };
-    let review = matches!(role, "operations" | "strategy");
-    if ids.len() > 256
-        || (review && ids.is_empty())
-        || (!review && !ids.is_empty())
-        || ids.iter().any(|id| {
-            id.is_empty()
-                || id.len() > 256
-                || !id
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"_-.:|".contains(&b))
-        })
-    {
+    // Only the retired post-close review roles carried citation IDs.
+    if !ids.is_empty() {
         return Err("harness_citation_ids_invalid".into());
     }
-    Ok(if review {
-        format!(
-            "{base}\nHOST REVIEW ROLE: {role}. Operations: investigate data, tool, setup and execution integrity failures that impair the profit objective; propose advisory remedies. Strategy: investigate profit opportunities and measured outcomes without inventing caps or treating hypotheses as accepted strategies. Stay within your named review role.\nHOST CITATION CONTRACT: The ONLY permitted final-review evidence_ids values are {}. Tool section names (bundle, portfolio, shortlist, fees, session_evidence), call IDs and experiment IDs are NOT citations. Anchor external/experiment commentary to a relevant sealed ID and describe its limits. Every memory entry must copy text AND the evidence_ids array EXACTLY from an observation or hypothesis of matching kind; do not summarize or paraphrase. Return memory:[] when no exact carry-forward is needed. Keep each claim concise (prefer <=300 UTF-8 bytes).",
-            json!(ids)
-        )
-    } else if matches!(role, "digest" | "scorer" | "supervisor") {
+    Ok(if matches!(role, "digest" | "scorer" | "supervisor") {
         let objective = cfg.map(objective_for).unwrap_or_else(|| OBJECTIVE.trim());
         format!("{objective}\n\n{base}")
     } else {
@@ -2469,20 +2452,6 @@ pub(super) fn run_collect(
         .filter(|kind| matches!(*kind, "web_search" | "x_search"))
         .map(str::to_owned)
         .collect();
-    let review = matches!(name, "operations" | "strategy");
-    let citation_ids: Vec<String> = if review {
-        bundle["session_evidence"]["input"]["evidence"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|v| v["id"].as_str().map(str::to_owned))
-            .collect()
-    } else {
-        vec![]
-    };
-    if review && citation_ids.is_empty() {
-        return Err("harness_sealed_citations_missing".into());
-    }
     let catalog = (include_catalog && !owner_review && !owner_research)
         .then_some(cfg.research_tools.as_ref())
         .flatten()
@@ -2545,7 +2514,7 @@ pub(super) fn run_collect(
         input: input.clone(),
         tools: tools.clone(),
         owner_tools: owner_tools_for_call(cfg, name, bundle, guard),
-        citation_ids: citation_ids.clone(),
+        citation_ids: Vec::new(),
         final_answer_only: owner_review,
         review_only: owner_review,
         decision_evidence: context,
@@ -2635,7 +2604,7 @@ pub(super) fn run_collect(
                 input: input.clone(),
                 tools: tools.clone(),
                 owner_tools: owner_tools_for_call(cfg, name, bundle, guard),
-                citation_ids: citation_ids.clone(),
+                citation_ids: Vec::new(),
                 final_answer_only: owner_review,
                 review_only: owner_review,
                 decision_evidence: context,
@@ -2944,11 +2913,7 @@ pub(super) fn run_collect(
                 };
                 let tool_started = std::time::Instant::now();
                 let result = match tool {
-                    Tool::Evidence(id) => Ok(if review {
-                        json!({"section_id":id,"citation_ids":citation_ids,"citation_rule":"Only citation_ids are valid final-review evidence references; section_id is a tool selector, not a citation","data":evidence(bundle,&id)})
-                    } else {
-                        json!({"evidence_id":id,"data":evidence(bundle,&id)})
-                    }),
+                    Tool::Evidence(id) => Ok(json!({"evidence_id":id,"data":evidence(bundle,&id)})),
                     Tool::Snapshot(keys) => match backend.snapshot(bundle, &keys, now()) {
                         Some(result) => result,
                         None => snapshot(c, bundle, &keys, &archive, &key),

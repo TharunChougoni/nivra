@@ -346,7 +346,6 @@ fn run(
     cfg.digest.model_config = None;
     cfg.digest.tools.clear();
     cfg.research_tools = None;
-    cfg.post_close = None;
     cfg.usage_namespace = Some("usage".into());
     let reply_bytes = crate::read_bounded(responses, 64_000_000)
         .map_err(|_| "paper_replay_responses_unreadable")?;
@@ -1935,9 +1934,7 @@ fn demo(output: &Path) -> Result<Value> {
             "enabled":true,
             "model":{"model_id":"grok-4.7","transport":"direct_oauth","timeout_ms":120000,"output_cap":8192,"daily_call_budget":200},
             "triggers":{
-                "supervisor":{"enabled":true,"prompt":supervisor_prompt},
-                "operations":{"enabled":false,"prompt":supervisor_prompt},
-                "strategy":{"enabled":false,"prompt":supervisor_prompt}
+                "supervisor":{"enabled":true,"prompt":supervisor_prompt}
             }
         },
         "events":{"enabled":true,"decision_timeout_ms":600000,"decision_start_minute":555,"cooldown_ms":0,"max_pending":40,"news_file":null,"policy":{"price_move_bps":100,"max_event_age_ms":300000,"max_news_age_ms":3600000,"max_instruments":10000,"max_identities":50000}}

@@ -28,18 +28,6 @@ fn parses_target_shape_defaults_overrides_and_rejects_invalid() {
             "network": false
         },
         "triggers": {
-            "operations": {
-                "prompt": "prompts/operations.md",
-                "tools": [],
-                "max_turns": 2,
-                "daily_call_budget": 1
-            },
-            "strategy": {
-                "prompt": "prompts/strategy.md",
-                "tools": ["x_search"],
-                "max_turns": 8,
-                "daily_call_budget": 2
-            },
             "scorer": {
                 "prompt": "prompts/scorer.md",
                 "tools": ["sandbox_write", "replay"],
@@ -58,16 +46,11 @@ fn parses_target_shape_defaults_overrides_and_rejects_invalid() {
     assert_eq!(settings.sandbox, SandboxSettings::default());
     assert_eq!(settings.triggers.len(), Trigger::ALL.len());
 
-    let operations = settings.role_for(Trigger::Operations);
-    assert!(operations.enabled);
-    assert_eq!(operations.model_id, "grok-4.7");
-    assert!(operations.tools.is_empty());
-    assert_eq!(operations.max_turns, Some(2));
-    assert_eq!(operations.daily_call_budget, 1);
-    assert_eq!(operations.timeout_ms, 120_000);
-    assert_eq!(operations.output_cap, 8000);
-
     let scorer = settings.role_for(Trigger::Scorer);
+    assert!(scorer.enabled);
+    assert_eq!(scorer.model_id, "grok-4.7");
+    assert_eq!(scorer.timeout_ms, 120_000);
+    assert_eq!(scorer.output_cap, 8000);
     assert_eq!(scorer.tools, vec!["sandbox_write", "replay"]);
     assert_eq!(scorer.max_turns, Some(10));
     assert_eq!(scorer.daily_call_budget, 4);
@@ -83,19 +66,11 @@ fn parses_target_shape_defaults_overrides_and_rejects_invalid() {
     assert!(!settings.sandbox.network);
     assert_eq!(settings.triggers.len(), Trigger::ALL.len());
 
-    let operations = settings.role_for(Trigger::Operations);
-    assert!(!operations.enabled);
-    assert!(operations.tools.is_empty());
-    assert_eq!(operations.max_turns, Some(2));
-    assert_eq!(operations.daily_call_budget, 1);
-    assert_eq!(operations.timeout_ms, 120_000);
-    assert_eq!(operations.output_cap, 8000);
-
-    let strategy = settings.role_for(Trigger::Strategy);
-    assert!(!strategy.enabled);
-    assert_eq!(strategy.tools, vec!["web_search", "x_search"]);
-    assert_eq!(strategy.max_turns, Some(8));
-    assert_eq!(strategy.daily_call_budget, 2);
+    let scorer = settings.role_for(Trigger::Scorer);
+    assert!(!scorer.enabled);
+    assert_eq!(scorer.tools, vec!["sandbox_write", "replay"]);
+    assert_eq!(scorer.max_turns, Some(10));
+    assert_eq!(scorer.daily_call_budget, 4);
     let settings: OrchestratorModelSettings = serde_json::from_value(json!({
         "model": {
             "model_id": "grok-4.7",
@@ -106,8 +81,8 @@ fn parses_target_shape_defaults_overrides_and_rejects_invalid() {
             "daily_call_budget": 9
         },
         "triggers": {
-            "operations": {
-                "prompt": "prompts/operations.md",
+            "scorer": {
+                "prompt": "prompts/scorer.md",
                 "tools": ["x_search"],
                 "max_turns": 4,
                 "daily_call_budget": 7,
@@ -118,27 +93,29 @@ fn parses_target_shape_defaults_overrides_and_rejects_invalid() {
     }))
     .unwrap();
 
-    let operations = settings.role_for(Trigger::Operations);
-    assert_eq!(operations.model_id, "grok-4.7");
-    assert_eq!(operations.tools, vec!["x_search"]);
-    assert_eq!(operations.max_turns, Some(4));
-    assert_eq!(operations.daily_call_budget, 7);
-    assert_eq!(operations.timeout_ms, 20_000);
-    assert_eq!(operations.output_cap, 2048);
+    let scorer = settings.role_for(Trigger::Scorer);
+    assert_eq!(scorer.model_id, "grok-4.7");
+    assert_eq!(scorer.tools, vec!["x_search"]);
+    assert_eq!(scorer.max_turns, Some(4));
+    assert_eq!(scorer.daily_call_budget, 7);
+    assert_eq!(scorer.timeout_ms, 20_000);
+    assert_eq!(scorer.output_cap, 2048);
 
-    let strategy = settings.role_for(Trigger::Strategy);
-    assert_eq!(strategy.model_id, "grok-4.7");
-    assert!(strategy.tools.is_empty());
-    assert_eq!(strategy.max_turns, Some(3));
-    assert_eq!(strategy.daily_call_budget, 9);
-    assert_eq!(strategy.timeout_ms, 90_000);
-    assert_eq!(strategy.output_cap, 4096);
+    let supervisor = settings.role_for(Trigger::Supervisor);
+    assert_eq!(supervisor.model_id, "grok-4.7");
+    assert!(supervisor.tools.is_empty());
+    assert_eq!(supervisor.max_turns, Some(3));
+    assert_eq!(supervisor.daily_call_budget, 9);
+    assert_eq!(supervisor.timeout_ms, 90_000);
+    assert_eq!(supervisor.output_cap, 4096);
     for value in [
         json!({"unknown": true}),
         json!({"model": {"unknown": true}}),
         json!({"sandbox": {"unknown": true}}),
         json!({"triggers": {"digest": {"unknown": true}}}),
         json!({"triggers": {"not_a_trigger": {}}}),
+        json!({"triggers": {"operations": {}}}),
+        json!({"triggers": {"strategy": {}}}),
     ] {
         assert!(
             serde_json::from_value::<OrchestratorModelSettings>(value.clone()).is_err(),
@@ -167,17 +144,11 @@ fn prompts_load_stably_and_reject_missing_or_oversize() {
         assert_eq!(first.sha256.len(), 64);
         assert!(!first.text.trim().is_empty());
         assert!(first.text.len() <= 4096);
-        if matches!(trigger, Trigger::Operations | Trigger::Strategy) {
-            assert!(first.text.starts_with(&format!(
-                "# Trigger: {} (template version 1)",
-                trigger.as_str()
-            )));
-        }
     }
     let dir = tempfile::tempdir().unwrap();
     let settings = OrchestratorModelSettings {
         triggers: BTreeMap::from([(
-            Trigger::Operations,
+            Trigger::Scorer,
             TriggerSettings {
                 prompt: dir.path().join("missing.md"),
                 ..TriggerSettings::default()
@@ -185,7 +156,7 @@ fn prompts_load_stably_and_reject_missing_or_oversize() {
         )]),
         ..OrchestratorModelSettings::default()
     };
-    let error = settings.load_prompt(Trigger::Operations).unwrap_err();
+    let error = settings.load_prompt(Trigger::Scorer).unwrap_err();
     assert_eq!(error.to_string(), "orchestrator_prompt_missing");
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("oversize.md");
@@ -193,7 +164,7 @@ fn prompts_load_stably_and_reject_missing_or_oversize() {
     let settings = OrchestratorModelSettings {
         max_prompt_bytes: 16,
         triggers: BTreeMap::from([(
-            Trigger::Operations,
+            Trigger::Scorer,
             TriggerSettings {
                 prompt: path,
                 ..TriggerSettings::default()
@@ -201,7 +172,7 @@ fn prompts_load_stably_and_reject_missing_or_oversize() {
         )]),
         ..OrchestratorModelSettings::default()
     };
-    let error = settings.load_prompt(Trigger::Operations).unwrap_err();
+    let error = settings.load_prompt(Trigger::Scorer).unwrap_err();
     assert_eq!(error.to_string(), "orchestrator_prompt_oversize");
 }
 

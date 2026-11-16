@@ -94,10 +94,6 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
     let mut aside_worker: Option<super::super::supervisor::Worker> = None;
     // The research lane's own slot (#237): never shared with trading turns.
     let mut research_lane = super::super::supervisor::research::Lane::default();
-    let mut review_worker: Option<postclose::Worker> = None;
-    let mut review_draining: Option<postclose::Worker> = None;
-    let mut review_disabled = false;
-    let mut review_status = serde_json::json!({"status":"awaiting_close"});
     let mut scorer_worker: Option<scorer_trigger::Worker> = None;
     let mut scorer_status = serde_json::json!({"status":"awaiting_close"});
     let mut owner_research_worker = harness::OwnerResearchRuntime::default();
@@ -209,18 +205,7 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
     let mut retention_status = serde_json::json!({"status":"not_run"});
     let mut reported = p.closed && c.directory.join("report.json").is_file();
     let mut read_failure: Option<String> = None;
-    let mut planner_pending: Option<
-        std::sync::mpsc::Receiver<std::result::Result<serde_json::Value, String>>,
-    > = None;
-    let mut planner_attempted = c.directory.join("model/attempt.json").exists();
-    let mut planner_status = fs::read(c.directory.join("model/status.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_else(|| {
-            fs::read(c.directory.join("model/session-plan.json")).ok()
-                .and_then(|b|serde_json::from_slice(&b).ok()).map(|v|planner::status(&v))
-                .unwrap_or_else(||serde_json::json!({"status":if planner_attempted {"attempt_incomplete_no_plan_no_replay"}else{"disabled_no_plan"}}))
-        });
+    let mut planner_status = serde_json::json!({"status":"disabled_no_plan"});
     let mut history_worker: Option<preparation::PreparationWorker> = None;
     let mut history_attempt = HistoryAttempts::load(&config)?;
     let mut history_status =
@@ -302,7 +287,6 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
             if let Some(worker) = history_worker.take() {
                 worker.cancel();
             }
-            drop(review_worker.take());
             drop(supervisor_worker.take());
             drop(aside_worker.take());
             research_lane.stop();
@@ -498,115 +482,49 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
             && !p.halted
             && !p.stopped
             && universe.is_some()
+            && event_mode
+            && !active
+            && p.positions.is_empty()
+            && !super::super::supervisor::holding_luna(supervisor_worker.as_ref(), now)
+            && let Some(cfg) = &event_config
         {
-            if !event_mode
-                && !planner_attempted
-                && !p.halted
-                && !p.stopped
-                && let Some(path) = &c.planner_config
-                && planner::has_eligible_input(c, &p, &tradable)?
-            {
-                planner_attempted = true;
-                fs::create_dir_all(c.directory.join("model"))?;
-                rollover::atomic(
-                    &c.directory.join("model/attempt.json"),
-                    &serde_json::json!({"at":now,"status":"reserved_no_replay"}),
-                )?;
-                let worker_config = c.clone();
-                let path = path.clone();
-                let portfolio = p.clone();
-                let instruments = tradable.clone();
-                let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-                planner_pending = Some(receiver);
-                planner_status = serde_json::json!({"status":"planning_no_new_entries"});
-                thread::spawn(move || {
-                    let result =
-                        planner::PlannerConfig::load_for_session(&path, worker_config.session)
-                            .and_then(|cfg| {
-                                planner::produce(
-                                    &worker_config,
-                                    &cfg,
-                                    &portfolio,
-                                    &instruments,
-                                    false,
-                                )
-                            })
-                            .map_err(|e| planner::logged_reason(e.as_ref()).to_owned());
-                    let _ = sender.send(result);
-                });
-            }
-            if !event_mode && let Some(receiver) = &planner_pending {
-                match receiver.try_recv() {
-                    Ok(result) => {
-                        planner_status = match result {
-                            Ok(plan) => {
-                                rollover::atomic(
-                                    &c.directory.join("model/session-plan.json"),
-                                    &plan,
-                                )?;
-                                planner::status(&plan)
-                            }
-                            Err(reason) => {
-                                serde_json::json!({"status":reason})
-                            }
-                        };
-                        rollover::atomic(&c.directory.join("model/status.json"), &planner_status)?;
-                        planner_pending = None;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        planner_status =
-                            serde_json::json!({"status":"planner_worker_failed_no_new_entries"});
-                        planner_pending = None;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                }
-            }
-            if event_mode
-                && !active
-                && p.positions.is_empty()
-                && !super::super::supervisor::holding_luna(supervisor_worker.as_ref(), now)
-                && let Some(cfg) = &event_config
-            {
-                let result = {
-                    let store = feature_store
-                        .lock()
-                        .map_err(|_| Fail::new("feature_store_lock"))?;
-                    event_tick(
-                        &mut db,
-                        c,
-                        cfg,
-                        &p,
-                        &tradable,
-                        &mut event_worker,
-                        &scan,
-                        &store,
-                        None,
-                        now,
-                        true,
-                        true,
-                    )
-                };
-                contain_event_error(
-                    result,
+            let result = {
+                let store = feature_store
+                    .lock()
+                    .map_err(|_| Fail::new("feature_store_lock"))?;
+                event_tick(
                     &mut db,
                     c,
-                    &mut p,
+                    cfg,
+                    &p,
+                    &tradable,
                     &mut event_worker,
-                    &mut event_config,
-                    &mut supervisor_config_fallback,
-                    &mut event_config_reason,
-                    millis(),
-                )?;
-            }
+                    &scan,
+                    &store,
+                    None,
+                    now,
+                    true,
+                    true,
+                )
+            };
+            contain_event_error(
+                result,
+                &mut db,
+                c,
+                &mut p,
+                &mut event_worker,
+                &mut event_config,
+                &mut supervisor_config_fallback,
+                &mut event_config_reason,
+                millis(),
+            )?;
         }
         if active {
             status = "waiting_for_d1_universe";
             if let Some(u) = &universe {
                 // No plan yet with nothing to decide is a no-op, not a failure
                 // (#221). The planner status names the reason.
-                status = if c.directory.join("model/session-plan.json").exists() {
-                    "model_plan_ready"
-                } else if let Some(reason) = planner_status["status"]
+                status = if let Some(reason) = planner_status["status"]
                     .as_str()
                     .filter(|status| *status == planner::NO_DECISION_WORK)
                 {
@@ -1204,30 +1122,6 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
             }
             status = &p.health;
         }
-        postclose::drain(&mut review_draining);
-        if reported
-            && (c.prior_config.is_none() || c.legacy_directory.is_some())
-            && !review_disabled
-            && review_draining.is_none()
-        {
-            let reviewed = (|| -> Result<serde_json::Value> {
-                let cfg = c
-                    .planner_config
-                    .as_deref()
-                    .map(|path| planner::PlannerConfig::load_for_session(path, c.session))
-                    .transpose()?;
-                postclose::tick(&mut db, c, cfg.as_ref(), &p, now, &mut review_worker)
-            })();
-            review_status = match reviewed {
-                Ok(status) => status,
-                Err(_) => {
-                    review_draining = review_worker.take();
-                    postclose::drain(&mut review_draining);
-                    review_disabled = true;
-                    serde_json::json!({"status":"review_unavailable_original_evidence_preserved"})
-                }
-            };
-        }
         if reported {
             scorer_status = match scorer_trigger::tick(
                 &mut db,
@@ -1339,16 +1233,8 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
                     last_scan = 0;
                     reported = false;
                     read_failure = None;
-                    planner_attempted = false;
-                    planner_pending = None;
                     planner_status = serde_json::json!({"status":"disabled_no_plan"});
                     event_worker = None;
-                    if review_worker.is_some() {
-                        review_draining = review_worker.take();
-                        postclose::drain(&mut review_draining);
-                    }
-                    review_disabled = false;
-                    review_status = serde_json::json!({"status":"awaiting_close"});
                     drop(scorer_worker.take());
                     scorer_status = serde_json::json!({"status":"awaiting_close"});
                     owner_research_status = if config.planner_config.is_some() {
@@ -1639,6 +1525,13 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
             c.idle_poll_interval_ms
         };
         let research_context_status = research_context_status(research_context_unavailable);
+        // The retired post-close review lane keeps its view field for the dashboard.
+        let review_status =
+            if reported && (c.prior_config.is_none() || c.legacy_directory.is_some()) {
+                serde_json::json!({"status":"disabled"})
+            } else {
+                serde_json::json!({"status":"awaiting_close"})
+            };
         let mut v_json = serde_json::json!({"research_library":research_library,"experiment_lifecycle":experiment_lifecycle,"instrument_display":display_catalog_status,"paper_only":true,"live_enabled":LIVE_ENABLED,"account":c.account,"authorized_session":c.session,"next_session_config":c.next_sessions(day)?,"policy":p.policy,"model_led":p.model_led,"strategy_decision":rollover::published_decision(c),"status":status,"as_of_ms":completed_at_ms,"universe_size":universe.as_ref().map(|u|u.instruments.len()),"universe_exclusions":universe.as_ref().map(|u|&u.exclusions),"security_ready":universe.is_some(),"scanned_count":scanned_count,"pending_count":universe.as_ref().map(|u|u.instruments.len().saturating_sub(scanned_count as usize)),"market_feed":feed_health,"oldest_scan_age_ms":oldest,"screen_reasons":reasons,"discovery":discovery_status,"ranking":scan.ranking.iter().take(10).collect::<Vec<_>>(),"capital":p.allocation()?,"planner":planner_status,"nifty_options":option_status,"post_close":review_status,"scorer_trigger":scorer_status,"research_tasks":owner_research_status,"activity_attribution":owner_activity,"retention":retention_status,"readiness":readiness_status,"history_preparation":history_status,"model_initialization":initialization,"model_status":"model-led","entry_status":entry_status,"realised_net_pnl_by_fill":p.realised_net_pnl(),"portfolio":p,"read_failure_reason":read_failure,"fee_policy":format!("SIMULATION_ONLY: {}", serde_json::to_string(&p.costs.clone().ok_or("paper_costs_required")?)?),"updater":updater_status});
         v_json["owner_review"] = owner_review_status;
         v_json["owner_research"] = owner_research;

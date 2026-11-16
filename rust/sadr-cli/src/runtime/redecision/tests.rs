@@ -814,9 +814,6 @@ fn event_claims_supersede_once_and_preserve_crashes_failures_and_original_usage(
         assert_ne!(next.id, initial.id);
         assert!(next.predecessor.is_none());
         assert_eq!(next.deadline_ms, at() + 12000);
-        // A compatibility file cannot revive the superseded decision.
-        fs::create_dir_all(c.directory.join("model")).unwrap();
-        rollover::atomic(&c.directory.join("model/session-plan.json"), &original).unwrap();
         assert!(planner::saved_plan(&db, &c).unwrap().is_none());
         if outcome == "crash" {
             drop(db);
