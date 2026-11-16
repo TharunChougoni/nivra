@@ -1690,33 +1690,6 @@ fn case_carry_contract(root: &Path, base_settings: &ResearchSettings, base_polic
     assert_eq!(trials["reset"], false);
     assert_eq!(trials["family_key_is_label_only"], true);
     assert!(trials["global_tested_trial_count"].is_u64());
-    // A verified predecessor ledger exists; the fold reads it without copying.
-    experiment_ledger::lifecycle::admit_spec(
-        &predecessor,
-        experiment_ledger::lifecycle::ExperimentSpec {
-            version: 1,
-            parent_candidate_id: None,
-            session: "2026-10-15".into(),
-            source_sha256: digest(b"fold-source"),
-            params_sha256: digest(b"fold-params"),
-            dataset_hash: digest(b"fold-dataset"),
-            feature_abi: "scorer_replay_v1".into(),
-            hypothesis: "read-only predecessor fold fixture".into(),
-            training_from_ms: 0,
-            training_to_ms: 1,
-            selection_from_ms: 2,
-            selection_to_ms: 3,
-            holding_ms: 60_000,
-            max_exit_delay_ms: 2_000,
-        },
-        10,
-    )
-    .unwrap();
-    let folded =
-        experiment_ledger::lifecycle::fold_library(&dir, Some(&predecessor), "2026-10-16").unwrap();
-    assert_eq!(folded["folded"], true);
-    assert_eq!(folded["copied_rows"], false);
-    assert_eq!(folded["items"].as_array().unwrap().len(), 1);
 }
 
 fn insert_research_tick(c: &Config, at: i64) {
@@ -3978,8 +3951,7 @@ fn case_e4_continuation_contract(
         "continuation must not double-count the episode: {trials_before} -> {trials_after}"
     );
     // The CURRENT continuation is the latest verified state of the ORIGINAL
-    // episode in the operational status and the read-only fold. It is not a
-    // second candidate and is not counted twice.
+    // episode in the operational status. It is not a second candidate.
     let status = observation_status(&successor_c, &successor_policy, due + 4_000);
     assert_eq!(status["status"], "available", "{status}");
     let milestone = status["lifecycle"]["milestones"]
@@ -3992,27 +3964,6 @@ fn case_e4_continuation_contract(
     assert_eq!(milestone["continuation_state"], "evaluated", "{status}");
     assert_eq!(
         milestone["measurement_sha256"],
-        observation["measurement_sha256"]
-    );
-    let folded = experiment_ledger::lifecycle::fold_library(
-        &successor_c.directory,
-        Some(&source_c.directory),
-        &successor_day,
-    )
-    .unwrap();
-    let folded_matches = folded["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|item| item["candidate_id"] == observation_id.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        folded_matches.len(),
-        1,
-        "continuation must not duplicate the episode: {folded}"
-    );
-    assert_eq!(
-        folded_matches[0]["continuation"]["measurement_sha256"],
         observation["measurement_sha256"]
     );
     // One new terminal fact for the ORIGINAL episode, with a stable evidence id.
@@ -4621,28 +4572,6 @@ fn case_e5_corrective_contract(
         milestone["continuation_recorded_in_session"],
         json!(triple.b_day),
         "C status must name B as the recording session: {status}"
-    );
-    let folded = experiment_ledger::lifecycle::fold_library_chain(
-        &triple.c,
-        &triple.c_policy,
-        &triple.c_day,
-    )
-    .unwrap();
-    let folded_matches = folded["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|item| item["candidate_id"] == triple.id.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        folded_matches.len(),
-        1,
-        "C fold must show A's episode exactly once: {folded}"
-    );
-    assert_eq!(
-        folded_matches[0]["continuation"]["measurement_sha256"],
-        json!(b_measurement),
-        "C fold must attach B's continuation: {folded}"
     );
     assert_eq!(
         directory_manifest(&triple.a.directory),

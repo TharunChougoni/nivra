@@ -740,52 +740,14 @@ block. An interrupted claim is retired only from its exact stored claim body and
 preserves its charges.
 
 Owner authority receipts are versioned separately from the planner event state.
-A pre-marker owner journal that still carries the exact current policy hash gains
-the companion proof at controller startup when its active plan is absent or is
-the owner's own plan head. The exact hash, not table existence, proves the
-owner. Startup preserves the original active head and any stronger sticky
-data/news/configuration block; a pending claim is marked interrupted without
-replacing that block or clearing the head. Repair and migrate therefore see the
-original legacy head and refuse rather than infer a proof from a vanished head.
-A legacy active plan keeps the marker absent so startup refuses with
-`decision_owner_legacy_plan_requires_migration`. The startup proof tick records
-`source=pre_marker_exact` or `source=pre_marker_hash_upgrade`, the actual prior
-hash and the upgrade source (`current_config`, `legacy_policy` or
-`archived_policy`); it never labels an upgrade as an exact match.
-
-An old binary can move `planner_event_control` without updating the marker, and
-a marker row can be missing or malformed. Review and repair that metadata
-offline with the controller stopped:
-
-```sh
-sadr-rs planner-authority repair --config PAPER_CONFIG \
-  --expected-owner orchestrator --confirm-paper-review
-```
-
-The repair command parses `--expected-owner` as a typed value, so a bogus or
-uppercase owner exits 2 at argument parsing, before any config file is opened.
-A missing `--confirm-paper-review` refuses before the config read. The command
-holds the controller lock and refuses `LIVE_ENABLED`, a missing book or identity,
-a current marker (`planner_authority_repair_not_required`), and any supplied
-policy whose exact hash differs from the stored authority
-(`planner_authority_repair_control_hash_mismatch`). A stale valid marker needs
-the same owner plus an audited
-`operator_planner_config_applied`/`operator_planner_authority_rebound`
-transition chain, or an exact archived full-config policy, from the marker hash
-to the current authority hash (`planner_authority_repair_transition_unproven`).
-Transition steps must use strictly increasing tick rowids; a hash cycle in
-nonchronological rows is not a proof. A missing or malformed marker is
-reconstructed only from the exact current authority hash plus the explicit
-`--expected-owner`; a contradictory binding, a recognized version other than 1,
-or a different valid owner refuses. The prior raw marker bytes and SHA-256, both
-hashes and the proof are appended to the private `planner_authority_audit`
-table. UPDATE, DELETE and INSERT OR REPLACE are refused, including a duplicate
-id. The receipt records the portfolio, `planner_event_control` and attempt-row
-hashes before and after; it does not read or log account or usage contents, and
-attempt rows are hashed without logging their bodies. Repair never writes
-`state`, `planner_event_control`, attempts, usage, blocks, active or pending
-rows; it is idempotent and a second run refuses without a new receipt. Do not
-hand-create or edit the marker table.
+Every new authority writes its orchestrator owner marker in the same
+transaction, and `config-apply` and `planner-recover` rewrite it with the
+control hash they bind. Startup preserves the original active head and any
+stronger sticky data/news/configuration block; a pending claim is marked
+interrupted without replacing that block or clearing the head. A journal that
+predates the marker refuses as `planner_authority_owner_missing` and stays
+archive-only; nothing reconstructs a marker. Do not hand-create or edit the
+marker table.
 
 Production recovery never infers the legacy Decide path. Legacy planner configs
 remain readable for archives, but `planner-recover` refuses them with
@@ -793,12 +755,12 @@ remain readable for archives, but `planner-recover` refuses them with
 halted legacy book stays archive-only. The legacy recovery mechanics retained in
 tests exercise archive and refusal behavior only.
 
-A present table with a missing row still refuses as
-`planner_authority_owner_missing`; malformed, mismatched or stale receipts still
-refuse as `planner_authority_owner_invalid`,
-`planner_authority_owner_mismatch` or `decision_owner_migration_required` until
-the reviewed repair runs. These refusals leave the book, report, charges and
-authority unchanged.
+A present table with a missing row also refuses as
+`planner_authority_owner_missing`. A malformed receipt or one naming another
+owner, including a stored `legacy` owner, refuses as
+`planner_authority_owner_invalid`; a foreign binding, another version or a stale
+hash refuses as `planner_authority_owner_mismatch`. These refusals leave the
+book, report, charges and authority unchanged.
 
 When the reviewed `owner_tasks.review` policy is enabled, the controller may run
 one sealed owner review after the report is written. It is advisory: it cannot

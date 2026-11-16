@@ -1529,29 +1529,6 @@ fn scanner_screens_key_matching_missing_keys_and_whole_market_baseline() {
 }
 
 #[test]
-fn pristine_upgrade_retains_original_state_and_refuses_terminal_or_late() {
-    let d = tempfile::tempdir().unwrap();
-    let c = super::super::tests::config(d.path());
-    let mut db = open_book(&c).unwrap();
-    let mut old = Book::new(c.session);
-    super::super::save(&mut db, &c, &old, start() - 86400000, None, None, "legacy").unwrap();
-    let upgraded = load_wide_at(&mut db, &c, start() - 86400000).unwrap();
-    assert_eq!(upgraded.cash, a("5000"));
-    let original: String = db
-        .query_row(
-            "SELECT body FROM schema_history ORDER BY id LIMIT 1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(serde_json::from_str::<Book>(&original).unwrap(), old);
-    assert!(load_wide_at(&mut db, &c, start()).is_err());
-    old.stopped = true;
-    super::super::save(&mut db, &c, &old, start() - 86400000, None, None, "stopped").unwrap();
-    assert!(load_wide_at(&mut db, &c, start() - 86400000).is_err());
-}
-
-#[test]
 fn existing_wide_book_and_identity_survive_patch() {
     let d = tempfile::tempdir().unwrap();
     let c = super::super::tests::config(d.path());
@@ -1561,7 +1538,7 @@ fn existing_wide_book_and_identity_survive_patch() {
     let anchor = std::fs::read(d.path().join("book-identity.json")).unwrap();
     drop(db);
     let mut db = open_book(&c).unwrap();
-    assert_eq!(load_wide_at(&mut db, &c, start() - 86400000).unwrap(), p);
+    assert_eq!(load_wide(&mut db, &c).unwrap(), p);
     assert_eq!(
         std::fs::read(d.path().join("book-identity.json")).unwrap(),
         anchor
@@ -1576,11 +1553,13 @@ fn existing_wide_book_and_identity_survive_patch() {
     assert!(!view.to_string().contains("Bearer"));
     let view = serde_json::json!({"read_failure_reason": Option::<String>::None});
     assert!(view["read_failure_reason"].is_null());
-    let supervisor = super::super::supervisor::operational_status(
+    let supervisor = super::super::supervisor::operational_status_with_research(
         d.path(),
         &c.session.to_string(),
         start(),
         super::super::supervisor::SupervisorConfig::NotConfigured,
+        None,
+        None,
         None,
     );
     assert_eq!(
@@ -1600,11 +1579,13 @@ fn existing_wide_book_and_identity_survive_patch() {
         super::super::supervisor::SupervisorConfig::NotConfigured
     ));
     let configured = super::super::supervisor::supervisor_config(Some(&status_cfg), None, None);
-    let configured_status = super::super::supervisor::operational_status(
+    let configured_status = super::super::supervisor::operational_status_with_research(
         d.path(),
         &c.session.to_string(),
         start(),
         configured,
+        None,
+        None,
         None,
     );
     assert_eq!(
@@ -1620,11 +1601,13 @@ fn existing_wide_book_and_identity_survive_patch() {
         Some(&status_cfg),
         Some("planner_usage_unavailable_recovery_required"),
     );
-    let unavailable_status = super::super::supervisor::operational_status(
+    let unavailable_status = super::super::supervisor::operational_status_with_research(
         d.path(),
         &c.session.to_string(),
         start(),
         unavailable,
+        None,
+        None,
         None,
     );
     assert_eq!(
@@ -1644,11 +1627,13 @@ fn existing_wide_book_and_identity_survive_patch() {
     assert_eq!(unavailable_status.backoff.configured_ms, Some(900_000));
     let unavailable_no_config =
         super::super::supervisor::supervisor_config(None, None, Some("planner_config_unavailable"));
-    let unavailable_no_config_status = super::super::supervisor::operational_status(
+    let unavailable_no_config_status = super::super::supervisor::operational_status_with_research(
         d.path(),
         &c.session.to_string(),
         start(),
         unavailable_no_config,
+        None,
+        None,
         None,
     );
     assert_eq!(
@@ -2109,7 +2094,7 @@ fn stored_paper_cost_policy_cannot_change_on_resume() {
     let d = tempfile::tempdir().unwrap();
     let mut c = super::super::tests::config(d.path());
     let mut db = open_book(&c).unwrap();
-    let p = load_wide_at(&mut db, &c, start()).unwrap();
+    let p = load_wide(&mut db, &c).unwrap();
     assert_eq!(p.costs, c.paper_costs);
     persist(&mut db, &c, &p, start(), None, None, "prepared").unwrap();
     let original: String = db
@@ -2119,7 +2104,7 @@ fn stored_paper_cost_policy_cannot_change_on_resume() {
         serde_json::from_str(include_str!("../../../../../fixtures/paper-costs.json")).unwrap(),
     );
     assert_eq!(
-        load_wide_at(&mut db, &c, start()).unwrap_err().to_string(),
+        load_wide(&mut db, &c).unwrap_err().to_string(),
         "paper_cost_policy_changed"
     );
     assert_eq!(
@@ -2136,10 +2121,7 @@ fn stored_paper_cost_policy_cannot_change_on_resume() {
     let mut fresh = super::super::tests::config(d2.path());
     fresh.paper_costs = c.paper_costs.clone();
     let mut new_db = open_book(&fresh).unwrap();
-    assert_eq!(
-        load_wide_at(&mut new_db, &fresh, start()).unwrap().costs,
-        c.paper_costs
-    );
+    assert_eq!(load_wide(&mut new_db, &fresh).unwrap().costs, c.paper_costs);
 }
 #[test]
 fn durable_terminal_corruption_and_rollback() {
@@ -2814,16 +2796,14 @@ fn pending_model_recovery_preserves_charges_and_busy_is_not_a_halt() {
     );
     mark_operator_stopped(&mut p);
     assert_eq!(p.health, "planner_authority_invalid_recovery_required");
-    // Reproduce a legacy shutdown that already clobbered health. The old
-    // immutable halt event, not that projection, must authorize review.
-    db.execute_batch("DROP TABLE paper_halt_history").unwrap();
+    // A shutdown that overwrites health keeps the recorded halt authoritative.
     p.health = "operator_stopped".into();
     persist(&mut db, &c, &p, start() + 1, None, None, "operator_stopped").unwrap();
     assert_eq!(
         last_halt_reason(&db).unwrap(),
         (
             "planner_authority_invalid_recovery_required".into(),
-            "legacy_halt_events"
+            "state_transition"
         )
     );
     drop(db);
@@ -2843,7 +2823,7 @@ fn pending_model_recovery_preserves_charges_and_busy_is_not_a_halt() {
     let recovered = load_wide(&mut db, &c).unwrap();
     assert!(recovered.stopped && !recovered.halted);
     // A newer financial halt must take precedence over that planner event,
-    // even if another legacy stop subsequently erased its health display.
+    // even if a later stop erased its health display.
     let mut unrelated = recovered;
     unrelated.halted = true;
     unrelated.health = "daily_loss_tripwire".into();
@@ -3264,62 +3244,8 @@ fn marker_raw(db: &Connection) -> Option<Vec<u8>> {
 fn marker_receipt(db: &Connection) -> Option<serde_json::Value> {
     marker_raw(db).map(|raw| serde_json::from_slice(&raw).unwrap())
 }
-fn authority_audit_count(db: &Connection) -> i64 {
-    let present: bool = db
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='planner_authority_audit')",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    if !present {
-        return 0;
-    }
-    db.query_row("SELECT count(*) FROM planner_authority_audit", [], |r| {
-        r.get(0)
-    })
-    .unwrap()
-}
-fn authority_audit_last(db: &Connection) -> Option<serde_json::Value> {
-    if authority_audit_count(db) == 0 {
-        return None;
-    }
-    let body: String = db
-        .query_row(
-            "SELECT body FROM planner_authority_audit ORDER BY id DESC LIMIT 1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    Some(serde_json::from_str(&body).unwrap())
-}
 fn hex_bytes(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-fn old_binary_config_apply(db: &Connection, prior: &str, current: &str) {
-    let raw: String = db
-        .query_row(
-            "SELECT body FROM planner_event_control WHERE id=1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let mut authority: serde_json::Value = serde_json::from_str(&raw).unwrap();
-    authority["config_hash"] = serde_json::json!(current);
-    db.execute(
-        "UPDATE planner_event_control SET body=? WHERE id=1",
-        [authority.to_string()],
-    )
-    .unwrap();
-    db.execute(
-        "INSERT INTO ticks(at,receipt,body,event) VALUES(?,NULL,?,'operator_planner_config_applied')",
-        rusqlite::params![
-            start(),
-            serde_json::json!({"prior_config_hash":prior,"current_config_hash":current})
-                .to_string()
-        ],
-    )
-    .unwrap();
 }
 fn halted_owner_book(
     dir: &std::path::Path,
@@ -3369,39 +3295,6 @@ fn initialize_legacy_marked(
     )
     .unwrap();
 }
-fn halted_legacy_book(
-    dir: &std::path::Path,
-) -> (
-    Config,
-    planner::PlannerConfig,
-    Connection,
-    Portfolio,
-    String,
-) {
-    let (c, legacy) = issue_137_planner_config(dir);
-    let mut db = open_book(&c).unwrap();
-    let p = load_wide(&mut db, &c).unwrap();
-    initialize_legacy_marked(&mut db, &c, &p, &legacy, start());
-    let claim = redecision::reserve(&mut db, &c, &legacy, &p, start(), true)
-        .unwrap()
-        .unwrap();
-    initialize_legacy_marked(&mut db, &c, &p, &legacy, start() + 1);
-    let mut p = p;
-    p.halted = true;
-    p.stopped = true;
-    p.health = "planner_authority_invalid_recovery_required".into();
-    persist(
-        &mut db,
-        &c,
-        &p,
-        start() + 2,
-        None,
-        None,
-        "planner_authority_invalid",
-    )
-    .unwrap();
-    (c, legacy, db, p, claim.id)
-}
 /// Startup must not destroy the original active head or a stronger sticky
 /// block just because a claim is pending or the policy changed.
 fn startup_preserves_active_and_sticky_block() {
@@ -3412,8 +3305,6 @@ fn startup_preserves_active_and_sticky_block() {
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
     let claim = redecision::reserve(&mut db, &c, &cfg, &p, start(), true)
         .unwrap()
-        .unwrap();
-    db.execute_batch("DROP TABLE planner_authority_owner")
         .unwrap();
     db.execute(
         "INSERT INTO planner_plan VALUES('legacy-plan',?)",
@@ -3451,7 +3342,7 @@ fn startup_preserves_active_and_sticky_block() {
     assert_eq!(control["active"], "legacy-plan");
     assert_eq!(control["blocked"], "attempt_interrupted_no_replay");
     assert_eq!(control["pending"]["id"], claim.id);
-    assert!(marker_raw(&db).is_none());
+    assert_eq!(marker_receipt(&db).unwrap()["owner"], "orchestrator");
     assert_eq!(planner::usage(&c).unwrap(), usage);
     assert_eq!(
         db.query_row("SELECT count(*) FROM planner_plan", [], |r| r
@@ -3459,31 +3350,6 @@ fn startup_preserves_active_and_sticky_block() {
             .unwrap(),
         plans
     );
-    let mut halted = p.clone();
-    halted.halted = true;
-    halted.stopped = true;
-    halted.health = "planner_authority_invalid_recovery_required".into();
-    persist(
-        &mut db,
-        &c,
-        &halted,
-        start() + 2,
-        None,
-        None,
-        "planner_authority_invalid",
-    )
-    .unwrap();
-    let before = recovery_authority_snapshot(&db, &c);
-    drop(db);
-    assert_eq!(
-        planner_authority_repair(&c, "orchestrator", true)
-            .unwrap_err()
-            .to_string(),
-        "planner_authority_repair_active_legacy_plan"
-    );
-    let db = open_book(&c).unwrap();
-    assert_eq!(recovery_authority_snapshot(&db, &c), before);
-
     // A pending claim must not replace a stronger sticky data block.
     let d = tempfile::tempdir().unwrap();
     let (c, cfg) = super::super::decision_owner::owner_fixture_config(d.path());
@@ -3617,165 +3483,6 @@ fn protection_only_retains_integrity_block() {
     }
 }
 
-/// Audit storage, marker versions, transition chronology and the proof tick
-/// carry only the facts they can prove.
-fn authority_audit_hardening() {
-    let d = tempfile::tempdir().unwrap();
-    let (c, mut cfg, db, _p) = halted_owner_book(d.path());
-    let prior = digest(&planner::policy_bytes(&cfg).unwrap());
-    cfg.shortlist_n += 1;
-    let current = digest(&planner::policy_bytes(&cfg).unwrap());
-    fs::write(
-        c.planner_config.as_ref().unwrap(),
-        serde_json::to_vec(&cfg).unwrap(),
-    )
-    .unwrap();
-    old_binary_config_apply(&db, &prior, &current);
-    drop(db);
-    planner_authority_repair(&c, "orchestrator", true).unwrap();
-    let db = open_book(&c).unwrap();
-    let audit_id: i64 = db
-        .query_row(
-            "SELECT id FROM planner_authority_audit ORDER BY id LIMIT 1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert!(
-        db.execute(
-            "INSERT OR REPLACE INTO planner_authority_audit(id,at,kind,body) VALUES(?,?,?,?)",
-            rusqlite::params![audit_id, start(), "repair", "{}"],
-        )
-        .is_err()
-    );
-    let audit = authority_audit_last(&db).unwrap();
-    assert!(audit.get("portfolio_sha256_before").is_some());
-    assert!(audit.get("portfolio_sha256_after").is_some());
-    assert!(audit.get("control_sha256_before").is_some());
-    assert!(audit.get("control_sha256_after").is_some());
-    assert!(audit.get("attempts_sha256_before").is_some());
-    assert!(audit.get("attempts_sha256_after").is_some());
-    assert_eq!(
-        audit["portfolio_sha256_before"],
-        audit["portfolio_sha256_after"]
-    );
-    assert_eq!(
-        audit["control_sha256_before"],
-        audit["control_sha256_after"]
-    );
-    assert_eq!(
-        audit["attempts_sha256_before"],
-        audit["attempts_sha256_after"]
-    );
-    drop(db);
-
-    for version in [0_i64, -1] {
-        let d = tempfile::tempdir().unwrap();
-        let (c, _cfg, db, _p) = halted_owner_book(d.path());
-        let raw = marker_raw(&db).unwrap();
-        let mut receipt: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-        receipt["version"] = serde_json::json!(version);
-        db.execute(
-            "UPDATE planner_authority_owner SET body=? WHERE id=1",
-            [receipt.to_string()],
-        )
-        .unwrap();
-        assert_repair_refused(
-            &c,
-            db,
-            "orchestrator",
-            "planner_authority_repair_marker_version_unsupported",
-        );
-    }
-
-    let d = tempfile::tempdir().unwrap();
-    let (c, _cfg, db, _p) = halted_owner_book(d.path());
-    let oversize = vec![b'x'; 4097];
-    db.execute(
-        "UPDATE planner_authority_owner SET body=? WHERE id=1",
-        [&oversize[..]],
-    )
-    .unwrap();
-    assert_repair_refused(
-        &c,
-        db,
-        "orchestrator",
-        "planner_authority_repair_marker_bounds",
-    );
-
-    let d = tempfile::tempdir().unwrap();
-    let (c, cfg, db, _p) = halted_owner_book(d.path());
-    let current = digest(&planner::policy_bytes(&cfg).unwrap());
-    let raw = marker_raw(&db).unwrap();
-    let mut receipt: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-    receipt["config_hash"] = serde_json::json!("old-hash");
-    db.execute(
-        "UPDATE planner_authority_owner SET body=? WHERE id=1",
-        [receipt.to_string()],
-    )
-    .unwrap();
-    for (prior, next) in [("mid-hash", current.as_str()), ("old-hash", "mid-hash")] {
-        db.execute(
-            "INSERT INTO ticks(at,receipt,body,event) VALUES(?,NULL,?,'operator_planner_config_applied')",
-            rusqlite::params![
-                start(),
-                serde_json::json!({"prior_config_hash":prior,"current_config_hash":next})
-                    .to_string()
-            ],
-        )
-        .unwrap();
-    }
-    assert_repair_refused(
-        &c,
-        db,
-        "orchestrator",
-        "planner_authority_repair_transition_unproven",
-    );
-
-    let d = tempfile::tempdir().unwrap();
-    let (c, cfg, db, _p) = halted_owner_book(d.path());
-    let mut old = cfg.clone();
-    old.digest.daily_call_budget = old.digest.daily_call_budget.saturating_add(1);
-    let old_hash = digest(&serde_json::to_vec(&old).unwrap());
-    let archive = c.directory.join("model/archive");
-    fs::create_dir_all(&archive).unwrap();
-    fs::write(
-        archive.join("input.json"),
-        serde_json::to_vec(&serde_json::json!({"digest":old.digest})).unwrap(),
-    )
-    .unwrap();
-    let raw = marker_raw(&db).unwrap();
-    let mut receipt: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-    receipt["config_hash"] = serde_json::json!(old_hash);
-    db.execute(
-        "UPDATE planner_authority_owner SET body=? WHERE id=1",
-        [receipt.to_string()],
-    )
-    .unwrap();
-    drop(db);
-    planner_authority_repair(&c, "orchestrator", true).unwrap();
-    let db = open_book(&c).unwrap();
-    let audit = authority_audit_last(&db).unwrap();
-    assert_eq!(audit["transition"]["kind"], "archived_policy");
-    assert_eq!(audit["prior_marker_config_hash"], old_hash);
-    assert_eq!(
-        audit["current_config_hash"],
-        digest(&planner::policy_bytes(&cfg).unwrap())
-    );
-}
-
-fn assert_repair_refused(c: &Config, db: Connection, expected_owner: &str, code: &str) {
-    let before = recovery_authority_snapshot(&db, c);
-    drop(db);
-    assert_eq!(
-        planner_authority_repair(c, expected_owner, true)
-            .unwrap_err()
-            .to_string(),
-        code
-    );
-    let db = open_book(c).unwrap();
-    assert_eq!(recovery_authority_snapshot(&db, c), before);
-}
 fn recovery_authority_snapshot(db: &Connection, c: &Config) -> serde_json::Value {
     let portfolio: String = db
         .query_row("SELECT body FROM state WHERE id=1", [], |r| r.get(0))
@@ -3812,11 +3519,8 @@ fn recovery_authority_snapshot(db: &Connection, c: &Config) -> serde_json::Value
 }
 fn recovery_owner_receipt_compatibility() {
     for case in [
-        "pre_marker_exact",
-        "pre_marker_changed",
+        "pre_marker",
         "corrected_owner",
-        "hash_upgrade",
-        "pre_marker_hash_upgrade",
         "invalid_version",
         "invalid_binding",
         "invalid_owner",
@@ -3841,62 +3545,7 @@ fn recovery_owner_receipt_compatibility() {
             "planner_authority_invalid",
         )
         .unwrap();
-        if case.starts_with("pre_marker_") {
-            db.execute_batch("DROP TABLE planner_authority_owner")
-                .unwrap();
-        }
-        if matches!(case, "hash_upgrade" | "pre_marker_hash_upgrade") {
-            let raw: String = db
-                .query_row(
-                    "SELECT body FROM planner_event_control WHERE id=1",
-                    [],
-                    |r| r.get(0),
-                )
-                .unwrap();
-            let mut authority: serde_json::Value = serde_json::from_str(&raw).unwrap();
-            let old_hash = digest(&serde_json::to_vec(&cfg).unwrap());
-            authority["config_hash"] = serde_json::json!(old_hash);
-            db.execute(
-                "UPDATE planner_event_control SET body=? WHERE id=1",
-                [authority.to_string()],
-            )
-            .unwrap();
-            if case == "hash_upgrade" {
-                let raw: String = db
-                    .query_row(
-                        "SELECT body FROM planner_authority_owner WHERE id=1",
-                        [],
-                        |r| r.get(0),
-                    )
-                    .unwrap();
-                let mut receipt: serde_json::Value = serde_json::from_str(&raw).unwrap();
-                receipt["config_hash"] = serde_json::json!(old_hash);
-                db.execute(
-                    "UPDATE planner_authority_owner SET body=? WHERE id=1",
-                    [receipt.to_string()],
-                )
-                .unwrap();
-            }
-            redecision::initialize(&mut db, &c, &p, Some(&cfg), start() + 1).unwrap();
-            let snapshot = recovery_authority_snapshot(&db, &c);
-            // An exact current hash after the archived-policy upgrade proves
-            // the owner; the companion marker is created at startup.
-            assert!(snapshot["receipt_exists"].as_bool().unwrap(), "{case}");
-            if case == "pre_marker_hash_upgrade" {
-                let body: String = db
-                    .query_row(
-                        "SELECT body FROM ticks WHERE event='operator_planner_authority_proof_created' ORDER BY rowid DESC LIMIT 1",
-                        [],
-                        |r| r.get(0),
-                    )
-                    .unwrap();
-                let proof: serde_json::Value = serde_json::from_str(&body).unwrap();
-                assert_eq!(proof["source"], "pre_marker_hash_upgrade");
-                assert_eq!(proof["prior_config_hash"], old_hash);
-                assert_eq!(proof["upgrade_source"], "current_config");
-            }
-        }
-        if matches!(case, "pre_marker_changed" | "corrected_owner") {
+        if case == "corrected_owner" {
             cfg.shortlist_n += 1;
             fs::write(
                 c.planner_config.as_ref().unwrap(),
@@ -3905,7 +3554,12 @@ fn recovery_owner_receipt_compatibility() {
             .unwrap();
         }
         let expected_error = match case {
-            "pre_marker_changed" => Some("planner_recover_owner_unproven_restore_original_config"),
+            // A journal that predates the owner marker has no proven owner.
+            "pre_marker" => {
+                db.execute_batch("DROP TABLE planner_authority_owner")
+                    .unwrap();
+                Some("planner_authority_owner_missing")
+            }
             "invalid_version" | "invalid_binding" | "invalid_owner" | "stale_hash" => {
                 let raw: String = db
                     .query_row(
@@ -3918,7 +3572,7 @@ fn recovery_owner_receipt_compatibility() {
                 match case {
                     "invalid_version" => receipt["version"] = serde_json::json!(2),
                     "invalid_binding" => receipt["binding"] = serde_json::json!("other-book"),
-                    "invalid_owner" => receipt["owner"] = serde_json::json!("unknown"),
+                    "invalid_owner" => receipt["owner"] = serde_json::json!("legacy"),
                     _ => receipt["config_hash"] = serde_json::json!("stale"),
                 }
                 db.execute(
@@ -4061,516 +3715,8 @@ fn recovery_owner_receipt_compatibility() {
     eprintln!(
         "authority_repair_red: halted_legacy_recover={recover_error} config_apply={apply_error}"
     );
-    assert_eq!(recover_error, "decision_owner_migration_required");
+    assert_eq!(recover_error, "planner_authority_owner_invalid");
     assert_eq!(apply_error, "config_apply_halted_requires_planner_recover");
-
-    // A pre-marker owner journal with the exact current policy hash gains the
-    // companion proof at startup, so a later corrected owner policy can recover.
-    let d = tempfile::tempdir().unwrap();
-    let (c, cfg) = super::super::decision_owner::owner_fixture_config(d.path());
-    let mut db = open_book(&c).unwrap();
-    let mut p = load_wide(&mut db, &c).unwrap();
-    redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
-    db.execute_batch("DROP TABLE planner_authority_owner")
-        .unwrap();
-    p.halted = true;
-    p.stopped = true;
-    p.health = "planner_authority_invalid_recovery_required".into();
-    persist(
-        &mut db,
-        &c,
-        &p,
-        start(),
-        None,
-        None,
-        "planner_authority_invalid",
-    )
-    .unwrap();
-    redecision::initialize(&mut db, &c, &p, Some(&cfg), start() + 1).unwrap();
-    let marker: String = db
-        .query_row(
-            "SELECT body FROM planner_authority_owner WHERE id=1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let marker: serde_json::Value = serde_json::from_str(&marker).unwrap();
-    assert_eq!(marker["owner"], "orchestrator");
-    assert_eq!(
-        marker["config_hash"],
-        digest(&planner::policy_bytes(&cfg).unwrap())
-    );
-    redecision::owner_startup_check(&db, &c, &cfg).unwrap();
-    drop(db);
-    let mut corrected = cfg.clone();
-    corrected.shortlist_n += 1;
-    fs::write(
-        c.planner_config.as_ref().unwrap(),
-        serde_json::to_vec(&corrected).unwrap(),
-    )
-    .unwrap();
-    planner_recover(&c, true).unwrap();
-    let mut db = open_book(&c).unwrap();
-    let recovered = load_wide(&mut db, &c).unwrap();
-    assert!(recovered.stopped && !recovered.halted);
-    redecision::owner_startup_check(&db, &c, &corrected).unwrap();
-
-    // A stale valid marker with an audited old-binary transition is repaired
-    // from the exact current Control hash. The prior raw marker is preserved.
-    let d = tempfile::tempdir().unwrap();
-    let (c, mut cfg, db, _p) = halted_owner_book(d.path());
-    let prior = digest(&planner::policy_bytes(&cfg).unwrap());
-    let prior_raw = marker_raw(&db).unwrap();
-    cfg.shortlist_n += 1;
-    let current = digest(&planner::policy_bytes(&cfg).unwrap());
-    fs::write(
-        c.planner_config.as_ref().unwrap(),
-        serde_json::to_vec(&cfg).unwrap(),
-    )
-    .unwrap();
-    old_binary_config_apply(&db, &prior, &current);
-    let before = recovery_authority_snapshot(&db, &c);
-    drop(db);
-    planner_authority_repair(&c, "orchestrator", true).unwrap();
-    let db = open_book(&c).unwrap();
-    let after = recovery_authority_snapshot(&db, &c);
-    assert_eq!(after["portfolio"], before["portfolio"]);
-    assert_eq!(after["authority"], before["authority"]);
-    assert_eq!(after["attempts"], before["attempts"]);
-    assert_eq!(after["usage"], before["usage"]);
-    let marker = marker_receipt(&db).unwrap();
-    assert_eq!(marker["owner"], "orchestrator");
-    assert_eq!(marker["config_hash"], current);
-    let audit = authority_audit_last(&db).unwrap();
-    assert_eq!(audit["kind"], "stale");
-    assert_eq!(audit["prior_marker_raw_hex"], hex_bytes(&prior_raw));
-    assert_eq!(audit["prior_marker_sha256"], digest(&prior_raw));
-    assert_eq!(audit["control_config_hash"], current);
-    assert_eq!(audit["current_config_hash"], current);
-    assert_eq!(audit["transition"]["kind"], "audited_ticks");
-    assert_eq!(audit["transition"]["steps"][0]["prior_config_hash"], prior);
-    assert_eq!(
-        audit["transition"]["steps"][0]["current_config_hash"],
-        current
-    );
-    assert!(
-        db.execute("UPDATE planner_authority_audit SET body='x'", [])
-            .is_err()
-    );
-    assert!(
-        db.execute("DELETE FROM planner_authority_audit", [])
-            .is_err()
-    );
-    let audit_before = authority_audit_count(&db);
-    drop(db);
-    assert_eq!(
-        planner_authority_repair(&c, "orchestrator", true)
-            .unwrap_err()
-            .to_string(),
-        "planner_authority_repair_not_required"
-    );
-    let db = open_book(&c).unwrap();
-    assert_eq!(authority_audit_count(&db), audit_before);
-    assert_eq!(marker_receipt(&db).unwrap(), marker);
-
-    // A stale marker without transition or archived-policy proof refuses and
-    // leaves every prior row unchanged.
-    let d = tempfile::tempdir().unwrap();
-    let (c, mut cfg, db, _p) = halted_owner_book(d.path());
-    cfg.shortlist_n += 1;
-    let current = digest(&planner::policy_bytes(&cfg).unwrap());
-    fs::write(
-        c.planner_config.as_ref().unwrap(),
-        serde_json::to_vec(&cfg).unwrap(),
-    )
-    .unwrap();
-    let raw: String = db
-        .query_row(
-            "SELECT body FROM planner_event_control WHERE id=1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let mut authority: serde_json::Value = serde_json::from_str(&raw).unwrap();
-    authority["config_hash"] = serde_json::json!(current);
-    db.execute(
-        "UPDATE planner_event_control SET body=? WHERE id=1",
-        [authority.to_string()],
-    )
-    .unwrap();
-    assert_repair_refused(
-        &c,
-        db,
-        "orchestrator",
-        "planner_authority_repair_transition_unproven",
-    );
-
-    // The expected owner is an assertion, not a bypass.
-    let d = tempfile::tempdir().unwrap();
-    let (c, mut cfg, db, _p) = halted_owner_book(d.path());
-    let prior = digest(&planner::policy_bytes(&cfg).unwrap());
-    cfg.shortlist_n += 1;
-    let current = digest(&planner::policy_bytes(&cfg).unwrap());
-    fs::write(
-        c.planner_config.as_ref().unwrap(),
-        serde_json::to_vec(&cfg).unwrap(),
-    )
-    .unwrap();
-    old_binary_config_apply(&db, &prior, &current);
-    assert_repair_refused(&c, db, "legacy", "planner_authority_repair_owner_mismatch");
-
-    // A missing row is reconstructed only from the exact authoritative hash.
-    let d = tempfile::tempdir().unwrap();
-    let (c, cfg, db, _p) = halted_owner_book(d.path());
-    db.execute("DELETE FROM planner_authority_owner WHERE id=1", [])
-        .unwrap();
-    let before = recovery_authority_snapshot(&db, &c);
-    drop(db);
-    planner_authority_repair(&c, "orchestrator", true).unwrap();
-    let db = open_book(&c).unwrap();
-    let audit = authority_audit_last(&db).unwrap();
-    assert_eq!(audit["kind"], "missing");
-    assert!(audit["prior_marker_raw_hex"].is_null());
-    assert!(audit["prior_marker_sha256"].is_null());
-    assert_eq!(
-        marker_receipt(&db).unwrap()["config_hash"],
-        digest(&planner::policy_bytes(&cfg).unwrap())
-    );
-    assert_eq!(
-        recovery_authority_snapshot(&db, &c)["portfolio"],
-        before["portfolio"]
-    );
-    drop(db);
-    assert_eq!(
-        planner_authority_repair(&c, "legacy", true)
-            .unwrap_err()
-            .to_string(),
-        "planner_authority_repair_owner_mismatch"
-    );
-
-    // Malformed bytes, including invalid UTF-8, are preserved verbatim.
-    let d = tempfile::tempdir().unwrap();
-    let (c, cfg, db, _p) = halted_owner_book(d.path());
-    let malformed = b"{\"version\":1,\"binding\":\"\xff\"}".to_vec();
-    db.execute(
-        "UPDATE planner_authority_owner SET body=? WHERE id=1",
-        [&malformed[..]],
-    )
-    .unwrap();
-    let before = recovery_authority_snapshot(&db, &c);
-    drop(db);
-    planner_authority_repair(&c, "orchestrator", true).unwrap();
-    let db = open_book(&c).unwrap();
-    let audit = authority_audit_last(&db).unwrap();
-    assert_eq!(audit["kind"], "malformed");
-    assert_eq!(audit["prior_marker_raw_hex"], hex_bytes(&malformed));
-    assert_eq!(audit["prior_marker_sha256"], digest(&malformed));
-    assert_eq!(
-        marker_receipt(&db).unwrap()["config_hash"],
-        digest(&planner::policy_bytes(&cfg).unwrap())
-    );
-    assert_eq!(
-        recovery_authority_snapshot(&db, &c)["portfolio"],
-        before["portfolio"]
-    );
-
-    // A completely absent marker table is reconstructed from the exact hash.
-    let d = tempfile::tempdir().unwrap();
-    let (c, cfg, db, _p) = halted_owner_book(d.path());
-    db.execute_batch("DROP TABLE planner_authority_owner")
-        .unwrap();
-    let before = recovery_authority_snapshot(&db, &c);
-    drop(db);
-    planner_authority_repair(&c, "orchestrator", true).unwrap();
-    let db = open_book(&c).unwrap();
-    let audit = authority_audit_last(&db).unwrap();
-    assert_eq!(audit["kind"], "absent");
-    assert!(audit["prior_marker_raw_hex"].is_null());
-    assert_eq!(
-        marker_receipt(&db).unwrap()["config_hash"],
-        digest(&planner::policy_bytes(&cfg).unwrap())
-    );
-    assert_eq!(
-        recovery_authority_snapshot(&db, &c)["portfolio"],
-        before["portfolio"]
-    );
-
-    // The owner is implicit, so a legacy owner assertion can never match the
-    // current policy; the refusal leaves the book and its authority untouched.
-    let d = tempfile::tempdir().unwrap();
-    let (c, _legacy, db, _p, _claim) = halted_legacy_book(d.path());
-    db.execute_batch("DROP TABLE planner_authority_owner")
-        .unwrap();
-    let before = recovery_authority_snapshot(&db, &c);
-    drop(db);
-    assert_eq!(
-        planner_authority_repair(&c, "legacy", true)
-            .unwrap_err()
-            .to_string(),
-        "planner_authority_repair_owner_mismatch"
-    );
-    assert_eq!(
-        recovery_authority_snapshot(&open_book(&c).unwrap(), &c),
-        before
-    );
-
-    // An exact archived full-config policy proves a stale hash upgrade.
-    let d = tempfile::tempdir().unwrap();
-    let (c, cfg, db, _p) = halted_owner_book(d.path());
-    let old = digest(&serde_json::to_vec(&cfg).unwrap());
-    let raw = marker_raw(&db).unwrap();
-    let mut receipt: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-    receipt["config_hash"] = serde_json::json!(old);
-    db.execute(
-        "UPDATE planner_authority_owner SET body=? WHERE id=1",
-        [receipt.to_string()],
-    )
-    .unwrap();
-    let before = recovery_authority_snapshot(&db, &c);
-    drop(db);
-    planner_authority_repair(&c, "orchestrator", true).unwrap();
-    let db = open_book(&c).unwrap();
-    let audit = authority_audit_last(&db).unwrap();
-    assert_eq!(audit["kind"], "stale");
-    assert_eq!(audit["transition"]["kind"], "archived_policy");
-    assert_eq!(audit["prior_marker_config_hash"], old);
-    assert_eq!(
-        recovery_authority_snapshot(&db, &c)["portfolio"],
-        before["portfolio"]
-    );
-
-    // Multiple audited transitions chain from the original marker hash.
-    let d = tempfile::tempdir().unwrap();
-    let (c, cfg, db, _p) = halted_owner_book(d.path());
-    let current = digest(&planner::policy_bytes(&cfg).unwrap());
-    let raw = marker_raw(&db).unwrap();
-    let mut receipt: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-    receipt["config_hash"] = serde_json::json!("old-hash");
-    db.execute(
-        "UPDATE planner_authority_owner SET body=? WHERE id=1",
-        [receipt.to_string()],
-    )
-    .unwrap();
-    for (prior, next) in [("old-hash", "mid-hash"), ("mid-hash", current.as_str())] {
-        db.execute(
-            "INSERT INTO ticks(at,receipt,body,event) VALUES(?,NULL,?,'operator_planner_config_applied')",
-            rusqlite::params![
-                start(),
-                serde_json::json!({"prior_config_hash":prior,"current_config_hash":next})
-                    .to_string()
-            ],
-        )
-        .unwrap();
-    }
-    drop(db);
-    planner_authority_repair(&c, "orchestrator", true).unwrap();
-    let db = open_book(&c).unwrap();
-    let audit = authority_audit_last(&db).unwrap();
-    assert_eq!(audit["transition"]["kind"], "audited_ticks");
-    assert_eq!(audit["transition"]["steps"].as_array().unwrap().len(), 2);
-
-    // Contradictory binding, unsupported version, wrong Control hash and an
-    // unreadable transition tick all refuse without touching prior state.
-    let d = tempfile::tempdir().unwrap();
-    let (c, _cfg, db, _p) = halted_owner_book(d.path());
-    let raw = marker_raw(&db).unwrap();
-    let mut receipt: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-    receipt["binding"] = serde_json::json!("other-book");
-    db.execute(
-        "UPDATE planner_authority_owner SET body=? WHERE id=1",
-        [receipt.to_string()],
-    )
-    .unwrap();
-    assert_repair_refused(
-        &c,
-        db,
-        "orchestrator",
-        "planner_authority_repair_binding_mismatch",
-    );
-
-    let d = tempfile::tempdir().unwrap();
-    let (c, _cfg, db, _p) = halted_owner_book(d.path());
-    let raw = marker_raw(&db).unwrap();
-    let mut receipt: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-    receipt["version"] = serde_json::json!(2);
-    db.execute(
-        "UPDATE planner_authority_owner SET body=? WHERE id=1",
-        [receipt.to_string()],
-    )
-    .unwrap();
-    assert_repair_refused(
-        &c,
-        db,
-        "orchestrator",
-        "planner_authority_repair_marker_version_unsupported",
-    );
-
-    let d = tempfile::tempdir().unwrap();
-    let (c, mut cfg, db, _p) = halted_owner_book(d.path());
-    cfg.shortlist_n += 1;
-    fs::write(
-        c.planner_config.as_ref().unwrap(),
-        serde_json::to_vec(&cfg).unwrap(),
-    )
-    .unwrap();
-    assert_repair_refused(
-        &c,
-        db,
-        "orchestrator",
-        "planner_authority_repair_control_hash_mismatch",
-    );
-
-    let d = tempfile::tempdir().unwrap();
-    let (c, mut cfg, db, _p) = halted_owner_book(d.path());
-    cfg.shortlist_n += 1;
-    let current = digest(&planner::policy_bytes(&cfg).unwrap());
-    fs::write(
-        c.planner_config.as_ref().unwrap(),
-        serde_json::to_vec(&cfg).unwrap(),
-    )
-    .unwrap();
-    let raw: String = db
-        .query_row(
-            "SELECT body FROM planner_event_control WHERE id=1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let mut authority: serde_json::Value = serde_json::from_str(&raw).unwrap();
-    authority["config_hash"] = serde_json::json!(current);
-    db.execute(
-        "UPDATE planner_event_control SET body=? WHERE id=1",
-        [authority.to_string()],
-    )
-    .unwrap();
-    db.execute(
-        "INSERT INTO ticks(at,receipt,body,event) VALUES(?,NULL,'not-json','operator_planner_config_applied')",
-        [start()],
-    )
-    .unwrap();
-    assert_repair_refused(
-        &c,
-        db,
-        "orchestrator",
-        "planner_authority_repair_transition_evidence_invalid",
-    );
-
-    // No confirmation and a held controller lock refuse before any write.
-    let d = tempfile::tempdir().unwrap();
-    let (c, _cfg, db, _p) = halted_owner_book(d.path());
-    let before = recovery_authority_snapshot(&db, &c);
-    drop(db);
-    assert_eq!(
-        planner_authority_repair(&c, "orchestrator", false)
-            .unwrap_err()
-            .to_string(),
-        "planner_authority_repair_confirm_paper_review_required"
-    );
-    let db = open_book(&c).unwrap();
-    assert_eq!(recovery_authority_snapshot(&db, &c), before);
-    drop(db);
-    let busy = AdvisoryLock::new(
-        fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(c.directory.join("controller.lock"))
-            .unwrap(),
-    );
-    busy.try_lock_exclusive().unwrap();
-    assert_eq!(
-        planner_authority_repair(&c, "orchestrator", true)
-            .unwrap_err()
-            .to_string(),
-        "planner_authority_repair_controller_busy"
-    );
-    drop(busy);
-    let db = open_book(&c).unwrap();
-    assert_eq!(recovery_authority_snapshot(&db, &c), before);
-
-    // A pre-marker owner with an active owner plan is demonstrably owner and
-    // gains proof; an active legacy plan keeps the marker absent.
-    let d = tempfile::tempdir().unwrap();
-    let (c, cfg, mut db, p) = halted_owner_book(d.path());
-    db.execute_batch("DROP TABLE planner_authority_owner")
-        .unwrap();
-    db.execute(
-        "INSERT INTO planner_plan VALUES('owner-plan',?)",
-        [
-            serde_json::json!({"decision_id":"owner-plan","decision_owner":"orchestrator"})
-                .to_string(),
-        ],
-    )
-    .unwrap();
-    let raw: String = db
-        .query_row(
-            "SELECT body FROM planner_event_control WHERE id=1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let mut authority: serde_json::Value = serde_json::from_str(&raw).unwrap();
-    authority["active"] = serde_json::json!("owner-plan");
-    db.execute(
-        "UPDATE planner_event_control SET body=? WHERE id=1",
-        [authority.to_string()],
-    )
-    .unwrap();
-    redecision::initialize(&mut db, &c, &p, Some(&cfg), start() + 1).unwrap();
-    assert!(marker_receipt(&db).is_some());
-
-    let d = tempfile::tempdir().unwrap();
-    let (c, cfg, mut db, p) = halted_owner_book(d.path());
-    db.execute_batch("DROP TABLE planner_authority_owner")
-        .unwrap();
-    db.execute(
-        "INSERT INTO planner_plan VALUES('legacy-plan',?)",
-        [serde_json::json!({"decision_id":"legacy-plan"}).to_string()],
-    )
-    .unwrap();
-    let raw: String = db
-        .query_row(
-            "SELECT body FROM planner_event_control WHERE id=1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let mut authority: serde_json::Value = serde_json::from_str(&raw).unwrap();
-    authority["active"] = serde_json::json!("legacy-plan");
-    db.execute(
-        "UPDATE planner_event_control SET body=? WHERE id=1",
-        [authority.to_string()],
-    )
-    .unwrap();
-    let before = recovery_authority_snapshot(&db, &c);
-    redecision::initialize(&mut db, &c, &p, Some(&cfg), start() + 1).unwrap();
-    assert!(marker_raw(&db).is_none());
-    assert_eq!(
-        redecision::owner_startup_check(&db, &c, &cfg)
-            .unwrap_err()
-            .to_string(),
-        "decision_owner_legacy_plan_requires_migration"
-    );
-    assert_eq!(recovery_authority_snapshot(&db, &c), before);
-
-    // An exact current hash with an explicit apply tick still gains proof; the
-    // exact hash, not a no-transition convention, is the proof.
-    let d = tempfile::tempdir().unwrap();
-    let (c, cfg, mut db, p) = halted_owner_book(d.path());
-    db.execute_batch("DROP TABLE planner_authority_owner")
-        .unwrap();
-    let hash = digest(&planner::policy_bytes(&cfg).unwrap());
-    db.execute(
-        "INSERT INTO ticks(at,receipt,body,event) VALUES(?,NULL,?,'operator_planner_config_applied')",
-        rusqlite::params![
-            start(),
-            serde_json::json!({"prior_config_hash":"prior","current_config_hash":hash})
-                .to_string()
-        ],
-    )
-    .unwrap();
-    redecision::initialize(&mut db, &c, &p, Some(&cfg), start() + 1).unwrap();
-    assert!(marker_receipt(&db).is_some());
 
     let d = tempfile::tempdir().unwrap();
     let (c, legacy) = issue_137_planner_config(d.path());
@@ -4579,25 +3725,15 @@ fn recovery_owner_receipt_compatibility() {
     initialize_legacy_marked(&mut db, &c, &p, &legacy, start());
     mark_operator_stopped(&mut p);
     persist(&mut db, &c, &p, start(), None, None, "operator_stopped").unwrap();
-    let charges = planner::usage(&c).unwrap();
+    let before = recovery_authority_snapshot(&db, &c);
     drop(db);
-    let (owner_c, owner) = super::super::decision_owner::owner_fixture_config(d.path());
-    config_apply(&owner_c, true).unwrap();
-    let mut db = open_book(&owner_c).unwrap();
-    redecision::owner_startup_check(&db, &owner_c, &owner).unwrap();
-    let recovered = load_wide(&mut db, &owner_c).unwrap();
-    assert!(recovered.stopped && !recovered.halted);
-    assert_eq!(planner::usage(&owner_c).unwrap(), charges);
-    let raw: String = db
-        .query_row(
-            "SELECT body FROM planner_authority_owner WHERE id=1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let receipt: serde_json::Value = serde_json::from_str(&raw).unwrap();
-    assert_eq!(receipt["owner"], "orchestrator");
-    authority_audit_hardening();
+    let (owner_c, _) = super::super::decision_owner::owner_fixture_config(d.path());
+    assert_eq!(
+        config_apply(&owner_c, true).unwrap_err().to_string(),
+        "planner_authority_owner_invalid"
+    );
+    let db = open_book(&owner_c).unwrap();
+    assert_eq!(recovery_authority_snapshot(&db, &owner_c), before);
 }
 #[test]
 fn resume_clears_operator_stop_with_audit_when_flat() {
@@ -5445,20 +4581,17 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
             if fault == "audit_projection" {
                 current["verdicts"] = serde_json::json!([]);
             }
-            assert!(
-                redecision::settle(
-                    &mut db,
-                    &c,
-                    &cfg,
-                    &p,
-                    &claim,
-                    Err("fixture_digest_failed".into()),
-                    at + 1001,
-                    true,
-                )
-                .unwrap()
-                .is_none()
-            );
+            redecision::settle(
+                &mut db,
+                &c,
+                &cfg,
+                &p,
+                &claim,
+                Err("fixture_digest_failed".into()),
+                at + 1001,
+                true,
+            )
+            .unwrap();
             // A newer accepted plan is the active head; its damaged evidence
             // is read on the next tick.
             db.execute(

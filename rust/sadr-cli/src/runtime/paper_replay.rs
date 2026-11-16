@@ -427,11 +427,7 @@ fn run(
             cursor = id;
             apply_event(&mut db, &c, &cfg, &mut p, &mut scan, &m.universe, &next)?;
         }
-        if let Some(plan) =
-            redecision::settle(&mut db, &c, &cfg, &p, &claim, result, finished, true)?
-        {
-            rollover::atomic(&output.join("model/session-plan.json"), &plan)?;
-        }
+        redecision::settle(&mut db, &c, &cfg, &p, &claim, result, finished, true)?;
     }
     if wide::close_portfolio(&mut p) {
         wide::persist(

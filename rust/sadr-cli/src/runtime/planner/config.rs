@@ -25,12 +25,6 @@ pub(crate) struct ModelRole {
     pub max_read_tools: Option<usize>,
     #[serde(skip_serializing_if = "ModelRole::default_max_analysis_tools")]
     pub max_analysis_tools: usize,
-    /// Accepted for configuration compatibility; no current role reads it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub minimum_turn_ms: Option<u64>,
-    /// Accepted for configuration compatibility; no current role reads it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_failed_tools: Option<usize>,
     /// Explicit fallback for one call whose primary failed with a usage, rate
     /// or quota limit (#245). Absent keeps every historical policy byte.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -92,8 +86,6 @@ impl Default for ModelRole {
             max_turns: None,
             max_read_tools: None,
             max_analysis_tools: 4,
-            minimum_turn_ms: None,
-            max_failed_tools: None,
             fallback: None,
         }
     }
@@ -129,8 +121,6 @@ pub(super) fn role_invalid(role: &ModelRole, max_run: u64) -> bool {
         || role.max_analysis_tools > 64
         || role.max_turns == Some(0)
         || role.max_read_tools == Some(0)
-        || role.minimum_turn_ms == Some(0)
-        || role.max_failed_tools.is_some_and(|n| n > 64)
         || role
             .run_timeout_ms
             .is_some_and(|n| n < role.timeout_ms || n > max_run)

@@ -73,8 +73,6 @@ pub(crate) struct ModelDefaults {
     pub max_turns: Option<usize>,
     pub max_read_tools: Option<usize>,
     pub max_analysis_tools: usize,
-    pub minimum_turn_ms: Option<u64>,
-    pub max_failed_tools: Option<usize>,
     #[allow(dead_code)] // parse-compatible unused leftover from removed approval renewal
     pub approval_auto_renew: Option<AutoRenewSettings>,
     /// Explicit limit fallback (#245); omitted when absent so policy bytes
@@ -98,8 +96,6 @@ impl Default for ModelDefaults {
             max_turns: None,
             max_read_tools: None,
             max_analysis_tools: 4,
-            minimum_turn_ms: None,
-            max_failed_tools: None,
             approval_auto_renew: None,
             fallback: None,
         }
@@ -122,8 +118,6 @@ impl ModelDefaults {
             max_turns: self.max_turns,
             max_read_tools: self.max_read_tools,
             max_analysis_tools: self.max_analysis_tools,
-            minimum_turn_ms: self.minimum_turn_ms,
-            max_failed_tools: self.max_failed_tools,
             fallback: self.fallback.clone(),
         }
     }
@@ -190,8 +184,6 @@ pub(crate) struct TriggerSettings {
     pub budget_unit: Option<String>,
     pub max_read_tools: Option<usize>,
     pub max_analysis_tools: Option<usize>,
-    pub minimum_turn_ms: Option<u64>,
-    pub max_failed_tools: Option<usize>,
     /// Post-close-only scorer due time in minutes after midnight IST. Absent
     /// means the trigger has no scheduled run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -243,8 +235,6 @@ impl Default for TriggerSettings {
             budget_unit: None,
             max_read_tools: None,
             max_analysis_tools: None,
-            minimum_turn_ms: None,
-            max_failed_tools: None,
             after_minute: None,
             replay: None,
             idle_interval_ms: None,
@@ -399,12 +389,6 @@ impl OrchestratorModelSettings {
         }
         if let Some(max_analysis_tools) = settings.max_analysis_tools {
             role.max_analysis_tools = max_analysis_tools;
-        }
-        if let Some(minimum_turn_ms) = settings.minimum_turn_ms {
-            role.minimum_turn_ms = Some(minimum_turn_ms);
-        }
-        if let Some(max_failed_tools) = settings.max_failed_tools {
-            role.max_failed_tools = Some(max_failed_tools);
         }
         role
     }

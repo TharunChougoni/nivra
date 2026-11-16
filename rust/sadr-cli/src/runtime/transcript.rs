@@ -6,7 +6,7 @@ use std::{
     fs::{File, OpenOptions},
     io::Write,
     os::unix::fs::OpenOptionsExt,
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -23,7 +23,6 @@ pub struct TranscriptEvent {
 
 pub struct Transcript<'a> {
     file: File,
-    path: PathBuf,
     run: String,
     seq: u64,
     bytes: u64,
@@ -63,7 +62,6 @@ impl<'a> Transcript<'a> {
             .open(&path)?;
         let mut writer = Self {
             file,
-            path,
             run: run.to_owned(),
             seq: 0,
             bytes: 0,
@@ -144,10 +142,6 @@ impl<'a> Transcript<'a> {
         self.file.sync_all()?;
         Ok(())
     }
-    #[allow(dead_code)]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
 }
 fn clip(text: &str, cap: usize) -> &str {
     let mut end = text.len().min(cap);
@@ -222,7 +216,6 @@ impl RequestArchive {
 }
 // Return the original archive wrapper. Serialize its typed Frame to recover the
 // exact provider byte order; serializing a generic JSON object sorts its keys.
-#[allow(dead_code)]
 pub fn full_request(dir: &Path, turn: usize, settings: &DashboardSettings) -> Result<Value> {
     let load = |path: &Path| -> Result<Value> {
         let metadata =
@@ -453,7 +446,6 @@ fn redact_in_place(value: &mut Value) {
         _ => {}
     }
 }
-#[allow(dead_code)]
 pub fn read(path: &Path, max_bytes: u64) -> Result<Vec<Value>> {
     let bytes = crate::read_bounded(path, max_bytes).map_err(|_| "transcript_read_failed")?;
     let mut events = Vec::new();
@@ -487,7 +479,7 @@ mod tests {
         };
         let clock = || 1234;
         let mut transcript = Transcript::start(dir.path(), "fixture-run", &settings, json!({"role":"digest","Authorization":"private-auth","api_key":"private-key","nested":{"refresh_token":"private-token"},"cash":12}), &clock).unwrap();
-        let path = transcript.path().to_owned();
+        let path = dir.path().join("transcript.ndjson");
         assert!(
             Transcript::start(dir.path(), "fixture-run", &settings, json!({}), &clock).is_err()
         );

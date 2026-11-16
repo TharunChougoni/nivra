@@ -379,6 +379,16 @@ fn halted_carry_reaches_protection_only_successor_and_clears_only_after_review()
     );
     // Controller startup records the adopted halt and fresh authority.
     redecision::initialize(&mut db, &next, &carried, Some(&cfg), monday).unwrap();
+    let marker: String = db
+        .query_row(
+            "SELECT body FROM planner_authority_owner WHERE id=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let marker: serde_json::Value = serde_json::from_str(&marker).unwrap();
+    assert_eq!(marker["owner"], "orchestrator");
+    assert_eq!(marker["binding"], book_binding(&next).unwrap());
     assert!(
         redecision::reserve(&mut db, &next, &cfg, &carried, monday, true)
             .unwrap()

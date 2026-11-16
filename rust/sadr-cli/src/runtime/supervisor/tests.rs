@@ -2471,11 +2471,13 @@ pub(crate) fn exercise() {
     let status_dir = tempfile::tempdir().unwrap();
     let status_session = "2026-10-26";
     let status_cfg = PlannerConfig::default();
-    let disabled = operational_status(
+    let disabled = operational_status_with_research(
         status_dir.path(),
         status_session,
         1_000,
         SupervisorConfig::NotConfigured,
+        None,
+        None,
         None,
     );
     assert_eq!(disabled.status, SupervisorStatus::Disabled);
@@ -2502,11 +2504,13 @@ pub(crate) fn exercise() {
     let disabled_json = serde_json::to_value(&disabled).unwrap();
     assert!(disabled_json["budget"]["exhausted"].is_null());
     assert!(disabled_json["backoff"]["active"].is_null());
-    let missing = operational_status(
+    let missing = operational_status_with_research(
         status_dir.path(),
         status_session,
         1_000,
         SupervisorConfig::Configured(&status_cfg),
+        None,
+        None,
         None,
     );
     assert_eq!(missing.status, SupervisorStatus::Unknown);
@@ -2552,12 +2556,14 @@ pub(crate) fn exercise() {
         });
     })
     .unwrap();
-    let parked = operational_status(
+    let parked = operational_status_with_research(
         status_dir.path(),
         status_session,
         1_000,
         SupervisorConfig::Configured(&status_cfg),
         Some(3),
+        None,
+        None,
     );
     assert_eq!(parked.status, SupervisorStatus::Parked);
     assert_eq!(parked.config, SupervisorConfigSource::Configured);
@@ -2634,11 +2640,13 @@ pub(crate) fn exercise() {
         });
     })
     .unwrap();
-    let raw_codes = operational_status(
+    let raw_codes = operational_status_with_research(
         status_dir.path(),
         status_session,
         1_000,
         SupervisorConfig::Configured(&status_cfg),
+        None,
+        None,
         None,
     );
     let raw_context = raw_codes.context.as_ref().unwrap();
@@ -2654,11 +2662,13 @@ pub(crate) fn exercise() {
         });
     })
     .unwrap();
-    let notes_compaction = operational_status(
+    let notes_compaction = operational_status_with_research(
         status_dir.path(),
         status_session,
         1_000,
         SupervisorConfig::Configured(&status_cfg),
+        None,
+        None,
         None,
     );
     let notes_compaction = notes_compaction.compaction.as_ref().unwrap();
@@ -2671,11 +2681,13 @@ pub(crate) fn exercise() {
         });
     })
     .unwrap();
-    let harness_compaction = operational_status(
+    let harness_compaction = operational_status_with_research(
         status_dir.path(),
         status_session,
         1_000,
         SupervisorConfig::Configured(&status_cfg),
+        None,
+        None,
         None,
     );
     let harness_compaction = harness_compaction.compaction.as_ref().unwrap();
@@ -2692,11 +2704,13 @@ pub(crate) fn exercise() {
         });
     })
     .unwrap();
-    let unknown_reason = operational_status(
+    let unknown_reason = operational_status_with_research(
         status_dir.path(),
         status_session,
         1_000,
         SupervisorConfig::Configured(&status_cfg),
+        None,
+        None,
         None,
     );
     let unknown_parked = unknown_reason.parked.as_ref().unwrap();
@@ -2732,11 +2746,13 @@ pub(crate) fn exercise() {
         },
     )
     .unwrap();
-    let pending = operational_status(
+    let pending = operational_status_with_research(
         status_dir.path(),
         status_session,
         1_500,
         SupervisorConfig::Configured(&status_cfg),
+        None,
+        None,
         None,
     );
     assert_eq!(pending.status, SupervisorStatus::Pending);
@@ -2770,11 +2786,13 @@ pub(crate) fn exercise() {
         },
     )
     .unwrap();
-    let unknown_kind = operational_status(
+    let unknown_kind = operational_status_with_research(
         status_dir.path(),
         status_session,
         1_800,
         SupervisorConfig::Configured(&status_cfg),
+        None,
+        None,
         None,
     );
     assert_eq!(unknown_kind.pending.as_ref().unwrap().kind, "unknown");
@@ -2782,11 +2800,13 @@ pub(crate) fn exercise() {
     let malformed_dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(malformed_dir.path().join("model")).unwrap();
     fs::write(malformed_dir.path().join(STATE_PATH), b"{").unwrap();
-    let malformed = operational_status(
+    let malformed = operational_status_with_research(
         malformed_dir.path(),
         status_session,
         1_900,
         SupervisorConfig::Configured(&status_cfg),
+        None,
+        None,
         None,
     );
     assert_eq!(malformed.status, SupervisorStatus::Unknown);
@@ -2805,11 +2825,13 @@ pub(crate) fn exercise() {
         state.last_run_ms = Some(5);
     })
     .unwrap();
-    let other = operational_status(
+    let other = operational_status_with_research(
         other_dir.path(),
         status_session,
         2_000,
         SupervisorConfig::Configured(&status_cfg),
+        None,
+        None,
         None,
     );
     assert_eq!(other.state, SupervisorStateSource::OtherSession);
@@ -2851,11 +2873,13 @@ pub(crate) fn exercise() {
     let mut corrupt_bytes = fs::read(&corrupt_path).unwrap();
     corrupt_bytes[4] ^= 1;
     fs::write(&corrupt_path, &corrupt_bytes).unwrap();
-    let corrupt = operational_status(
+    let corrupt = operational_status_with_research(
         corrupt_dir.path(),
         status_session,
         2_000,
         SupervisorConfig::Configured(&status_cfg),
+        None,
+        None,
         None,
     );
     assert_eq!(corrupt.status, SupervisorStatus::Unknown);
@@ -2871,11 +2895,13 @@ pub(crate) fn exercise() {
         .join("log.bin");
     fs::create_dir_all(incomplete_path.parent().unwrap()).unwrap();
     fs::write(&incomplete_path, [0u8, 0]).unwrap();
-    let incomplete = operational_status(
+    let incomplete = operational_status_with_research(
         incomplete_dir.path(),
         status_session,
         2_000,
         SupervisorConfig::Configured(&status_cfg),
+        None,
+        None,
         None,
     );
     assert_eq!(incomplete.status, SupervisorStatus::Unknown);
@@ -2896,11 +2922,13 @@ pub(crate) fn exercise() {
     let oversized = fs::File::create(&oversized_path).unwrap();
     oversized.set_len(64 * 1024 * 1024 + 1).unwrap();
     drop(oversized);
-    let oversized_status = operational_status(
+    let oversized_status = operational_status_with_research(
         oversized_dir.path(),
         status_session,
         2_000,
         SupervisorConfig::Configured(&status_cfg),
+        None,
+        None,
         None,
     );
     assert_eq!(oversized_status.status, SupervisorStatus::Unknown);
@@ -2918,11 +2946,13 @@ pub(crate) fn exercise() {
         .join(status_session)
         .join("log.bin");
     fs::create_dir_all(&nonregular_path).unwrap();
-    let nonregular = operational_status(
+    let nonregular = operational_status_with_research(
         nonregular_dir.path(),
         status_session,
         2_000,
         SupervisorConfig::Configured(&status_cfg),
+        None,
+        None,
         None,
     );
     assert_eq!(nonregular.status, SupervisorStatus::Unknown);
@@ -2941,11 +2971,13 @@ pub(crate) fn exercise() {
     let symlink_target = symlink_dir.path().join("empty-log.bin");
     fs::write(&symlink_target, b"").unwrap();
     std::os::unix::fs::symlink(&symlink_target, &symlink_path).unwrap();
-    let symlink = operational_status(
+    let symlink = operational_status_with_research(
         symlink_dir.path(),
         status_session,
         2_000,
         SupervisorConfig::Configured(&status_cfg),
+        None,
+        None,
         None,
     );
     assert_eq!(symlink.status, SupervisorStatus::Unknown);
@@ -2973,11 +3005,13 @@ pub(crate) fn exercise() {
             },
         )
         .unwrap();
-    let malformed_pending = operational_status(
+    let malformed_pending = operational_status_with_research(
         malformed_pending_dir.path(),
         status_session,
         2_500,
         SupervisorConfig::Configured(&status_cfg),
+        None,
+        None,
         None,
     );
     assert_eq!(malformed_pending.status, SupervisorStatus::Unknown);
@@ -3001,11 +3035,13 @@ pub(crate) fn exercise() {
         .join(status_session);
     fs::create_dir_all(unreadable_session.parent().unwrap()).unwrap();
     fs::write(&unreadable_session, b"not-a-directory").unwrap();
-    let unreadable = operational_status(
+    let unreadable = operational_status_with_research(
         unreadable_dir.path(),
         status_session,
         2_000,
         SupervisorConfig::Configured(&status_cfg),
+        None,
+        None,
         None,
     );
     assert_eq!(unreadable.status, SupervisorStatus::Unknown);
@@ -3017,11 +3053,13 @@ pub(crate) fn exercise() {
     // a complete log. Both can be idle when the state is present.
     let no_log_dir = tempfile::tempdir().unwrap();
     with_state(no_log_dir.path(), status_session, |_| {}).unwrap();
-    let no_log = operational_status(
+    let no_log = operational_status_with_research(
         no_log_dir.path(),
         status_session,
         2_000,
         SupervisorConfig::Configured(&status_cfg),
+        None,
+        None,
         None,
     );
     assert_eq!(no_log.status, SupervisorStatus::Idle);
@@ -3062,11 +3100,13 @@ pub(crate) fn exercise() {
             },
         )
         .unwrap();
-    let complete = operational_status(
+    let complete = operational_status_with_research(
         complete_dir.path(),
         status_session,
         3_000,
         SupervisorConfig::Configured(&status_cfg),
+        None,
+        None,
         None,
     );
     assert_eq!(complete.status, SupervisorStatus::Idle);
@@ -3075,7 +3115,7 @@ pub(crate) fn exercise() {
     // A configured planner whose policy or usage projection is unavailable is
     // unknown, not disabled. Static caps stay visible when the original policy
     // is available; the reason is a static allowlist code, never raw text.
-    let unavailable = operational_status(
+    let unavailable = operational_status_with_research(
         no_log_dir.path(),
         status_session,
         2_000,
@@ -3084,6 +3124,8 @@ pub(crate) fn exercise() {
             reason: "planner_usage_unavailable_recovery_required",
         },
         Some(3),
+        None,
+        None,
     );
     assert_eq!(unavailable.status, SupervisorStatus::Unknown);
     assert_eq!(unavailable.config, SupervisorConfigSource::Unavailable);
@@ -3102,7 +3144,7 @@ pub(crate) fn exercise() {
         unavailable_json["config_reason"],
         "planner_usage_unavailable_recovery_required"
     );
-    let unavailable_no_config = operational_status(
+    let unavailable_no_config = operational_status_with_research(
         no_log_dir.path(),
         status_session,
         2_000,
@@ -3110,6 +3152,8 @@ pub(crate) fn exercise() {
             config: None,
             reason: "planner_config_unavailable",
         },
+        None,
+        None,
         None,
     );
     assert_eq!(unavailable_no_config.status, SupervisorStatus::Unknown);
@@ -3126,7 +3170,7 @@ pub(crate) fn exercise() {
     assert_eq!(unavailable_no_config.backoff.configured_ms, None);
     assert_eq!(unavailable_no_config.backoff.active, None);
     // Unknown failure text is replaced by a static code, never echoed.
-    let unknown_config_reason = operational_status(
+    let unknown_config_reason = operational_status_with_research(
         no_log_dir.path(),
         status_session,
         2_000,
@@ -3134,6 +3178,8 @@ pub(crate) fn exercise() {
             config: Some(&status_cfg),
             reason: "provider_secret_must_not_leak",
         },
+        None,
+        None,
         None,
     );
     assert_eq!(

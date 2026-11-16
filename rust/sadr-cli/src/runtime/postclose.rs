@@ -64,7 +64,6 @@ impl Settings {
             if role.max_analysis_tools > 64
                 || role.max_turns == Some(0)
                 || role.max_read_tools == Some(0)
-                || role.minimum_turn_ms == Some(0)
                 || role.model_id == crate::model::FAST_VARIANT
                 || role
                     .tools

@@ -3240,19 +3240,6 @@ fn supervisor_research(research: ResearchOperational) -> SupervisorResearch {
 
 /// Read-only projection of the durable supervisor state and the pending turn.
 /// Unknown, missing and malformed sources stay distinct from an idle zero.
-/// Retained for callers that have no research projection; the controller uses
-/// the research-aware variant.
-#[allow(dead_code)]
-pub(crate) fn operational_status(
-    root: &std::path::Path,
-    session: &str,
-    now: i64,
-    config: SupervisorConfig<'_>,
-    charged_calls: Option<u64>,
-) -> SupervisorOperationalStatus {
-    operational_status_with_research(root, session, now, config, charged_calls, None, None)
-}
-
 pub(crate) fn operational_status_with_research(
     root: &std::path::Path,
     session: &str,

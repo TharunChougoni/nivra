@@ -194,11 +194,9 @@ impl PlannerLogPhase {
     }
 
     /// Attempt settlement written after a reserved claim finishes.
-    pub(crate) fn settle(deferred: bool, planned: bool, superseded: bool) -> Self {
+    pub(crate) fn settle(deferred: bool, superseded: bool) -> Self {
         if deferred {
             Self::Deferred
-        } else if planned {
-            Self::Planned
         } else if superseded {
             Self::Superseded
         } else {
