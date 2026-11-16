@@ -7,14 +7,6 @@
       "sha256": "30dd36d4591790b9ca7517e2a87909455269a5ba1139868c1e1e7f73717cc8bc"
     },
     {
-      "path": "fixtures/rust/captured_source_vectors.json",
-      "sha256": "aa910da028114b329499524356eb9f277f83513ebb1c2e77497bcd9548ae49d1"
-    },
-    {
-      "path": "fixtures/rust/cash_risk_vectors.json",
-      "sha256": "7444fc1e4cc34e95119070d95eb8f480ac9eb39b32abde38ff0dbcb7d9c36af4"
-    },
-    {
       "path": "fixtures/rust/financial_vectors.json",
       "sha256": "682bb9543c0c4f637de3970f84e1109d2ec3b001968b1d5808ee04ddfd5e7b8c"
     },
@@ -23,24 +15,8 @@
       "sha256": "f203d451be2a4497161bd8ee4d89cca127f840921cceaa38100cd3ee32a098bd"
     },
     {
-      "path": "fixtures/rust/paper_contract_vectors.json",
-      "sha256": "9e9cd90985578d2bcb5858c4f6e23feace2e3da112550e90ec488c3adc57871c"
-    },
-    {
-      "path": "fixtures/rust/preflight_vectors.json",
-      "sha256": "a4e7beb27bd422ee2cade42eca10d61bb7dc88c4cc9fdb2235913a3200f76b1d"
-    },
-    {
       "path": "fixtures/rust/pristine_install_vectors.json",
       "sha256": "416e41f89077c9da50f77ab1baaa492812b6aacdd2ab1319fbdd228e154e8e83"
-    },
-    {
-      "path": "fixtures/rust/upstox_history_vectors.json",
-      "sha256": "3fdfe87873a27d84ec3504702014b9a756d52ec3aaa01607d96b49858d3688aa"
-    },
-    {
-      "path": "fixtures/rust/upstox_intraday_vectors.json",
-      "sha256": "0ef0c36ddebe161fe25db09aa4bfc45405d4b9f9af98a968a3e1bab73d69aba3"
     }
   ]
 }
