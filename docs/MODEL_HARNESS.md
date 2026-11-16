@@ -432,7 +432,10 @@ Research runs in its own **research lane**. It shares the
 orchestrator's reviewed model selection and harness, but it has its own worker
 slot, its own session log (`model/session/<session>/research-lane/`), its own
 `research` usage bucket and its own failure record
-(`model/research-lane-failure.json`). Trading is never preempted: a research
+(`model/research-lane-failure.json`). The usage inventory accepts the
+`research-NNNN` reservation prefix alongside the trading role buckets; a
+completed research turn is a valid journal record and never invalidates later
+usage reads. Trading is never preempted: a research
 turn in flight never holds a decision, a queued paper decision, handoff or
 compaction never waits for research, and research failures, budget exhaustion
 or a stuck research turn never park trading, arm the owner failure streak or its

@@ -1,5 +1,16 @@
 # Source snapshot
 
+## 0.9.28 — 2026-11-16
+
+Accept the research-lane usage bucket in the usage reservation inventory. An
+owner-research turn records a `research-NNNN` usage reservation (#238), but the
+inventory validator only accepted the six trading role prefixes. A completed
+research turn therefore made every later usage read refuse
+`planner_usage_reservations_invalid`, and the controller halted on authority
+initialization with no digest or owner decisions. The validator now accepts the
+documented `research` bucket; unknown role prefixes still refuse, and budget
+accounting, trading policy and execution are unchanged.
+
 ## 0.9.27 — 2026-11-16
 
 Reviewed forced activation for a flat in-session book. `--force-unwatched-window`

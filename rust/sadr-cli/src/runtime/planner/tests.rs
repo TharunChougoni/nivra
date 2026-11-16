@@ -1436,6 +1436,27 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
         }
     }
     let mut previews = DryRuns(0);
+    // #238: the research lane charges its own `research` bucket. Its reservation
+    // must stay a valid journal record, while unknown role prefixes still refuse.
+    let journal_dir = tempfile::tempdir().unwrap();
+    let write_reservation = |name: &str| {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let path = journal_dir.path().join(name);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        file.write_all(br#"{"reserved_ms":0}"#).unwrap();
+        file.sync_all().unwrap();
+    };
+    write_reservation("research-0000.attempt.json");
+    write_reservation("supervisor-0000.attempt.json");
+    assert!(super::usage::reservations(journal_dir.path(), 16).is_ok());
+    write_reservation("bogus-0000.attempt.json");
+    assert!(super::usage::reservations(journal_dir.path(), 16).is_err());
     assert!(
         call(
             &c,

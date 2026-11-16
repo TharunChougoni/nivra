@@ -1410,6 +1410,7 @@ pub(crate) fn usage(c: &Config) -> Result<Value> {
         ("strategy", 0usize),
         ("scorer", 0usize),
         ("supervisor", 0usize),
+        ("research", 0usize),
     ]);
     if path.exists() {
         for item in fs::read_dir(&path)? {

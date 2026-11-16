@@ -310,6 +310,9 @@ pub(crate) fn reservations(
         if !name.ends_with(".attempt.json") {
             continue;
         }
+        // `research` is the separate research-lane bucket charged by the
+        // orchestrator role (#238); it must validate like every other role or a
+        // completed research turn poisons the whole usage journal.
         let valid = [
             "digest-",
             "decide-",
@@ -317,6 +320,7 @@ pub(crate) fn reservations(
             "strategy-",
             "scorer-",
             "supervisor-",
+            "research-",
         ]
         .iter()
         .any(|prefix| {
