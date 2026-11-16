@@ -287,15 +287,20 @@ pub(crate) fn exercise() {
         .unwrap();
     let mut recovery_facts = facts.clone();
     recovery_facts["session_context"] = recovery_log.conversation();
-    assert!(compaction_due(
+    // Replay is bounded, so one failed payload cannot push the measured history
+    // past the decision ceiling. Compaction still follows committed turns, and
+    // the oversized original request remains in the append-only log.
+    assert!(recovery_log.context_bytes() < 64 * 1024);
+    let replayed = recovery_log.conversation();
+    let request = &replayed["exchanges"][0]["turn"]["request"];
+    assert!(serde_json::to_vec(request).unwrap().len() < 8 * 1024);
+    assert!(request["digest"].get("brief").is_some());
+    assert!(!compaction_due(
         recovery_log.turns_since_summary(),
         recovery_log.context_bytes(),
         &bounds
     ));
-    assert_eq!(
-        render_session_turn("Review", &recovery_facts, &bounds),
-        Err("supervisor_context_limit")
-    );
+    assert!(render_session_turn("Review", &recovery_facts, &bounds).is_ok());
     render_lifecycle_turn("Review", &mut recovery_facts, &bounds).unwrap();
     // Current decision facts can exceed the cap while the measured history is
     // still under the compaction trigger. The refusal itself compacts history

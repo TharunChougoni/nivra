@@ -3,7 +3,7 @@ members = ["rust/sadr-core", "rust/sadr-cli", "rust/sadr-store", "rust/sadr-tool
 resolver = "2"
 
 [workspace.package]
-version = "0.9.31"
+version = "0.9.32"
 edition = "2024"
 rust-version = "1.95"
 publish = false

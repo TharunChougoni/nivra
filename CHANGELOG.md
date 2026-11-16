@@ -1,5 +1,17 @@
 # Source snapshot
 
+## 0.9.32 — 2026-11-16
+
+Bound the replayed committed conversation. The owner prompt replayed every
+committed turn's request after the latest compaction summary, so old turns that
+still carried Luna's raw tool observations and data rows kept the decision prompt
+at about 223 KB even after the digest and the owner facts became small. Replay now
+drops host envelope and legacy tool-result fields, keeps only the digest brief and
+coverage, bounds one replayed request to 8 KB and the whole conversation to 32 KB
+(oldest exchanges omitted first, with `omitted_exchanges`), and bounds the carried
+summary to 12 KB. The append-only log, recorded requests and results are
+unchanged; only the prompt reconstruction is bounded.
+
 ## 0.9.31 — 2026-11-16
 
 Keep the owner prompt small. The decision facts embedded Luna's raw digest tool

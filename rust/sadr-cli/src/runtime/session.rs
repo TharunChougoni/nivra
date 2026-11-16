@@ -25,6 +25,31 @@ const ROOT: &str = "model/session";
 pub(crate) const ROOT_PREFIX: &str = ROOT;
 const MAX_LOG_BYTES: usize = 64 * 1024 * 1024;
 const MAX_REPLY_BYTES: usize = 32 * 1024;
+/// Bound on one replayed turn request. The owner re-reads detail with tools, so
+/// replay keeps continuity fields instead of embedding an old data payload.
+const MAX_REPLAY_REQUEST_BYTES: usize = 8_192;
+/// Bound on the replayed committed conversation. Oldest exchanges are omitted
+/// first; the original log is never rewritten.
+const MAX_REPLAY_CONVERSATION_BYTES: usize = 32_768;
+/// Bound on the latest compaction summary text carried into the prompt.
+const MAX_REPLAY_SUMMARY_BYTES: usize = 12_288;
+/// Continuity fields kept when one replayed request is over its bound.
+const REPLAY_CONTINUITY_KEYS: [&str; 14] = [
+    "digest",
+    "digest_id",
+    "digest_tool_result_count",
+    "facts_sha256",
+    "evidence_input_hash",
+    "resume_binding_sha256",
+    "host_decision",
+    "model_selection",
+    "cash",
+    "fees",
+    "applied_hashes",
+    "current_hashes",
+    "owner_applied_hashes",
+    "trigger",
+];
 
 fn io_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: Mutex<()> = Mutex::new(());
@@ -585,7 +610,10 @@ impl SessionLog {
     /// summary. Turns are emitted in log order and paired with their terminal
     /// result. A pending turn is excluded until its result is durable. Host
     /// envelope fields are removed from requests so the next turn cannot
-    /// recursively embed previous conversation state.
+    /// recursively embed previous conversation state. Replay is bounded: a
+    /// request keeps only continuity fields, the digest keeps only its brief,
+    /// and the oldest exchanges are omitted past the replay budget. The log
+    /// itself is never rewritten.
     pub(crate) fn conversation(&self) -> Value {
         let records = self.records();
         let summary = records.iter().rev().find_map(|record| match &record.body {
@@ -607,7 +635,7 @@ impl SessionLog {
                 map.entry(id).or_insert(value);
                 map
             });
-        let exchanges: Vec<Value> = records
+        let mut exchanges: Vec<Value> = records
             .iter()
             .filter_map(|record| {
                 if record.seq <= after {
@@ -625,17 +653,58 @@ impl SessionLog {
                 }
                 let mut turn = turn.clone();
                 if let Some(request) = turn.request.as_object_mut() {
-                    for key in ["session_context", "recent_turns", "summary", "seed"] {
+                    for key in [
+                        "session_context",
+                        "recent_turns",
+                        "summary",
+                        "seed",
+                        "digest_tool_results",
+                    ] {
                         request.remove(key);
                     }
+                    if let Some(digest) = request.get_mut("digest") {
+                        let brief = digest.get("brief").cloned().unwrap_or(Value::Null);
+                        let coverage = digest.get("coverage").cloned().unwrap_or(Value::Null);
+                        *digest = json!({"brief":brief,"coverage":coverage});
+                    }
+                }
+                if serde_json::to_vec(&turn.request)
+                    .map(|bytes| bytes.len())
+                    .unwrap_or(usize::MAX)
+                    > MAX_REPLAY_REQUEST_BYTES
+                    && let Some(request) = turn.request.as_object_mut()
+                {
+                    request.retain(|key, _| REPLAY_CONTINUITY_KEYS.contains(&key.as_str()));
+                    request.insert("replay_bounded".into(), json!(true));
                 }
                 Some(json!({"turn":turn,"result":result}))
             })
             .collect();
+        let mut omitted = 0usize;
+        while exchanges.len() > 1
+            && serde_json::to_vec(&exchanges)
+                .map(|bytes| bytes.len())
+                .unwrap_or(usize::MAX)
+                > MAX_REPLAY_CONVERSATION_BYTES
+        {
+            exchanges.remove(0);
+            omitted += 1;
+        }
+        let summary = summary.map(|mut summary| {
+            if summary.text.len() > MAX_REPLAY_SUMMARY_BYTES {
+                let mut at = summary.text.len() - MAX_REPLAY_SUMMARY_BYTES;
+                while !summary.text.is_char_boundary(at) {
+                    at += 1;
+                }
+                summary.text = format!("[earlier summary truncated] {}", &summary.text[at..]);
+            }
+            summary
+        });
         super::transcript::redact(&json!({
             "schema_version": 1,
             "summary": summary,
             "exchanges": exchanges,
+            "omitted_exchanges": omitted,
         }))
     }
 
@@ -1631,7 +1700,6 @@ pub(crate) fn exercise() {
         log.context_bytes(),
         serde_json::to_vec(&conversation).unwrap().len() as u64
     );
-
     // The framed reader never errors and never returns a partial last record,
     // including a cut at every byte offset.
     let path = root.join(ROOT).join(session).join("log.bin");
@@ -1648,6 +1716,42 @@ pub(crate) fn exercise() {
         assert!(records.iter().all(|record| record.seq > 0));
         fs::remove_file(partial).unwrap();
     }
+    // Replay is bounded: a large committed request keeps continuity fields only,
+    // the digest keeps only its brief, and the original log keeps every turn.
+    let mut big = turn.clone();
+    big.id = "turn-big".into();
+    big.request = json!({
+        "digest":{"brief":"focus","rows":vec!["x".repeat(64);200]},
+        "evidence":{"rows":vec!["y".repeat(64);200]},
+    });
+    log.append(30, Body::Turn { turn: big }).unwrap();
+    log.append(
+        31,
+        Body::Result {
+            result: TurnResult {
+                turn_id: "turn-big".into(),
+                finished_at_ms: 31,
+                outcome: "failed".into(),
+                reason: None,
+                reply: "{}".into(),
+                actions: Vec::new(),
+            },
+        },
+    )
+    .unwrap();
+    let bounded = log.conversation();
+    let last = bounded["exchanges"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .clone();
+    assert_eq!(last["turn"]["request"]["replay_bounded"], json!(true));
+    assert!(last["turn"]["request"].get("evidence").is_none());
+    assert_eq!(last["turn"]["request"]["digest"]["brief"], json!("focus"));
+    assert!(last["turn"]["request"]["digest"].get("rows").is_none());
+    assert_eq!(log.turns().len(), 2, "the original log keeps every turn");
+
     let first_end = frame_header() + u32::from_be_bytes(raw[..4].try_into().unwrap()) as usize;
     for offset in [0, first_end] {
         for damage in [
