@@ -448,7 +448,15 @@ pub(crate) fn exercise() {
         ..bounds
     };
     let mut full_facts = facts.clone();
-    full_facts["digest"] = json!("d".repeat(200_000));
+    // Sized to the reviewed request ceiling so the prompt-only bound admits it
+    // while the measured envelope pushes the full request over.
+    full_facts["digest"] = json!(
+        "d".repeat(
+            (bounds.max_request_bytes as usize)
+                .saturating_sub(bounds.reserve_bytes as usize)
+                .saturating_sub(40_000),
+        )
+    );
     let plain_prompt = render_session_turn("Review", &full_facts, &bounds).unwrap();
     let escaped = escaped_prompt_bytes(&plain_prompt);
     let prompt_only = Compaction {
@@ -469,8 +477,12 @@ pub(crate) fn exercise() {
     );
     // The measured envelope also triggers compaction before the prompt-only
     // ceiling would.
-    assert!(!compaction_due(0, 1_020_000, &bounds));
-    assert!(compaction_due(0, 1_020_000, &envelope_bounds));
+    let under_prompt_only = bounds
+        .max_request_bytes
+        .saturating_sub(bounds.reserve_bytes)
+        .saturating_sub(10_000);
+    assert!(!compaction_due(0, under_prompt_only, &bounds));
+    assert!(compaction_due(0, under_prompt_only, &envelope_bounds));
     let mut envelope_facts = facts.clone();
     envelope_facts["session_context"]["exchanges"]
         .as_array_mut()

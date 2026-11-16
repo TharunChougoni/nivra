@@ -27,12 +27,12 @@ const MAX_LOG_BYTES: usize = 64 * 1024 * 1024;
 const MAX_REPLY_BYTES: usize = 32 * 1024;
 /// Bound on one replayed turn request. The owner re-reads detail with tools, so
 /// replay keeps continuity fields instead of embedding an old data payload.
-const MAX_REPLAY_REQUEST_BYTES: usize = 8_192;
+const MAX_REPLAY_REQUEST_BYTES: usize = 4_096;
 /// Bound on the replayed committed conversation. Oldest exchanges are omitted
 /// first; the original log is never rewritten.
-const MAX_REPLAY_CONVERSATION_BYTES: usize = 32_768;
+const MAX_REPLAY_CONVERSATION_BYTES: usize = 12_288;
 /// Bound on the latest compaction summary text carried into the prompt.
-const MAX_REPLAY_SUMMARY_BYTES: usize = 12_288;
+const MAX_REPLAY_SUMMARY_BYTES: usize = 6_144;
 /// Continuity fields kept when one replayed request is over its bound.
 const REPLAY_CONTINUITY_KEYS: [&str; 14] = [
     "digest",

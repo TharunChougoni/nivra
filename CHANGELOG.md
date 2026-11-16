@@ -1,5 +1,15 @@
 # Source snapshot
 
+## 0.9.33 — 2026-11-16
+
+Tighten the bounded prompt inputs. Replay now keeps at most 4 KB for one replayed
+request, 12 KB for the whole replayed conversation and 6 KB of carried summary,
+and host facts bound `model/luna-latest.json` to 8 KB. The owner prompt is built
+from the brief, host facts, a compact summary and a bounded replay instead of a
+growing transcript, which was still reaching about 220 KB after the earlier
+changes. Compaction thresholds, decision authority, tool definitions and the
+append-only log are unchanged; only prompt reconstruction is bounded.
+
 ## 0.9.32 — 2026-11-16
 
 Bound the replayed committed conversation. The owner prompt replayed every

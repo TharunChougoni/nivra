@@ -1160,7 +1160,7 @@ fn summary_for(
     state: &State,
     hashes: &AppliedHashes,
 ) -> Value {
-    let luna = crate::read_bounded(&root.join("model/luna-latest.json"), 65_536)
+    let luna = crate::read_bounded(&root.join("model/luna-latest.json"), 8_192)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .unwrap_or(Value::Null);
