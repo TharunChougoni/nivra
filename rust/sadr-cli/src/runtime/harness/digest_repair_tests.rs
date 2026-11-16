@@ -169,6 +169,7 @@ fn digest_directive_acknowledgements_and_bounds_preserve_rejection() {
         "complete":true,
         "as_of_ms":now,
         "coverage":{"universe":1,"scanned":1,"quoted":1,"featured":1,"experiments":0},
+        "brief":"Focus on NSE_EQ|A: it moved and is the only cited prospect.",
         "gaps":[],
         "changed_prospects":[{"instrument_key":"NSE_EQ|A","symbol":"A",
             "change_bps":12.5,"observed_ms":now,"reason":"moved",
@@ -195,8 +196,20 @@ fn digest_directive_acknowledgements_and_bounds_preserve_rejection() {
     .unwrap();
     assert_eq!(normalized["evidence_ids"], json!(["bundle"]));
     assert_eq!(
+        normalized["brief"],
+        json!("Focus on NSE_EQ|A: it moved and is the only cited prospect.")
+    );
+    assert_eq!(
         normalized["changed_prospects"][0]["evidence_ids"],
         json!(["bundle"])
+    );
+    let mut long_brief = owner.clone();
+    long_brief["brief"] = json!("x".repeat(2_001));
+    assert_eq!(
+        validate_owner_digest(&long_brief.to_string(), &held)
+            .unwrap_err()
+            .to_string(),
+        "harness_digest_bounds_invalid"
     );
     // Advisory ranking rows are normalized, not fatal: one foreign or
     // duplicate row must not discard the whole factual digest.

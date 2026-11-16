@@ -1,5 +1,22 @@
 # Source snapshot
 
+## 0.9.29 — 2026-11-16
+
+Give the decision owner a digest in words instead of a data dump. The owner
+digest now carries a bounded `brief` (plain prose, at most 2000 characters) and
+the Luna prompt asks for direction, focus and options rather than pasted tool
+output and tables. Detailed ranking, bar, spread, recent-action and experiment
+rows stay optional and empty by default; the orchestrator fetches the exact
+values with its own tools, and the decision template and orchestrator system
+prompt now say the brief is direction, never data. A missing brief warns rather
+than refusing the factual digest, and an oversized brief fails closed.
+
+The live decision prompt had grown to roughly 211 KB, and every provider
+decision turn failed response validation (HTTP 200) before any plan was read.
+This change shrinks that prompt to the brief plus host facts. Prompt bytes
+participate in authority, so installing it follows the reviewed policy
+transition.
+
 ## 0.9.28 — 2026-11-16
 
 Accept the research-lane usage bucket in the usage reservation inventory. An

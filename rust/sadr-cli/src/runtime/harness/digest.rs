@@ -163,6 +163,10 @@ pub(crate) struct OwnerDigest {
     complete: bool,
     as_of_ms: i64,
     coverage: OwnerCoverage,
+    /// Short prose direction for the decision owner: what deserves attention and
+    /// why, in words. The owner reads this and fetches its own detail with tools.
+    #[serde(default)]
+    brief: String,
     #[serde(default)]
     gaps: Vec<String>,
     #[serde(default)]
@@ -337,6 +341,9 @@ struct OwnerExperiment {
 const MAX_OWNER_ROWS: usize = 32;
 const MAX_OWNER_GAPS: usize = 16;
 const MAX_OWNER_TEXT: usize = 300;
+/// Luna's prose direction for the decision owner. The owner fetches detail with
+/// its own tools; the brief is never a data dump.
+const MAX_OWNER_BRIEF: usize = 2_000;
 const MAX_OWNER_SOURCE: usize = 128;
 const MAX_OWNER_COVERAGE: usize = 1_000_000;
 const MAX_OWNER_RANK: u32 = 1_000_000;
@@ -412,6 +419,7 @@ pub(crate) fn owner_digest_bounds_violation(
                 .is_some_and(|allow| allow.iter().any(|item| item["key"] == key))
     };
     if v.as_of_ms < 0
+        || v.brief.len() > MAX_OWNER_BRIEF
         || v.evidence_ids.len() > MAX_EVIDENCE_IDS
         || v.evidence_ids
             .iter()
@@ -611,6 +619,11 @@ pub(crate) fn validate_owner_digest(raw: &str, bundle: &Value) -> Result<()> {
     if let Some(field) = owner_digest_bounds_violation(&v, bundle) {
         eprintln!("owner_digest_bounds_invalid field={field}");
         return Err("harness_digest_bounds_invalid".into());
+    }
+    if v.brief.trim().is_empty() {
+        // Directional prose is the owner's primary input. A digest without it is
+        // still factual evidence, so this warns instead of refusing the turn.
+        eprintln!("owner_digest_warning reason=brief_missing");
     }
     Ok(())
 }
