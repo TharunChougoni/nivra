@@ -41,8 +41,7 @@ mod usage;
 pub(crate) use usage::call_guarded;
 pub(crate) use usage::{
     CallGuard, attempt_failed, bucket_tokens, budget_status, call_guarded_as, checked_reservations,
-    prepare_review_usage, preview_guard, require_usage, review_call, usage_directory, usage_lock,
-    usage_path,
+    prepare_review_usage, preview_guard, require_usage, usage_directory, usage_lock, usage_path,
 };
 #[cfg(test)]
 pub(crate) use usage::{
@@ -244,7 +243,6 @@ pub(crate) struct PlannerConfig {
     #[serde(default = "default_digest", deserialize_with = "deserialize_digest")]
     pub digest: ModelRole,
     pub events: Option<redecision::Settings>,
-    pub post_close: Option<postclose::Settings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_tasks: Option<super::owner_tasks::OwnerTasksSettings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -362,7 +360,6 @@ impl Default for PlannerConfig {
             previous_config: None,
             digest: default_digest(),
             events: None,
-            post_close: None,
             owner_tasks: None,
             approval_auto_renew: None,
             research_tools: None,
@@ -442,29 +439,6 @@ impl PlannerConfig {
         let supervisor_role = self.role(Trigger::Supervisor);
         if supervisor_role.model_id.is_empty() {
             missing.push("decision_owner_supervisor_model_required");
-        }
-        if self.orchestrator.as_ref().is_some_and(|orchestrator| {
-            orchestrator
-                .triggers
-                .get(&Trigger::Operations)
-                .is_some_and(|trigger| trigger.enabled)
-        }) {
-            missing.push("decision_owner_operations_trigger_must_be_disabled");
-        }
-        if self.orchestrator.as_ref().is_some_and(|orchestrator| {
-            orchestrator
-                .triggers
-                .get(&Trigger::Strategy)
-                .is_some_and(|trigger| trigger.enabled)
-        }) {
-            missing.push("decision_owner_strategy_trigger_must_be_disabled");
-        }
-        if self
-            .post_close
-            .as_ref()
-            .is_some_and(|settings| settings.enabled)
-        {
-            missing.push("decision_owner_post_close_must_be_disabled");
         }
         if !self.digest.enabled {
             missing.push("decision_owner_digest_required");
@@ -616,9 +590,6 @@ impl PlannerConfig {
                     .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
         }) {
             return Err("planner_usage_namespace_invalid".into());
-        }
-        if let Some(review) = &c.post_close {
-            review.validate()?;
         }
         if let Some(tasks) = &c.owner_tasks {
             tasks.validate(&c)?;
@@ -1068,18 +1039,6 @@ fn bundle_with_references(
     ))
 }
 
-pub(crate) fn read_legacy_plan(c: &Config) -> Result<Option<Value>> {
-    let path = c.directory.join("model/session-plan.json");
-    if !path.exists() {
-        return Ok(None);
-    }
-    let bytes = crate::read_bounded(&path, SAVED_PLAN_MAX_BYTES as u64)
-        .map_err(|_| "planner_saved_plan_invalid")?;
-    Ok(Some(
-        sadr_core::native::decode_bounded(&bytes, SAVED_PLAN_MAX_BYTES)
-            .map_err(|_| "planner_saved_plan_invalid")?,
-    ))
-}
 fn is_saved_hash(value: &Value) -> bool {
     value.as_str().is_some_and(|text| {
         text.len() == 64
@@ -1166,10 +1125,7 @@ pub(super) fn has_eligible_input(
 }
 
 pub(crate) fn saved_plan(db: &Connection, c: &Config) -> Result<Option<Value>> {
-    let plan = match redecision::active_plan(db, c)? {
-        Some(plan) => plan,
-        None => read_legacy_plan(c)?,
-    };
+    let plan = redecision::active_plan(db, c)?.flatten();
     if let Some(plan) = &plan {
         validate_saved(c, plan)?;
     }

@@ -1966,9 +1966,8 @@ returns 404, so the transcript is shown without inventing the missing value.
 
 For file-based prompts, copy the exact revision's `packaging/rust/prompts/`
 directory beside the planner JSON as `prompts/`. It must contain `objective.md`,
-`data.md`, `data_owner.md`, `decision.md`, `profit_under_uncertainty.md`,
-`decision_evidence_digest.md`, `supervisor.md`, `orchestrator.md`, `review.md` and
-`scorer.md`. The directory is optional for existing configurations; when absent,
+`data_owner.md`, `supervisor.md`, `orchestrator.md` and `scorer.md`; the other
+packaged files are shipped for the fixed release list and are not read. The directory is optional for existing configurations; when absent,
 embedded defaults preserve their existing policy bytes. Once present, missing,
 empty, unreadable, oversized or invalid UTF-8 files refuse configuration loading.
 There is no partial-directory fallback.

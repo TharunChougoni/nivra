@@ -4352,6 +4352,35 @@ fn resume_resolves_active_session_book_and_keeps_safety_checks() {
     assert!(predecessor.stopped);
     assert!(predecessor.closed);
 }
+/// Event authority with the given plan as its active head, as the owner path
+/// leaves it after an accepted decision.
+fn activate_fixture_plan(db: &mut Connection, c: &Config, p: &Portfolio, plan: &serde_json::Value) {
+    if redecision::active_plan(db, c).unwrap().is_none() {
+        let cfg: planner::PlannerConfig = serde_json::from_value(serde_json::json!({"enabled":true,"digest":{"enabled":true,"model_id":"fixture","daily_call_budget":2},"orchestrator":{"enabled":true,"model":{"model_id":"grok-4.7"},"triggers":{"supervisor":{"prompt":concat!(env!("CARGO_MANIFEST_DIR"),"/../../packaging/rust/prompts/supervisor.md")}}},"events":{"enabled":true,"cooldown_ms":0,"max_pending":20,"policy":{"price_move_bps":100,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
+        planner::prepare_review_usage(c).unwrap();
+        ensure_actions(db).unwrap();
+        redecision::initialize(db, c, p, Some(&cfg), start()).unwrap();
+    }
+    db.execute(
+        "INSERT INTO planner_plan VALUES(?,?)",
+        rusqlite::params![plan["decision_id"].as_str().unwrap(), plan.to_string()],
+    )
+    .unwrap();
+    let control: String = db
+        .query_row(
+            "SELECT body FROM planner_event_control WHERE id=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut control: serde_json::Value = serde_json::from_str(&control).unwrap();
+    control["active"] = plan["decision_id"].clone();
+    db.execute(
+        "UPDATE planner_event_control SET body=? WHERE id=1",
+        [control.to_string()],
+    )
+    .unwrap();
+}
 #[test]
 fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
     super::super::decision_owner::exercise();
@@ -4366,8 +4395,7 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
     let verdicts = planner::validate(&raw, &p, std::slice::from_ref(&i)).unwrap();
     fs::create_dir_all(c.directory.join("model/fixture-stale")).unwrap();
     let mut plan = serde_json::json!({"decision_id":"fixture-stale","session_binding":book_binding(&c).unwrap(),"input_hash":digest(&serde_json::to_vec(&input).unwrap()),"input":input,"fake":false,"dry_run":false,"verdicts":verdicts});
-    let path = c.directory.join("model/session-plan.json");
-    rollover::atomic(&path, &plan).unwrap();
+    activate_fixture_plan(&mut db, &c, &p, &plan);
     let quotes = BTreeMap::from([(i.key.clone(), quote(at, 100))]);
     commit_quotes(&mut db, &c, &mut p, &quotes, &[], at, "fixture", || {
         at + 2001
@@ -4376,7 +4404,7 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
     assert!(p.fills.is_empty());
     plan["decision_id"] = serde_json::json!("fixture-screened");
     fs::create_dir_all(c.directory.join("model/fixture-screened")).unwrap();
-    rollover::atomic(&path, &plan).unwrap();
+    activate_fixture_plan(&mut db, &c, &p, &plan);
     commit_quotes_screened(
         &mut db,
         &c,
@@ -4404,7 +4432,7 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
     plan["decision_id"] = serde_json::json!("fixture-stale-portfolio");
     plan["portfolio_revision"] = serde_json::json!("0".repeat(64));
     fs::create_dir_all(c.directory.join("model/fixture-stale-portfolio")).unwrap();
-    rollover::atomic(&path, &plan).unwrap();
+    activate_fixture_plan(&mut db, &c, &p, &plan);
     commit_quotes(&mut db, &c, &mut p, &quotes, &[], at, "fixture", || at).unwrap();
     assert!(p.fills.is_empty());
     let stale: String = db
@@ -4420,7 +4448,7 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
     plan["portfolio_revision"] = serde_json::json!(redecision::portfolio_hash(&p).unwrap());
     plan["policy_sha256"] = serde_json::json!("a".repeat(64));
     fs::create_dir_all(c.directory.join("model/fixture-policy-changed")).unwrap();
-    rollover::atomic(&path, &plan).unwrap();
+    activate_fixture_plan(&mut db, &c, &p, &plan);
     commit_quotes(&mut db, &c, &mut p, &quotes, &[], at, "fixture", || at).unwrap();
     assert!(p.fills.is_empty());
     let changed: String = db
@@ -4435,7 +4463,7 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
     plan["portfolio_revision"] = serde_json::json!(redecision::portfolio_hash(&p).unwrap());
     plan["decision_id"] = serde_json::json!("fixture-fresh");
     fs::create_dir_all(c.directory.join("model/fixture-fresh")).unwrap();
-    rollover::atomic(&path, &plan).unwrap();
+    activate_fixture_plan(&mut db, &c, &p, &plan);
     commit_quotes(&mut db, &c, &mut p, &quotes, &[], at, "fixture", || at).unwrap();
     assert_eq!(p.fills.len(), 1);
     assert_eq!(p.fills[0].decision_id.as_deref(), Some("fixture-fresh"));
@@ -4493,10 +4521,7 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
         let input = serde_json::json!({"allowlist":[i,second]});
         let plan = serde_json::json!({"decision_id":"fixture-predecessor","session_binding":book_binding(&c).unwrap(),"input_hash":digest(&serde_json::to_vec(&input).unwrap()),"input":input,"fake":false,"dry_run":false,"verdicts":planner::validate(&raw,&p,&[i.clone(),second.clone()]).unwrap()});
         fs::create_dir_all(c.directory.join("model/fixture-predecessor")).unwrap();
-        planner::prepare_review_usage(&c).unwrap();
-        // Before any planner authority exists, the saved plan file primes the
-        // first entry.
-        rollover::atomic(&c.directory.join("model/session-plan.json"), &plan).unwrap();
+        activate_fixture_plan(&mut db, &c, &p, &plan);
         commit_quotes(
             &mut db,
             &c,
@@ -4511,27 +4536,6 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
         assert_eq!(p.positions.len(), 1);
         assert_eq!(p.fills.len(), 1);
         let cfg:planner::PlannerConfig=serde_json::from_value(serde_json::json!({"enabled":true,"digest":{"enabled":true,"model_id":"fixture","daily_call_budget":2},"orchestrator":{"enabled":true,"model":{"model_id":"grok-4.7"},"triggers":{"supervisor":{"prompt":concat!(env!("CARGO_MANIFEST_DIR"),"/../../packaging/rust/prompts/supervisor.md")}}},"events":{"enabled":true,"cooldown_ms":0,"max_pending":20,"policy":{"price_move_bps":100,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
-        redecision::initialize(&mut db, &c, &p, Some(&cfg), at).unwrap();
-        // An earlier executable plan is the active head the event claim suspends.
-        db.execute(
-            "INSERT INTO planner_plan VALUES(?,?)",
-            rusqlite::params!["fixture-predecessor", plan.to_string()],
-        )
-        .unwrap();
-        let control: String = db
-            .query_row(
-                "SELECT body FROM planner_event_control WHERE id=1",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        let mut control: serde_json::Value = serde_json::from_str(&control).unwrap();
-        control["active"] = serde_json::json!("fixture-predecessor");
-        db.execute(
-            "UPDATE planner_event_control SET body=? WHERE id=1",
-            [control.to_string()],
-        )
-        .unwrap();
         let observation = |time, price| sadr_core::redecision::MarketObservation {
             instrument: i.clone(),
             quote: quote(time, price),

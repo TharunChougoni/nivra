@@ -313,8 +313,8 @@ pub(crate) fn reservations(
         // `research` is the separate research-lane bucket charged by the
         // orchestrator role (#238); it must validate like every other role or a
         // completed research turn poisons the whole usage journal.
-        // `decide-` charges written before the owner-only policy stay valid,
-        // readable journal records.
+        // `decide-`, `operations-` and `strategy-` charges written by retired
+        // roles stay valid, readable journal records.
         let valid = [
             "digest-",
             "decide-",
@@ -352,15 +352,9 @@ pub(crate) fn checked_reservations(
         .as_ref()
         .map(|cfg| {
             let digest_role = cfg.role(Trigger::Digest);
-            let operations_role = cfg.role(Trigger::Operations);
-            let strategy_role = cfg.role(Trigger::Strategy);
             let scorer_role = cfg.role(Trigger::Scorer);
             let supervisor_role = cfg.role(Trigger::Supervisor);
-            let mut roles = vec![&digest_role, &scorer_role, &supervisor_role];
-            if cfg.post_close.is_some() {
-                roles.extend([&operations_role, &strategy_role]);
-            }
-            roles
+            [&digest_role, &scorer_role, &supervisor_role]
                 .into_iter()
                 .fold(0usize, |sum, role| {
                     sum.saturating_add((role.daily_call_budget as usize).saturating_mul(
@@ -420,16 +414,7 @@ pub(crate) fn reserve_usage(
     prompt: &str,
     guard: &CallGuard<'_>,
 ) -> Result<(PathBuf, usize, usize)> {
-    if ![
-        "digest",
-        "operations",
-        "strategy",
-        "scorer",
-        "supervisor",
-        "research",
-    ]
-    .contains(&role_name)
-    {
+    if !["digest", "scorer", "supervisor", "research"].contains(&role_name) {
         return Err("planner_usage_role_invalid".into());
     }
     let journal = usage_directory(c, guard.journal_required.get())?;
@@ -741,40 +726,4 @@ pub(crate) fn call_guarded_as(
         &evidence,
     )?;
     result
-}
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn review_call(
-    c: &Config,
-    cfg: &PlannerConfig,
-    role_name: &str,
-    role: &ModelRole,
-    prompt: &str,
-    evidence: &Value,
-    cancel: &std::sync::atomic::AtomicBool,
-    started: i64,
-    deadline: i64,
-    backend: &mut impl Backend,
-) -> Result<String> {
-    super::harness::run(
-        c,
-        cfg,
-        role_name,
-        role,
-        prompt,
-        &json!({"session_evidence":evidence}),
-        backend,
-        &CallGuard {
-            cancel: Some(cancel),
-            deadline: Some(deadline),
-            not_before: Some(started),
-            configuration: Some((c, cfg)),
-            journal_required: std::cell::Cell::new(true),
-            minimum_prior_calls: 0,
-            invocation_id: None,
-            context_hash: None,
-            clock: &millis,
-            duration: None,
-            started_wall_ms: None,
-        },
-    )
 }

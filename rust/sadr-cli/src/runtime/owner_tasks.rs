@@ -421,10 +421,9 @@ impl OwnerTasksSettings {
             return Err("owner_tasks_settings_invalid".into());
         }
         if self.review.enabled
-            && (!cfg
+            && !cfg
                 .role(super::orchestrator_model::Trigger::Supervisor)
                 .enabled
-                || cfg.post_close.as_ref().is_some_and(|s| s.enabled))
         {
             return Err("owner_review_requires_decision_owner".into());
         }

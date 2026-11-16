@@ -12,14 +12,6 @@ fn model_role_analysis_defaults_and_bounds() {
     );
     role.max_analysis_tools = 65;
     assert!(role_invalid(&role, 120_000));
-    let mut review = postclose::Settings {
-        operations: role.clone(),
-        ..Default::default()
-    };
-    assert!(review.validate().is_err());
-    review.operations = ModelRole::default();
-    review.strategy = role.clone();
-    assert!(review.validate().is_err());
     role.max_analysis_tools = 0;
     assert!(!role_invalid(&role, 120_000));
     assert_eq!(

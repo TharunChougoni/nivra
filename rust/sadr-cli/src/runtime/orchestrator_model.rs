@@ -33,8 +33,6 @@ pub(crate) enum Trigger {
     /// Luna's factual digest. It runs through its own planner role and is
     /// never an orchestrator trigger.
     Digest,
-    Operations,
-    Strategy,
     Scorer,
     /// Intraday supervisor. Not part of `ALL`, so existing orchestrator hashes
     /// stay unchanged until a config explicitly adds the trigger.
@@ -45,13 +43,11 @@ impl Trigger {
     /// Configured orchestrator triggers. The digest remains a separate model
     /// role with its own sandbox, credential and budget.
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 3] = [Self::Operations, Self::Strategy, Self::Scorer];
+    pub(crate) const ALL: [Self; 1] = [Self::Scorer];
 
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Digest => "digest",
-            Self::Operations => "operations",
-            Self::Strategy => "strategy",
             Self::Scorer => "scorer",
             Self::Supervisor => "supervisor",
         }
@@ -335,20 +331,10 @@ impl Default for OrchestratorModelSettings {
             trigger_prompts: BTreeMap::new(),
             model_profiles: BTreeMap::new(),
             admitted_models: Vec::new(),
-            triggers: BTreeMap::from([
-                (
-                    Trigger::Operations,
-                    TriggerSettings::new("prompts/operations.md", &[], 2, 1),
-                ),
-                (
-                    Trigger::Strategy,
-                    TriggerSettings::new("prompts/strategy.md", &["web_search", "x_search"], 8, 2),
-                ),
-                (
-                    Trigger::Scorer,
-                    TriggerSettings::new("prompts/scorer.md", &["sandbox_write", "replay"], 10, 4),
-                ),
-            ]),
+            triggers: BTreeMap::from([(
+                Trigger::Scorer,
+                TriggerSettings::new("prompts/scorer.md", &["sandbox_write", "replay"], 10, 4),
+            )]),
         }
     }
 }
