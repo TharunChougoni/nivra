@@ -1,5 +1,17 @@
 # Source snapshot
 
+## 0.9.27 — 2026-11-16
+
+Reviewed forced activation for a flat in-session book. `--force-unwatched-window`
+now admits a bounded restart window when the paper book is flat and in session
+(no positions, no pending orders, not halted, not an operator-stopped book) with
+reason `market_open_flat`, instead of deferring until the blackout ends. The
+original book is preserved and the same session resumes after the health-checked
+restart; a halted or operator-stopped book still defers, and every integrity,
+hold, identity, preflight and rollback guard is unchanged. The unwatched window
+is recorded in the transaction receipt. No trading policy, sizing or execution
+behaviour changed.
+
 ## 0.9.26 — 2026-11-16
 
 First Nivra binary release and the one-time deployment rehome. A host installed

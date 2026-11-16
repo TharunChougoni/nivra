@@ -1695,9 +1695,13 @@ open and any position or pending order exists, activation defers with an
 explicit `deferred_*` reason instead of silently reporting `deferred`. An
 explicit forced deploy (`--force-unwatched-window`) accepts a bounded restart
 window for that exposure, but never bypasses a risk halt, hold, identity,
-integrity or preflight check. A forced activation records `unwatched`
-(`started_at`, `stopped_at`, `duration_ms`, `reason`, `forced:true`) in the
-transaction receipt and logs the same record; the window is never hidden.
+integrity or preflight check. The same explicit flag also admits a **flat**
+in-session book (no positions and no pending orders, not halted and not an
+operator-stopped book) with reason `market_open_flat`: the original book is
+preserved and the same session resumes after the health-checked restart. A
+halted or operator-stopped book still defers. A forced activation records
+`unwatched` (`started_at`, `stopped_at`, `duration_ms`, `reason`, `forced:true`)
+in the transaction receipt and logs the same record; the window is never hidden.
 `--operator-stopped` remains the separate path that leaves the controller
 stopped and is mutually exclusive with the forced window.
 

@@ -147,7 +147,11 @@ impl Host for Fake {
             }));
         }
         Ok(if market {
-            Admission::Deferred("deferred_market_open")
+            if force {
+                Admission::Forced("market_open_flat")
+            } else {
+                Admission::Deferred("deferred_market_open")
+            }
         } else {
             Admission::Safe
         })
@@ -1142,6 +1146,26 @@ fn rollback_preflight_passes_then_updates_and_gates_keep_stopped() {
             .as_i64()
             .is_some_and(|ms| ms >= 0)
     );
+    // A flat in-session book may be forced with an explicit bounded window; the
+    // halt/stopped guards above still refuse it.
+    let home = fixture();
+    let h = home.path();
+    let mut host = Fake::new(h);
+    host.now = "2026-10-19T12:00:00+05:30".parse().unwrap();
+    assert_eq!(
+        apply_selected(h, &mut host, false, false, false, &target),
+        Ok("deferred_market_open")
+    );
+    assert_eq!(host.stops, 0);
+    assert_eq!(
+        apply_selected(h, &mut host, false, false, true, &target),
+        Ok("updated")
+    );
+    let stage = fs::canonicalize(h.join("ind-sadr-rust-current")).unwrap();
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&fs::read(stage.join("installed-update.json")).unwrap()).unwrap();
+    assert_eq!(receipt["unwatched"]["forced"], true);
+    assert_eq!(receipt["unwatched"]["reason"], "market_open_flat");
     // A flat book outside the session needs no forced window and is not recorded.
     let home = fixture();
     let h = home.path();

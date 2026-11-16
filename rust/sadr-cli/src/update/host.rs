@@ -487,6 +487,13 @@ impl Host for RealHost {
             }));
         }
         if market {
+            // A reviewed forced activation may take the bounded restart window even
+            // for a flat in-session book: no exposure is open, the original book is
+            // preserved, and the same session resumes after the health-checked
+            // restart. A halted or operator-stopped book still defers.
+            if force && !book.halted && !book.stopped_safe {
+                return Ok(Admission::Forced("market_open_flat"));
+            }
             return Ok(Admission::Deferred(if book.flat_safe {
                 "deferred_market_open"
             } else {
