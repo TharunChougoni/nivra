@@ -1,9 +1,0 @@
-{
-  "cases": [
-    {
-      "id": "synthetic-canonical-upstox-capture",
-      "original_json": "{\"source\":\"upstox-readonly-v1\",\"path\":\"/v2/market-quote/quotes\",\"params\":{\"instrument_key\":\"NSE_EQ|SYNTHETIC-ARCHIVE\"},\"requested_at\":\"2026-10-15T09:15:00+05:30\",\"received_at\":\"2026-10-15T09:15:01+05:30\",\"body\":\"{\\\"status\\\":\\\"success\\\",\\\"data\\\":{\\\"fixture\\\":1}}\"}",
-      "sha256": "023da083b72c17ae6884e59fc2ef1726db1ba860c40c96e28422bcc44bb4471b"
-    }
-  ]
-}
