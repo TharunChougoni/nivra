@@ -291,6 +291,9 @@ impl Host for RealHost {
     fn keep_stopped(&self) -> bool {
         self.operator_stopped
     }
+    fn remote(&self) -> Option<String> {
+        Some(self.remote.clone())
+    }
     fn fetch(&mut self, name: &str, limit: usize) -> Result<Vec<u8>> {
         let data = if name == "tags" {
             git_run(&self.cache, &["ls-remote", "--tags", &self.remote])?

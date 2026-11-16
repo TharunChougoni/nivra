@@ -98,6 +98,30 @@ pub fn coverage_report(
     )
 }
 
+/// Hard bound on receipt-directory entries examined per coverage pass. The
+/// directory accumulates receipts over a configured range, so the bound grows
+/// with the corpus instead of failing at a fixed size.
+#[cfg(not(test))]
+const MAX_RECEIPT_ENTRIES: usize = 1_000_000;
+#[cfg(test)]
+const MAX_RECEIPT_ENTRIES: usize = 28;
+/// Hard bound on decoded receipts per coverage pass. Write-once receipts that
+/// predate the required window cannot cover it and are skipped by mtime first.
+#[cfg(not(test))]
+const MAX_DECODED_RECEIPTS: usize = 250_000;
+#[cfg(test)]
+const MAX_DECODED_RECEIPTS: usize = 24;
+/// Clock/timezone margin applied to the required-window start. A receipt's
+/// provider rows can never postdate its own immutable write.
+const RECEIPT_RECENCY_MARGIN_MS: i64 = 2 * 86_400_000;
+/// IST midnight of a reviewed session, in Unix milliseconds.
+fn session_start_millis(day: NaiveDate) -> Option<i64> {
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)?;
+    day.signed_duration_since(epoch)
+        .num_days()
+        .checked_mul(86_400_000)?
+        .checked_sub(19_800_000)
+}
 fn coverage_report_control(
     root: &Path,
     instruments: &[Instrument],
@@ -137,6 +161,19 @@ fn coverage_report_control(
         }
     };
     let mut receipt_count = 0usize;
+    let mut examined = 0usize;
+    // Receipts are write-once artifacts: a row for a required session can only
+    // exist in a receipt written at or after that session, so older files cannot
+    // contribute coverage. Two days absorb clock and timezone differences.
+    let cutoff = required_sessions
+        .first()
+        .and_then(|day| session_start_millis(*day))
+        .map(|start| {
+            std::time::UNIX_EPOCH
+                + std::time::Duration::from_millis(
+                    start.saturating_sub(RECEIPT_RECENCY_MARGIN_MS).max(0) as u64,
+                )
+        });
     for entry in entries {
         if control.is_some_and(|control| control.check().is_err()) {
             report.failure = Some("history_preparation_cancelled_or_expired".into());
@@ -153,13 +190,28 @@ fn coverage_report_control(
         if !name.to_string_lossy().ends_with(".receipt.json") {
             continue;
         }
-        receipt_count += 1;
-        if receipt_count > 50_000 {
+        examined += 1;
+        if examined > MAX_RECEIPT_ENTRIES {
             report.failure = Some("history_receipt_inventory_limit".into());
             return report;
         }
         if !matches!(entry.file_type(), Ok(t) if t.is_file()) {
             report.failure = Some("history_receipt_not_regular".into());
+            return report;
+        }
+        let recent = cutoff.is_none_or(|cutoff| {
+            entry
+                .metadata()
+                .ok()
+                .and_then(|meta| meta.modified().ok())
+                .is_none_or(|modified| modified >= cutoff)
+        });
+        if !recent {
+            continue;
+        }
+        receipt_count += 1;
+        if receipt_count > MAX_DECODED_RECEIPTS {
+            report.failure = Some("history_receipt_decode_limit".into());
             return report;
         }
         let receipt: history_download::Receipt = match history_download::read_receipt(&entry.path())

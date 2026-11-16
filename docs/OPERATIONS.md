@@ -1556,11 +1556,29 @@ attachments and in immutable `refs/release-assets/<tag>`. Verify tag, exact sour
 commit, target and SHA-256; a tag is not session authority. Published tags never
 move.
 
-This source snapshot has no published binary release. The steps below apply when
-a release is explicitly requested by the repository owner.
+Nivra is the only deployment source. Releases are published from
+`github.com/TharunChougoni/nivra` when explicitly requested by the repository
+owner; the first is `v0.9.26`. The predecessor `ind-sadr` repository is retired:
+its release assets are no longer installed, and new work, tags and deployment
+instructions live here. An installed host bound to the retired repository is moved
+once through the reviewed distribution migration below.
 
 Updater config selects the configured Git remote and absolute `paper_config` path.
-It never reads keys itself or needs a GitHub token. Preview/install:
+It never reads keys itself or needs a GitHub token. Remote transport is a
+deploy-key SSH host alias: `github-nivra:` is canonical, and `github-ind-sadr:` is
+accepted only to read a retained legacy binding while a host is being migrated
+([example config](../packaging/rust/updater.example.json)):
+
+```json
+{
+  "remote": "github-nivra:TharunChougoni/nivra.git",
+  "paper_config": "/absolute/paper.json"
+}
+```
+
+The host's private alias/key details and the concrete host addresses stay outside
+Git, in the git-ignored private host inventory described in
+[AGENTS.md](../AGENTS.md). Preview/install:
 
 ```sh
 sadr-rs update --check --config UPDATER_CONFIG
@@ -1604,6 +1622,61 @@ systemctl --user start ind-sadr-rust-paper.service
 
 Run these only for the reviewed stopped book; a failed check requires inspection.
 Deployment alone never resumes the book.
+
+### One-time distribution migration
+
+A host installed by a retired distribution keeps that release's identity, so the
+normal updater refuses it with `installed_release_identity_mismatch` instead of
+silently installing a foreign release. Move such a host once, under review:
+
+1. Install the canonical deploy key and SSH host alias for the new repository
+   outside Git; keep host addresses and key paths in the private host inventory
+   described in [AGENTS.md](../AGENTS.md), never in this repository.
+2. Point `UPDATER_CONFIG.remote` at the new repository and add the exact legacy
+   identity read from the installed release's `release.json`:
+
+   ```json
+   "distribution_migration": {
+     "from_remote": "github-ind-sadr:TharunChougoni/ind-sadr.git",
+     "installed_tag": "vX.Y.Z",
+     "installed_source_commit": "40-HEX-COMMIT",
+     "installed_sha256": "64-HEX-SHA256"
+   }
+   ```
+
+3. Preview with the new release's own binary: the currently installed binary
+   predates the block and refuses it as `invalid_update_configuration`.
+
+   ```sh
+   sadr-rs update --check --tag vX.Y.Z --migrate-distribution --config UPDATER_CONFIG
+   sadr-rs update --dry-run --tag vX.Y.Z --migrate-distribution --config UPDATER_CONFIG
+   ```
+
+4. Run the reviewed activation at an eligible window, adding
+   `--operator-stopped --confirm-paper-review` only for a reviewed stopped book:
+
+   ```sh
+   sadr-rs update --tag vX.Y.Z --migrate-distribution --config UPDATER_CONFIG
+   ```
+
+The declaration is inert without the flag. Adoption requires the installed
+manifest to match all three declared values exactly, the new repository to publish
+no release under the installed tag, and an explicit stable target tag newer than
+the installed one. Everything else stays in force: annotated tag, immutable asset
+ref, `release.json`, SHA-256, prompt bundle, candidate and rollback preflight, the
+book/clock/hold guard, stop/swap/restart/health and rollback. The old release
+directory is retained unchanged as the rollback target. A successful rebind
+records `distribution-migration.json` in `~/.local/state/ind-sadr` with both
+remotes, the adopted identity and the new tag/commit, returns
+`distribution_migrated_and_updated`, and logs `distribution_migration_applied`.
+
+After the first successful rebind, remove the `distribution_migration` block from
+`UPDATER_CONFIG`; the normal identity guard then applies again. Every refusal
+(`distribution_migration_mismatch`, `distribution_migration_not_required`,
+`distribution_migration_version_not_advanced`,
+`distribution_migration_configuration_required`,
+`distribution_migration_tag_required`, `invalid_distribution_migration`) changes
+nothing on the host.
 
 `--tag vX.Y.Z` also accepts the same tag without its leading `v`. The diagnostic
 `--sha <commit>` selector accepts only an unambiguous commit of a published

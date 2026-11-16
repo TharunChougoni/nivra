@@ -588,6 +588,120 @@ fn daily_only_plan_reuses_receipts_across_interval_choices() {
         date("2026-10-19"),
         previous,
     );
+    // Receipts are write-once and accumulate for the configured range. A receipt
+    // that predates the required window cannot cover it, so it is skipped before
+    // decoding; the inventory and decode bounds stay explicit and fail closed.
+    let stale_dir = tempfile::tempdir().unwrap();
+    let stale_day = required[0];
+    let stale_body = json!({"status":"success","data":{"candles":[[
+        format!("{stale_day}T00:00:00+05:30"),100,102,99,101,1000,0
+    ]]}})
+    .to_string();
+    let stale = Receipt {
+        key: universe[0].key.clone(),
+        unit: "days".into(),
+        start: stale_day,
+        end: stale_day,
+        requested_ms: now() - 1000,
+        received_ms: now(),
+        body_sha256: digest(stale_body.as_bytes()),
+        body: stale_body,
+    };
+    let stale_path = stale_dir.path().join(format!(
+        "{}.receipt.json",
+        range_id(&stale.key, "days", stale.start, stale.end)
+    ));
+    immutable(&stale_path, &serde_json::to_vec(&stale).unwrap()).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&stale_path)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000),
+        ))
+        .unwrap();
+    let stale_report = super::super::preparation::coverage_report(
+        stale_dir.path(),
+        &universe,
+        &required,
+        date("2026-10-19"),
+        previous,
+    );
+    assert_eq!(
+        stale_report.status,
+        super::super::preparation::CoverageStatus::Partial
+    );
+    assert_eq!(stale_report.observed_bars, 0);
+    assert_eq!(stale_report.failure, None);
+    // The decode bound fails closed instead of scanning an unbounded recent corpus.
+    let bounded_dir = tempfile::tempdir().unwrap();
+    let mut bounded_receipts = Vec::new();
+    for day in &required {
+        bounded_receipts.push((*day, *day));
+    }
+    for span in 1..=4 {
+        bounded_receipts.push((required[0], required[span]));
+    }
+    for (start, end) in &bounded_receipts {
+        let body = json!({"status":"success","data":{"candles":[[
+            format!("{start}T00:00:00+05:30"),100,102,99,101,1000,0
+        ]]}})
+        .to_string();
+        let receipt = Receipt {
+            key: universe[0].key.clone(),
+            unit: "days".into(),
+            start: *start,
+            end: *end,
+            requested_ms: now() - 1000,
+            received_ms: now(),
+            body_sha256: digest(body.as_bytes()),
+            body,
+        };
+        immutable(
+            &bounded_dir.path().join(format!(
+                "{}.receipt.json",
+                range_id(&receipt.key, "days", *start, *end)
+            )),
+            &serde_json::to_vec(&receipt).unwrap(),
+        )
+        .unwrap();
+    }
+    let bounded = super::super::preparation::coverage_report(
+        bounded_dir.path(),
+        &universe,
+        &required,
+        date("2026-10-19"),
+        previous,
+    );
+    assert_eq!(
+        bounded.failure.as_deref(),
+        Some("history_receipt_decode_limit")
+    );
+    // The entry bound counts files, but skipped receipts are never decoded.
+    let entries_dir = tempfile::tempdir().unwrap();
+    for index in 0..29 {
+        let path = entries_dir.path().join(format!("{index:060}.receipt.json"));
+        std::fs::write(&path, b"not decoded").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000),
+            ))
+            .unwrap();
+    }
+    let entries = super::super::preparation::coverage_report(
+        entries_dir.path(),
+        &universe,
+        &required,
+        date("2026-10-19"),
+        previous,
+    );
+    assert_eq!(
+        entries.failure.as_deref(),
+        Some("history_receipt_inventory_limit")
+    );
     // Admission must check cancellation before the first injected request.
     let cancelled = Arc::new(AtomicBool::new(true));
     let control = PreparationControl {

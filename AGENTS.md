@@ -31,6 +31,9 @@ Issues and leave handoff detail in Git history.
 - Never print, log or commit tokens, `.env*`, auth state, account payloads or
   `data/`. Redact errors. Do not put host addresses or key paths in the
   repository.
+- Private host inventory (Tailscale/SSH targets, service and config paths, release
+  state) lives only in the git-ignored `.vm/` directory. Never copy it into docs,
+  issues or commits.
 - Use only the application's own credentials. Never read another application's
   or agent's auth caches.
 
@@ -100,8 +103,11 @@ has no separate package or test gate. The committed bundle needs no Node runtime
 
 ## Releases
 
-A push to `main` does not deploy. This source snapshot has no published binary
-release. When a release is explicitly requested, the version in `Cargo.toml`, the
+A push to `main` does not deploy. Releases are published from this repository
+only; `v0.9.26` is the first. The retired `ind-sadr` repository is not a deployment
+source, and an installed host moves once through the reviewed
+[distribution migration](docs/OPERATIONS.md#one-time-distribution-migration).
+When a release is explicitly requested, the version in `Cargo.toml`, the
 changelog heading and the annotated tag `vX.Y.Z` must match on the exact commit.
 Never move a published tag; ship fixes as the next patch. See
 [development](docs/DEVELOPMENT.md).

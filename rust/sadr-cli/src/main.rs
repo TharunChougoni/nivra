@@ -214,6 +214,12 @@ enum Command {
         /// is open inside or outside the session. Never bypasses halt, hold or integrity.
         #[arg(long, conflicts_with = "operator_stopped")]
         force_unwatched_window: bool,
+        /// One reviewed move of this host to a different release repository.
+        /// Requires an explicit --tag and the updater config's
+        /// `distribution_migration` identity block; remove the block after the
+        /// first successful adoption.
+        #[arg(long)]
+        migrate_distribution: bool,
         #[arg(long, requires = "operator_stopped")]
         confirm_paper_review: bool,
     },
@@ -678,6 +684,7 @@ fn main() -> ExitCode {
             sha,
             operator_stopped,
             force_unwatched_window,
+            migrate_distribution,
             confirm_paper_review: _,
         } => update::entry(
             &config,
@@ -688,6 +695,7 @@ fn main() -> ExitCode {
             sha.as_deref(),
             operator_stopped,
             force_unwatched_window,
+            migrate_distribution,
         ),
         Command::CandidateSupervise { launch } => {
             match runtime::harness::research_candidate_helper(&launch) {

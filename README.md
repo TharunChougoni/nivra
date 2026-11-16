@@ -91,8 +91,11 @@ target/debug/sadr-rs --help
 target/debug/sadr-rs self-check
 ```
 
-These commands are offline checks and do not start a paper session. There is no
-published binary release to download yet.
+These commands are offline checks and do not start a paper session. Signed
+guarded releases are published from this repository when explicitly requested;
+installing one never authorizes a session. The retired `ind-sadr` repository is
+no longer a deployment source — an installed host moves once through the
+[reviewed distribution migration](docs/OPERATIONS.md#one-time-distribution-migration).
 
 - [Configure a paper installation](packaging/rust/CONFIGURATION.md)
 - [Read the documentation index](docs/README.md)

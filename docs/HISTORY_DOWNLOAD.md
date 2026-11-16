@@ -55,6 +55,14 @@ Failures consume reservations; bounded quota waits do not reset them.
 
 The controller's opt-in pre-open preparation acquires missing prior-session daily
 spans in receipts-only mode and publishes READY/PARTIAL/BLOCKED coverage. Its
+coverage pass reads the complete receipt inventory, but it never scans an
+unbounded corpus: receipts that predate the required window are skipped by their
+write-once mtime before being decoded (a provider row can never postdate the
+receipt that carries it, with a two-day clock/timezone margin), and explicit
+entry/decode bounds fail closed with `history_receipt_inventory_limit` or
+`history_receipt_decode_limit`. Skipping a receipt only understates coverage for
+that pass; it never substitutes, edits or deletes evidence. Reaching either bound
+is an operator-review condition, not a reason to prune or overwrite receipts. Its
 cutoff/deadline, cancellation and original quota remain unchanged; a manual
 catch-up is separate from pre-open admission. Preparation skips uncovered
 ranges with no session in the reviewed NSE calendar and coalesces split daily gaps

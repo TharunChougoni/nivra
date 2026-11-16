@@ -32,13 +32,92 @@ pub(crate) struct Manifest {
     target: String,
     sha256: String,
 }
-#[derive(Deserialize)]
+/// SSH host aliases accepted as release transport. `github-ind-sadr` is the
+/// retired distribution binding; `github-nivra` is canonical from 0.9.26 on.
+const REMOTE_ALIASES: [&str; 2] = ["github-ind-sadr:", "github-nivra:"];
+#[derive(Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 struct Config {
     #[serde(default)]
     alert_webhook_file: Option<PathBuf>,
     remote: String,
     paper_config: PathBuf,
+    /// One reviewed move of this host to a different release repository. The
+    /// block is inert without `--migrate-distribution`; remove it after the first
+    /// successful adoption so the normal identity guard applies again.
+    #[serde(default)]
+    distribution_migration: Option<DistributionMigration>,
+}
+/// Exact identity of the release installed by the previous distribution. The
+/// updater adopts it only when every byte matches the installed manifest and the
+/// new distribution does not publish that release.
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DistributionMigration {
+    from_remote: String,
+    installed_tag: String,
+    installed_source_commit: String,
+    installed_sha256: String,
+}
+impl DistributionMigration {
+    /// Adopt the installed legacy release only for its exact declared identity,
+    /// and only while the new distribution keeps no release under that tag. This
+    /// is a distribution rebind, not a version check or an integrity bypass.
+    fn adopt(&self, installed: &Manifest, catalog: &str, running: &str) -> Result<()> {
+        if self.installed_tag != installed.tag
+            || self.installed_source_commit != installed.source_commit
+            || self.installed_sha256 != installed.sha256
+        {
+            return Err("distribution_migration_mismatch");
+        }
+        if select_target(
+            catalog,
+            running,
+            &Selection::new(Some(&installed.tag), None)?,
+        )
+        .is_ok()
+        {
+            return Err("distribution_migration_not_required");
+        }
+        Ok(())
+    }
+}
+fn valid_remote(remote: &str) -> bool {
+    REMOTE_ALIASES
+        .iter()
+        .any(|prefix| remote.starts_with(prefix))
+        && !remote.contains(char::is_whitespace)
+}
+/// Declared adoption is inert unless the operator asks for it on this run. A
+/// request without a matching block, or without an explicit target tag, refuses
+/// before any repository or host access.
+fn declared_migration<'a>(
+    config: &'a Config,
+    migrate: bool,
+    tag: Option<&str>,
+) -> Result<Option<&'a DistributionMigration>> {
+    let Some(migration) = config.distribution_migration.as_ref() else {
+        return if migrate {
+            Err("distribution_migration_configuration_required")
+        } else {
+            Ok(None)
+        };
+    };
+    if !valid_remote(&migration.from_remote)
+        || migration.from_remote == config.remote
+        || Version::parse(&migration.installed_tag).is_err()
+        || !hash(&migration.installed_source_commit, 40)
+        || !hash(&migration.installed_sha256, 64)
+    {
+        return Err("invalid_distribution_migration");
+    }
+    if !migrate {
+        return Ok(None);
+    }
+    if tag.is_none() {
+        return Err("distribution_migration_tag_required");
+    }
+    Ok(Some(migration))
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Version(u32, u32, u32);
@@ -158,6 +237,10 @@ pub(crate) trait Host {
     fn rollback_preflight(&mut self, binary: &Path) -> Result<()>;
     fn restart(&mut self) -> Result<()>;
     fn healthy(&mut self) -> Result<()>;
+    /// Configured transport, retained only as bounded adoption evidence.
+    fn remote(&self) -> Option<String> {
+        None
+    }
     /// Injectable for failure-path tests; production always uses the atomic flip.
     fn swap(&mut self, current: &Path, target: &Path) -> Result<()> {
         swap(current, target)
@@ -258,6 +341,7 @@ pub fn entry(
     sha: Option<&str>,
     operator_stopped: bool,
     force: bool,
+    migrate_distribution: bool,
 ) -> ExitCode {
     let alert_path = read(path, 16384)
         .ok()
@@ -273,12 +357,12 @@ pub fn entry(
         }
         let config: Config = serde_json::from_slice(&read(path, 16384)?)
             .map_err(|_| "invalid_update_configuration")?;
-        // Only SSH transport: git uses the VM's existing deploy-key alias; no tokens.
-        if !config.remote.starts_with("github-ind-sadr:")
-            || config.remote.contains(char::is_whitespace)
-        {
+        // Only SSH transport: git uses the host's deploy-key alias; no tokens.
+        if !valid_remote(&config.remote) {
             return Err("update_ssh_alias_required");
         }
+        let migration =
+            declared_migration(&config, migrate_distribution, selection.tag.as_deref())?.cloned();
         let home = PathBuf::from(std::env::var("HOME").map_err(|_| "home_unavailable")?);
         if !home.is_absolute() {
             return Err("update_absolute_home_required");
@@ -320,7 +404,15 @@ pub fn entry(
                 now,
                 operator_stopped,
             };
-            apply_selected(&home, &mut host, check, dry, force, &selection)
+            apply_selected_migrating(
+                &home,
+                &mut host,
+                check,
+                dry,
+                force,
+                &selection,
+                migration.as_ref(),
+            )
         })
     })();
     let state = std::env::var("HOME")

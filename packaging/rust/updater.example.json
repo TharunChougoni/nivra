@@ -1,0 +1,4 @@
+{
+  "remote": "github-nivra:OWNER/REPOSITORY.git",
+  "paper_config": "/absolute/path/to/paper.json"
+}

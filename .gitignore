@@ -29,6 +29,9 @@ token*.txt
 # Private author audit workspace
 /.audit/
 
+# Private host and deployment inventory (never commit addresses/key paths)
+/.vm/
+
 # Stale nested repo copy
 /ind-sadr/
 
