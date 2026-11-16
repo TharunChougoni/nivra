@@ -85,14 +85,6 @@ impl Default for DecisionOwnerPolicy {
         }
     }
 }
-impl DecisionOwnerPolicy {
-    fn two_role() -> Self {
-        Self {
-            version: 1,
-            owner: DecisionOwner::Orchestrator,
-        }
-    }
-}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum DecisionOwner {
@@ -529,8 +521,7 @@ impl PlannerConfig {
         Ok(())
     }
     /// Prerequisites for the versioned two-role decision policy. Empty for
-    /// legacy/absent ownership. The same list feeds config validation and the
-    /// read-only `agent policy preview` migration report.
+    /// legacy/absent ownership. The same list feeds config validation.
     pub(crate) fn decision_owner_requirements(&self) -> Vec<&'static str> {
         let Some(policy) = self.decision_owner else {
             return Vec::new();
@@ -616,24 +607,6 @@ impl PlannerConfig {
         }
         Ok(())
     }
-    /// The proposed two-role policy for a read-only migration preview.
-    pub(crate) fn proposed_two_role(&self) -> Self {
-        let mut proposed = self.clone();
-        proposed.decision_owner = Some(DecisionOwnerPolicy::two_role());
-        proposed.decide.enabled = false;
-        proposed.handoff_gate = None;
-        if let Some(orchestrator) = proposed.orchestrator.as_mut() {
-            for trigger in [Trigger::Operations, Trigger::Strategy] {
-                if let Some(settings) = orchestrator.triggers.get_mut(&trigger) {
-                    settings.enabled = false;
-                }
-            }
-        }
-        if let Some(post_close) = proposed.post_close.as_mut() {
-            post_close.enabled = false;
-        }
-        proposed
-    }
     /// Resolve dated configuration without changing a predecessor book's seal.
     pub fn load_for_session(path: &Path, session: NaiveDate) -> Result<Self> {
         let mut path = path.to_path_buf();
@@ -658,16 +631,6 @@ impl PlannerConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let raw = crate::read_bounded(path, 65536).map_err(|_| "planner_config_unreadable")?;
         let value = sadr_core::native::decode(&raw).map_err(|_| "planner_config_invalid")?;
-        if value
-            .get("orchestrator")
-            .and_then(|settings| settings.get("enabled"))
-            == Some(&Value::Bool(true))
-            && super::orchestrator_model::LegacyRoleBlocks::from_planner_value(&value)
-                .map_err(|_| "planner_config_invalid")?
-                .has_orchestrator_roles()
-        {
-            return Err(super::orchestrator_model::ORCHESTRATOR_LEGACY_CONFLICT.into());
-        }
         let mut c: Self = serde_json::from_value(value).map_err(|_| "planner_config_invalid")?;
         c.validate_handoff_limit()?;
         if let Some(settings) = &c.decision_evidence {
@@ -1445,32 +1408,6 @@ pub enum Command {
         #[arg(long)]
         planner: PathBuf,
     },
-    /// Genuine three-role protocol check with synthetic evidence; no financial book.
-    HarnessCheck {
-        #[arg(long)]
-        planner: PathBuf,
-        /// New, private diagnostic authority; retain it and all consumed attempts.
-        #[arg(long)]
-        directory: PathBuf,
-        /// Test one role, retaining all reservations in this diagnostic authority.
-        #[arg(long, value_parser = ["digest", "strategy", "operations"])]
-        role: Option<String>,
-        /// Explicit new diagnostic after a code fix; never refunds or replays calls.
-        #[arg(long)]
-        continue_after_fix: bool,
-        /// Charge the existing closed book's original allowance, never a new one.
-        #[arg(long)]
-        authority_config: Option<PathBuf>,
-    },
-    /// Advisory review of a verified historical close snapshot; never advances a book.
-    ReviewPreview {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        planner: PathBuf,
-        #[arg(long)]
-        output: PathBuf,
-    },
     /// One-shot current-market diagnostic; never opens a book or executes trades.
     LivePreview {
         #[arg(long)]
@@ -1489,8 +1426,6 @@ pub enum Command {
         config: PathBuf,
         #[arg(long)]
         planner: PathBuf,
-        #[arg(long)]
-        fake_plan: Option<PathBuf>,
     },
 }
 pub fn entry(cmd: Command) -> ExitCode {
@@ -1523,30 +1458,6 @@ pub fn entry(cmd: Command) -> ExitCode {
             }
         };
     }
-    if let Command::HarnessCheck {
-        planner,
-        directory,
-        role,
-        continue_after_fix,
-        authority_config,
-    } = &cmd
-    {
-        return super::harness::diagnostic_check(
-            planner,
-            directory,
-            role.as_deref(),
-            *continue_after_fix,
-            authority_config.as_deref(),
-        );
-    }
-    if let Command::ReviewPreview {
-        config,
-        planner,
-        output,
-    } = &cmd
-    {
-        return super::harness::review_preview(config, planner, output);
-    }
     if let Command::LivePreview {
         config,
         planner,
@@ -1557,12 +1468,7 @@ pub fn entry(cmd: Command) -> ExitCode {
         return live::entry(config, planner, output, symbols);
     }
     let result = (|| -> Result<Value> {
-        let Command::DryRun {
-            config,
-            planner,
-            fake_plan,
-        } = cmd
-        else {
+        let Command::DryRun { config, planner } = cmd else {
             unreachable!()
         };
         let c: Config = serde_json::from_slice(
@@ -1582,7 +1488,7 @@ pub fn entry(cmd: Command) -> ExitCode {
             p
         };
         p.reconcile()?;
-        let value = produce(&c, &cfg, &p, &instruments, fake_plan.as_deref(), true)?;
+        let value = produce(&c, &cfg, &p, &instruments, true)?;
         Ok(json!({"paper_only":true,"dry_run":true,"traded":false,"result":value}))
     })();
     match result {

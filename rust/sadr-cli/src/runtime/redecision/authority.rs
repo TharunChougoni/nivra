@@ -46,7 +46,6 @@ pub(super) enum MarkerState {
         receipt: AuthorityOwnerReceipt,
     },
     Current {
-        raw: Vec<u8>,
         receipt: AuthorityOwnerReceipt,
     },
 }
@@ -159,7 +158,7 @@ pub(super) fn read_marker_state(db: &Connection, state: &Control) -> Result<Mark
     if receipt.config_hash != state.config_hash {
         return Ok(MarkerState::Stale { raw, receipt });
     }
-    Ok(MarkerState::Current { raw, receipt })
+    Ok(MarkerState::Current { receipt })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -203,36 +202,6 @@ pub(crate) struct AuthorityRepairReceiptV1 {
     pub attempts_sha256_before: String,
     pub attempts_sha256_after: String,
     pub repaired_at_ms: i64,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct AuthorityMigrationReceiptV1 {
-    pub version: u32,
-    pub kind: String,
-    pub binding: String,
-    pub prior_marker_raw_hex: String,
-    pub prior_marker_sha256: String,
-    pub prior_marker_config_hash: String,
-    pub prior_owner: AuthorityOwner,
-    pub prior_control_config_hash: String,
-    pub current_control_config_hash: String,
-    pub current_config_hash: String,
-    pub transition: Option<AuthorityTransitionV1>,
-    pub prior_active: Option<String>,
-    pub prior_active_sha256: Option<String>,
-    pub prior_active_owner: Option<String>,
-    pub prior_blocked: Option<String>,
-    pub prior_pending_attempt: Option<String>,
-    pub prior_prompt_sha256: Option<Value>,
-    pub current_prompt_sha256: Option<Value>,
-    pub portfolio_sha256_before: String,
-    pub portfolio_sha256_after: String,
-    pub control_sha256_before: String,
-    pub control_sha256_after: String,
-    pub attempts_sha256_before: String,
-    pub attempts_sha256_after: String,
-    pub migrated_at_ms: i64,
 }
 
 fn owner_name(owner: AuthorityOwner) -> &'static str {
@@ -462,16 +431,6 @@ fn check_repair_active_plan(
     }
 }
 
-fn check_migration_active_plan(active: Option<&(String, String, Option<String>)>) -> Result<()> {
-    if active
-        .and_then(|(_, _, owner)| owner.as_deref())
-        .is_some_and(|owner| owner == "orchestrator")
-    {
-        return Err("planner_authority_migrate_active_owner_plan".into());
-    }
-    Ok(())
-}
-
 pub(crate) fn repair_authority(
     db: &mut Connection,
     c: &Config,
@@ -611,147 +570,6 @@ pub(crate) fn repair_authority(
                 "current_config_hash":receipt.current_config_hash.clone(),
                 "expected_owner":owner_name(expected_owner),
                 "transition":receipt.transition.as_ref().map(|transition| transition.kind.clone()),
-                "portfolio_sha256":receipt.portfolio_sha256_after,
-                "control_sha256_before":receipt.control_sha256_before,
-                "control_sha256_after":receipt.control_sha256_after,
-                "attempts_sha256_before":receipt.attempts_sha256_before,
-                "attempts_sha256_after":receipt.attempts_sha256_after
-            })
-            .to_string(),
-        ],
-    )?;
-    tx.commit()?;
-    Ok(receipt)
-}
-
-pub(crate) fn migrate_legacy_authority(
-    db: &mut Connection,
-    c: &Config,
-    cfg: &planner::PlannerConfig,
-    p: &Portfolio,
-) -> Result<AuthorityMigrationReceiptV1> {
-    if !cfg.orchestrator_owns_decisions() {
-        return Err("planner_authority_migrate_owner_policy_required".into());
-    }
-    cfg.validate_decision_owner()?;
-    if settings(cfg).is_none() {
-        return Err("planner_authority_migrate_events_disabled".into());
-    }
-    if !p.halted {
-        return Err("planner_authority_migrate_requires_halted_book".into());
-    }
-    let state = load(db)?.ok_or("planner_authority_migrate_authority_missing")?;
-    check(&state, c)?;
-    let marker = read_marker_state(db, &state)?;
-    let (prior_raw, receipt, stale) = match marker {
-        MarkerState::Current { raw, receipt } => (raw, receipt, false),
-        MarkerState::Stale { raw, receipt } => (raw, receipt, true),
-        MarkerState::TableAbsent | MarkerState::RowMissing | MarkerState::Malformed { .. } => {
-            return Err("planner_authority_migrate_prior_owner_unproven".into());
-        }
-    };
-    if receipt.owner != AuthorityOwner::Legacy {
-        return Err("planner_authority_migrate_not_legacy".into());
-    }
-    let current_hash = config_hash(cfg)?;
-    let (transition, update_control) = if stale {
-        if state.config_hash != current_hash {
-            return Err("planner_authority_migrate_control_unproven".into());
-        }
-        let transition = transition_evidence(db, c, cfg, &receipt.config_hash, &state.config_hash)?
-            .ok_or("planner_authority_migrate_control_unproven")?;
-        (Some(transition), false)
-    } else {
-        if state.config_hash != receipt.config_hash || state.config_hash == current_hash {
-            return Err("planner_authority_migrate_control_unproven".into());
-        }
-        (None, true)
-    };
-    let active = active_plan_evidence(db, &state, "planner_authority_migrate_active_plan_invalid")?;
-    check_migration_active_plan(active.as_ref())?;
-    let (current_prompts, current_without_prompt) = if update_control {
-        let (_, prompts, without_prompt) = config_identity(cfg)?;
-        (prompts, without_prompt)
-    } else {
-        (
-            state.prompt_sha256.clone(),
-            state.config_without_prompt_sha256.clone(),
-        )
-    };
-    let portfolio_before = portfolio_sha256(db)?;
-    let control_before = control_sha256(db)?;
-    let attempts_before = attempts_sha256(db)?;
-    let at = millis();
-    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    ensure_audit(&tx)?;
-    if update_control {
-        let mut next = state.clone();
-        next.config_hash = current_hash.clone();
-        next.prompt_sha256 = current_prompts.clone();
-        next.config_without_prompt_sha256 = current_without_prompt.clone();
-        save(&tx, &next)?;
-    }
-    save_authority_owner(
-        &tx,
-        &AuthorityOwnerReceipt {
-            version: 1,
-            binding: state.binding.clone(),
-            config_hash: current_hash.clone(),
-            owner: AuthorityOwner::Orchestrator,
-        },
-    )?;
-    let portfolio_after = portfolio_sha256(&tx)?;
-    let control_after = control_sha256(&tx)?;
-    let attempts_after = attempts_sha256(&tx)?;
-    if portfolio_after != portfolio_before || attempts_after != attempts_before {
-        return Err("planner_authority_migrate_evidence_mismatch".into());
-    }
-    let receipt = AuthorityMigrationReceiptV1 {
-        version: 1,
-        kind: "legacy_to_owner".into(),
-        binding: state.binding.clone(),
-        prior_marker_raw_hex: hex(&prior_raw),
-        prior_marker_sha256: digest(&prior_raw),
-        prior_marker_config_hash: receipt.config_hash.clone(),
-        prior_owner: AuthorityOwner::Legacy,
-        prior_control_config_hash: state.config_hash.clone(),
-        current_control_config_hash: current_hash.clone(),
-        current_config_hash: current_hash,
-        transition,
-        prior_active: active.as_ref().map(|(id, _, _)| id.clone()),
-        prior_active_sha256: active.as_ref().map(|(_, sha, _)| sha.clone()),
-        prior_active_owner: active.as_ref().and_then(|(_, _, owner)| owner.clone()),
-        prior_blocked: state.blocked.clone(),
-        prior_pending_attempt: state.pending.as_ref().map(|claim| claim.id.clone()),
-        prior_prompt_sha256: state.prompt_sha256.clone(),
-        current_prompt_sha256: current_prompts,
-        portfolio_sha256_before: portfolio_before,
-        portfolio_sha256_after: portfolio_after,
-        control_sha256_before: control_before,
-        control_sha256_after: control_after,
-        attempts_sha256_before: attempts_before,
-        attempts_sha256_after: attempts_after,
-        migrated_at_ms: at,
-    };
-    let audit_id = insert_audit(&tx, at, "migrate", &serde_json::to_string(&receipt)?)?;
-    tx.execute(
-        "INSERT INTO ticks(at,receipt,body,event) VALUES(?,NULL,?,'operator_planner_authority_migrated')",
-        params![
-            at,
-            json!({
-                "audit_id":audit_id,
-                "prior_owner":"legacy",
-                "prior_marker_sha256":receipt.prior_marker_sha256.clone(),
-                "prior_marker_config_hash":receipt.prior_marker_config_hash.clone(),
-                "prior_control_config_hash":receipt.prior_control_config_hash.clone(),
-                "current_control_config_hash":receipt.current_control_config_hash.clone(),
-                "current_config_hash":receipt.current_config_hash.clone(),
-                "transition":receipt.transition.as_ref().map(|transition| transition.kind.clone()),
-                "halted":p.halted,
-                "stopped":p.stopped,
-                "blocked":receipt.prior_blocked.clone(),
-                "active":receipt.prior_active.clone(),
-                "pending_attempt":receipt.prior_pending_attempt.clone(),
                 "portfolio_sha256":receipt.portfolio_sha256_after,
                 "control_sha256_before":receipt.control_sha256_before,
                 "control_sha256_after":receipt.control_sha256_after,

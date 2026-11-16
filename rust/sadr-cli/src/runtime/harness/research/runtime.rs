@@ -25,14 +25,13 @@ pub(crate) struct ResearchLaunch {
 pub(crate) struct LaunchBook {
     pub halted: bool,
     pub stopped: bool,
-    pub disposed: bool,
     pub owner_decision_pending: bool,
     pub context_unavailable: bool,
 }
 
 impl ResearchLaunch {
     pub(crate) fn for_book(book: LaunchBook) -> Self {
-        let runnable = !book.halted && !book.stopped && !book.disposed;
+        let runnable = !book.halted && !book.stopped;
         let usable = runnable && !book.context_unavailable;
         Self {
             registered: usable && !book.owner_decision_pending,
@@ -43,8 +42,6 @@ impl ResearchLaunch {
                 "book_halted"
             } else if book.stopped {
                 "book_stopped"
-            } else if book.disposed {
-                "book_disposed"
             } else if book.owner_decision_pending {
                 "owner_decision_pending"
             } else {

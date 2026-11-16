@@ -72,9 +72,6 @@ fn legacy_policy_bytes_do_not_gain_an_orchestrator_block() {
         obsolete.validate_decision_owner().unwrap_err().to_string(),
         "decision_owner_legacy_handoff_gate_refused"
     );
-    let migrated = obsolete.proposed_two_role();
-    assert!(migrated.handoff_gate.is_none());
-    migrated.validate_decision_owner().unwrap();
     obsolete.decision_owner = None;
     obsolete.validate_decision_owner().unwrap();
 
@@ -474,45 +471,7 @@ fn orchestrator_policy_excludes_budgets_but_includes_tools_and_sandbox() {
 }
 
 #[test]
-fn legacy_and_migrated_configs_hash_differently() {
-    use super::super::orchestrator_model::{
-        LegacyRoleBlocks, OrchestratorModelSettings, Trigger, migrate_legacy_roles,
-    };
-    let dir = tempfile::tempdir().unwrap();
-    let mut legacy: super::PlannerConfig = serde_json::from_value(serde_json::json!({
-        "enabled": true,
-        "digest": {"enabled": true, "model_id": "gpt-6-luna",
-            "transport": "openai_codex", "daily_call_budget": 30},
-        "decide": {"enabled": true, "model_id": "grok-4.7",
-            "transport": "direct_oauth", "daily_call_budget": 20},
-        "post_close": {
-            "operations": {"enabled": true, "model_id": "grok-4.7",
-                "transport": "direct_oauth", "daily_call_budget": 1},
-            "strategy": {"enabled": true, "model_id": "grok-4.7",
-                "transport": "direct_oauth", "daily_call_budget": 2}
-        }
-    }))
-    .unwrap();
-    let legacy_bytes = super::policy_bytes(&legacy).unwrap();
-
-    let roles = LegacyRoleBlocks {
-        digest: Some(legacy.digest.clone()),
-        decide: Some(legacy.decide.clone()),
-        operations: legacy.post_close.as_ref().map(|r| r.operations.clone()),
-        strategy: legacy.post_close.as_ref().map(|r| r.strategy.clone()),
-    };
-    let mut settings: OrchestratorModelSettings = migrate_legacy_roles(None, &roles).unwrap();
-    for trigger in Trigger::ALL {
-        let path = dir.path().join(format!("{}.md", trigger.as_str()));
-        std::fs::write(&path, "same text").unwrap();
-        settings.triggers.get_mut(&trigger).unwrap().prompt = path;
-    }
-    legacy.orchestrator = Some(settings);
-    assert_ne!(super::policy_bytes(&legacy).unwrap(), legacy_bytes);
-}
-
-#[test]
-fn load_rejects_enabled_orchestrator_with_legacy_review_roles() {
+fn load_accepts_orchestrator_beside_digest_and_decide() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("planner.json");
     let legacy_digest = serde_json::json!({
@@ -523,15 +482,6 @@ fn load_rejects_enabled_orchestrator_with_legacy_review_roles() {
         "output_cap": 4096,
         "daily_call_budget": 1
     });
-    let conflict = serde_json::json!({
-        "post_close": {"operations": legacy_digest},
-        "orchestrator": {"enabled": true, "scorer_after_minute": 931}
-    });
-    std::fs::write(&path, serde_json::to_vec(&conflict).unwrap()).unwrap();
-    assert_eq!(
-        super::PlannerConfig::load(&path).err().unwrap().to_string(),
-        super::super::orchestrator_model::ORCHESTRATOR_LEGACY_CONFLICT
-    );
 
     let enabled_only =
         serde_json::json!({"orchestrator": {"enabled": true, "scorer_after_minute": 931}});
@@ -1305,11 +1255,7 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
     assert_eq!(backend.0, 2);
     assert_eq!(p, before);
     assert!(!cfg.enabled && !cfg.digest.enabled && !cfg.decide.enabled);
-    assert!(produce(&c, &cfg, &p, std::slice::from_ref(&i), None, false).is_err());
-    let fake = d.path().join("fixture-plan.json");
-    fs::write(&fake, plan.to_string()).unwrap();
-    let preview = produce(&c, &cfg, &p, std::slice::from_ref(&i), Some(&fake), true).unwrap();
-    assert_eq!(preview["fake"], true);
+    assert!(produce(&c, &cfg, &p, std::slice::from_ref(&i), false).is_err());
     assert!(!c.directory.join("model/session-plan.json").exists());
     assert_eq!(p, before);
     let cancel = std::sync::atomic::AtomicBool::new(false);
@@ -1504,42 +1450,6 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
         usage(&c).unwrap(),
         json!({"digest":2,"decide":2,"operations":0,"strategy":0,"scorer":0,"supervisor":0,"research":0})
     );
-    let mut claim = redecision::Claim {
-        id: "a".repeat(64),
-        event_id: "event-a".into(),
-        trigger: json!({"kind":"fill"}),
-        binding: book_binding(&c).unwrap(),
-        portfolio_hash: String::new(),
-        started_ms: at,
-        deadline_ms: at + 60000,
-        predecessor: None,
-        previous_attempts: 0,
-    };
-    let first = produce_for(
-        &c,
-        &cfg,
-        &p,
-        std::slice::from_ref(&i),
-        Some(&fake),
-        false,
-        Some(&claim),
-        None,
-    )
-    .unwrap();
-    claim.id = "b".repeat(64);
-    let second = produce_for(
-        &c,
-        &cfg,
-        &p,
-        std::slice::from_ref(&i),
-        Some(&fake),
-        false,
-        Some(&claim),
-        None,
-    )
-    .unwrap();
-    assert_ne!(first["decision_id"], second["decision_id"]);
-    assert_eq!(second["valid_until_ms"], at + 60000);
     let mut augmented = p.clone();
     assert!(
         augmented
@@ -2872,96 +2782,6 @@ fn legacy_role_accessor_returns_the_stored_blocks() {
             serde_json::to_value(cfg.role(Trigger::Strategy)).unwrap(),
             serde_json::to_value(&review.strategy).unwrap()
         );
-    }
-}
-
-#[test]
-fn migrated_legacy_roles_keep_each_trigger_limit() {
-    use super::super::orchestrator_model::{LegacyRoleBlocks, Trigger, migrate_legacy_roles};
-    let mut value = serde_json::json!({
-        "enabled": true,
-        "digest": {"enabled": true, "model_id": "grok-4.7",
-            "transport": "direct_oauth", "tools": [], "daily_call_budget": 30,
-            "timeout_ms": 20000, "output_cap": 4096},
-        "decide": {"enabled": true, "model_id": "grok-4.7",
-            "transport": "direct_oauth", "tools": ["web_search", "x_search"],
-            "daily_call_budget": 20, "timeout_ms": 150000, "output_cap": 8192},
-        "post_close": {
-            "enabled": true,
-            "operations": {"enabled": true, "model_id": "grok-4.7",
-                "transport": "direct_oauth", "tools": [],
-                "daily_call_budget": 3, "timeout_ms": 20000,
-                "output_cap": 4096},
-            "strategy": {"enabled": true, "model_id": "grok-4.7",
-                "transport": "direct_oauth", "tools": ["web_search", "x_search"],
-                "daily_call_budget": 2, "timeout_ms": 150000,
-                "output_cap": 8192}
-        }
-    });
-    let legacy = LegacyRoleBlocks::from_planner_value(&value).unwrap();
-    let settings = migrate_legacy_roles(None, &legacy).unwrap();
-    let object = value.as_object_mut().unwrap();
-    if let Some(post_close) = object
-        .get_mut("post_close")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        post_close.remove("operations");
-        post_close.remove("strategy");
-    }
-    object.insert(
-        "orchestrator".into(),
-        serde_json::to_value(settings).unwrap(),
-    );
-    let cfg: super::PlannerConfig = serde_json::from_value(value).unwrap();
-
-    let digest = cfg.role(Trigger::Digest);
-    let decide = cfg.role(Trigger::Decide);
-    let operations = cfg.role(Trigger::Operations);
-    let strategy = cfg.role(Trigger::Strategy);
-    assert!(operations.enabled);
-    assert_eq!(operations.daily_call_budget, 3);
-    assert_eq!(operations.timeout_ms, 20_000);
-    assert!(strategy.enabled);
-    assert_eq!(strategy.daily_call_budget, 2);
-    assert_eq!(strategy.timeout_ms, 150_000);
-    for role in [&digest, &decide, &operations, &strategy] {
-        assert_eq!(role.model_id, "grok-4.7");
-    }
-    {
-        use super::super::orchestrator_model::{LegacyRoleBlocks, Trigger, migrate_legacy_roles};
-        let mut value = serde_json::json!({
-            "enabled": true,
-            "digest": {"enabled": true, "model_id": "grok-4.7",
-                "transport": "direct_oauth", "tools": [], "daily_call_budget": 30,
-                "timeout_ms": 20000, "output_cap": 4096},
-            "decide": {"enabled": true, "model_id": "grok-4.7",
-                "transport": "direct_oauth", "tools": ["web_search", "x_search"],
-                "daily_call_budget": 20, "timeout_ms": 150000, "output_cap": 8192}
-        });
-        let legacy = LegacyRoleBlocks::from_planner_value(&value).unwrap();
-        let settings = migrate_legacy_roles(None, &legacy).unwrap();
-        let object = value.as_object_mut().unwrap();
-        object.insert(
-            "orchestrator".into(),
-            serde_json::to_value(settings).unwrap(),
-        );
-        let cfg: super::PlannerConfig = serde_json::from_value(value).unwrap();
-
-        let digest = cfg.role(Trigger::Digest);
-        assert!(digest.enabled);
-        assert_eq!(digest.model_id, "grok-4.7");
-        assert_eq!(digest.daily_call_budget, 30);
-        assert_eq!(digest.timeout_ms, 20_000);
-        assert_eq!(digest.output_cap, 4096);
-        assert!(digest.tools.is_empty());
-
-        let decide = cfg.role(Trigger::Decide);
-        assert!(decide.enabled);
-        assert_eq!(decide.model_id, "grok-4.7");
-        assert_eq!(decide.daily_call_budget, 20);
-        assert_eq!(decide.timeout_ms, 150_000);
-        assert_eq!(decide.output_cap, 8192);
-        assert_eq!(decide.tools, vec!["web_search", "x_search"]);
     }
 }
 

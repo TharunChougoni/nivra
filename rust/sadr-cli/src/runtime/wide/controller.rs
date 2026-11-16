@@ -63,12 +63,7 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
     if let Some(cfg) = &event_config {
         p.settings.exit_policy = cfg.exit_policy.clone();
     }
-    let original_body: String = db
-        .query_row("SELECT body FROM state WHERE id=1", [], |r| r.get(0))
-        .optional()?
-        .unwrap_or_else(|| serde_json::to_string(&p).expect("portfolio"));
-    let mut disposed_book = closed_incident::approved(c, &db, &original_body)?.is_some();
-    let mut event_mode = if disposed_book || closed_incident::closed_sealed(c, &p) {
+    let mut event_mode = if closed_incident::closed_sealed(c, &p) {
         false
     } else {
         match redecision::initialize(&mut db, c, &p, event_config.as_ref(), millis()) {
@@ -300,7 +295,7 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
                     &mut research_lane,
                     now,
                     session_end_ms,
-                    !p.halted && !p.stopped && !disposed_book,
+                    !p.halted && !p.stopped,
                     p.fills.iter().map(|fill| fill.at).max(),
                 );
             } else {
@@ -537,7 +532,6 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
                                     &cfg,
                                     &portfolio,
                                     &instruments,
-                                    None,
                                     false,
                                 )
                             })
@@ -1218,7 +1212,6 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
         if reported
             && (c.prior_config.is_none() || c.legacy_directory.is_some())
             && !review_disabled
-            && !disposed_book
             && review_draining.is_none()
         {
             let reviewed = (|| -> Result<serde_json::Value> {
@@ -1239,7 +1232,7 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
                 }
             };
         }
-        if reported && !disposed_book {
+        if reported {
             scorer_status = match scorer_trigger::tick(
                 &mut db,
                 c,
@@ -1264,7 +1257,6 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
             let launch = harness::ResearchLaunch::for_book(harness::LaunchBook {
                 halted: p.halted,
                 stopped: p.stopped,
-                disposed: disposed_book,
                 owner_decision_pending: owner_blocked,
                 context_unavailable: research_context_unavailable,
             });
@@ -1314,7 +1306,6 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
                     stale_since = None;
                     stale_seen = false;
                     rollover_seen = false;
-                    disposed_book = false;
                     config = next;
                     history_attempt = HistoryAttempts::load(&config)?;
                     last_history_check = 0;

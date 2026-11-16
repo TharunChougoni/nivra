@@ -20,7 +20,6 @@ pub(crate) const DEFAULT_MODEL_TIMEOUT_MS: u64 = 120_000;
 pub(crate) const DEFAULT_MODEL_OUTPUT_CAP: u32 = 8000;
 pub(crate) const DEFAULT_DAILY_CALL_BUDGET: u32 = 200;
 pub(crate) const DEFAULT_MAX_PROMPT_BYTES: u64 = 64 * 1024;
-pub(crate) const ORCHESTRATOR_LEGACY_CONFLICT: &str = "orchestrator_and_legacy_roles_conflict";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LoadedPrompt {
@@ -59,17 +58,6 @@ impl Trigger {
             Self::Strategy => "strategy",
             Self::Scorer => "scorer",
             Self::Supervisor => "supervisor",
-        }
-    }
-
-    pub(crate) const fn default_prompt(self) -> &'static str {
-        match self {
-            Self::Digest => "prompts/data.md",
-            Self::Decide => "prompts/decision.md",
-            Self::Operations => "prompts/operations.md",
-            Self::Strategy => "prompts/strategy.md",
-            Self::Scorer => "prompts/scorer.md",
-            Self::Supervisor => "prompts/supervisor.md",
         }
     }
 }
@@ -610,9 +598,7 @@ impl OrchestratorModelSettings {
     }
 }
 
-mod migrate;
 mod prompts;
-pub(crate) use migrate::*;
 pub(crate) use prompts::*;
 
 #[cfg(test)]

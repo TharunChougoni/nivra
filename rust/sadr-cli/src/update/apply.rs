@@ -577,7 +577,7 @@ pub(crate) fn apply(
 ) -> Result<&'static str> {
     apply_selected(home, host, check, dry, false, &Selection::default())
 }
-#[cfg(test)]
+/// Install the selected release.
 pub(crate) fn apply_selected(
     home: &Path,
     host: &mut impl Host,
@@ -586,24 +586,6 @@ pub(crate) fn apply_selected(
     force: bool,
     target: &Selection,
 ) -> Result<&'static str> {
-    apply_selected_migrating(home, host, check, dry, force, target, None)
-}
-/// Install the selected release. `migration` is the one reviewed distribution
-/// rebind declared in the updater config; it can only relax the installed-release
-/// identity check for the exact legacy bytes it names.
-pub(crate) fn apply_selected_migrating(
-    home: &Path,
-    host: &mut impl Host,
-    check: bool,
-    dry: bool,
-    force: bool,
-    target: &Selection,
-    migration: Option<&DistributionMigration>,
-) -> Result<&'static str> {
-    // An adoption request without an explicit stable tag has no bounded target.
-    if migration.is_some() && target.tag.is_none() {
-        return Err("distribution_migration_tag_required");
-    }
     let state = home.join(".local/state/ind-sadr");
     let releases = home.join("ind-sadr-rust-releases");
     let current = home.join("ind-sadr-rust-current");
@@ -642,19 +624,13 @@ pub(crate) fn apply_selected_migrating(
     }
     let catalog = host.fetch("tags", 1024 * 1024)?;
     let catalog = std::str::from_utf8(&catalog).map_err(|_| "invalid_tag_catalog")?;
-    let mut adopted = None;
     if let Some(m) = &installed {
         // A normal install must be published by the configured distribution with
-        // exactly the recorded source commit. Only a declared distribution
-        // migration may pass this guard, and only for the exact legacy identity.
+        // exactly the recorded source commit.
         let published = select_target(catalog, &running, &Selection::new(Some(&m.tag), None)?);
         let identity_ok = matches!(published, Ok(Some((_, ref sha))) if *sha == m.source_commit);
         if !identity_ok {
-            let Some(migration) = migration else {
-                return Err("installed_release_identity_mismatch");
-            };
-            migration.adopt(m, catalog, &running)?;
-            adopted = Some(m.clone());
+            return Err("installed_release_identity_mismatch");
         }
         if !check && !dry {
             release_metadata(&old, m)?;
@@ -669,13 +645,6 @@ pub(crate) fn apply_selected_migrating(
         }
         return Ok("already_current");
     };
-    if let Some(legacy) = &adopted {
-        // A rebind still has to move the host forward; matching or older tags are
-        // an ambiguous rollback across distributions and refuse before effects.
-        if Version::parse(&tag)? <= Version::parse(&legacy.tag)? {
-            return Err("distribution_migration_version_not_advanced");
-        }
-    }
     if check {
         return Ok(if running == tag {
             "already_current"
@@ -886,23 +855,5 @@ pub(crate) fn apply_selected_migrating(
     sync(&stage)?;
     sync(&state)?;
     // Retain all releases, including failed artifacts (at least three plus previous).
-    if let Some(legacy) = &adopted {
-        // Durable, bounded adoption evidence. The old release stays on disk as the
-        // rollback target; nothing here rewrites its identity or receipts.
-        let record = serde_json::json!({
-            "from_remote": migration.map(|m| m.from_remote.clone()),
-            "to_remote": host.remote(),
-            "installed": {
-                "tag": legacy.tag,
-                "source_commit": legacy.source_commit,
-                "sha256": legacy.sha256,
-            },
-            "adopted": {"tag": tag, "source_commit": commit},
-            "at": now_utc().to_rfc3339(),
-        });
-        record_json(&state.join("distribution-migration.json"), &record)?;
-        eprintln!("distribution_migration_applied: tag={tag}");
-        return Ok("distribution_migrated_and_updated");
-    }
     Ok("updated")
 }

@@ -56,9 +56,7 @@ systemctl --user show ind-sadr-rust-paper.service \
 
 For a fresh configuration baseline, prepare new paper and planner files
 outside every original session directory. Retain predecessor configs and immutable
-release evidence unchanged. The sanitized legacy fixture in
-`fixtures/rust/bootstrap-paper.example.json` is test data, not an operational
-configuration or current installation template. Installation,
+release evidence unchanged. Installation,
 authority application and a paper start are separate operator actions.
 
 Review the complete set together:
@@ -80,9 +78,7 @@ it never creates a replacement ledger, resets allowances, replays an ambiguous
 attempt or clears stop/halt flags. A fresh config is not a fresh account.
 
 Use `planner config-check --planner NEW_PLANNER --session SESSION` for offline
-planner validation, then `agent policy preview --config PAPER_CONFIG --json` to
-review owner prerequisites. Existing legacy authority requires the reviewed
-`agent policy migrate` and `config-apply` flow described below. Source/fixture
+planner validation; it reports owner prerequisites. Source/fixture
 validation does not establish credential entitlement or installed-host readiness.
 Before any separately authorized paper start, validate the original authority,
 self-check and preflight under the reviewed configuration. Preserve stopped or
@@ -791,30 +787,11 @@ attempt rows are hashed without logging their bodies. Repair never writes
 rows; it is idempotent and a second run refuses without a new receipt. Do not
 hand-create or edit the marker table.
 
-A halted legacy book cannot use `config-apply` because that command refuses
-halts. Use the explicit migration only for that dead end:
-
-```sh
-sadr-rs planner-authority migrate --config PAPER_CONFIG --confirm-paper-review
-```
-
-Migration requires a halted book, the reviewed owner policy, a valid current or
-stale legacy marker, and either the legacy authority still current or an
-audited transition to the already-current owner hash. It preserves the halt,
-blocks, active plan, pending claim, attempts, usage, halt history and financial
-state; it updates only the authority marker and, when the legacy hash is still
-current, the stored policy hash and prompt hashes. The owner policy cannot
-execute until the ordinary reviewed `planner-recover`/`resume` path clears the
-halt. A stopped non-halted legacy book uses the normal reviewed `config-apply`.
-An owner-to-legacy downgrade, a missing or malformed marker without exact proof,
-and an absent marker with a legacy active plan are unsupported; restore the
-exact original policy and use repair first, or keep the journal archive-only.
-
 Production recovery never infers the legacy Decide path. Legacy planner configs
-remain readable for archive and migration review, but `planner-recover` refuses
-them with `planner_recover_events_disabled`; use `config-apply` for a stopped
-non-halted book or `planner-authority migrate` for a halted one. The legacy
-recovery mechanics retained in tests exercise archive and refusal behavior only.
+remain readable for archives, but `planner-recover` refuses them with
+`planner_recover_events_disabled`, and `config-apply` refuses a halted book. A
+halted legacy book stays archive-only. The legacy recovery mechanics retained in
+tests exercise archive and refusal behavior only.
 
 A present table with a missing row still refuses as
 `planner_authority_owner_missing`; malformed, mismatched or stale receipts still
@@ -827,7 +804,7 @@ When the reviewed `owner_tasks.review` policy is enabled, the controller may run
 one sealed owner review after the report is written. It is advisory: it cannot
 place, size or block an order, change policy, or write the workspace. The
 dashboard `owner_review` projection is read-only and reports `disabled`, `due`,
-`busy`, `attempted`, `expired`, `parked`, `disposed` or
+`busy`, `attempted`, `expired`, `parked` or
 `awaiting_sealed_report`, and `invalid` with one of
 `owner_tasks_settings_invalid`, `owner_review_cutoff_invalid`,
 `owner_review_path_invalid`, `owner_review_binding_invalid`,
@@ -1040,7 +1017,7 @@ advance and recovery never start the service, place an order or replay a call.
 Non-model-led, stopped, open, flat, unreconciled, missing-halt-history,
 pending-order, interrupted or integrity-blocked and unknown-state books refuse.
 Only a non-stopped halted hold qualifies. A halted flat book keeps its
-`planner-recover` or `closed-planner-disposition` path; a stopped non-halted book
+`planner-recover` path; a stopped non-halted book
 keeps `--accept-stopped-carry` or `--acknowledge-closed-book`. The receipt binds
 one source close, so a multi-day hold repeats the reviewed sequence for each
 closed halted predecessor; the successor's own halt is carried again only after
@@ -1147,33 +1124,7 @@ older `model_led_account` verdicts remain readable. A restart of a stopped, stil
 book logs `stopped_open_session_restart_requires_review` with explicit resume
 instructions. The book remains stopped; a restart is never a resume.
 
-For a closed, flat, reconciled planner incident,
-an explicitly reviewed next-session disposition is:
-
-```sh
-sadr-rs closed-planner-disposition --config PAPER_CONFIG --session TARGET_DATE --confirm-paper-review
-```
-
-The controller must be stopped; the command binds original evidence for only that
-future date and preserves the source state, halt/stop history, seals, fills, fees
-and P&L. A clean sealed close followed only by `planner_authority_invalid` incidents
-is eligible with or without fills, including a losing day; all authority halts
-must be strictly after the sealed report's `as_of_ms`. The original zero-fill
-already-halted seal path remains supported. The controller process must be stopped
-(the source state's stopped flag need not be set). Wrong dates, changed financial
-state, mismatched seals/reports, exposure, unrelated or pre-seal halts and unresolved
-attempts refuse. The receipt is separate `closed-planner-disposition.json` evidence;
-rollover and updater admission revalidate it. No flags are cleared in the source.
-Post-seal evidence accepts changed planner bindings, an unset block and stale
-active event ids. It requires no pending claim and only planned, failed,
-superseded or deferred attempts. The receipt binds exact control bytes and a
-streaming, length-framed SHA-256 of ordered attempt rows, count and body/result
-byte total; it does not embed attempt history or impose the legacy 16 MB limit.
-The legacy zero-fill seal retains its original authority and history checks.
-Refusals print a sanitized reason code alongside the original refusal line.
 Planner authority changes on a closed sealed book apply to the next session.
-There are no new tunables; these are evidence and paper-only invariants. Never use this to flatten
-or replace a carried book. `rollover --dry-run` then verifies the normal successor.
 
 Legacy migrations (`prior_config`, `allow_legacy_model_led_default`) admit only
 exact documented original bindings/default-field proofs. Keep original configs
@@ -1192,11 +1143,9 @@ cannot run independent Decide calls in this build. Current readiness and the
 dashboard expose Digest and Orchestrator only. Original Decide reservations
 remain separate evidence and are never refunded or merged.
 
-Stop the paper controller and back up reviewed configs. Use `agent policy preview`
-then reviewed `agent policy migrate` to a new planner file; the writer refuses to
-overwrite its input. Review the required digest, supervisor trigger, disabled
-Decide block and enabled events. `config-migrate-orchestrator` only converts older
-review-role config shapes; it alone does not authorize an owner transition.
+Stop the paper controller and back up reviewed configs. Write the owner policy
+to a new planner file and check it with `planner config-check`, which refuses a
+missing digest, supervisor trigger or events block and an enabled Decide block.
 Install the exact revision's prompt files and bind application-owned credentials.
 Confirm the digest and owner grants, run self-check and preflight, then reviewed
 `config-apply --confirm-paper-review` and audited `resume` before an authorized
@@ -1439,25 +1388,17 @@ config. The normal [release transition](#releases-and-updates) and reviewed
 
 ### Reviewing the decision-owner migration
 
-The optional top-level `decision_owner` policy is reviewed without applying it:
+The top-level `decision_owner` policy is reviewed without applying it. Write the
+owner policy to a new planner config and validate it offline:
 
 ```sh
-sadr-rs agent policy preview --config PAPER_CONFIG --json
+sadr-rs planner config-check --planner NEW_PLANNER.json --session SESSION
 ```
 
-The report shows current ownership, every missing two-role prerequisite, the
-proposed policy hash and the policy-level runtime gate. It writes nothing. A
-reviewed migration writes the proposed policy to a new planner config:
-
-```sh
-sadr-rs agent policy migrate --config PAPER_CONFIG --out NEW_PLANNER.json --json
-```
-
-The output must not exist and must differ from both the paper config and its
-current planner config. The writer validates the new file and leaves the source
-config and the paper book unchanged. Point the paper config's `planner_config`
-at the new file, run `config-apply --confirm-paper-review`, then `resume`.
-Rollback uses the predecessor planner file and the same reviewed transition.
+The check refuses any missing owner prerequisite and writes nothing. Point the
+paper config's `planner_config` at the new file, run
+`config-apply --confirm-paper-review`, then `resume`. Rollback uses the
+predecessor planner file and the same reviewed transition.
 
 A two-role policy whose durable authority was initialized under a different
 policy is refused at controller startup with `decision_owner_migration_required`
@@ -1626,57 +1567,13 @@ Deployment alone never resumes the book.
 ### One-time distribution migration
 
 A host installed by a retired distribution keeps that release's identity, so the
-normal updater refuses it with `installed_release_identity_mismatch` instead of
-silently installing a foreign release. Move such a host once, under review:
-
-1. Install the canonical deploy key and SSH host alias for the new repository
-   outside Git; keep host addresses and key paths in the private host inventory
-   described in [AGENTS.md](../AGENTS.md), never in this repository.
-2. Point `UPDATER_CONFIG.remote` at the new repository and add the exact legacy
-   identity read from the installed release's `release.json`:
-
-   ```json
-   "distribution_migration": {
-     "from_remote": "github-ind-sadr:TharunChougoni/ind-sadr.git",
-     "installed_tag": "vX.Y.Z",
-     "installed_source_commit": "40-HEX-COMMIT",
-     "installed_sha256": "64-HEX-SHA256"
-   }
-   ```
-
-3. Preview with the new release's own binary: the currently installed binary
-   predates the block and refuses it as `invalid_update_configuration`.
-
-   ```sh
-   sadr-rs update --check --tag vX.Y.Z --migrate-distribution --config UPDATER_CONFIG
-   sadr-rs update --dry-run --tag vX.Y.Z --migrate-distribution --config UPDATER_CONFIG
-   ```
-
-4. Run the reviewed activation at an eligible window, adding
-   `--operator-stopped --confirm-paper-review` only for a reviewed stopped book:
-
-   ```sh
-   sadr-rs update --tag vX.Y.Z --migrate-distribution --config UPDATER_CONFIG
-   ```
-
-The declaration is inert without the flag. Adoption requires the installed
-manifest to match all three declared values exactly, the new repository to publish
-no release under the installed tag, and an explicit stable target tag newer than
-the installed one. Everything else stays in force: annotated tag, immutable asset
-ref, `release.json`, SHA-256, prompt bundle, candidate and rollback preflight, the
-book/clock/hold guard, stop/swap/restart/health and rollback. The old release
-directory is retained unchanged as the rollback target. A successful rebind
-records `distribution-migration.json` in `~/.local/state/ind-sadr` with both
-remotes, the adopted identity and the new tag/commit, returns
-`distribution_migrated_and_updated`, and logs `distribution_migration_applied`.
-
-After the first successful rebind, remove the `distribution_migration` block from
-`UPDATER_CONFIG`; the normal identity guard then applies again. Every refusal
-(`distribution_migration_mismatch`, `distribution_migration_not_required`,
-`distribution_migration_version_not_advanced`,
-`distribution_migration_configuration_required`,
-`distribution_migration_tag_required`, `invalid_distribution_migration`) changes
-nothing on the host.
+updater refuses it with `installed_release_identity_mismatch` instead of
+silently installing a foreign release. The updater no longer carries a built-in
+distribution rebind: the `--migrate-distribution` flag and the
+`distribution_migration` updater config block were removed, and an updater
+config that still has the block fails to parse. Remove the block before
+installing this release. A reviewed host migration procedure replaces the
+rebind; until it is documented, keep such a host on its installed release.
 
 `--tag vX.Y.Z` also accepts the same tag without its leading `v`. The diagnostic
 `--sha <commit>` selector accepts only an unambiguous commit of a published
@@ -1689,8 +1586,7 @@ independent of the caller's checkout, with bounded redacted failure diagnostics.
 Manual and automatic activation require a reconciled closed non-halted bound
 book, NTP-synchronised clock, no `DEPLOY_ROOT/HOLD`, and time outside the
 weekday **09:00–15:45 inclusive IST** blackout. A closed flat non-halted book
-(or a flat book covered by an approved closed disposition) is admitted by the
-original rule. The deploy guard also reads the real book: while the session is
+is admitted by the original rule. The deploy guard also reads the real book: while the session is
 open and any position or pending order exists, activation defers with an
 explicit `deferred_*` reason instead of silently reporting `deferred`. An
 explicit forced deploy (`--force-unwatched-window`) accepts a bounded restart
@@ -1708,8 +1604,8 @@ stopped and is mutually exclusive with the forced window.
 A closed model-led book that is already carrying positions overnight is
 admitted only outside market hours (the NSE calendar is closed at the sampled
 clock), and only when a read-only adoption check passes: the bound book is
-readable and reconciled, closed, model-led, non-stopped, non-halted (or covered
-by an approved closed disposition), with no pending orders and no pending or
+readable and reconciled, closed, model-led, non-stopped, non-halted, with no
+pending orders and no pending or
 reserved planner attempt. The check never rewrites, clears or replays the book,
 and the successor session still starts only through the reviewed
 rollover/carry path. An open in-session book, a halted or stopped book, an
@@ -2129,11 +2025,11 @@ config does not authorize starting a session.
 Production model work requires explicit reviewed orchestrator ownership. Existing
 planner JSON without `decision_owner` still decodes as legacy and retains its
 policy hash, but enabled legacy planners refuse with
-`decision_owner_migration_required`. On a stopped book, use `agent policy preview`
-and reviewed `agent policy migrate` to a new planner config, review its exact
+`decision_owner_migration_required`. On a stopped book, write the owner policy
+to a new planner config, check it with `planner config-check`, review its exact
 prompt and credential bindings, then use `config-apply --confirm-paper-review`
-and audited resume. The migration writer and authority checks preserve original
-journals and separate role charges. Installing a build does not migrate a book.
+and audited resume. The authority checks preserve original journals and separate
+role charges. Installing a build does not migrate a book.
 Rollback means restoring the reviewed predecessor config and compatible binary
 through the documented updater guards; never edit seals or replay pending work.
 The current-market `planner live-preview` compiles only a factual digest; use

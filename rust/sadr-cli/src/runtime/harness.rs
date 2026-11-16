@@ -7,11 +7,7 @@ use planner::{Backend, CallGuard, ModelRole, PlannerConfig, ToolsSettings};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::DirBuilderExt;
-mod diagnostic;
-mod preview;
 pub(crate) mod research;
-pub(super) use diagnostic::entry as diagnostic_check;
-pub(super) use preview::entry as review_preview;
 pub(crate) use research::{
     LaunchBook, OwnerResearchRuntime, ResearchLaunch, ResearchSettings,
     adopt_carried_research as research_adopt_carried,

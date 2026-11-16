@@ -81,13 +81,13 @@ approvals to make readiness pass.
    for a model whose pricing evidence is absent.
 5. Validate the completed planner offline with
    `sadr-rs planner config-check --planner NEW_PLANNER --session SESSION`.
-   Review `agent policy preview --config NEW_PAPER --json`, original authority,
-   self-check and preflight separately before applying. These templates neither
-   apply policy nor start, resume, unhalt, reset usage or roll over a book.
+   Review original authority, self-check and preflight separately before
+   applying. These templates neither apply policy nor start, resume, unhalt,
+   reset usage or roll over a book.
 6. Choose disposition explicitly: retain archived books read-only with original
-   configs, or continue the original book through reviewed authority migration
-   and `config-apply`. Preserve halted/stopped state. Keep predecessor configs,
-   journals, failed artifacts and immutable release rollback evidence unchanged.
+   configs, or continue the original book through reviewed `config-apply`.
+   Preserve halted/stopped state. Keep predecessor configs, journals, failed
+   artifacts and immutable release rollback evidence unchanged.
    Any installation or paper start needs the operator's separate authorization.
 
 ## Compatibility inventory

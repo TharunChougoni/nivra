@@ -6,10 +6,9 @@ pub(crate) fn produce(
     cfg: &PlannerConfig,
     p: &Portfolio,
     instruments: &[Instrument],
-    fake: Option<&Path>,
     preview: bool,
 ) -> Result<Value> {
-    produce_for(c, cfg, p, instruments, fake, preview, None, None)
+    produce_for(c, cfg, p, instruments, preview, None, None)
 }
 #[allow(clippy::too_many_arguments)] // Exact durable claim and cancellation accompany the immutable input snapshot.
 pub(crate) fn produce_for(
@@ -17,41 +16,22 @@ pub(crate) fn produce_for(
     cfg: &PlannerConfig,
     p: &Portfolio,
     instruments: &[Instrument],
-    fake: Option<&Path>,
     preview: bool,
     claim: Option<&redecision::Claim>,
     cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<Value> {
-    let fixture_clock = || claim.map(|c| c.started_ms).unwrap_or(0);
-    if fake.is_some() {
-        produce_clocked(
-            c,
-            cfg,
-            p,
-            instruments,
-            fake,
-            preview,
-            claim,
-            cancel,
-            &fixture_clock,
-            None,
-            None,
-        )
-    } else {
-        produce_clocked(
-            c,
-            cfg,
-            p,
-            instruments,
-            fake,
-            preview,
-            claim,
-            cancel,
-            &millis,
-            None,
-            None,
-        )
-    }
+    produce_clocked(
+        c,
+        cfg,
+        p,
+        instruments,
+        preview,
+        claim,
+        cancel,
+        &millis,
+        None,
+        None,
+    )
 }
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
@@ -70,7 +50,6 @@ pub(crate) fn produce_with_backend(
         cfg,
         p,
         instruments,
-        None,
         false,
         Some(claim),
         cancel,
@@ -191,7 +170,6 @@ pub(in crate::runtime) fn produce_clocked(
     cfg: &PlannerConfig,
     p: &Portfolio,
     instruments: &[Instrument],
-    fake: Option<&Path>,
     preview: bool,
     claim: Option<&redecision::Claim>,
     cancel: Option<&std::sync::atomic::AtomicBool>,
@@ -203,7 +181,7 @@ pub(in crate::runtime) fn produce_clocked(
         cancel,
         deadline: claim.map(|c| c.deadline_ms),
         not_before: claim.map(|c| c.started_ms),
-        configuration: if fake.is_none() && claim.is_some() {
+        configuration: if claim.is_some() {
             Some((c, cfg))
         } else {
             None
@@ -220,10 +198,8 @@ pub(in crate::runtime) fn produce_clocked(
     };
     guard.check()?;
     #[cfg(not(test))]
-    if fake.is_none() {
-        cfg.runtime_decision_owner_gate()?;
-    }
-    let orchestrator_owns_decisions = fake.is_none() && cfg.orchestrator_owns_decisions();
+    cfg.runtime_decision_owner_gate()?;
+    let orchestrator_owns_decisions = cfg.orchestrator_owns_decisions();
     let digest_role = cfg.role(Trigger::Digest);
     let decide_role = cfg.role(Trigger::Decide);
     if orchestrator_owns_decisions && !digest_role.enabled {
@@ -340,9 +316,7 @@ pub(in crate::runtime) fn produce_clocked(
         input["shortlist_is_navigation_only"] = json!(true);
     }
     let reference_hash = digest(&serde_json::to_vec(&references)?);
-    if fake.is_none() {
-        persist_session_references(c, &references)?;
-    }
+    persist_session_references(c, &references)?;
     if cfg.post_close.as_ref().is_some_and(|s| s.enabled) {
         input["advisory_memory"] = postclose::memory(
             c,
@@ -373,18 +347,16 @@ pub(in crate::runtime) fn produce_clocked(
         input["predecessor"] = json!(claim.predecessor);
     }
     let hash = digest(&serde_json::to_vec(&input)?);
-    if fake.is_none() {
-        if !cfg.enabled || cfg.model_led == Some(false) {
-            return Err("model_plan_unavailable_no_trades".into());
-        }
-        if !orchestrator_owns_decisions && !decide_role.enabled {
-            return Err("model_plan_unavailable_no_trades".into());
-        }
-        // Nothing to buy and nothing to manage is a normal no-op, not a failed
-        // attempt or a block (#221).
-        if !has_decision_work(&input, p, instruments) {
-            return Err(NO_DECISION_WORK.into());
-        }
+    if !cfg.enabled || cfg.model_led == Some(false) {
+        return Err("model_plan_unavailable_no_trades".into());
+    }
+    if !orchestrator_owns_decisions && !decide_role.enabled {
+        return Err("model_plan_unavailable_no_trades".into());
+    }
+    // Nothing to buy and nothing to manage is a normal no-op, not a failed
+    // attempt or a block (#221).
+    if !has_decision_work(&input, p, instruments) {
+        return Err(NO_DECISION_WORK.into());
     }
     let decision_id = format!(
         "{}-{}{}",
@@ -397,14 +369,12 @@ pub(in crate::runtime) fn produce_clocked(
         }
     );
     let audit = c.directory.join("model").join(&decision_id);
-    if fake.is_none() {
-        fs::create_dir_all(c.directory.join("model"))?;
-        fs::create_dir(&audit)?;
-        rollover::atomic(
-            &audit.join("input.json"),
-            &json!({"input":input,"input_hash":hash,"prompt_version":PROMPT_VERSION,"provider":cfg.provider,"digest":digest_role,"decide":decide_role}),
-        )?;
-    }
+    fs::create_dir_all(c.directory.join("model"))?;
+    fs::create_dir(&audit)?;
+    rollover::atomic(
+        &audit.join("input.json"),
+        &json!({"input":input,"input_hash":hash,"prompt_version":PROMPT_VERSION,"provider":cfg.provider,"digest":digest_role,"decide":decide_role}),
+    )?;
     let start = std::time::Instant::now();
     #[cfg(test)]
     let handoff_requested = std::cell::Cell::new(true);
@@ -584,15 +554,7 @@ pub(in crate::runtime) fn produce_clocked(
         }
         Err("decision_owner_migration_required".into())
     };
-    let (raw_result, provider_evidence) = if let Some(path) = fake {
-        (
-            String::from_utf8(
-                crate::read_bounded(path, 262144).map_err(|_| "fake_plan_unreadable")?,
-            )
-            .map_err(|_| "fake_plan_invalid".into()),
-            Value::Null,
-        )
-    } else if let Some(backend) = injected {
+    let (raw_result, provider_evidence) = if let Some(backend) = injected {
         let result = ask(backend);
         let evidence = backend.provenance();
         (result, evidence)
@@ -612,22 +574,6 @@ pub(in crate::runtime) fn produce_clocked(
     let raw = match raw_result {
         Ok(raw) => raw,
         Err(e) => {
-            if fake.is_none() {
-                rollover::atomic(
-                    &audit.join("failure.json"),
-                    &failure_record_with_provider(
-                        reason(e.as_ref()),
-                        e.as_ref(),
-                        start.elapsed().as_millis(),
-                        &provider_evidence,
-                    ),
-                )?;
-            }
-            return Err(e);
-        }
-    };
-    if let Err(e) = guard.check_finished() {
-        if fake.is_none() {
             rollover::atomic(
                 &audit.join("failure.json"),
                 &failure_record_with_provider(
@@ -637,29 +583,37 @@ pub(in crate::runtime) fn produce_clocked(
                     &provider_evidence,
                 ),
             )?;
+            return Err(e);
         }
+    };
+    if let Err(e) = guard.check_finished() {
+        rollover::atomic(
+            &audit.join("failure.json"),
+            &failure_record_with_provider(
+                reason(e.as_ref()),
+                e.as_ref(),
+                start.elapsed().as_millis(),
+                &provider_evidence,
+            ),
+        )?;
         return Err(e);
     }
-    if fake.is_none() {
-        rollover::atomic(
-            &audit.join("output.json"),
-            &json!({"raw_output":raw,"latency_ms":start.elapsed().as_millis()}),
-        )?;
-    }
+    rollover::atomic(
+        &audit.join("output.json"),
+        &json!({"raw_output":raw,"latency_ms":start.elapsed().as_millis()}),
+    )?;
     let verdicts = match validate(&raw, p, instruments) {
         Ok(v) => v,
         Err(e) => {
-            if fake.is_none() {
-                rollover::atomic(
-                    &audit.join("failure.json"),
-                    &failure_record_with_provider(
-                        "schema_failed_no_entries",
-                        e.as_ref(),
-                        start.elapsed().as_millis(),
-                        &provider_evidence,
-                    ),
-                )?;
-            }
+            rollover::atomic(
+                &audit.join("failure.json"),
+                &failure_record_with_provider(
+                    "schema_failed_no_entries",
+                    e.as_ref(),
+                    start.elapsed().as_millis(),
+                    &provider_evidence,
+                ),
+            )?;
             return Err(e);
         }
     };
@@ -671,7 +625,7 @@ pub(in crate::runtime) fn produce_clocked(
     }
     // A host no-trade plan can be recorded before any model reservation exists.
     let usage_dir = usage_path(c)?;
-    let budget_used = if fake.is_some() || !usage_dir.is_dir() {
+    let budget_used = if !usage_dir.is_dir() {
         0
     } else {
         fs::read_dir(&usage_dir)?
@@ -691,7 +645,7 @@ pub(in crate::runtime) fn produce_clocked(
     // A policy/profile hash is only recorded when the same policy can be
     // reloaded at execution time; in-memory fixture policies keep the legacy
     // unbound representation.
-    let configurable = fake.is_none() && !preview && c.planner_config.is_some();
+    let configurable = !preview && c.planner_config.is_some();
     let policy_sha256 = if configurable {
         Some(digest(&policy_bytes(cfg)?))
     } else {
@@ -716,22 +670,15 @@ pub(in crate::runtime) fn produce_clocked(
     };
     let owner_digest =
         orchestrator_owns_decisions.then(|| digest_attribution["owner_digest"].clone());
-    let mut result = json!({"strategy_attribution":strategy_attribution,"selection_provenance":super::super::decision_owner::selected_version(&json!({"strategy_attribution":strategy_attribution})),"digest_attribution":digest_attribution,"digest_id":digest_attribution["digest_id"].clone(),"portfolio_revision":portfolio_revision,"policy_sha256":policy_sha256,"profile_sha256":profile_sha256,"decision_id":decision_id,"attempt_id":claim.map(|c|&c.id),"valid_until_ms":claim.map(|c|c.deadline_ms),"session_binding":book_binding(c)?,"input_hash":hash,"input":input,"market_references":references,"market_references_hash":reference_hash,"prompt_version":PROMPT_VERSION,"provider":cfg.provider,"model_id":if handoff_requested.get() {&decide_role.model_id} else {&digest_role.model_id},"luna_handoff_requested":if orchestrator_owns_decisions {Some(false)}else if cfg.discovery.is_some() {Some(handoff_requested.get())}else{None},"raw_output":raw,"parsed_plan":parsed,"verdicts":verdicts,"latency_ms":start.elapsed().as_millis(),"fake":fake.is_some(),"dry_run":preview,"budgets":budgets,"budget_used":budget_used});
+    let mut result = json!({"strategy_attribution":strategy_attribution,"selection_provenance":super::super::decision_owner::selected_version(&json!({"strategy_attribution":strategy_attribution})),"digest_attribution":digest_attribution,"digest_id":digest_attribution["digest_id"].clone(),"portfolio_revision":portfolio_revision,"policy_sha256":policy_sha256,"profile_sha256":profile_sha256,"decision_id":decision_id,"attempt_id":claim.map(|c|&c.id),"valid_until_ms":claim.map(|c|c.deadline_ms),"session_binding":book_binding(c)?,"input_hash":hash,"input":input,"market_references":references,"market_references_hash":reference_hash,"prompt_version":PROMPT_VERSION,"provider":cfg.provider,"model_id":if handoff_requested.get() {&decide_role.model_id} else {&digest_role.model_id},"luna_handoff_requested":if orchestrator_owns_decisions {Some(false)}else if cfg.discovery.is_some() {Some(handoff_requested.get())}else{None},"raw_output":raw,"parsed_plan":parsed,"verdicts":verdicts,"latency_ms":start.elapsed().as_millis(),"fake":false,"dry_run":preview,"budgets":budgets,"budget_used":budget_used});
     if let Some(owner_digest) = owner_digest {
         result["owner_digest"] = owner_digest;
     }
-    if fake.is_none() {
-        #[cfg(test)]
-        if handoff_requested.get() {
-            super::super::harness::publish_validated(
-                c,
-                Trigger::Decide.as_str(),
-                &decide_role,
-                &raw,
-            );
-        }
-        rollover::atomic(&audit.join("plan.json"), &result)?;
+    #[cfg(test)]
+    if handoff_requested.get() {
+        super::super::harness::publish_validated(c, Trigger::Decide.as_str(), &decide_role, &raw);
     }
+    rollover::atomic(&audit.join("plan.json"), &result)?;
     Ok(result)
 }
 

@@ -722,77 +722,6 @@ pub(crate) fn initialize(
     tx.commit()?;
     Ok(true)
 }
-/// Read-only proof for a narrowly scoped closed, zero-fill planner incident.
-pub(crate) fn closed_incident_evidence(db: &Connection, c: &Config) -> Result<Value> {
-    let state = load(db)?.ok_or("disposition_planner_authority_missing")?;
-    check(&state, c)?;
-    if state.pending.is_some()
-        || state.active.is_some()
-        || state.blocked.as_deref() != Some("planner_event_configuration_changed")
-    {
-        return Err("disposition_planner_incident_not_eligible".into());
-    }
-    let pending: i64 = db.query_row(
-        "SELECT count(*) FROM planner_attempt_log WHERE state NOT IN ('planned','failed','superseded','deferred')",
-        [],
-        |r| r.get(0),
-    )?;
-    if pending != 0 {
-        return Err("disposition_pending_attempt".into());
-    }
-    let raw: String = db.query_row(
-        "SELECT body FROM planner_event_control WHERE id=1",
-        [],
-        |r| r.get(0),
-    )?;
-    let (count,bytes):(i64,i64)=db.query_row("SELECT count(*),COALESCE(sum(length(body)+COALESCE(length(result),0)),0) FROM planner_attempt_log",[],|r|Ok((r.get(0)?,r.get(1)?)))?;
-    if count > 4096 || bytes > 16_000_000 {
-        return Err("disposition_attempt_history_invalid".into());
-    }
-    let mut attempts = db.prepare(
-        "SELECT id,event_id,body,state,result FROM planner_attempt_log ORDER BY id LIMIT 4097",
-    )?;
-    let records = attempts
-        .query_map([], |r| {
-            Ok(json!([
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, Option<String>>(4)?
-            ]))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    if records.len() > 4096 || records.iter().any(|r| r.to_string().len() > 2_000_000) {
-        return Err("disposition_attempt_history_invalid".into());
-    }
-    for row in &records {
-        let claim: Claim = serde_json::from_value(sadr_core::native::decode(
-            row[2]
-                .as_str()
-                .ok_or("disposition_attempt_history_invalid")?
-                .as_bytes(),
-        )?)?;
-        if row[0] != claim.id || row[1] != claim.event_id || claim.binding != book_binding(c)? {
-            return Err("disposition_attempt_history_invalid".into());
-        }
-        let result = sadr_core::native::decode(
-            row[4]
-                .as_str()
-                .ok_or("disposition_attempt_history_invalid")?
-                .as_bytes(),
-        )?;
-        if !result.is_object() {
-            return Err("disposition_attempt_history_invalid".into());
-        }
-        if row[3] == "planned" {
-            planner::validate_saved(c, &result)?;
-        }
-    }
-    Ok(
-        json!({"control_sha256":digest(raw.as_bytes()),"attempts_sha256":digest(&serde_json::to_vec(&records)?),"reason":"planner_event_configuration_changed"}),
-    )
-}
 
 /// A sealed financial book needs settled attempts, not current planner authority.
 /// Hash exact stored bytes in primary-key order with length framing and a NULL tag.
@@ -1415,7 +1344,7 @@ fn append(db: &Connection, event: &Event) -> Result<()> {
 mod authority;
 mod events;
 mod lifecycle;
-pub(crate) use authority::{migrate_legacy_authority, repair_authority};
+pub(crate) use authority::repair_authority;
 pub(crate) use events::*;
 pub(crate) use lifecycle::*;
 

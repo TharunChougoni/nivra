@@ -3,20 +3,12 @@
   "baseline": "df20719",
   "files": [
     {
-      "path": "fixtures/rust/bootstrap_vectors.json",
-      "sha256": "30dd36d4591790b9ca7517e2a87909455269a5ba1139868c1e1e7f73717cc8bc"
-    },
-    {
       "path": "fixtures/rust/financial_vectors.json",
       "sha256": "682bb9543c0c4f637de3970f84e1109d2ec3b001968b1d5808ee04ddfd5e7b8c"
     },
     {
       "path": "fixtures/rust/market_vectors.json",
       "sha256": "f203d451be2a4497161bd8ee4d89cca127f840921cceaa38100cd3ee32a098bd"
-    },
-    {
-      "path": "fixtures/rust/pristine_install_vectors.json",
-      "sha256": "416e41f89077c9da50f77ab1baaa492812b6aacdd2ab1319fbdd228e154e8e83"
     }
   ]
 }

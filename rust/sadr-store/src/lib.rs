@@ -1,7 +1,6 @@
 //! Persistent paper-research results, journals, grants and diagnostics.
 
 pub mod controller;
-pub mod install_preflight;
 pub mod journal;
 pub mod native_grant;
 pub mod protection_diagnostics;

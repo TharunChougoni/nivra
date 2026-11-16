@@ -600,165 +600,11 @@ pub(super) fn load_current(path: &Path) -> SelectionResult<(Config, planner::Pla
     Ok((current, cfg))
 }
 
-/// Read-only migration report for the versioned two-role policy. It never
-/// writes a policy. `open` means the policy-level gate admits the review; the
-/// controller still requires a matching durable authority at startup.
-fn policy_preview(c: &Config, cfg: &planner::PlannerConfig) -> Value {
-    let proposed = cfg.proposed_two_role();
-    let missing = proposed.decision_owner_requirements();
-    let runtime_gate = proposed
-        .runtime_decision_owner_gate()
-        .err()
-        .map(|error| error.to_string())
-        .unwrap_or_else(|| "open".into());
-    let policy_sha256 = planner::policy_bytes(&proposed)
-        .ok()
-        .map(|bytes| digest(&bytes));
-    json!({
-        "status": if missing.is_empty() { "ready_for_review" } else { "prerequisites_missing" },
-        "session": c.session.to_string(),
-        "current": {
-            "decision_owner": cfg.decision_owner,
-            "digest_enabled": cfg.digest.enabled,
-            "decide_enabled": cfg.decide.enabled,
-            "supervisor_trigger": cfg.orchestrator.as_ref().is_some_and(|orchestrator| {
-                orchestrator.enabled
-                    && orchestrator
-                        .triggers
-                        .get(&super::orchestrator_model::Trigger::Supervisor)
-                        .is_some_and(|trigger| trigger.enabled)
-            }),
-            "events_enabled": cfg.events.as_ref().is_some_and(|events| events.enabled),
-        },
-        "proposed": {
-            "version": 1,
-            "owner": "orchestrator",
-            "decide_enabled": proposed.decide.enabled,
-            "policy_sha256": policy_sha256,
-        },
-        "missing": missing,
-        "runtime_gate": runtime_gate,
-        "writes": false,
-    })
-}
-
-fn policy_preview_entry(path: &Path, json_out: bool) -> SelectionResult<()> {
-    let (c, cfg) = load_current(path)?;
-    let value = policy_preview(&c, &cfg);
-    if json_out {
-        println!(
-            "{}",
-            serde_json::to_string(&value).map_err(|_| "model_selection_unwritable")?
-        );
-    } else {
-        println!(
-            "status={} missing={} runtime_gate={} writes=false",
-            value["status"].as_str().unwrap_or_default(),
-            value["missing"]
-                .as_array()
-                .map(|items| items.len())
-                .unwrap_or(0),
-            value["runtime_gate"].as_str().unwrap_or("open")
-        );
-    }
-    Ok(())
-}
-
 pub(super) fn same_path(a: &Path, b: &Path) -> bool {
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b,
         _ => a == b,
     }
-}
-
-/// Write the proposed two-role policy to a new planner config. This touches no
-/// book, journal, usage or approval state; the operator reviews the file, points
-/// the paper config at it and runs the existing reviewed `config-apply`.
-fn policy_migrate_entry(path: &Path, out: &Path, json_out: bool) -> SelectionResult<()> {
-    let (c, cfg) = load_current(path)?;
-    if same_path(path, out)
-        || c.planner_config
-            .as_deref()
-            .is_some_and(|current| same_path(current, out))
-    {
-        return Err("policy_migrate_same_path");
-    }
-    let proposed = cfg.proposed_two_role();
-    if let Some(reason) = proposed.decision_owner_requirements().first() {
-        return Err(match *reason {
-            "decision_owner_version_invalid" => "policy_migrate_version_invalid",
-            "decision_owner_supervisor_required" => "policy_migrate_supervisor_required",
-            "decision_owner_supervisor_model_required" => {
-                "policy_migrate_supervisor_model_required"
-            }
-            "decision_owner_operations_trigger_must_be_disabled" => {
-                "policy_migrate_operations_trigger_must_be_disabled"
-            }
-            "decision_owner_strategy_trigger_must_be_disabled" => {
-                "policy_migrate_strategy_trigger_must_be_disabled"
-            }
-            "decision_owner_post_close_must_be_disabled" => {
-                "policy_migrate_post_close_must_be_disabled"
-            }
-            "decision_owner_digest_required" => "policy_migrate_digest_required",
-            "decision_owner_decide_must_be_disabled" => "policy_migrate_decide_must_be_disabled",
-            "decision_owner_events_required" => "policy_migrate_events_required",
-            _ => "policy_migrate_prerequisites_missing",
-        });
-    }
-    proposed
-        .runtime_decision_owner_gate()
-        .map_err(|_| "policy_migrate_prerequisites_missing")?;
-    let mut text = serde_json::to_string_pretty(&proposed)
-        .map_err(|_| "policy_migrate_unwritable")?
-        .into_bytes();
-    text.push(b'\n');
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(out)
-        .map_err(|error| match error.kind() {
-            std::io::ErrorKind::AlreadyExists => "policy_migrate_out_exists",
-            _ => "policy_migrate_unwritable",
-        })?;
-    use std::io::Write;
-    if file.write_all(&text).is_err() || file.sync_all().is_err() {
-        let _ = std::fs::remove_file(out);
-        return Err("policy_migrate_unwritable");
-    }
-    drop(file);
-    // Prove the written file decodes under the same reviewed prerequisites.
-    let loaded = planner::PlannerConfig::load(out).map_err(|_| "policy_migrate_invalid")?;
-    if !loaded.decision_owner_requirements().is_empty()
-        || loaded.runtime_decision_owner_gate().is_err()
-    {
-        let _ = std::fs::remove_file(out);
-        return Err("policy_migrate_invalid");
-    }
-    let policy_sha256 = planner::policy_bytes(&loaded)
-        .ok()
-        .map(|bytes| digest(&bytes));
-    let value = json!({
-        "status": "written",
-        "session": c.session.to_string(),
-        "out": out,
-        "policy_sha256": policy_sha256,
-        "writes": "new_planner_config_only",
-        "book_unchanged": true,
-        "apply": "point the paper config at this planner_config and run config-apply --confirm-paper-review",
-    });
-    if json_out {
-        println!(
-            "{}",
-            serde_json::to_string(&value).map_err(|_| "policy_migrate_unwritable")?
-        );
-    } else {
-        println!(
-            "status=written policy_sha256={} book_unchanged=true",
-            value["policy_sha256"].as_str().unwrap_or("-")
-        );
-    }
-    Ok(())
 }
 
 #[derive(clap::Subcommand)]
@@ -831,31 +677,6 @@ pub(crate) enum Commands {
     Model {
         #[command(subcommand)]
         command: ModelCommands,
-    },
-    /// Review a versioned decision-owner migration without applying it.
-    Policy {
-        #[command(subcommand)]
-        command: PolicyCommands,
-    },
-}
-
-#[derive(clap::Subcommand)]
-pub(crate) enum PolicyCommands {
-    /// Report the proposed two-role policy, prerequisites and runtime gate.
-    Preview {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Write a reviewed two-role planner config to a new file, never in place.
-    Migrate {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        out: PathBuf,
-        #[arg(long)]
-        json: bool,
     },
 }
 
@@ -993,15 +814,6 @@ pub(crate) fn run(command: Commands) -> ExitCode {
                     request_id.as_deref(),
                     json,
                 ),
-            },
-            "model_selection_refused",
-        ),
-        Commands::Policy { command } => (
-            match command {
-                PolicyCommands::Preview { config, json } => policy_preview_entry(&config, json),
-                PolicyCommands::Migrate { config, out, json } => {
-                    policy_migrate_entry(&config, &out, json)
-                }
             },
             "model_selection_refused",
         ),
@@ -1436,10 +1248,6 @@ pub(crate) fn exercise() {
     );
     assert!(two_role.decision_owner_requirements().is_empty());
     two_role.runtime_decision_owner_gate().unwrap();
-    let ready = policy_preview(&c, &two_role);
-    assert_eq!(ready["status"], "ready_for_review");
-    assert_eq!(ready["runtime_gate"], "open");
-    assert_eq!(ready["writes"], false);
     let mut decide_on = two_role.clone();
     decide_on.decide.enabled = true;
     assert!(
@@ -1453,46 +1261,6 @@ pub(crate) fn exercise() {
         no_events
             .decision_owner_requirements()
             .contains(&"decision_owner_events_required")
-    );
-    // The reviewed migration writer produces a new file and leaves the source
-    // planner config (and therefore the book's running authority) byte-identical.
-    let owner_planner = dir.path().join("owner-planner.json");
-    fs::write(&owner_planner, serde_json::to_vec(&two_role).unwrap()).unwrap();
-    let owner_paper = dir.path().join("owner-paper.json");
-    let mut owner_paper_value = serde_json::to_value(&paper).unwrap();
-    owner_paper_value["planner_config"] = json!(owner_planner);
-    fs::write(
-        &owner_paper,
-        serde_json::to_vec(&owner_paper_value).unwrap(),
-    )
-    .unwrap();
-    let original = fs::read(&owner_planner).unwrap();
-    let migrated_path = dir.path().join("owner-planner-migrated.json");
-    policy_migrate_entry(&owner_paper, &migrated_path, true).unwrap();
-    assert_eq!(fs::read(&owner_planner).unwrap(), original);
-    let migrated = PlannerConfig::load(&migrated_path).unwrap();
-    assert!(migrated.orchestrator_owns_decisions());
-    assert!(migrated.decision_owner_requirements().is_empty());
-    assert!(migrated.runtime_decision_owner_gate().is_ok());
-    assert_eq!(
-        policy_migrate_entry(&owner_paper, &migrated_path, true).unwrap_err(),
-        "policy_migrate_out_exists"
-    );
-    assert_eq!(
-        policy_migrate_entry(&owner_paper, &owner_planner, true).unwrap_err(),
-        "policy_migrate_same_path"
-    );
-
-    let current = policy_preview(&c, &cfg);
-    assert_eq!(current["status"], "prerequisites_missing");
-    assert_eq!(current["runtime_gate"], "decision_owner_events_required");
-    assert!(current["writes"].as_bool() == Some(false));
-    assert!(
-        policy_preview(&c, &cfg)["missing"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|reason| reason == "decision_owner_events_required")
     );
 
     // Non-binding policy drift invalidates active and pending attribution. The

@@ -2744,59 +2744,6 @@ pub(super) fn planner_authority_repair(
     Ok(())
 }
 
-/// Explicit halted legacy-to-owner migration. It changes authority metadata
-/// only; halt, block, active, pending, attempts, usage and financial state stay.
-pub(super) fn planner_authority_migrate(c: &Config, confirm: bool) -> Result<()> {
-    if !confirm {
-        return Err("planner_authority_migrate_confirm_paper_review_required".into());
-    }
-    let _root_lock = rollover::controller_lock(c)?;
-    let active = rollover::current(c)?;
-    let c = &active;
-    c.validate()?;
-    if LIVE_ENABLED {
-        return Err("planner_authority_migrate_live_enabled".into());
-    }
-    if !c.directory.join("paper.sqlite").is_file()
-        || !c.directory.join("book-identity.json").is_file()
-    {
-        return Err("planner_authority_migrate_book_missing".into());
-    }
-    let lock = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(c.directory.join("controller.lock"))?;
-    lock.try_lock_exclusive()
-        .map_err(|_| "planner_authority_migrate_controller_busy")?;
-    let _lock = rollover::ControllerLock(lock);
-    let cfg = planner::PlannerConfig::load_for_session(
-        c.planner_config
-            .as_deref()
-            .ok_or("planner_config_required")?,
-        c.session,
-    )?;
-    let mut db = open_book(c)?;
-    let p = load_wide(&mut db, c)?;
-    p.reconcile()?;
-    let receipt = redecision::migrate_legacy_authority(&mut db, c, &cfg, &p)?;
-    println!(
-        "{}",
-        serde_json::to_string(&serde_json::json!({
-            "authority_migrated":true,
-            "prior_owner":receipt.prior_owner,
-            "prior_control_config_hash":receipt.prior_control_config_hash,
-            "current_control_config_hash":receipt.current_control_config_hash,
-            "halted_preserved":p.halted,
-            "stopped_preserved":p.stopped,
-            "blocked_preserved":receipt.prior_blocked,
-            "active_preserved":receipt.prior_active,
-            "pending_attempt_preserved":receipt.prior_pending_attempt
-        }))?
-    );
-    Ok(())
-}
 pub(super) fn resume(c: &Config, confirm: bool) -> Result<()> {
     if !confirm {
         return Err(Fail::new("resume_confirm_paper_review_required").into());

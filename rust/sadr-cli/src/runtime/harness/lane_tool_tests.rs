@@ -247,13 +247,6 @@ fn registered_research_waits_only_for_the_book_and_a_pending_owner_decision() {
         ),
         (
             LaunchBook {
-                disposed: true,
-                ..Default::default()
-            },
-            "book_disposed",
-        ),
-        (
-            LaunchBook {
                 context_unavailable: true,
                 ..Default::default()
             },

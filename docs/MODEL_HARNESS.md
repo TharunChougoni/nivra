@@ -147,9 +147,8 @@ reviewed migration before model work. The two-role policy requires an enabled
 orchestrator with an enabled supervisor trigger, an enabled digest, a disabled
 decide role and enabled events; a missing prerequisite is refused at load with
 its specific `decision_owner_*` code. The policy is reviewable without applying
-it via `sadr-rs agent policy preview --config PAPER_CONFIG --json`, which reports
-configured ownership, the missing prerequisite list, the proposed policy hash
-and the runtime gate. It never writes a policy.
+it via `sadr-rs planner config-check --planner FILE --session DATE`, which reports
+the policy hash and refuses a missing prerequisite. It never writes a policy.
 
 The decision-owner policy provides the digest-to-orchestrator path.
 Installing a release does not migrate a legacy policy or qualify host operation.
@@ -196,24 +195,15 @@ The policy-level runtime gate admits a valid two-role policy, but the controller
 requires durable ledger authority initialized by that exact policy. A legacy
 authority is refused at startup with `decision_owner_migration_required`; host
 protection continues and no legacy decision path is silently substituted.
-Reviewed migration writes a new planner config without touching the book:
-
-```sh
-sadr-rs agent policy migrate --config PAPER_CONFIG --out NEW_PLANNER.json --json
-```
-
-The writer refuses an existing output or a source path, validates the written
-file and leaves the original config byte-identical. Point the paper config at the
-new file and run the normal `config-apply --confirm-paper-review`, then `resume`.
+Reviewed migration writes the owner policy to a new planner config, checks it
+with `planner config-check` and leaves the original config byte-identical. Point
+the paper config at the new file and run the normal
+`config-apply --confirm-paper-review`, then `resume`.
 Rollback is the same reviewed transition using the predecessor planner file.
 Starting with a policy whose config hash differs from the durable authority is
 refused rather than rewriting the authority implicitly. A halted legacy book
-cannot run `config-apply`; the reviewed
-`planner-authority migrate --config PAPER_CONFIG --confirm-paper-review` command
-is the explicit legacy-to-owner authority transition for that dead end. It
-preserves the halt, blocks, active plan, pending claim, attempts, usage and
-financial state, and the owner policy does not execute until ordinary reviewed
-recovery clears the halt. A stopped non-halted book keeps using `config-apply`.
+cannot run `config-apply` and stays archive-only. A stopped non-halted book uses
+`config-apply`.
 For a missing, malformed or stale marker, the offline repair command
 reconstructs the marker only from the exact current authority hash and explicit
 owner, or from an audited hash transition, and appends the prior raw marker and
@@ -1279,14 +1269,11 @@ text is never interpreted as HTML. Opening the dashboard invokes no model.
 | Command | Scope |
 | --- | --- |
 | `planner config-check --planner FILE --session DATE` | Offline dated-policy/cap validation, no credentials/calls |
-| `planner harness-check --planner FILE --directory NEW_DIR` | Genuine configured-role protocol diagnostic with synthetic evidence; consumes allowance |
-| `planner dry-run --config FILE --planner FILE --fake-plan FILE` | Offline plan validation; omitting fake-plan uses/charges configured provider |
+| `planner dry-run --config FILE --planner FILE` | Read-only turn against the active book; uses and charges the configured provider |
 | `planner live-preview` | Fresh-market diagnostic, no financial book/fills; requires reviewed closed flat authority |
-| `planner review-preview` | Sealed advisory diagnostic for retained evidence; no rollover/carry authority |
 
 Use `--help` for required options. Diagnostic namespaces cannot replenish an
-original book's allowance. Continue-after-fix paths retain failed attempts and
-require their original identity. Operational qualification is tracked in
+original book's allowance. Operational qualification is tracked in
 [GitHub Issues](https://github.com/TharunChougoni/nivra/issues);
 [transport](XAI_SUBSCRIPTION_TRANSPORT.md) covers explicit approval renewal.
 
@@ -1349,9 +1336,9 @@ is diagnosable from the session archive rather than only the journal.
 New in-memory planner defaults serialize explicit `orchestrator` ownership;
 omitted ownership in an existing JSON config (including an old empty policy
 object) still decodes as legacy, preserving its exact policy identity. An enabled legacy planner refuses
-runtime admission with `decision_owner_migration_required`. Use the reviewed
-`agent policy migrate` workflow while stopped, then reviewed config apply and
-audited resume. No config is silently rewritten and original Decide usage stays
+runtime admission with `decision_owner_migration_required`. Write a reviewed
+owner planner config while stopped, check it with `planner config-check`, then
+run reviewed config apply and audited resume. No config is silently rewritten and original Decide usage stays
 separate.
 
 Independent Decide inference, digest handoff/veto gates and the advisory
