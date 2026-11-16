@@ -454,7 +454,6 @@ pub(crate) fn launch(
             &cfg,
             &p,
             &instruments,
-            None,
             false,
             Some(&claim),
             Some(&cancel),

@@ -989,7 +989,6 @@ pub(crate) struct ScheduleInput {
     pub enabled: bool,
     pub closed: bool,
     pub report_present: bool,
-    pub disposed: bool,
     pub parked: bool,
     pub busy: bool,
     pub attempted: bool,
@@ -1012,7 +1011,6 @@ pub(crate) enum ReviewState {
     Disabled,
     Invalid,
     Attempted,
-    Disposed,
     Expired,
     Parked,
     Busy,
@@ -1026,7 +1024,6 @@ impl ReviewState {
             Self::Disabled => "disabled",
             Self::Invalid => "invalid",
             Self::Attempted => "attempted",
-            Self::Disposed => "disposed",
             Self::Expired => "expired",
             Self::Parked => "parked",
             Self::Busy => "busy",
@@ -1100,8 +1097,6 @@ pub(crate) fn project(input: &ScheduleInput) -> OwnerSchedule {
             ReviewState::Invalid,
             Some("owner_review_session_date_mismatch"),
         )
-    } else if input.disposed {
-        (ReviewState::Disposed, None)
     } else if input.now_ms > input.cutoff_ms {
         (ReviewState::Expired, None)
     } else if input.parked {
@@ -1137,7 +1132,7 @@ pub(crate) struct ResearchScheduleInput {
     pub enabled: bool,
     /// A research lane turn is in flight or awaiting recovery.
     pub pending: bool,
-    /// False while the book is halted, stopped or disposed.
+    /// False while the book is halted or stopped.
     pub book_runnable: bool,
     /// The first exhausted research lane cap, if any.
     pub capped: Option<&'static str>,

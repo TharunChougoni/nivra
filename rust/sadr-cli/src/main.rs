@@ -182,13 +182,6 @@ enum Command {
         #[arg(long, alias = "supervision-timings")]
         supervision: Option<PathBuf>,
     },
-    /// Read-only guard for the original dated pristine-book installer; no swap authority.
-    PaperInstallPreflight {
-        #[arg(long)]
-        version: String,
-        #[arg(long)]
-        state: PathBuf,
-    },
     /// Verify and install an annotated stable paper release; explicit selection also permits rollback.
     Update {
         /// Exact stable release, with or without v; an explicit older tag is rollback.
@@ -214,12 +207,6 @@ enum Command {
         /// is open inside or outside the session. Never bypasses halt, hold or integrity.
         #[arg(long, conflicts_with = "operator_stopped")]
         force_unwatched_window: bool,
-        /// One reviewed move of this host to a different release repository.
-        /// Requires an explicit --tag and the updater config's
-        /// `distribution_migration` identity block; remove the block after the
-        /// first successful adoption.
-        #[arg(long)]
-        migrate_distribution: bool,
         #[arg(long, requires = "operator_stopped")]
         confirm_paper_review: bool,
     },
@@ -339,15 +326,6 @@ enum Command {
         #[arg(long)]
         observation: PathBuf,
     },
-    /// Record an explicitly reviewed future-session disposition; preserves the original closed halt.
-    ClosedPlannerDisposition {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        session: chrono::NaiveDate,
-        #[arg(long)]
-        confirm_paper_review: bool,
-    },
     /// Read-only next-session approvals, usage, history and rollover readiness; no provider calls.
     Readiness {
         #[arg(long)]
@@ -381,17 +359,10 @@ enum Command {
         #[arg(long)]
         confirm_paper_review: bool,
     },
-    /// Offline authority-marker repair or explicit halted legacy-to-owner migration.
+    /// Offline authority-marker repair from exact proof.
     PlannerAuthority {
         #[command(subcommand)]
         command: PlannerAuthorityCommand,
-    },
-    /// Write a migrated single-orchestrator planner config to a new file; never in place.
-    ConfigMigrateOrchestrator {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        out: PathBuf,
     },
     /// Resume a reviewed flat paper book; audit model-led activation on pristine legacy books.
     Resume {
@@ -412,13 +383,6 @@ enum PlannerAuthorityCommand {
         /// Required assertion checked against the reviewed policy and evidence.
         #[arg(long)]
         expected_owner: AuthorityOwnerArg,
-        #[arg(long)]
-        confirm_paper_review: bool,
-    },
-    /// Explicitly migrate a halted legacy authority to the reviewed owner policy.
-    Migrate {
-        #[arg(long)]
-        config: PathBuf,
         #[arg(long)]
         confirm_paper_review: bool,
     },
@@ -674,7 +638,6 @@ fn main() -> ExitCode {
                 .map_err(|_| ()),
             "Protection diagnostics unavailable",
         ),
-        Command::PaperInstallPreflight { version, state } => install_preflight(&version, &state),
         Command::Update {
             config,
             check,
@@ -684,7 +647,6 @@ fn main() -> ExitCode {
             sha,
             operator_stopped,
             force_unwatched_window,
-            migrate_distribution,
             confirm_paper_review: _,
         } => update::entry(
             &config,
@@ -695,7 +657,6 @@ fn main() -> ExitCode {
             sha.as_deref(),
             operator_stopped,
             force_unwatched_window,
-            migrate_distribution,
         ),
         Command::CandidateSupervise { launch } => {
             match runtime::harness::research_candidate_helper(&launch) {
@@ -776,11 +737,6 @@ fn main() -> ExitCode {
             split,
             observation,
         } => research::accept(&result, &code, &runtime, &input, &split, &observation),
-        Command::ClosedPlannerDisposition {
-            config,
-            session,
-            confirm_paper_review,
-        } => runtime::closed_incident::entry(&config, session, confirm_paper_review),
         Command::Readiness { config, now } => runtime::readiness::entry(
             &config,
             now.map(|v| v.timestamp_millis())
@@ -810,23 +766,7 @@ fn main() -> ExitCode {
                 expected_owner.as_str(),
                 confirm_paper_review,
             ),
-            PlannerAuthorityCommand::Migrate {
-                config,
-                confirm_paper_review,
-            } => runtime::planner_authority_migrate_entry(&config, confirm_paper_review),
         },
-        Command::ConfigMigrateOrchestrator { config, out } => {
-            match runtime::orchestrator_model::migrate_config_file(&config, &out) {
-                Ok(()) => {
-                    println!("{}", serde_json::json!({"config_migrated": true}));
-                    ExitCode::SUCCESS
-                }
-                Err(error) => {
-                    eprintln!("config_migrate_failed: {error}");
-                    ExitCode::FAILURE
-                }
-            }
-        }
         Command::Resume {
             config,
             confirm_paper_review,
@@ -1045,34 +985,6 @@ fn self_check(expected: Option<&str>) -> ExitCode {
         serde_json::json!({"self_check":"ok","version":version,"live_enabled":false})
     );
     ExitCode::SUCCESS
-}
-
-fn install_preflight(version: &str, path: &std::path::Path) -> ExitCode {
-    let result = (|| {
-        if !path
-            .symlink_metadata()
-            .map_err(|_| "pristine_state_unavailable")?
-            .is_file()
-        {
-            return Err("pristine_regular_file_required");
-        }
-        let db = rusqlite::Connection::open_with_flags(
-            path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(|_| "pristine_state_unavailable")?;
-        sadr_store::install_preflight::inspect(db, version).map_err(|_| "pristine_upgrade_refused")
-    })();
-    match result {
-        Ok(()) => {
-            println!("pristine_original_book_verified_no_install_authority");
-            ExitCode::SUCCESS
-        }
-        Err(code) => {
-            eprintln!("{code}");
-            ExitCode::FAILURE
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1448,17 +1360,6 @@ mod rollover_cli_tests {
         assert!(repair("legacy").is_ok());
         assert!(repair("bogus").is_err());
         assert!(repair("ORCHESTRATOR").is_err());
-        assert!(
-            Args::try_parse_from([
-                "sadr-rs",
-                "planner-authority",
-                "migrate",
-                "--config",
-                "c.json",
-                "--confirm-paper-review",
-            ])
-            .is_ok()
-        );
         let help = Args::try_parse_from(["sadr-rs", "planner-authority", "repair", "--help"])
             .err()
             .unwrap();

@@ -461,171 +461,34 @@ fn update_decision_verifies_and_defers_then_activates_or_rolls_back() {
             Ok("already_current")
         );
     }
-    // A host still bound to a retired distribution publishes a different release
-    // identity. Only its exact declared identity may be adopted, only with an
-    // explicit advancing tag, and only while the new distribution keeps no
-    // release under that tag. The old release is retained, never rewritten.
-    let legacy_release = |h: &Path, tag: &str, commit: &str, bytes: &'static [u8]| {
-        let dir = h.join("ind-sadr-rust-releases/old");
-        fs::write(dir.join("sadr-rs"), bytes).unwrap();
-        fs::write(
-            dir.join("release.json"),
-            serde_json::json!({
-                "tag": tag,
-                "source_commit": commit,
-                "target": TARGET,
-                "sha256": digest(bytes),
-            })
-            .to_string(),
-        )
-        .unwrap();
-    };
-    let legacy_remote = "github-ind-sadr:TharunChougoni/ind-sadr.git";
+    // An installed release the configured distribution does not publish under
+    // its recorded identity refuses before any effect.
     let home = fixture();
     let h = home.path();
-    legacy_release(h, "v0.5.46", &"e".repeat(40), b"legacy");
-    let legacy = DistributionMigration {
-        from_remote: legacy_remote.into(),
-        installed_tag: "v0.5.46".into(),
-        installed_source_commit: "e".repeat(40),
-        installed_sha256: digest(b"legacy"),
-    };
+    let dir = h.join("ind-sadr-rust-releases/old");
+    fs::write(dir.join("sadr-rs"), b"legacy").unwrap();
+    fs::write(
+        dir.join("release.json"),
+        serde_json::json!({
+            "tag": "v0.5.46",
+            "source_commit": "e".repeat(40),
+            "target": TARGET,
+            "sha256": digest(b"legacy"),
+        })
+        .to_string(),
+    )
+    .unwrap();
     let target = Selection::new(Some("v0.6.0"), None).unwrap();
     let mut host = Fake::new(h);
     assert_eq!(
-        apply_selected_migrating(h, &mut host, false, false, false, &target, None),
+        apply_selected(h, &mut host, false, false, false, &target),
         Err("installed_release_identity_mismatch")
     );
-    let mut wrong = legacy.clone();
-    wrong.installed_sha256 = digest(b"other");
-    assert_eq!(
-        apply_selected_migrating(h, &mut host, false, false, false, &target, Some(&wrong)),
-        Err("distribution_migration_mismatch")
-    );
-    // A preview may pass admission; nothing is stopped, swapped or recorded.
-    assert_eq!(
-        apply_selected_migrating(h, &mut host, true, false, false, &target, Some(&legacy)),
-        Ok("available")
-    );
     assert!(host.restarts.is_empty() && host.stops == 0);
-    assert_eq!(
-        apply_selected_migrating(h, &mut host, false, false, false, &target, Some(&legacy)),
-        Ok("distribution_migrated_and_updated")
-    );
-    let receipt: serde_json::Value = serde_json::from_slice(
-        &fs::read(h.join(".local/state/ind-sadr/distribution-migration.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(receipt["installed"]["tag"], "v0.5.46");
-    assert_eq!(receipt["from_remote"], legacy_remote);
-    assert_eq!(receipt["adopted"]["tag"], "v0.6.0");
-    assert_eq!(receipt["adopted"]["source_commit"], "a".repeat(40));
-    // The superseded release keeps its original bytes as the rollback target.
-    assert_eq!(
-        fs::read(h.join("ind-sadr-rust-releases/old/sadr-rs")).unwrap(),
-        b"legacy"
-    );
-    assert_eq!(
-        fs::read(h.join("ind-sadr-rust-current/sadr-rs")).unwrap(),
-        b"candidate"
-    );
-    assert_eq!(
-        apply_selected_migrating(
-            h,
-            &mut host,
-            false,
-            false,
-            false,
-            &Selection::default(),
-            Some(&legacy)
-        ),
-        Err("distribution_migration_tag_required")
-    );
-    // A tag the new distribution still publishes is a normal install, not a rebind.
-    let home = fixture();
-    let h = home.path();
-    legacy_release(h, "v0.6.0", &"e".repeat(40), b"candidate");
-    let mut host = Fake::new(h);
-    let still_published = DistributionMigration {
-        from_remote: legacy_remote.into(),
-        installed_tag: "v0.6.0".into(),
-        installed_source_commit: "e".repeat(40),
-        installed_sha256: digest(b"candidate"),
-    };
-    assert_eq!(
-        apply_selected_migrating(
-            h,
-            &mut host,
-            false,
-            false,
-            false,
-            &target,
-            Some(&still_published)
-        ),
-        Err("distribution_migration_not_required")
-    );
-    assert!(host.restarts.is_empty() && host.stops == 0);
-    // A rebind never moves the host to an older or equal tag.
-    let home = fixture();
-    let h = home.path();
-    legacy_release(h, "v0.9.0", &"e".repeat(40), b"legacy");
-    let mut host = Fake::new(h);
-    host.installed_version = Some("v0.9.0".into());
-    let ahead = DistributionMigration {
-        from_remote: legacy_remote.into(),
-        installed_tag: "v0.9.0".into(),
-        installed_source_commit: "e".repeat(40),
-        installed_sha256: digest(b"legacy"),
-    };
-    assert_eq!(
-        apply_selected_migrating(h, &mut host, false, false, false, &target, Some(&ahead)),
-        Err("distribution_migration_version_not_advanced")
-    );
-    assert!(host.restarts.is_empty() && host.stops == 0);
-    // The declaration is inert unless this run asks for it, and a malformed or
-    // self-conflicting declaration refuses before repository or host access.
-    let config = Config {
-        alert_webhook_file: None,
-        remote: "github-nivra:TharunChougoni/nivra.git".into(),
-        paper_config: PathBuf::from("/paper.json"),
-        distribution_migration: Some(legacy.clone()),
-    };
-    assert!(matches!(declared_migration(&config, false, None), Ok(None)));
-    assert!(matches!(
-        declared_migration(&config, true, None),
-        Err("distribution_migration_tag_required")
-    ));
-    assert!(matches!(
-        declared_migration(&config, true, Some("v0.6.0")),
-        Ok(Some(_))
-    ));
-    let mut conflicting = config.clone();
-    conflicting.remote = legacy_remote.into();
-    assert!(matches!(
-        declared_migration(&conflicting, true, Some("v0.6.0")),
-        Err("invalid_distribution_migration")
-    ));
     assert!(valid_remote("github-nivra:TharunChougoni/nivra.git"));
-    assert!(valid_remote(legacy_remote));
+    assert!(valid_remote("github-ind-sadr:TharunChougoni/ind-sadr.git"));
     assert!(!valid_remote("https://github.com/TharunChougoni/nivra.git"));
     assert!(!valid_remote("github-nivra:Tharun Chougoni/nivra.git"));
-    let migration_cli = crate::Args::try_parse_from([
-        "sadr-rs",
-        "update",
-        "--config",
-        "config.json",
-        "--tag",
-        "v0.6.0",
-        "--migrate-distribution",
-    ])
-    .unwrap();
-    assert!(matches!(
-        migration_cli.command,
-        crate::Command::Update {
-            migrate_distribution: true,
-            ..
-        }
-    ));
     // A tag whose CI assets are not yet published: the timer defers cleanly.
     {
         let home = fixture();

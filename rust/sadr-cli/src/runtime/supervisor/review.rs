@@ -757,7 +757,6 @@ pub(super) fn schedule_input(
         enabled: true,
         closed,
         report_present,
-        disposed: c.directory.join("closed-planner-disposition.json").exists(),
         parked: state.is_some_and(|state| state.parked.is_some()),
         // A corrupt or unreadable log is never mistaken for idle (#233).
         busy: !log.pending_checked().idle() || log.handoff().is_some(),
@@ -1511,7 +1510,6 @@ pub(super) fn exercise() {
         enabled: true,
         closed: true,
         report_present: true,
-        disposed: false,
         parked: false,
         busy: false,
         attempted: false,
@@ -1531,7 +1529,6 @@ pub(super) fn exercise() {
         (json!({"attempt_conflict":true}), "invalid"),
         (json!({"attempted":true}), "attempted"),
         (json!({"session_day":false}), "invalid"),
-        (json!({"disposed":true}), "disposed"),
         (json!({"now_ms":201}), "expired"),
         (json!({"parked":true}), "parked"),
         (json!({"busy":true}), "busy"),
@@ -1548,9 +1545,6 @@ pub(super) fn exercise() {
         }
         if let Some(value) = mutate.get("report_present").and_then(Value::as_bool) {
             input.report_present = value;
-        }
-        if let Some(value) = mutate.get("disposed").and_then(Value::as_bool) {
-            input.disposed = value;
         }
         if let Some(value) = mutate.get("parked").and_then(Value::as_bool) {
             input.parked = value;

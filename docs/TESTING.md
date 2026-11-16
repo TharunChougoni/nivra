@@ -63,7 +63,7 @@ Manual browser fixtures qualify layout/interaction only, not market acceptance.
 | Grants | Model fixtures: exact identity/origin, fenced refresh, expired/mismatched refusal, live-catalog admission |
 | Data/history | Parser/download/preparation fixtures: source times, malformed rows, immutable receipts, missing bars, original shared quota and partial coverage |
 | Dashboard | Runtime web/history tests: bearer/Host/method/origin checks, bounded inputs, redaction, identity/hash failures and no trading controls |
-| Delivery | Updater/bootstrap/preflight tests: immutable tags/checksums, HOLD/blackout/book admission, failed health rollback and interrupted transaction |
+| Delivery | Updater/preflight tests: immutable tags/checksums, HOLD/blackout/book admission, failed health rollback and interrupted transaction |
 | Research | `sadr-research` contracts: registration hashes, leases, malicious output, cancellation/uncertain-worker recovery; no unsandboxed fallback |
 | Full-day replay | Virtual 09:15–15:30 scripted flow, paper buy/sell, fees/cash reconciliation, timeout no-halt, future receipt refusal, original inputs unchanged |
 

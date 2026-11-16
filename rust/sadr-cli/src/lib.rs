@@ -2,10 +2,6 @@
 pub mod native_transport;
 pub mod orchestrator;
 
-pub mod bootstrap;
-pub mod bootstrap_cli;
-pub mod bootstrap_stage;
-
 pub mod dashboard_host;
 pub mod lock;
 pub mod model_stream;

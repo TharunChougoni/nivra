@@ -13,10 +13,4 @@ Production calendars and instrument metadata must be supplied with provenance.
 manifest per receipt retained for the history reuse regression. These are real
 candle evidence, not synthetic prices or calendar proof.
 
-`rust/bootstrap-paper.example.json` is a sanitized legacy delivery-test fixture,
-not an installation template. Its home and filesystem IDs are synthetic;
-account/scope aliases, dates and paper-policy values remain compatibility
-literals required by the legacy validators, not broker account IDs or balances.
-Never install this fixture or substitute it for an original journal binding.
-
 `upstox_full_quote_doc_example.json` is derived from the documented NHPC Full Market Quote example; source: https://upstox.com/developer/api-documentation/get-full-market-quote/ (2026-10-27). It is documentation evidence, not a captured market receipt.

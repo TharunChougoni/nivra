@@ -550,9 +550,6 @@ pub(super) fn protective_carry_evidence(c: &Config, db: &Connection) -> Result<O
 pub(super) fn review(c: &Config) -> Result<Value> {
     let (db, body) = bound_state(c)?;
     let (open, stopped, halted, closed) = book_flags(&body)?;
-    if let Some(disposed) = closed_incident::accepted_review(c, &db, &body)? {
-        return Ok(disposed);
-    }
     if closed
         && open == 0
         && !halted
@@ -815,9 +812,6 @@ pub(super) fn preview(c: &Config, now: i64) -> Result<Value> {
         return Ok(json!({"status":PreviewStatus::CurrentSession.as_str(),"session":c.session}));
     }
     let old = review(c)?;
-    if old["reason"] == closed_incident::REASON && old["target_session"] != day.to_string() {
-        return Err("disposition_target_session_mismatch".into());
-    }
     Ok(
         json!({"status":PreviewStatus::from_review(old["status"].as_str().and_then(|status| SealVerdict::parse(status).ok()), minute(now)).as_str(),"session":day,"previous_session":c.next_sessions(day)?.1,"session_dir":root(c)?.join(day.to_string()),"review":old,"strategy_decision":decision(c,&old,day)?,"live_enabled":false}),
     )
@@ -906,13 +900,6 @@ fn verify_carry_with(c: &Config, value: &Value, immutable: bool) -> Result<()> {
     {
         return Err("carry_source_changed".into());
     }
-    if closed_incident::approved(&prior, &db, &body)?.is_some() {
-        let p = closed_incident::successor(&prior, &db, &body, c.session)?;
-        if value["portfolio"] != serde_json::to_value(p)? {
-            return Err("carry_state_changed".into());
-        }
-        return Ok(());
-    }
     let mut p: Portfolio = serde_json::from_str(&body)?;
     if let Some(receipt) = accepted_halted_carry(&prior, &db, &body)? {
         // Halt stays sticky: only the reviewed protection-only successor is admitted.
@@ -951,7 +938,6 @@ pub(super) fn advance(c: &Config, now: i64) -> Result<Option<Config>> {
         && old["reason"] != STOPPED_CARRY_REASON
         && old["reason"] != HALTED_CARRY_REASON
         && old["reason"] != ACK_REASON
-        && old["reason"] != closed_incident::REASON
     {
         atomic(&c.directory.join("review.json"), old)?;
     }
@@ -1000,18 +986,11 @@ pub(super) fn advance(c: &Config, now: i64) -> Result<Option<Config>> {
         &plan["strategy_decision"],
     )?;
     let (source_db, body) = bound_state(c)?;
-    let disposed = closed_incident::approved(c, &source_db, &body)?.is_some();
     if let Ok(mut p) = serde_json::from_str::<Portfolio>(&body)
-        && (p.model_led || disposed)
+        && p.model_led
     {
-        let halted_acceptance = if disposed {
-            None
-        } else {
-            accepted_halted_carry(c, &source_db, &body)?
-        };
-        if disposed {
-            p = closed_incident::successor(c, &source_db, &body, next.session)?;
-        } else if halted_acceptance.is_some() {
+        let halted_acceptance = accepted_halted_carry(c, &source_db, &body)?;
+        if halted_acceptance.is_some() {
             // Carried as halted protection-only: the halt, positions and source
             // evidence are preserved; entries stay blocked until planner-recover.
             if p.stopped || !p.halted || !p.closed || p.positions.is_empty() {
@@ -1205,7 +1184,6 @@ pub(super) fn controller_lock(c: &Config) -> Result<ControllerLock> {
 pub(super) fn record_review(c: &Config) -> Result<()> {
     let reviewed = review(c)?;
     if reviewed["reason"] == ACK_REASON
-        || reviewed["reason"] == closed_incident::REASON
         || reviewed["reason"] == STOPPED_CARRY_REASON
         || reviewed["reason"] == HALTED_CARRY_REASON
     {
@@ -1235,7 +1213,6 @@ pub(super) fn update_book(path: &Path) -> Result<BookAdmission> {
     let c = current(&c)?;
     let (db, body) = bound_state(&c)?;
     let (open, _stopped, halted, closed) = book_flags(&body)?;
-    let approved = closed_incident::approved(&c, &db, &body)?.is_some();
     let portfolio = serde_json::from_str::<Portfolio>(&body).ok();
     let pending = portfolio
         .as_ref()
@@ -1260,17 +1237,16 @@ pub(super) fn update_book(path: &Path) -> Result<BookAdmission> {
         open_positions: open,
         pending_orders: pending,
         halted,
-        flat_safe: open == 0 && closed && (!halted || approved),
+        flat_safe: open == 0 && closed && !halted,
         // Carried holdings are allowed because the book is preserved and the
         // controller stays stopped until an explicit resume. A closed flat book
         // needs no restart either, even when a planner halt remains: this is the
         // reviewed path that deploys first and clears the halt with the new
         // release, avoiding a cross-version authority rebind (#158).
-        stopped_safe: approved
-            || portfolio.as_ref().is_some_and(|p| {
-                super::wide::pending_orders(p) == 0
-                    && ((p.stopped && !p.halted) || (p.closed && p.positions.is_empty()))
-            }),
+        stopped_safe: portfolio.as_ref().is_some_and(|p| {
+            super::wide::pending_orders(p) == 0
+                && ((p.stopped && !p.halted) || (p.closed && p.positions.is_empty()))
+        }),
         carried_safe,
     })
 }

@@ -527,29 +527,6 @@ pub fn planner_authority_repair_entry(
         }
     }
 }
-pub fn planner_authority_migrate_entry(path: &Path, confirm: bool) -> ExitCode {
-    if !confirm {
-        eprintln!(
-            "planner_authority_migrate_refused: planner_authority_migrate_confirm_paper_review_required"
-        );
-        return ExitCode::FAILURE;
-    }
-    let result = (|| -> Result<()> {
-        let bytes = crate::read_bounded(path, 16384).map_err(|_| "config_unreadable")?;
-        let c: Config = serde_json::from_slice(&bytes).map_err(|_| "config_invalid")?;
-        wide::planner_authority_migrate(&c, true)
-    })();
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!(
-                "planner_authority_migrate_refused: {}",
-                failure_code(error.as_ref())
-            );
-            ExitCode::FAILURE
-        }
-    }
-}
 pub fn history_recover_entry(
     path: &Path,
     now: Option<DateTime<FixedOffset>>,
