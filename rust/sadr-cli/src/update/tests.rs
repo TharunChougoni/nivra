@@ -843,6 +843,7 @@ fn update_decision_verifies_and_defers_then_activates_or_rolls_back() {
         let elapsed = std::cell::Cell::new(Duration::ZERO);
         let mut attempts = 0;
         let result = poll_health(
+            Duration::from_secs(60),
             || Ok(0),
             || {
                 attempts += 1;
@@ -858,9 +859,32 @@ fn update_decision_verifies_and_defers_then_activates_or_rolls_back() {
         assert_eq!(result.is_ok(), ready_after <= 30);
         assert!(elapsed.get() <= Duration::from_secs(60));
     }
+    // A slow but healthy restart is admitted inside the longer bounded wait;
+    // the failure budget still refuses an unresponsive dashboard.
+    let elapsed = std::cell::Cell::new(Duration::ZERO);
+    let mut attempts = 0;
+    assert!(
+        poll_health(
+            HEALTH_WAIT,
+            || Ok(0),
+            || {
+                attempts += 1;
+                if attempts > 100 {
+                    paper_health_at(body, "v0.6.0", now)
+                } else {
+                    Err("update_dashboard_health_failed")
+                }
+            },
+            || elapsed.get(),
+            |delay| elapsed.set(elapsed.get() + delay),
+        )
+        .is_ok()
+    );
+    assert!(elapsed.get() <= HEALTH_WAIT);
     let mut checks = 0;
     assert_eq!(
         poll_health(
+            Duration::from_secs(60),
             || {
                 checks += 1;
                 Ok(u64::from(checks > 2))
@@ -873,6 +897,7 @@ fn update_decision_verifies_and_defers_then_activates_or_rolls_back() {
     );
     assert_eq!(
         poll_health(
+            Duration::from_secs(60),
             || Err("update_service_unhealthy"),
             || panic!("inactive service must not be probed"),
             || Duration::ZERO,

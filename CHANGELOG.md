@@ -1,5 +1,16 @@
 # Source snapshot
 
+## 0.9.30 — 2026-11-16
+
+Wait for a slow but healthy controller restart before calling an activation
+failed. A restart re-derives pre-open history coverage, and on a large receipt
+corpus that took about 150 seconds on the paper host while the updater allowed
+only 60 seconds. The healthy candidate was reported as `update_dashboard_health_failed`
+and the rollback restart failed the same way, leaving the book stopped. The
+authenticated health wait is now a named 240-second bound; it is still a bound,
+still requires the same healthy projection, and still rolls back on a real
+failure.
+
 ## 0.9.29 — 2026-11-16
 
 Give the decision owner a digest in words instead of a data dump. The owner

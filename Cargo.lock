@@ -1234,7 +1234,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sadr-cli"
-version = "0.9.29"
+version = "0.9.30"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1262,7 +1262,7 @@ dependencies = [
 
 [[package]]
 name = "sadr-core"
-version = "0.9.29"
+version = "0.9.30"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -1276,7 +1276,7 @@ dependencies = [
 
 [[package]]
 name = "sadr-research"
-version = "0.9.29"
+version = "0.9.30"
 dependencies = [
  "libc",
  "rig-core",
@@ -1289,7 +1289,7 @@ dependencies = [
 
 [[package]]
 name = "sadr-sandbox"
-version = "0.9.29"
+version = "0.9.30"
 dependencies = [
  "chrono",
  "libc",
@@ -1303,7 +1303,7 @@ dependencies = [
 
 [[package]]
 name = "sadr-store"
-version = "0.9.29"
+version = "0.9.30"
 dependencies = [
  "chrono",
  "libc",
@@ -1318,7 +1318,7 @@ dependencies = [
 
 [[package]]
 name = "sadr-tools"
-version = "0.9.29"
+version = "0.9.30"
 dependencies = [
  "chrono",
  "clap",

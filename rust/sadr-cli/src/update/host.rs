@@ -232,7 +232,14 @@ pub(crate) fn paper_health_at(body: &[u8], tag: &str, now_ms: i64) -> Result<()>
     }
     Ok(())
 }
+/// Bounded wait for a restarted controller to answer authenticated health.
+/// A controller re-derives history coverage at startup, which on a large receipt
+/// corpus takes minutes; a shorter wait reported a healthy-but-slow restart as a
+/// failed activation and then failed its rollback restart the same way. The wait
+/// stays bounded and is never treated as permission to skip health.
+pub(crate) const HEALTH_WAIT: Duration = Duration::from_secs(240);
 pub(crate) fn poll_health(
+    budget: Duration,
     mut service: impl FnMut() -> Result<u64>,
     mut probe: impl FnMut() -> Result<()>,
     mut elapsed: impl FnMut() -> Duration,
@@ -250,7 +257,7 @@ pub(crate) fn poll_health(
         if result.is_ok() {
             return Ok(());
         }
-        let remaining = Duration::from_secs(60).saturating_sub(elapsed());
+        let remaining = budget.saturating_sub(elapsed());
         if remaining.is_zero() {
             return Err("update_dashboard_health_failed");
         }
@@ -623,6 +630,7 @@ impl Host for RealHost {
         }
         let start = Instant::now();
         poll_health(
+            HEALTH_WAIT,
             || {
                 if !service_active()? {
                     return Err("update_service_unhealthy");
