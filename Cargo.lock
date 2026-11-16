@@ -1266,7 +1266,6 @@ version = "0.9.33"
 dependencies = [
  "chrono",
  "chrono-tz",
- "csv",
  "rust_decimal",
  "serde",
  "serde_json",
