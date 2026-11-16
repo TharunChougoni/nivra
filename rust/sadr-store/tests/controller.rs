@@ -123,45 +123,6 @@ fn initialization_never_adopts_existing_books_and_corruption_is_denied() {
 }
 
 #[test]
-fn dashboard_lists_sessions_read_only_with_bounded_allowlisted_stale_projections() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("registry.sqlite");
-    let mut writer = Connection::open(&path).unwrap();
-    controller::initialize(&mut writer).unwrap();
-    let first = book();
-    let mut second_id = first.id().clone();
-    second_id.date = ExchangeDate::parse("2026-10-16").unwrap();
-    controller::create(&mut writer, first).unwrap();
-    controller::create(
-        &mut writer,
-        Book::open(second_id, &"cd".repeat(32)).unwrap(),
-    )
-    .unwrap();
-    let mut db =
-        Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-    let page = controller::sessions(&mut db, 1).unwrap();
-    assert!(page.truncated);
-    assert_eq!(page.sessions.len(), 1);
-    assert_eq!(page.sessions[0].id.date.to_string(), "2026-10-16");
-    assert!(page.sessions[0].stale);
-    assert!(!page.sessions[0].trading_controls);
-    assert!(db.is_autocommit());
-    let json = serde_json::to_string(&page).unwrap();
-    assert!(!json.contains("policy_hash"));
-    assert!(!json.contains(&"cd".repeat(32)));
-    assert_eq!(controller::sessions(&mut db, 0), Err(Error::InvalidState));
-    assert_eq!(controller::sessions(&mut db, 101), Err(Error::InvalidState));
-    assert!(!controller::sessions(&mut db, 100).unwrap().truncated);
-    assert_eq!(
-        writer
-            .query_row("SELECT count(*) FROM controller_days", [], |r| r
-                .get::<_, i64>(0))
-            .unwrap(),
-        2
-    );
-}
-
-#[test]
 fn terminal_completion_survives_reopen_and_cannot_wake_as_the_same_primary_day() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("controller.sqlite");

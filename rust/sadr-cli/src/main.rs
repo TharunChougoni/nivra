@@ -264,15 +264,10 @@ enum Command {
         #[arg(long)]
         apply: bool,
     },
-    /// Persistent authenticated read-only history for an explicit controller registry.
+    /// Research-only authenticated loopback dashboard (Backtest lab, verification); no controller state.
     Dashboard {
         #[arg(long)]
-        registry: Option<PathBuf>,
-        #[arg(long)]
         token_file: PathBuf,
-        /// Explicit dashboard-history.json index of immutable reports and published reviews.
-        #[arg(long)]
-        history: Option<PathBuf>,
         /// Read the redacted model feed from this explicitly bound paper config.
         #[arg(long)]
         model_config: Option<PathBuf>,
@@ -641,16 +636,9 @@ fn main() -> ExitCode {
             apply,
         } => runtime::retention::entry(&config, apply),
         Command::Dashboard {
-            registry,
             token_file,
-            history,
             model_config,
-        } => runtime::registry::entry(
-            registry.as_deref(),
-            &token_file,
-            history.as_deref(),
-            model_config.as_deref(),
-        ),
+        } => runtime::research_dashboard::entry(&token_file, model_config.as_deref()),
         Command::Rollover {
             config,
             now,

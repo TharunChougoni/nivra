@@ -52,12 +52,12 @@ const V2: &[(&str, &str, &[u8])] = &[
 fn v2_asset(path: &str) -> Option<(&'static str, &'static Asset)> {
     static ASSETS: OnceLock<Vec<Asset>> = OnceLock::new();
     let name = match path {
-        "/" | "/v2" | "/v2/" | "/v2/index.html" => "index.html",
-        "/app.js" | "/v2/app.js" => "app.js",
-        "/app.css" | "/v2/app.css" => "app.css",
-        "/uPlot.esm.js" | "/v2/uPlot.esm.js" => "uPlot.esm.js",
-        "/v2/SOURCES.md" => "SOURCES.md",
-        "/v2/LICENSES.txt" => "LICENSES.txt",
+        "/" => "index.html",
+        "/app.js" => "app.js",
+        "/app.css" => "app.css",
+        "/uPlot.esm.js" => "uPlot.esm.js",
+        "/SOURCES.md" => "SOURCES.md",
+        "/LICENSES.txt" => "LICENSES.txt",
         _ => return None,
     };
     let index = V2.iter().position(|(file, _, _)| *file == name)?;
@@ -233,16 +233,7 @@ struct BacktestInput {
     events: String,
 }
 fn research_available(v: &serde_json::Value) -> bool {
-    matches!(v["mode"].as_str(), Some("research" | "registry"))
-        && !v["unavailable"].as_bool().unwrap_or(false)
-        && v["sessions"].as_array().is_none_or(|rows| {
-            rows.iter().all(|r| {
-                matches!(
-                    r["phase"].as_str(),
-                    Some("Sleep" | "ReviewQueued" | "Completed" | "Blocked" | "Halted" | "Skipped")
-                ) && r["pending_effect"] != true
-            })
-        })
+    v["mode"] == "research"
 }
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
@@ -384,16 +375,13 @@ fn dispatch_inner(
     let request_path = line
         .strip_prefix("GET ")
         .and_then(|v| v.strip_suffix(" HTTP/1.1"));
-    if let Some(path) = request_path {
-        if let Some((kind, asset)) = v2_asset(path) {
-            // Shell assets use stable filenames, so a long max-age would keep
-            // serving a previous UI after deployment. Always revalidate with
-            // the content ETag instead; a matching browser gets the cheap 304.
-            return asset_reply(head, kind, asset, Cow::Borrowed("no-cache"));
-        }
-        if path.starts_with("/v2/") {
-            return error("404 Not Found", "v2_asset_not_found");
-        }
+    if let Some(path) = request_path
+        && let Some((kind, asset)) = v2_asset(path)
+    {
+        // Shell assets use stable filenames, so a long max-age would keep
+        // serving a previous UI after deployment. Always revalidate with
+        // the content ETag instead; a matching browser gets the cheap 304.
+        return asset_reply(head, kind, asset, Cow::Borrowed("no-cache"));
     }
     error("404 Not Found", "route_not_found")
 }
@@ -862,8 +850,6 @@ mod tests {
         for (name, kind, bytes) in V2 {
             let route = if *name == "index.html" {
                 "GET /".to_owned()
-            } else if matches!(*name, "SOURCES.md" | "LICENSES.txt") {
-                format!("GET /v2/{name}")
             } else {
                 format!("GET /{name}")
             };
@@ -883,22 +869,18 @@ mod tests {
             assert_eq!(cached.code, "304 Not Modified", "{name}");
             assert!(cached.body.is_empty(), "{name}");
         }
-        for (route, expected) in [
-            ("GET /v2", V2[0].2),
-            ("GET /v2/", V2[0].2),
-            ("GET /v2/app.js", V2[1].2),
-            ("GET /v2/app.css", V2[3].2),
+        for route in [
+            "GET /v2",
+            "GET /v2/",
+            "GET /v2/app.js",
+            "GET /v2/SOURCES.md",
         ] {
             assert_eq!(
-                dispatch(&head(route, ""), b"", "fixture", &view(), None).body,
-                expected,
+                dispatch(&head(route, ""), b"", "fixture", &view(), None).code,
+                "404 Not Found",
                 "{route}"
             );
         }
-        assert_eq!(
-            dispatch(&head("GET /legacy/", ""), b"", "fixture", &view(), None).code,
-            "404 Not Found"
-        );
         let gzip = dispatch(
             &head("GET /app.js", "Accept-Encoding: gzip\r\n"),
             b"",
@@ -1745,15 +1727,12 @@ mod tests {
         );
     }
     #[test]
-    fn trading_and_active_registry_phases_do_not_admit_research_compute() {
+    fn only_the_research_dashboard_admits_research_compute() {
         assert!(!research_available(
             &serde_json::json!({"status":"scanning"})
         ));
-        assert!(!research_available(
-            &serde_json::json!({"mode":"registry","sessions":[{"phase":"Running"}]})
-        ));
         assert!(research_available(
-            &serde_json::json!({"mode":"registry","sessions":[{"phase":"Completed","pending_effect":false}]})
+            &serde_json::json!({"mode":"research","status":"research_only"})
         ));
         let v = view();
         v.lock().unwrap()["mode"] = serde_json::json!("paper");

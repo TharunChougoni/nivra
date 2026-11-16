@@ -18,7 +18,6 @@ import {
   reconcileSeries,
   route,
   identities,
-  groupRole,
   sessions,
   strategyLinkFor,
   strategyReferences,
@@ -240,18 +239,17 @@ test("display downsampling preserves extrema, endpoints and explicit gaps", () =
     points.slice(0, 4),
   );
 });
-test("two identities retain separate legacy review allowances and bounded archive routes", () => {
+test("two identities and bounded archive routes", () => {
   const ids = identities({
     readiness: {
       models: {
         roles: [
+          { role: "digest", model: "luna", remaining_current: 10 },
           {
             role: "orchestrator",
             model: "one-access-identity",
             remaining_current: 10,
           },
-          { role: "operations", remaining_current: 3 },
-          { role: "strategy", remaining_current: 8 },
         ],
       },
     },
@@ -259,35 +257,22 @@ test("two identities retain separate legacy review allowances and bounded archiv
   assert.equal(ids.length, 2);
   assert.equal(ids[1].label, "Orchestrator");
   assert.equal(ids[1].role!.model, "one-access-identity");
-  assert.deepEqual(
-    ids[1].legacy.map((v) => v.remaining_current),
-    [3, 8],
-  );
-  assert.equal(groupRole("supervisor"), "orchestrator");
-  assert.equal(groupRole("scorer"), "orchestrator");
-  assert.equal(groupRole("decide"), "decide");
   assert.deepEqual(route("#/runs/harness-digest-1"), {
     name: "models",
     run: "harness-digest-1",
   });
   assert.deepEqual(route("#/runs/../secret"), { name: "missing" });
-  assert.deepEqual(route("#/now"), { name: "overview" });
+  assert.deepEqual(route("#/now"), { name: "missing" });
   assert.deepEqual(route("#/chat"), { name: "missing" });
 });
-test("approval projection identities stay separate from legacy task grants", () => {
+test("approval projection identities label digest and orchestrator", () => {
   const ids = identities({
     approvals: {
       identities: [
         { identity: "digest", role: { role: "digest", model: "luna" } },
-        { identity: "decide", role: { role: "decide", model: "grok" } },
         {
           identity: "orchestrator",
-          role: { role: "operations", model: "shared" },
-          tasks: [
-            { role: "operations", remaining_current: 4 },
-            { role: "strategy", remaining_current: 9 },
-            { role: "scorer", remaining_current: 2 },
-          ],
+          role: { role: "orchestrator", model: "shared" },
         },
       ],
     },
@@ -297,10 +282,6 @@ test("approval projection identities stay separate from legacy task grants", () 
     ["Digest", "Orchestrator"],
   );
   assert.equal(ids[1].role!.model, "shared");
-  assert.deepEqual(
-    ids[1].legacy.map((v) => v.role),
-    ["operations", "strategy", "scorer"],
-  );
 });
 test("v1 sessions merge the current projection and preserve archived fill order", () => {
   const state = {
