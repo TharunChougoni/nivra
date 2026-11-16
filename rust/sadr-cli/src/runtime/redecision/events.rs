@@ -4,11 +4,9 @@ use crate::runtime::phases::PlannerLogPhase;
 /// Make one durable owner recheck for a terminal registered-analysis task.
 /// The event identity is bound to the book/task revision rather than a clock,
 /// so a driver restart can retry insertion without manufacturing another wake.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn enqueue_owner_research_event(
     db: &Connection,
     c: &Config,
-    cfg: &PlannerConfig,
     task_id: &str,
     revision: u32,
     result_sha256: Option<&str>,
@@ -18,7 +16,6 @@ pub(crate) fn enqueue_owner_research_event(
     enqueue_owner_research_event_kind(
         db,
         c,
-        cfg,
         task_id,
         revision,
         result_sha256,
@@ -34,7 +31,6 @@ pub(crate) fn enqueue_owner_research_event(
 pub(crate) fn enqueue_owner_research_event_kind(
     db: &Connection,
     c: &Config,
-    cfg: &PlannerConfig,
     task_id: &str,
     revision: u32,
     result_sha256: Option<&str>,
@@ -54,8 +50,7 @@ pub(crate) fn enqueue_owner_research_event_kind(
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     });
     let result_matches_status = (status == "succeeded") == result_sha256.is_some();
-    if !cfg.orchestrator_owns_decisions()
-        || revision == 0
+    if revision == 0
         || !valid_id
         || !valid_result_hash
         || !result_matches_status

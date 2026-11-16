@@ -202,8 +202,7 @@ pub(crate) fn enqueue_digest(
     previous_cadence_facts: Option<&str>,
 ) -> Result<bool> {
     planner::validate_saved(c, plan)?;
-    if !cfg.orchestrator_owns_decisions()
-        || plan["owner_digest"]["version"] != 1
+    if plan["owner_digest"]["version"] != 1
         || !plan["owner_digest"]["digest"].is_object()
         || !plan["owner_digest"]["tool_results"].is_array()
         || plan["luna_handoff_requested"] != false
@@ -369,8 +368,7 @@ fn current(
     claim: &Claim,
     now: i64,
 ) -> Result<()> {
-    if !cfg.orchestrator_owns_decisions() || claim.binding != book_binding(c)? || claim.version != 1
-    {
+    if claim.binding != book_binding(c)? || claim.version != 1 {
         return Err("owner_claim_binding_invalid".into());
     }
     if p.stopped || p.halted || p.closed || !p.model_led || !in_window(c, cfg, now) {

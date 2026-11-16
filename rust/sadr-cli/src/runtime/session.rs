@@ -83,7 +83,6 @@ pub(crate) struct Turn {
     pub prompt_version: String,
     /// Note-set version this turn was built from. A commit refuses if it moved.
     pub notes_version: u64,
-    pub decides_at_start: u32,
     pub fills_at_start: usize,
     pub started_at_ms: i64,
     /// Bounded trigger facts sent to the model. Untrusted observations only.
@@ -1648,7 +1647,6 @@ pub(crate) fn exercise() {
         trigger: "session_open".into(),
         prompt_version: prompt_version("system", "open {{notes}}"),
         notes_version: 0,
-        decides_at_start: 0,
         fills_at_start: 0,
         started_at_ms: 10,
         request: json!({
@@ -1885,7 +1883,6 @@ pub(crate) fn exercise() {
         trigger: "scanner_update".into(),
         prompt_version: "prompt-v2".into(),
         notes_version: 3,
-        decides_at_start: 1,
         fills_at_start: 0,
         started_at_ms: 50,
         request: json!({
@@ -1926,7 +1923,6 @@ pub(crate) fn exercise() {
         trigger: "portfolio_change".into(),
         prompt_version: "prompt-v2".into(),
         notes_version: 3,
-        decides_at_start: 1,
         fills_at_start: 0,
         started_at_ms: 70,
         request: json!({"evidence":{"source":"portfolio"}}),
@@ -1952,7 +1948,6 @@ pub(crate) fn exercise() {
         trigger: "idle".into(),
         prompt_version: "prompt-v2".into(),
         notes_version: 3,
-        decides_at_start: 1,
         fills_at_start: 0,
         started_at_ms: 90,
         request: json!({"evidence":{"source":"idle"}}),

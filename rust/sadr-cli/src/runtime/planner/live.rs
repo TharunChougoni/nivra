@@ -47,7 +47,7 @@ fn run(config: &Path, planner: &Path, output: &Path, symbols: &[String]) -> Resu
     }
     sadr_store::native_grant::file_path_ok(output).map_err(|_| "preview_path_invalid")?;
     let settings = PlannerConfig::load_for_session(planner, book.session)?;
-    settings.runtime_decision_owner_gate()?;
+    settings.validate_decision_owner()?;
     let digest_role = settings.role(Trigger::Digest);
     if !settings.enabled || !digest_role.enabled {
         return Err("model_plan_unavailable_no_trades".into());

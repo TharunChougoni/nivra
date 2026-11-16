@@ -747,9 +747,6 @@ pub struct Config {
     pub capital: Option<sadr_core::finance::Amount>,
     #[serde(default, skip_serializing)]
     pub prior_config: Option<PathBuf>,
-    /// Explicit migration of a proved missing/default legacy serialization field.
-    #[serde(default, skip_serializing)]
-    pub allow_legacy_model_led_default: bool,
 }
 pub(crate) fn default_model_readiness_check_interval_ms() -> i64 {
     60_000

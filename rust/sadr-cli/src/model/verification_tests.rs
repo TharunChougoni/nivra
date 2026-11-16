@@ -208,13 +208,12 @@ fn provider_diagnostics_and_probe_are_bounded_and_redacted() {
     let role = crate::runtime::planner::ModelRole {
         model_id: "grok-4.7".into(),
         transport: Transport::DirectOauth,
-        tools: vec!["web_search".into(), "x_search".into()],
         ..Default::default()
     };
     let frame = crate::runtime::harness::Frame {
-        role: "decide".into(),
+        role: "digest".into(),
         input: vec![json!({"role":"user","content":"synthetic"})],
-        tools: crate::runtime::harness::definitions("decide", &role.tools, true).unwrap(),
+        tools: crate::runtime::harness::definitions("digest", &role.tools, true).unwrap(),
         citation_ids: vec![],
         final_answer_only: false,
         review_only: false,
@@ -241,7 +240,7 @@ fn provider_diagnostics_and_probe_are_bounded_and_redacted() {
         decision_evidence: true,
         max_instrument_keys: Some(1),
         tools: crate::runtime::harness::configured_definitions(
-            "decide",
+            "digest",
             &role.tools,
             true,
             true,
@@ -260,31 +259,8 @@ fn provider_diagnostics_and_probe_are_bounded_and_redacted() {
         .unwrap_err(),
         "model_config_unreadable"
     );
-    // Luna is admitted as the decision model only without native search tools.
-    let mut luna = crate::runtime::planner::ModelRole {
-        model_id: LUNA.into(),
-        transport: Transport::OpenaiCodex,
-        ..Default::default()
-    };
-    let luna_frame = crate::runtime::harness::Frame {
-        tools: crate::runtime::harness::definitions("decide", &[], true).unwrap(),
-        ..serde_json::from_value(serde_json::to_value(&frame).unwrap()).unwrap()
-    };
-    let request = serde_json::to_string(&luna_frame).unwrap();
-    let missing = Path::new("/nonexistent-ind-sadr-model-config");
-    let mut provenance = Value::Null;
-    let error = planner_response(missing, &luna, &request, &mut provenance).unwrap_err();
-    assert_eq!(error, "model_config_unreadable");
-    luna.tools = vec!["web_search".into()];
-    let luna_frame = crate::runtime::harness::Frame {
-        tools: crate::runtime::harness::definitions("decide", &luna.tools, true).unwrap(),
-        ..serde_json::from_value(serde_json::to_value(&luna_frame).unwrap()).unwrap()
-    };
-    let request = serde_json::to_string(&luna_frame).unwrap();
-    let error = planner_response(missing, &luna, &request, &mut provenance).unwrap_err();
-    assert_eq!(error, "model_config_unreadable");
     let final_only = crate::runtime::harness::Frame {
-        role: "decide".into(),
+        role: "digest".into(),
         input: frame.input.clone(),
         tools: vec![],
         citation_ids: vec![],

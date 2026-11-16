@@ -251,7 +251,7 @@ fn session_prompts_bind_content_and_reject_unknown_placeholders() {
     for trigger in SessionTrigger::ALL {
         assert!(!trigger.default_prompt().is_empty());
     }
-    assert_eq!(SessionTrigger::ALL.len(), 13);
+    assert_eq!(SessionTrigger::ALL.len(), 11);
     assert!(
         SessionTrigger::Decision
             .facts()

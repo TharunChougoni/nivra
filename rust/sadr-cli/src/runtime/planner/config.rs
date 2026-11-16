@@ -25,11 +25,10 @@ pub(crate) struct ModelRole {
     pub max_read_tools: Option<usize>,
     #[serde(skip_serializing_if = "ModelRole::default_max_analysis_tools")]
     pub max_analysis_tools: usize,
+    /// Accepted for configuration compatibility; no current role reads it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minimum_turn_ms: Option<u64>,
-    /// Failed (unavailable) tool results a decide run may hand back to the model before it
-    /// aborts with `harness_decision_tool_failed_no_entries` (#43). Omission means
-    /// `DEFAULT_MAX_FAILED_TOOLS`; 0 restores abort-on-first-failure.
+    /// Accepted for configuration compatibility; no current role reads it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_failed_tools: Option<usize>,
     /// Explicit fallback for one call whose primary failed with a usage, rate
@@ -99,38 +98,16 @@ impl Default for ModelRole {
         }
     }
 }
-/// Unavailable tool results a decide may see before aborting, when config omits it.
-pub(crate) const DEFAULT_MAX_FAILED_TOOLS: usize = 3;
-/// One measured grok-4.7 decide turn from the 2026-10-21 paper session.
-pub(crate) const DEFAULT_TURN_MS: u64 = 100_000;
-/// Three 150-second calls when a decide role omits `run_timeout_ms`.
-pub(crate) const DEFAULT_RUN_MS: u64 = 450_000;
-/// Explicit decide run budget cap. Digest stays at the 120s role cap.
-pub(crate) const MAX_RUN_MS: u64 = 600_000;
 /// Serialized provider envelope bound as `output_cap` tokens times this many
-/// bytes. 2026-10-29 paper grok-4.7 decide turns with web_search serialized to
+/// bytes. 2026-10-29 paper grok-4.7 turns with web_search serialized to
 /// ~128–139 KiB, clipping the previous ×16 (128 KiB) check after HTTP 200.
 pub(crate) const OUTPUT_BYTE_CAP_MULTIPLIER: usize = 64;
 impl ModelRole {
     fn default_max_analysis_tools(v: &usize) -> bool {
         *v == 4
     }
-    pub(crate) fn max_failed_tools(&self) -> usize {
-        self.max_failed_tools.unwrap_or(DEFAULT_MAX_FAILED_TOOLS)
-    }
     pub(crate) fn run_budget_ms(&self) -> u64 {
         self.run_timeout_ms.unwrap_or(self.timeout_ms)
-    }
-    /// Decide omission is sized for real tool use. Other roles keep the request timeout.
-    pub(crate) fn invocation_budget_ms(&self, role: &str) -> u64 {
-        if let Some(budget) = self.run_timeout_ms {
-            return budget;
-        }
-        if role == "decide" {
-            DEFAULT_RUN_MS
-        } else {
-            self.timeout_ms
-        }
     }
     pub(crate) fn output_byte_limit(&self) -> usize {
         (self.output_cap as usize).saturating_mul(OUTPUT_BYTE_CAP_MULTIPLIER)

@@ -154,7 +154,6 @@ pub(crate) fn exercise() {
                     trigger: "idle".into(),
                     prompt_version: "prompt-a".into(),
                     notes_version: 0,
-                    decides_at_start: 0,
                     fills_at_start: 0,
                     started_at_ms: 1,
                     request: json!({"resume_binding_sha256":binding}),
@@ -262,7 +261,6 @@ pub(crate) fn exercise() {
                     trigger: "decision".into(),
                     prompt_version: "fixture".into(),
                     notes_version: 0,
-                    decides_at_start: 0,
                     fills_at_start: 0,
                     started_at_ms: 1,
                     request: original_request.clone(),
@@ -548,7 +546,6 @@ pub(crate) fn exercise() {
                     trigger: "idle".into(),
                     prompt_version: "fixture".into(),
                     notes_version: 0,
-                    decides_at_start: 0,
                     fills_at_start: 0,
                     started_at_ms: 1,
                     request: json!({"digest":"x".repeat(1_100_000)}),
@@ -840,12 +837,6 @@ pub(crate) fn exercise() {
     state.last_run_ms = Some(1_000);
     state.applied = Some(hashes.clone());
     assert_eq!(due(&state, &wake, 2_000, &input, &hashes), None);
-    state.luna_no_decide = 8;
-    assert_eq!(
-        due(&state, &wake, 1_000 + wake.min_interval_ms, &input, &hashes),
-        Some("luna_no_decide_streak")
-    );
-    state.luna_no_decide = 0;
     let filled = Inputs {
         fill_count: 1,
         ..input
@@ -890,18 +881,17 @@ pub(crate) fn exercise() {
         load(dir.path(), "2026-10-16").unwrap_err(),
         "supervisor_state_corrupt"
     );
-    note_luna(dir.path(), "2026-10-16", "decide");
+    assert!(with_state(dir.path(), "2026-10-16", |state| state.runs += 1).is_err());
     assert_eq!(fs::read(&corrupt).unwrap(), b"{not json");
-    assert!(dir.path().join("model/supervisor-error.json").is_file());
     fs::remove_file(&corrupt).unwrap();
-    // Concurrent note writers hold one load-modify-save section, so no handoff
-    // count is lost between lock acquisitions (#156).
+    // Concurrent writers hold one load-modify-save section, so no count is
+    // lost between lock acquisitions (#156).
     let threads: Vec<_> = (0..8)
         .map(|_| {
             let root = dir.path().to_path_buf();
             std::thread::spawn(move || {
                 for _ in 0..50 {
-                    note_luna(&root, "2026-10-16", "decide");
+                    with_state(&root, "2026-10-16", |state| state.runs += 1).unwrap();
                 }
             })
         })
@@ -909,43 +899,7 @@ pub(crate) fn exercise() {
     for thread in threads {
         thread.join().unwrap();
     }
-    assert_eq!(load(dir.path(), "2026-10-16").unwrap().decides, 400);
-    // A decide handed off during a run is not marked seen: finish records only
-    // the snapshot the turn was built from (#154).
-    let session = "2026-10-17";
-    with_state(dir.path(), session, |state| {
-        *state = State::fresh(session);
-        state.open_fired = true;
-        state.last_run_ms = Some(5_000);
-        state.applied = Some(hashes.clone());
-    })
-    .unwrap();
-    note_luna(dir.path(), session, "decide");
-    let snapshot = load(dir.path(), session).unwrap();
-    note_luna(dir.path(), session, "decide");
-    finish(
-        dir.path(),
-        session,
-        RunKind::Supervisor,
-        "session_open",
-        5_000 + wake.min_interval_ms,
-        true,
-        &hashes,
-        snapshot.decides,
-        None,
-    );
-    let after = load(dir.path(), session).unwrap();
-    assert_eq!((after.decides, after.seen_decides), (2, 1));
-    assert_eq!(
-        due(
-            &after,
-            &wake,
-            5_000 + 2 * wake.min_interval_ms,
-            &input,
-            &hashes
-        ),
-        Some("post_decide")
-    );
+    assert_eq!(load(dir.path(), "2026-10-16").unwrap().runs, 400);
     // A failed instruction store is a failed run, not an ok one; the next wake
     // retries and a successful store clears the failure (#155).
     let session = "2026-10-18";
@@ -1115,7 +1069,6 @@ pub(crate) fn exercise() {
                     trigger: "post_fill".into(),
                     prompt_version: "fixture".into(),
                     notes_version: 0,
-                    decides_at_start: 0,
                     fills_at_start: 0,
                     started_at_ms: 49_990,
                     request: json!({}),
@@ -1794,7 +1747,7 @@ pub(crate) fn exercise() {
         (RunKind::Compaction, "compaction"),
         (RunKind::Aside, "aside"),
     ] {
-        apply_finish(&mut streak, kind, reason, 3, true, &hashes, 0, None);
+        apply_finish(&mut streak, kind, reason, 3, true, &hashes, None);
         assert_eq!(streak.failures, wake.failure_streak);
     }
     assert_eq!(
@@ -1808,7 +1761,6 @@ pub(crate) fn exercise() {
         4,
         true,
         &hashes,
-        0,
         None,
     );
     assert_eq!(streak.failures, 0);
@@ -1929,7 +1881,6 @@ pub(crate) fn exercise() {
                 trigger: "decision".into(),
                 prompt_version: "fixture".into(),
                 notes_version: 0,
-                decides_at_start: 0,
                 fills_at_start: 0,
                 started_at_ms: interrupted_now,
                 request: json!({"host_decision": claim}),
@@ -2014,7 +1965,6 @@ pub(crate) fn exercise() {
                 trigger: "decision".into(),
                 prompt_version: "fixture".into(),
                 notes_version: 0,
-                decides_at_start: 0,
                 fills_at_start: 0,
                 started_at_ms: recovered_now,
                 request: json!({
@@ -2070,7 +2020,6 @@ pub(crate) fn exercise() {
                     trigger: "supervisor".into(),
                     prompt_version: "fixture".into(),
                     notes_version: 0,
-                    decides_at_start: 0,
                     fills_at_start: 0,
                     started_at_ms: action_now,
                     request: json!({}),
@@ -2181,7 +2130,6 @@ pub(crate) fn exercise() {
                     trigger: "supervisor".into(),
                     prompt_version: "fixture".into(),
                     notes_version: 0,
-                    decides_at_start: 0,
                     fills_at_start: 0,
                     started_at_ms: action_now + 10,
                     request: json!({}),
@@ -2262,7 +2210,6 @@ pub(crate) fn exercise() {
                     trigger: "supervisor".into(),
                     prompt_version: "fixture".into(),
                     notes_version: 0,
-                    decides_at_start: 0,
                     fills_at_start: 0,
                     started_at_ms: action_now + 20,
                     request: json!({}),
@@ -2382,7 +2329,6 @@ pub(crate) fn exercise() {
                         trigger: "decision".into(),
                         prompt_version: owner_prompt_version.into(),
                         notes_version: 0,
-                        decides_at_start: 0,
                         fills_at_start: owner_portfolio.fills.len(),
                         started_at_ms: owner_now,
                         request: json!({
@@ -2779,7 +2725,6 @@ pub(crate) fn exercise() {
                 trigger: "session_open".into(),
                 prompt_version: "prompt".into(),
                 notes_version: 0,
-                decides_at_start: 0,
                 fills_at_start: 0,
                 started_at_ms: 1_200,
                 request: json!({"prompt":"must-not-leak","transcript":"must-not-leak"}),
@@ -2818,7 +2763,6 @@ pub(crate) fn exercise() {
                 trigger: "provider_prompt_must_not_leak".into(),
                 prompt_version: "prompt".into(),
                 notes_version: 0,
-                decides_at_start: 0,
                 fills_at_start: 0,
                 started_at_ms: 1_700,
                 request: json!({"prompt":"must-not-leak"}),
@@ -2892,7 +2836,6 @@ pub(crate) fn exercise() {
                     trigger: "idle".into(),
                     prompt_version: "prompt".into(),
                     notes_version: 0,
-                    decides_at_start: 0,
                     fills_at_start: 0,
                     started_at_ms: 1,
                     request: json!({}),
@@ -3023,7 +2966,6 @@ pub(crate) fn exercise() {
                     trigger: "resume".into(),
                     prompt_version: "prompt".into(),
                     notes_version: 0,
-                    decides_at_start: 0,
                     fills_at_start: 0,
                     started_at_ms: 2_100,
                     request: json!({}),
@@ -3098,7 +3040,6 @@ pub(crate) fn exercise() {
                     trigger: "idle".into(),
                     prompt_version: "prompt".into(),
                     notes_version: 0,
-                    decides_at_start: 0,
                     fills_at_start: 0,
                     started_at_ms: 1,
                     request: json!({}),
@@ -3339,7 +3280,6 @@ pub(crate) fn exercise() {
         1_000,
         false,
         &hashes,
-        0,
         Some("default:0"),
     );
     apply_finish(
@@ -3349,7 +3289,6 @@ pub(crate) fn exercise() {
         1_001,
         false,
         &hashes,
-        0,
         Some("default:0"),
     );
     apply_finish(
@@ -3359,7 +3298,6 @@ pub(crate) fn exercise() {
         1_002,
         false,
         &hashes,
-        0,
         Some("default:0"),
     );
     assert_eq!(mixed.failures, 3);
@@ -3376,7 +3314,6 @@ pub(crate) fn exercise() {
         1_003,
         false,
         &hashes,
-        0,
         Some("default:0"),
     );
     apply_finish(
@@ -3386,7 +3323,6 @@ pub(crate) fn exercise() {
         1_004,
         false,
         &hashes,
-        0,
         Some("default:0"),
     );
     assert_eq!(mixed.owner_failure_streak, Some(3));
@@ -3404,7 +3340,6 @@ pub(crate) fn exercise() {
         1_006,
         true,
         &hashes,
-        0,
         Some("other:1"),
     );
     assert_eq!(mixed.owner_failure_streak, Some(3));
@@ -3415,7 +3350,6 @@ pub(crate) fn exercise() {
         1_007,
         true,
         &hashes,
-        0,
         Some("default:0"),
     );
     assert_eq!(mixed.owner_failure_streak, None);
@@ -3433,7 +3367,6 @@ pub(crate) fn exercise() {
         trigger: "supervisor".into(),
         prompt_version: "fixture".into(),
         notes_version: 0,
-        decides_at_start: 0,
         fills_at_start: 0,
         started_at_ms: 1,
         request: json!({"model_selection":{"profile":"default","revision":7}}),
@@ -3456,7 +3389,6 @@ pub(crate) fn exercise() {
         2_000,
         false,
         &hashes,
-        0,
         Some("default:7"),
     );
     assert_eq!(recovered.owner_failure_streak, Some(1));
@@ -3519,7 +3451,6 @@ fn case_research_contract() {
         trigger: "research".into(),
         prompt_version: identity.prompt_version.clone(),
         notes_version: 0,
-        decides_at_start: 0,
         fills_at_start: 0,
         started_at_ms: 10,
         request: json!({
@@ -4116,7 +4047,6 @@ fn case_research_contract() {
         trigger: "research".into(),
         prompt_version: crash_identity.prompt_version.clone(),
         notes_version: 0,
-        decides_at_start: 9,
         fills_at_start: 0,
         started_at_ms: 10,
         request: json!({
@@ -4154,7 +4084,6 @@ fn case_research_contract() {
     let decision_hashes = AppliedHashes::current(&crash_cfg);
     with_state(crash_dir.path(), &crash_session, |state| {
         state.applied = Some(decision_hashes.clone());
-        state.seen_decides = 5;
     })
     .unwrap();
     assert!(super::research::recover(crash_dir.path(), &crash_turn, 20).unwrap());
@@ -4162,7 +4091,6 @@ fn case_research_contract() {
     assert_eq!(recovered_state.failures, 0);
     assert_eq!(recovered_state.owner_failure_streak, None);
     assert_eq!(recovered_state.applied, Some(decision_hashes.clone()));
-    assert_eq!(recovered_state.seen_decides, 5);
     assert!(!crash_dir.path().join("model/usage").exists());
     assert!(
         !reconcile_lifecycle_results(crash_dir.path(), &crash_session).unwrap(),
@@ -4197,7 +4125,6 @@ fn case_research_contract() {
             trigger: "research".into(),
             prompt_version: identity.prompt_version.clone(),
             notes_version: 0,
-            decides_at_start: 9,
             fills_at_start: 0,
             started_at_ms: 10,
             request: json!({
@@ -4228,7 +4155,6 @@ fn case_research_contract() {
         let hashes = AppliedHashes::current(&cfg);
         with_state(dir.path(), &session, |state| {
             state.applied = Some(hashes.clone());
-            state.seen_decides = 5;
         })
         .unwrap();
         // A legacy research turn in the trading log never feeds trading
@@ -4238,7 +4164,6 @@ fn case_research_contract() {
         assert_eq!(state.failures, 0, "{outcome}");
         assert_eq!(state.owner_failure_streak, None, "{outcome}");
         assert_eq!(state.applied, Some(hashes), "{outcome}");
-        assert_eq!(state.seen_decides, 5, "{outcome}");
     }
 
     // Issue 3: corrupt maturity evidence is never admitted; a missing or
@@ -4328,7 +4253,6 @@ fn case_research_contract() {
                     trigger: "research".into(),
                     prompt_version: "fixture".into(),
                     notes_version: 0,
-                    decides_at_start: 0,
                     fills_at_start: 0,
                     started_at_ms: 1,
                     request: json!({"owner_task":{"kind":"research"}}),

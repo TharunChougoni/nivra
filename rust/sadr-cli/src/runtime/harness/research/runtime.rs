@@ -497,7 +497,6 @@ pub(crate) fn tick_owner_tasks_with_runner(
         super::super::super::redecision::enqueue_owner_research_event(
             db,
             c,
-            cfg,
             &row.spec.task_id,
             row.spec.revision,
             row.job.result_hash.as_deref(),
@@ -580,7 +579,6 @@ pub(crate) fn tick_owner_tasks_with_runner(
         super::super::super::redecision::enqueue_owner_research_event_kind(
             db,
             c,
-            cfg,
             &row.spec.task_id,
             row.spec.revision,
             row.job.result_hash.as_deref(),

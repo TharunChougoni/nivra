@@ -53,10 +53,6 @@ fn owner_fixture(root: &Path, source: &ResearchSettings) -> (Config, PlannerConf
     }
     let cfg = super::super::super::planner::PlannerConfig {
         orchestrator: Some(orchestrator),
-        decision_owner: Some(super::super::super::planner::DecisionOwnerPolicy {
-            version: 1,
-            owner: super::super::super::planner::DecisionOwner::Orchestrator,
-        }),
         research_tools: Some(research),
         ..Default::default()
     };
@@ -7606,10 +7602,6 @@ fn case_e8_corrective_contract(
             orchestrator.triggers.get_mut(&trigger).unwrap().prompt = path;
         }
         tool_cfg.orchestrator = Some(orchestrator);
-        tool_cfg.decision_owner = Some(super::super::super::planner::DecisionOwnerPolicy {
-            version: 1,
-            owner: super::super::super::planner::DecisionOwner::Orchestrator,
-        });
         tool_cfg.owner_tasks = Some(crate::runtime::owner_tasks::OwnerTasksSettings {
             version: 1,
             agenda: None,
@@ -10222,7 +10214,6 @@ fn candidate_contract(root: &Path, base_settings: &ResearchSettings, base_policy
         }),
     });
     research_cfg.workspace = Some(serde_json::from_value(json!({"enabled":true})).unwrap());
-    research_cfg.decision_owner = Some(Default::default());
     let mut orchestrator = research_cfg.orchestrator.clone().unwrap_or_default();
     orchestrator.enabled = true;
     orchestrator
@@ -10267,7 +10258,6 @@ fn candidate_contract(root: &Path, base_settings: &ResearchSettings, base_policy
         trigger: "research".into(),
         prompt_version: identity.prompt_version.clone(),
         notes_version: 0,
-        decides_at_start: 0,
         fills_at_start: 0,
         started_at_ms: t0 + 3,
         request: json!({
@@ -10425,7 +10415,6 @@ fn candidate_contract(root: &Path, base_settings: &ResearchSettings, base_policy
         }),
     });
     lower_research.workspace = Some(serde_json::from_value(json!({"enabled":true})).unwrap());
-    lower_research.decision_owner = Some(Default::default());
     let mut lower_orchestrator = lower_research.orchestrator.clone().unwrap_or_default();
     lower_orchestrator.enabled = true;
     lower_orchestrator

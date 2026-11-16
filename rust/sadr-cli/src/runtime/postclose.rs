@@ -696,80 +696,6 @@ fn status(db: &Connection, c: &Config) -> Result<Value> {
     )
 }
 /// Load only the verified immediate predecessor. Never discover arbitrary old text.
-pub(super) fn memory(c: &Config, as_of: i64, limit: usize) -> Result<Value> {
-    let path = c.directory.join("carry-over.json");
-    if !path.exists() {
-        return Ok(json!({"status":"no_verified_predecessor","entries":[]}));
-    }
-    let carry: Value = serde_json::from_slice(
-        &crate::read_bounded(&path, 16_000_000).map_err(|_| "postclose_carry_unreadable")?,
-    )?;
-    rollover::verify_carry(c, &carry)?;
-    Ok(match predecessor_memory(c, as_of, limit, &carry) {
-        Ok(memory) => memory,
-        Err(_) => json!({"status":"predecessor_advisory_memory_unavailable","entries":[]}),
-    })
-}
-fn predecessor_memory(c: &Config, as_of: i64, limit: usize, carry: &Value) -> Result<Value> {
-    let mut prior = c.clone();
-    prior.session = serde_json::from_value(carry["source_session"].clone())?;
-    prior.previous_session = serde_json::from_value(carry["source_previous_session"].clone())?;
-    let root = match &c.sessions_root {
-        Some(root) => root.clone(),
-        None => PathBuf::from(std::env::var("HOME")?).join("ind-sadr-data/sessions"),
-    };
-    prior.directory = root.join(prior.session.to_string());
-    if let Some(legacy) = &c.legacy_directory {
-        let mut legacy_config = prior.clone();
-        legacy_config.directory = legacy.clone();
-        if book_binding(&legacy_config)? == carry["source_binding"] {
-            prior = legacy_config;
-        }
-    }
-    let (db, body) = rollover::bound_state(&prior)?;
-    let Some(control) = load(&db, &prior)? else {
-        return Ok(json!({"status":"predecessor_review_unavailable","entries":[]}));
-    };
-    if control.sealed.input.state_sha256 != digest(body.as_bytes())
-        || control.sealed.input.session_binding != carry["source_binding"]
-    {
-        return Err("postclose_memory_state_changed".into());
-    }
-    let mut entries = Vec::new();
-    let mut stmt = db.prepare(
-        "SELECT body,result FROM postclose_job WHERE status='completed' ORDER BY role LIMIT 3",
-    )?;
-    for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
-        let (job, result) = row?;
-        let job: Job = decode(&job)?;
-        let completed: Completed = decode(&result)?;
-        if completed.completed_ms > as_of {
-            continue;
-        }
-        if completed.completed_ms < job.started_ms
-            || completed.completed_ms > job.deadline_ms
-            || job.input_hash != control.sealed.sha256
-            || job.configuration_hash != control.configuration_hash
-        {
-            return Err("postclose_memory_job_invalid".into());
-        }
-        let provenance = contract::ReviewProvenance {
-            role: job.role,
-            model_id: job.model.model_id,
-            prompt_version: PROMPT_VERSION.into(),
-        };
-        entries.extend(contract::make_memory(
-            &control.sealed,
-            &completed.output,
-            &provenance,
-        )?);
-    }
-    let entries = contract::memory_for(&entries, &account(c), c.session, limit)?;
-    Ok(
-        json!({"status":"verified_predecessor_advisory_only","source_session":prior.session,"as_of_ms":as_of,"entries":entries}),
-    )
-}
-
 #[cfg(test)]
 pub(super) fn behavioral_assertions() {
     use sadr_core::{
@@ -919,33 +845,6 @@ pub(super) fn behavioral_assertions() {
     let raw=json!({"observations":[{"text":"The report retained carried positions","evidence_ids":["report"]}],"hypotheses":[],"uncertainties":["Synthetic fixtures do not establish strategy quality"],"memory":[{"kind":"observation","text":"The report retained carried positions","evidence_ids":["report"],"uncertainty":"Synthetic evidence only"}]}).to_string();
     settle(&db, &c, &control, &operations, Ok(raw.clone()), at + 1).unwrap();
     assert!(settle(&db, &c, &control, &operations, Ok(raw), at + 2).is_err());
-    // Same account predecessor, exact source state and result availability bind memory.
-    let mut next = c.clone();
-    next.session = "2026-10-19".parse().unwrap();
-    next.previous_session = c.session;
-    next.directory = root.join("2026-10-19");
-    fs::create_dir_all(&next.directory).unwrap();
-    let mut carry_p = p.clone();
-    carry_p.closed = false;
-    carry_p.health = "carried_waiting_for_fresh_quotes".into();
-    let carry = json!({"source_session":c.session,"source_previous_session":c.previous_session,"source_binding":book_binding(&c).unwrap(),"source_state_hash":digest(body.as_bytes()),"destination_binding":book_binding(&next).unwrap(),"portfolio":carry_p});
-    fs::write(next.directory.join("carry-over.json"), carry.to_string()).unwrap();
-    assert!(
-        memory(&next, at, 16).unwrap()["entries"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(
-        memory(&next, at + 2, 16).unwrap()["entries"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    let mut other = next.clone();
-    other.account = "other".into();
-    assert!(memory(&other, at + 2, 16).is_err());
     // Timeout records failure but preserves the live callback slot until drained.
     let strategy = reserve(&db, "strategy");
     let (sender, receiver) = std::sync::mpsc::channel();
@@ -973,16 +872,6 @@ pub(super) fn behavioral_assertions() {
     assert!(worker.is_none());
     assert_eq!(p, before);
     assert_eq!(p.allocation().unwrap(), a("5000"));
-    // Corrupt advisory evidence never blocks an otherwise verified financial carry.
-    db.execute(
-        "UPDATE postclose_job SET result='{}' WHERE role='operations'",
-        [],
-    )
-    .unwrap();
-    assert_eq!(
-        memory(&next, at + 3, 16).unwrap()["status"],
-        "predecessor_advisory_memory_unavailable"
-    );
     db.execute("DELETE FROM postclose_job WHERE role='strategy'", [])
         .unwrap();
     assert!(initialize(&mut db, &c, &cfg, &p, at + 3).is_err());

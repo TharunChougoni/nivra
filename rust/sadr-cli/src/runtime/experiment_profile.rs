@@ -3,8 +3,7 @@
 //! Profile contents are deliberately excluded from `planner::policy_bytes`. Trading
 //! policy (identities, allowlists, costs, exits and ceilings) stays in the dated
 //! planner config; a profile can only tighten the runtime values it is given.
-use super::discovery::GateSettings;
-use super::planner::{MAX_RUN_MS, ModelRole, PlannerConfig, ToolsSettings};
+use super::planner::{ModelRole, PlannerConfig, ToolsSettings};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -21,7 +20,6 @@ const PROFILE_BYTES: u64 = 262_144;
 struct Profile {
     version: u32,
     prompts: Prompts,
-    handoff_gate: Option<GateSettings>,
     tools: Option<ToolsSettings>,
     cadence: Cadence,
     roles: BTreeMap<String, RoleCaps>,
@@ -35,9 +33,6 @@ struct Profile {
 struct Prompts {
     objective: Option<PathBuf>,
     digest: Option<PathBuf>,
-    decide: Option<PathBuf>,
-    decision_evidence: Option<PathBuf>,
-    decision_evidence_digest: Option<PathBuf>,
     supervisor: Option<PathBuf>,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -74,33 +69,24 @@ impl From<String> for PromptText {
 #[derive(Clone)]
 pub(crate) struct PromptSet {
     objective: PromptText,
+    /// The factual digest prompt: the owner digest unless a profile overrides it.
     digest: PromptText,
-    owner_digest: PromptText,
-    decide: PromptText,
-    decision_evidence: PromptText,
-    decision_evidence_digest: PromptText,
     supervisor: Option<PromptText>,
     orchestrator: Option<PromptText>,
     review: Option<PromptText>,
     scorer: Option<PromptText>,
     custom: bool,
-    digest_overridden: bool,
 }
 impl Default for PromptSet {
     fn default() -> Self {
         Self {
             objective: PromptText::embedded(super::harness::OBJECTIVE.trim()),
-            digest: PromptText::embedded(super::harness::DATA_PROMPT),
-            owner_digest: PromptText::embedded(super::harness::DATA_OWNER_PROMPT),
-            decide: PromptText::embedded(super::harness::DECISION_PROMPT),
-            decision_evidence: PromptText::embedded(super::decision_evidence::PROMPT),
-            decision_evidence_digest: PromptText::embedded(super::decision_evidence::DIGEST_PROMPT),
+            digest: PromptText::embedded(super::harness::DATA_OWNER_PROMPT),
             supervisor: None,
             orchestrator: None,
             review: None,
             scorer: None,
             custom: false,
-            digest_overridden: false,
         }
     }
 }
@@ -127,24 +113,20 @@ impl PromptSet {
         };
         let prompts = Self {
             objective: read("objective.md")?,
-            digest: read("data.md")?,
-            owner_digest: read("data_owner.md")?,
-            decide: read("decision.md")?,
-            decision_evidence: read("profit_under_uncertainty.md")?,
-            decision_evidence_digest: read("decision_evidence_digest.md")?,
+            digest: read("data_owner.md")?,
             supervisor: Some(read("supervisor.md")?),
             orchestrator: Some(read("orchestrator.md")?),
             review: Some(read("review.md")?),
             scorer: Some(read("scorer.md")?),
             custom: true,
-            digest_overridden: false,
         };
         Ok(Some(prompts))
     }
-    pub(crate) fn role_for(&self, role: &str, owner: bool) -> Option<&str> {
-        match (role, owner) {
-            ("digest", true) if !self.digest_overridden => Some(&self.owner_digest.text),
-            ("supervisor", true) => self
+    /// The persistent owner's standing prompt is the orchestrator prompt when
+    /// one is loaded, then the supervisor prompt.
+    pub(crate) fn role_for(&self, role: &str) -> Option<&str> {
+        match role {
+            "supervisor" => self
                 .orchestrator
                 .as_ref()
                 .map(|p| p.text.as_str())
@@ -158,36 +140,19 @@ impl PromptSet {
     pub(crate) fn role(&self, role: &str) -> Option<&str> {
         match role {
             "digest" => Some(&self.digest.text),
-            "decide" => Some(&self.decide.text),
             "supervisor" => self.supervisor.as_ref().map(|p| p.text.as_str()),
             "operations" | "strategy" => self.review.as_ref().map(|p| p.text.as_str()),
             "scorer" => self.scorer.as_ref().map(|p| p.text.as_str()),
             _ => None,
         }
     }
-    pub(crate) fn decision_evidence(&self, digest: bool) -> &str {
-        if digest {
-            &self.decision_evidence_digest.text
-        } else {
-            &self.decision_evidence.text
-        }
-    }
     pub(crate) fn custom(&self) -> bool {
         self.custom
     }
     pub(crate) fn hashes(&self) -> Value {
-        self.hashes_with_digest(&self.digest.sha256)
-    }
-    fn hashes_with_digest(&self, digest: &str) -> Value {
         let mut hashes = BTreeMap::new();
-        hashes.insert("digest", digest);
+        hashes.insert("digest", &self.digest.sha256);
         hashes.insert("objective", &self.objective.sha256);
-        hashes.insert("decide", &self.decide.sha256);
-        hashes.insert("decision_evidence", &self.decision_evidence.sha256);
-        hashes.insert(
-            "decision_evidence_digest",
-            &self.decision_evidence_digest.sha256,
-        );
         if let Some(supervisor) = &self.supervisor {
             hashes.insert("supervisor", &supervisor.sha256);
         }
@@ -202,16 +167,6 @@ impl PromptSet {
         }
         json!(hashes)
     }
-    /// Prompt identity as actually bound by the runtime. An owner policy with
-    /// no explicit profile digest prompt uses the code-owned owner digest, so
-    /// record that hash instead of the dormant legacy prompt.
-    pub(crate) fn hashes_for(&self, owner: bool) -> Value {
-        if owner && !self.digest_overridden {
-            self.hashes_with_digest(&self.owner_digest.sha256)
-        } else {
-            self.hashes()
-        }
-    }
 }
 /// Profile values applied to one in-memory `PlannerConfig`.
 #[derive(Clone)]
@@ -221,14 +176,10 @@ pub(crate) struct AppliedProfile {
     pub(crate) changed_keys: Vec<String>,
     raw: Profile,
     tools: Option<ToolsSettings>,
-    gate: Option<GateSettings>,
     idle: Option<i64>,
     digest_caps: Option<RoleCaps>,
-    decide_caps: Option<RoleCaps>,
     base_tools: ToolsSettings,
-    base_gate: Option<GateSettings>,
     base_digest: ModelRole,
-    base_decide: ModelRole,
     base_idle: Option<Option<i64>>,
 }
 impl PlannerConfig {
@@ -273,8 +224,7 @@ impl PlannerConfig {
             .or(self.file_prompts.as_ref())
     }
     pub(crate) fn prompt_hashes(&self) -> Option<Value> {
-        self.prompt_set()
-            .map(|p| p.hashes_for(self.orchestrator_owns_decisions()))
+        self.prompt_set().map(PromptSet::hashes)
     }
     pub(crate) fn profile_changed_keys(&self) -> Option<&[String]> {
         self.profile.as_ref().map(|p| p.changed_keys.as_slice())
@@ -295,9 +245,7 @@ impl PlannerConfig {
         cfg.profile = None;
         if let Some(profile) = &self.profile {
             cfg.tools = profile.base_tools.clone();
-            cfg.handoff_gate = profile.base_gate.clone();
             cfg.digest = profile.base_digest.clone();
-            cfg.decide = profile.base_decide.clone();
             if let Some(base) = profile.base_idle
                 && let Some(discovery) = &mut cfg.discovery
             {
@@ -325,20 +273,6 @@ fn load_profile(
     }
     if let Some(text) = read_prompt(base, &profile.prompts.digest, max_prompt_bytes)? {
         prompts.digest = text;
-        prompts.digest_overridden = true;
-    }
-    if let Some(text) = read_prompt(base, &profile.prompts.decide, max_prompt_bytes)? {
-        prompts.decide = text;
-    }
-    if let Some(text) = read_prompt(base, &profile.prompts.decision_evidence, max_prompt_bytes)? {
-        prompts.decision_evidence = text;
-    }
-    if let Some(text) = read_prompt(
-        base,
-        &profile.prompts.decision_evidence_digest,
-        max_prompt_bytes,
-    )? {
-        prompts.decision_evidence_digest = text;
     }
     if let Some(prompt) = read_prompt(base, &profile.prompts.supervisor, max_prompt_bytes)? {
         prompts.supervisor = Some(prompt.clone());
@@ -394,40 +328,24 @@ fn apply(
             return Err("experiment_profile_tools_exceed_policy".into());
         }
     }
-    if let Some(gate) = &profile.handoff_gate {
-        gate.validate().map_err(|error| error.to_string())?;
-    }
     if profile.cadence.idle_digest_interval_ms.is_some() && cfg.discovery.is_none() {
         return Err("experiment_profile_cadence_without_discovery".into());
     }
     if let Some(caps) = profile.roles.get("digest") {
-        validate_caps(caps, &cfg.digest, "digest")?;
+        validate_caps(caps, &cfg.digest)?;
     }
-    if let Some(caps) = profile.roles.get("decide") {
-        validate_caps(caps, &cfg.decide, "decide")?;
-    }
-    if profile
-        .roles
-        .keys()
-        .any(|role| !matches!(role.as_str(), "digest" | "decide"))
-    {
+    if profile.roles.keys().any(|role| role != "digest") {
         return Err("experiment_profile_role_invalid".into());
     }
     let mut changed_keys = Vec::new();
     if profile.prompts.objective.is_some()
         || profile.prompts.digest.is_some()
-        || profile.prompts.decide.is_some()
-        || profile.prompts.decision_evidence.is_some()
-        || profile.prompts.decision_evidence_digest.is_some()
         || profile.prompts.supervisor.is_some()
     {
         changed_keys.push("prompts".into());
     }
     if profile.tools.is_some() {
         changed_keys.push("tools".into());
-    }
-    if profile.handoff_gate.is_some() {
-        changed_keys.push("handoff_gate".into());
     }
     if profile.cadence.idle_digest_interval_ms.is_some() {
         changed_keys.push("cadence.idle_digest_interval_ms".into());
@@ -439,7 +357,6 @@ fn apply(
         serde_json::to_vec(&json!({
             "version":profile.version,
             "prompts":prompts.hashes(),
-            "handoff_gate":profile.handoff_gate,
             "tools":profile.tools,
             "cadence":profile.cadence,
             "roles":profile.roles,
@@ -455,14 +372,10 @@ fn apply(
         changed_keys,
         raw: profile.clone(),
         tools: profile.tools.clone(),
-        gate: profile.handoff_gate.clone(),
         idle: profile.cadence.idle_digest_interval_ms,
         digest_caps: profile.roles.get("digest").cloned(),
-        decide_caps: profile.roles.get("decide").cloned(),
         base_tools,
-        base_gate: cfg.handoff_gate.clone(),
         base_digest: cfg.digest.clone(),
-        base_decide: cfg.decide.clone(),
         base_idle: cfg
             .discovery
             .as_ref()
@@ -470,9 +383,6 @@ fn apply(
     };
     if let Some(tools) = applied.tools.clone() {
         cfg.tools = tools;
-    }
-    if let Some(gate) = applied.gate.clone() {
-        cfg.handoff_gate = Some(gate);
     }
     if let Some(idle) = applied.idle
         && let Some(discovery) = &mut cfg.discovery
@@ -482,17 +392,10 @@ fn apply(
     if let Some(caps) = &applied.digest_caps {
         apply_caps(&mut cfg.digest, caps);
     }
-    if let Some(caps) = &applied.decide_caps {
-        apply_caps(&mut cfg.decide, caps);
-    }
     Ok(applied)
 }
-fn validate_caps(caps: &RoleCaps, role: &ModelRole, name: &str) -> std::result::Result<(), String> {
-    let max_run = if name == "digest" {
-        120_000
-    } else {
-        MAX_RUN_MS
-    };
+/// Profile caps may only tighten the digest role; its run ceiling is 120s.
+fn validate_caps(caps: &RoleCaps, role: &ModelRole) -> std::result::Result<(), String> {
     if caps
         .max_turns
         .is_some_and(|n| n == 0 || n > role.max_turns.unwrap_or(12))
@@ -501,7 +404,7 @@ fn validate_caps(caps: &RoleCaps, role: &ModelRole, name: &str) -> std::result::
             .is_some_and(|n| n == 0 || n > role.max_read_tools.unwrap_or(16))
         || caps
             .run_timeout_ms
-            .is_some_and(|n| n < role.timeout_ms || n > max_run)
+            .is_some_and(|n| n < role.timeout_ms || n > 120_000)
     {
         return Err("experiment_profile_role_exceeds_policy".into());
     }

@@ -17,11 +17,8 @@ pub(crate) use research::{
     validate_files as validate_research_files,
 };
 
-pub(crate) const DATA_PROMPT: &str = include_str!("../../../../packaging/rust/prompts/data.md");
 pub(crate) const DATA_OWNER_PROMPT: &str =
     include_str!("../../../../packaging/rust/prompts/data_owner.md");
-pub(crate) const DECISION_PROMPT: &str =
-    include_str!("../../../../packaging/rust/prompts/decision.md");
 pub(crate) const REVIEW_PROMPT: &str = include_str!("../../../../packaging/rust/prompts/review.md");
 pub(crate) const SCORER_PROMPT: &str = include_str!("../../../../packaging/rust/prompts/scorer.md");
 pub(crate) const SUPERVISOR_PROMPT: &str =
@@ -50,13 +47,8 @@ pub(crate) fn publish_validated(c: &Config, name: &str, role: &ModelRole, raw: &
     }
 }
 pub(crate) fn instructions(role: &str) -> Result<&'static str> {
-    #[cfg(not(test))]
-    if role == "decide" {
-        return Err("decision_owner_migration_required".into());
-    }
     match role {
-        "digest" => Ok(DATA_PROMPT),
-        "decide" => Ok(DECISION_PROMPT),
+        "digest" => Ok(DATA_OWNER_PROMPT),
         "operations" | "strategy" => Ok(REVIEW_PROMPT),
         "scorer" => Ok(SCORER_PROMPT),
         "supervisor" => Ok(SUPERVISOR_PROMPT),
@@ -73,10 +65,10 @@ pub(crate) fn frame_instructions_for(cfg: &PlannerConfig, frame: &Frame) -> Resu
 }
 
 fn frame_instructions_with(cfg: Option<&PlannerConfig>, frame: &Frame) -> Result<String> {
-    if frame.decision_evidence && !matches!(frame.role.as_str(), "digest" | "decide") {
+    if frame.decision_evidence && frame.role != "digest" {
         return Err("harness_role_invalid".into());
     }
-    let mut text = if let Some(instructions) = &frame.instructions {
+    let text = if let Some(instructions) = &frame.instructions {
         instructions.clone()
     } else if frame.final_answer_only {
         format!(
@@ -86,22 +78,6 @@ fn frame_instructions_with(cfg: Option<&PlannerConfig>, frame: &Frame) -> Result
     } else {
         system_instructions_with(cfg, &frame.role, &frame.citation_ids)?
     };
-    // A present `instructions` field is already the complete host text (used by
-    // the scorer and by a custom experiment profile), so evidence text must not
-    // be appended twice. The owner factual prompt carries its own evidence
-    // rules; append the legacy handoff fragment only for the legacy digest.
-    let owner_digest =
-        frame.role == "digest" && cfg.is_some_and(PlannerConfig::orchestrator_owns_decisions);
-    if frame.instructions.is_none() && frame.decision_evidence && !owner_digest {
-        text.push('\n');
-        text.push_str(
-            match (cfg.and_then(PlannerConfig::prompt_set), frame.role.as_str()) {
-                (Some(prompts), role) => prompts.decision_evidence(role == "digest"),
-                (None, "digest") => super::decision_evidence::DIGEST_PROMPT,
-                (None, _) => super::decision_evidence::PROMPT,
-            },
-        );
-    }
     Ok(text)
 }
 
@@ -109,14 +85,6 @@ pub(crate) fn objective_for(cfg: &PlannerConfig) -> &str {
     cfg.prompt_set()
         .map(|p| p.objective())
         .unwrap_or_else(|| OBJECTIVE.trim())
-}
-
-#[cfg(test)]
-fn legacy_test_config() -> PlannerConfig {
-    PlannerConfig {
-        decision_owner: None,
-        ..Default::default()
-    }
 }
 
 #[cfg(test)]
@@ -130,9 +98,8 @@ fn system_instructions_with(
     ids: &[String],
 ) -> Result<String> {
     // Explicit session instructions win, then the experiment-profile role
-    // prompt. A reviewed decision-owner policy gets its own compiled standing
-    // prompt only when neither override is present; legacy supervisor behavior
-    // remains unchanged.
+    // prompt. With a policy and neither override, the owner gets its compiled
+    // standing prompt.
     let session_system_prompt = if role == "supervisor" {
         cfg.and_then(|cfg| cfg.orchestrator.as_ref())
             .filter(|orchestrator| orchestrator.system_prompt.is_some())
@@ -145,26 +112,16 @@ fn system_instructions_with(
     } else {
         None
     };
-    let profile_prompt = cfg.and_then(PlannerConfig::prompt_set).and_then(|prompts| {
-        prompts.role_for(
-            role,
-            cfg.is_some_and(PlannerConfig::orchestrator_owns_decisions),
-        )
-    });
-    let owner_default = role == "supervisor"
-        && cfg.is_some_and(PlannerConfig::orchestrator_owns_decisions)
-        && profile_prompt.is_none();
-    let owner_digest_default = role == "digest"
-        && cfg.is_some_and(PlannerConfig::orchestrator_owns_decisions)
-        && profile_prompt.is_none();
+    let profile_prompt = cfg
+        .and_then(PlannerConfig::prompt_set)
+        .and_then(|prompts| prompts.role_for(role));
+    let owner_default = role == "supervisor" && cfg.is_some() && profile_prompt.is_none();
     let base = session_system_prompt
         .as_deref()
         .or(profile_prompt)
         .unwrap_or_else(|| {
             if owner_default {
                 ORCHESTRATOR_PROMPT
-            } else if owner_digest_default {
-                DATA_OWNER_PROMPT
             } else {
                 instructions(role).unwrap_or("")
             }
@@ -193,7 +150,7 @@ fn system_instructions_with(
             "{base}\nHOST REVIEW ROLE: {role}. Operations: investigate data, tool, setup and execution integrity failures that impair the profit objective; propose advisory remedies. Strategy: investigate profit opportunities and measured outcomes without inventing caps or treating hypotheses as accepted strategies. Stay within your named review role.\nHOST CITATION CONTRACT: The ONLY permitted final-review evidence_ids values are {}. Tool section names (bundle, portfolio, shortlist, fees, session_evidence), call IDs and experiment IDs are NOT citations. Anchor external/experiment commentary to a relevant sealed ID and describe its limits. Every memory entry must copy text AND the evidence_ids array EXACTLY from an observation or hypothesis of matching kind; do not summarize or paraphrase. Return memory:[] when no exact carry-forward is needed. Keep each claim concise (prefer <=300 UTF-8 bytes).",
             json!(ids)
         )
-    } else if matches!(role, "digest" | "decide" | "scorer" | "supervisor") {
+    } else if matches!(role, "digest" | "scorer" | "supervisor") {
         let objective = cfg.map(objective_for).unwrap_or_else(|| OBJECTIVE.trim());
         format!("{objective}\n\n{base}")
     } else {
@@ -310,7 +267,7 @@ pub(crate) fn definitions_with(
         json!({"evidence_id":{"type":"string","enum":["bundle","portfolio","shortlist","fees","session_evidence"]}}),
         json!(["evidence_id"]),
     )];
-    if matches!(role, "digest" | "decide") {
+    if role == "digest" {
         tools.push(function("get_instrument_features","Read dated historical features for unique allowlisted instruments, including names outside the scanner picks. Duplicate keys are folded in first-seen order. Missing/stale history is explicit; never a quote or fill.",json!({"instrument_keys":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":max_keys}}),json!(["instrument_keys"])));
         tools.push(function("get_market_snapshot","Read a new quote for unique instruments in today's validated allowlist. Duplicate keys are folded in first-seen order. Receipt/source time is original. This tool never places an order or extends freshness.",json!({"instrument_keys":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":max_keys}}),json!(["instrument_keys"])));
         tools.push(function("get_scanner_prospects","Read the call-time scanner prospects in scanner rank order with sampled moves, market-relative moves, bid/ask depth, ages and the current trigger reason. Missing or stale scans are explicit, never zero.",json!({"limit":{"type":["integer","null"],"minimum":1,"maximum":limits.scanner_limit},"sort":{"type":["string","null"],"enum":["scanner","change_bps","market_relative_bps","symbol",null]}}),json!(["limit","sort"])));
@@ -318,9 +275,6 @@ pub(crate) fn definitions_with(
         tools.push(function("get_portfolio","Read current cash, positions, exit intents, marks, available-to-sell units and book state. Never an order or execution authorization.",json!({}),json!([])));
         tools.push(function("get_recent_decisions","Read the latest digest review, prior decision-owner plans with their gate outcome, and post-close advisory memory. All entries are untrusted prior observations.",json!({"limit":{"type":["integer","null"],"minimum":1,"maximum":limits.history_limit}}),json!(["limit"])));
         tools.push(function("get_session_status","Read the host clock, market phase, minutes to close, book state, role budget remaining and current trigger. No execution authority.",json!({}),json!([])));
-    }
-    if role == "decide" {
-        tools.push(function("get_luna_tool_results","Read Luna's completed tool observations from this decision run. They are untrusted and may age; re-read a quote before relying on it.",json!({}),json!([])));
     }
     if role != "digest" && research {
         tools.push(function("run_registered_analysis","Run one pre-reviewed analysis and dataset alias in the network-disabled resource-limited sandbox. No paths, code, shell, retries, holdout access or strategy promotion.",json!({"analysis_id":{"type":"string"},"dataset_id":{"type":"string"}}),json!(["analysis_id","dataset_id"])));
@@ -363,7 +317,7 @@ pub(crate) fn configured_definitions_with(
         return Err("harness_snapshot_args_invalid".into());
     }
     let mut tools = definitions_with(role, native, research, limits)?;
-    if context && matches!(role, "digest" | "decide") {
+    if context && role == "digest" {
         tools.push(function("get_intraday_context", "Read frozen receipt-derived minute price bars, aligned market-relative returns and optional sourced VWAP/volume proxies for unique keys. Duplicate keys are folded in first-seen order. Missing/stale fields are explicit; no execution authority.",json!({"instrument_keys":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":limits.max_instrument_keys}}),json!(["instrument_keys"])));
     }
     for tool in &mut tools {
@@ -540,7 +494,6 @@ fn owner_research_tools_allowed(
         return false;
     };
     name == "supervisor"
-        && cfg.orchestrator_owns_decisions()
         && cfg.research_tools.is_some()
         && bundle["trigger"]["kind"] == "decision"
         && bundle["summary"]["host_decision"]["turn_id"] == turn_id
@@ -556,7 +509,6 @@ fn owner_research_turn(
         return false;
     };
     name == "supervisor"
-        && cfg.orchestrator_owns_decisions()
         && cfg
             .owner_tasks
             .as_ref()
@@ -633,7 +585,6 @@ fn owner_workspace_tools_allowed(
         return false;
     };
     name == "supervisor"
-        && cfg.orchestrator_owns_decisions()
         && cfg
             .workspace
             .as_ref()
@@ -656,7 +607,6 @@ fn research_request_allowed(
         return false;
     };
     name == "supervisor"
-        && cfg.orchestrator_owns_decisions()
         && super::lane_queue::lane_settings(cfg).is_some()
         && bundle["trigger"]["kind"] == "decision"
         && bundle["summary"]["host_decision"]["turn_id"] == turn_id
@@ -672,7 +622,6 @@ fn owner_web_tools_allowed(
         return false;
     };
     name == "supervisor"
-        && cfg.orchestrator_owns_decisions()
         && cfg.web_tools.as_ref().is_some_and(|web| web.enabled)
         && bundle["trigger"]["kind"] == "decision"
         && bundle["summary"]["host_decision"]["turn_id"] == turn_id
@@ -938,7 +887,6 @@ enum Tool {
     Portfolio,
     History(usize),
     Session,
-    LunaResults,
     Workspace(super::workspace::WorkspaceOp),
     Web(super::web_tools::WebToolOp),
 }
@@ -1357,10 +1305,6 @@ fn checked_call_with(
         "get_session_status" => {
             let _: Value = serde_json::from_value(args)?;
             Tool::Session
-        }
-        "get_luna_tool_results" => {
-            let _: Value = serde_json::from_value(args)?;
-            Tool::LunaResults
         }
         "run_registered_analysis" => {
             let a: AnalysisArgs = serde_json::from_value(args)?;
@@ -2100,14 +2044,6 @@ fn session_status(
         "execution_authorized":false
     })
 }
-fn luna_tool_results(bundle: &Value) -> Value {
-    let Some(rows) = bundle["luna_tool_results"].as_array() else {
-        return json!({"status":"unknown","reason":"no_luna_tool_results_in_this_run","observations":[],"execution_authorized":false});
-    };
-    let total = rows.len();
-    let observations = rows.iter().rev().take(32).cloned().collect::<Vec<_>>();
-    json!({"status":if total==0 {"empty"} else {"available_untrusted_observations"},"total":total,"observations":observations,"execution_authorized":false})
-}
 /// Host error codes are static snake_case identifiers; anything else is redacted.
 fn tool_failure_reason(e: &(dyn std::error::Error + 'static)) -> String {
     let text = e.to_string();
@@ -2121,11 +2057,6 @@ fn tool_failure_reason(e: &(dyn std::error::Error + 'static)) -> String {
     } else {
         "tool_error_redacted".into()
     }
-}
-/// Decide hands unavailable tool results back to the model until the configured
-/// count is exceeded; one empty-depth quote must not kill the whole decide (#43).
-fn aborts_on_failed_tool(name: &str, failed_tools: usize, role: &ModelRole) -> bool {
-    name == "decide" && failed_tools > role.max_failed_tools()
 }
 fn snapshot(
     c: &Config,
@@ -2194,10 +2125,10 @@ fn snapshot_response(
 
 mod digest;
 #[cfg(test)]
-pub(super) use digest::{OwnerDigest, digest_bounds_violation, owner_digest_bounds_violation};
+pub(super) use digest::{OwnerDigest, owner_digest_bounds_violation};
 pub(super) use digest::{
-    normalize_digest, normalize_owner_digest, owner_digest_eligible, owner_facts_sha256,
-    owner_feed_usable, validate_digest, validate_owner_digest,
+    normalize_owner_digest, owner_digest_eligible, owner_facts_sha256, owner_feed_usable,
+    validate_owner_digest,
 };
 
 /// A rejected digest body is retained beside its run record so the next
@@ -2211,7 +2142,6 @@ fn digest_rejection_retained(reason: &str) -> bool {
         "harness_digest_json_invalid"
             | "harness_digest_schema_invalid"
             | "harness_digest_bounds_invalid"
-            | "harness_digest_positions_review_invalid"
     )
 }
 
@@ -2260,13 +2190,8 @@ fn normalize_digest_body(
     raw: &str,
     bundle: &Value,
     tool_ids: &BTreeSet<String>,
-    owner_policy: bool,
 ) -> (Result<String>, bool) {
-    let result = if owner_policy {
-        normalize_owner_digest(raw, bundle, tool_ids)
-    } else {
-        normalize_digest(raw, bundle, tool_ids)
-    };
+    let result = normalize_owner_digest(raw, bundle, tool_ids);
     let rejected = result
         .as_ref()
         .is_err_and(|error| digest_rejection_retained(&error.to_string()));
@@ -2335,16 +2260,6 @@ pub(crate) fn final_text(output: &[Value]) -> Result<String> {
     Ok(text)
 }
 
-fn minimal_digest() -> String {
-    json!({
-        "summary": "Digest run deadline reached before a model summary. Decide from the original evidence.",
-        "evidence_ids": ["bundle"],
-        "missing_data": ["digest_run_deadline"],
-        "uncertainties": ["digest_not_completed"]
-    })
-    .to_string()
-}
-
 pub(super) fn minimal_owner_digest() -> String {
     json!({
         "complete": false,
@@ -2367,45 +2282,16 @@ pub(super) fn minimal_owner_digest() -> String {
 }
 
 /// A digest run deadline still returns a minimal digest so the owner can
-/// continue. An owner run deadline is an accepted empty plan. Review roles
-/// keep the original hard stop.
-fn stopped_result(name: &str, owner_policy: bool) -> Result<String> {
+/// continue. Every other role keeps the original hard stop.
+fn stopped_result(name: &str) -> Result<String> {
     match name {
         "digest" => {
-            let text = if owner_policy {
-                minimal_owner_digest()
-            } else {
-                minimal_digest()
-            };
-            if owner_policy {
-                validate_owner_digest(&text, &Value::Null)?;
-            } else {
-                validate_digest(&text, &Value::Null)?;
-            }
+            let text = minimal_owner_digest();
+            validate_owner_digest(&text, &Value::Null)?;
             Ok(text)
         }
-        "decide" => Ok(planner::host_budget_abstain()),
         _ => Err("harness_deadline_expired".into()),
     }
-}
-
-fn embedded_plan(output: &[Value]) -> Option<String> {
-    for item in output.iter().rev() {
-        if item["type"] != "message" || item["role"] != "assistant" {
-            continue;
-        }
-        let text = item["content"]
-            .as_array()?
-            .iter()
-            .filter(|part| part["type"] == "output_text")
-            .filter_map(|part| part["text"].as_str())
-            .collect::<Vec<_>>()
-            .join("");
-        if planner::plan_document(&text).is_ok() {
-            return Some(text);
-        }
-    }
-    None
 }
 
 /// Two independent readings for one admitted model turn: the actual observation
@@ -2557,16 +2443,12 @@ pub(super) fn run_collect(
             super::owner_tasks::REVIEW_PROMPT
         )
     });
-    let owner_policy = cfg.orchestrator_owns_decisions();
-    let context = cfg.decision_evidence.is_some() && matches!(name, "digest" | "decide");
+    let context = cfg.decision_evidence.is_some() && name == "digest";
     let tool_limits = cfg.effective_tools();
-    let custom_prompt = cfg.prompt_set().is_some_and(|prompts| prompts.custom())
-        || (name == "supervisor"
-            && (cfg
-                .orchestrator
-                .as_ref()
-                .is_some_and(|orchestrator| orchestrator.system_prompt.is_some())
-                || cfg.orchestrator_owns_decisions()));
+    // The owner's standing prompt is never the compiled role default, so its
+    // frames always carry their exact instructions.
+    let custom_prompt =
+        cfg.prompt_set().is_some_and(|prompts| prompts.custom()) || name == "supervisor";
     let tools = definitions_for_call(
         cfg,
         name,
@@ -2719,8 +2601,7 @@ pub(super) fn run_collect(
             "run_started",
             "Harness started",
         );
-        let budget_ms = role.invocation_budget_ms(name) as i64;
-        let minimum_turn_ms = role.minimum_turn_ms.unwrap_or(planner::DEFAULT_TURN_MS);
+        let budget_ms = role.run_budget_ms() as i64;
         for turn in 0..role.max_turns.unwrap_or(12) {
             // A passed event deadline or a changed config is never turned into a plan.
             guard.check_finished()?;
@@ -2734,7 +2615,7 @@ pub(super) fn run_collect(
             }
             if elapsed > budget_ms {
                 stopped = true;
-                return stopped_result(name, owner_policy);
+                return stopped_result(name);
             }
             let remaining = (budget_ms - elapsed).min(
                 guard
@@ -2742,32 +2623,20 @@ pub(super) fn run_collect(
                     .map(|deadline| deadline.saturating_sub(clock.projected_wall_ms()))
                     .unwrap_or(i64::MAX),
             );
-            // Measured grok-4.7 turns need 100s. Do not start one that cannot finish.
-            if name == "decide" && (remaining as u64) < minimum_turn_ms {
-                return Ok(planner::host_budget_abstain());
-            }
             if guard.check_cancel().is_err() {
-                if matches!(name, "digest" | "decide") {
+                if name == "digest" {
                     stopped = true;
-                    return stopped_result(name, owner_policy);
+                    return stopped_result(name);
                 }
                 return Err("planner_cancelled_no_replay".into());
             }
-            let force_final = name == "decide" && (remaining as u64) < minimum_turn_ms * 2;
-            let mut turn_input = input.clone();
-            let turn_tools = if force_final {
-                turn_input.push(json!({"role":"user","content":"Tools are disabled. Use the original evidence and completed tool results above. Return the final JSON trade plan, or a reasoned empty-actions abstention."}));
-                Vec::new()
-            } else {
-                tools.clone()
-            };
             let mut frame = Frame {
                 role: name.to_owned(),
-                input: turn_input,
-                tools: turn_tools,
+                input: input.clone(),
+                tools: tools.clone(),
                 owner_tools: owner_tools_for_call(cfg, name, bundle, guard),
                 citation_ids: citation_ids.clone(),
-                final_answer_only: force_final || owner_review,
+                final_answer_only: owner_review,
                 review_only: owner_review,
                 decision_evidence: context,
                 max_instrument_keys: (tool_limits.max_instrument_keys != MAX_INSTRUMENT_KEYS)
@@ -2861,15 +2730,9 @@ pub(super) fn run_collect(
                         &json!({"input_tokens":provider["tokens_in"],"output_tokens":provider["tokens_out"]}),
                         &mut token_totals,
                     );
-                    if name == "decide" && error.to_string() == "planner_call_timeout" {
-                        guard.check_finished()?;
-                        return Ok(json!({"actions":[],"stance":"abstain","notes":"host_call_timeout_no_trade"}).to_string());
-                    }
-                    if error.to_string() == "planner_cancelled_no_replay"
-                        && matches!(name, "digest" | "decide")
-                    {
+                    if error.to_string() == "planner_cancelled_no_replay" && name == "digest" {
                         stopped = true;
-                        return stopped_result(name, owner_policy);
+                        return stopped_result(name);
                     }
                     return Err(error);
                 }
@@ -2936,13 +2799,8 @@ pub(super) fn run_collect(
             // Fixture backends may return a final structured result directly.
             let Some(output) = response.get("output").and_then(Value::as_array) else {
                 if name == "digest" {
-                    let (normalized, retained) = normalize_digest_body(
-                        &archive,
-                        &raw,
-                        bundle,
-                        &tool_citations,
-                        owner_policy,
-                    );
+                    let (normalized, retained) =
+                        normalize_digest_body(&archive, &raw, bundle, &tool_citations);
                     rejected_digest |= retained;
                     return normalized;
                 }
@@ -2991,13 +2849,8 @@ pub(super) fn run_collect(
                     return Err("harness_final_output_missing".into());
                 }
                 if name == "digest" {
-                    let (normalized, retained) = normalize_digest_body(
-                        &archive,
-                        &text,
-                        bundle,
-                        &tool_citations,
-                        owner_policy,
-                    );
+                    let (normalized, retained) =
+                        normalize_digest_body(&archive, &text, bundle, &tool_citations);
                     rejected_digest |= retained;
                     text = normalized?;
                     publish_validated(c, name, role, &text);
@@ -3009,23 +2862,13 @@ pub(super) fn run_collect(
                 return Err("planner_clock_anomaly".into());
             }
             let expired = after_elapsed > budget_ms;
-            let remaining = budget_ms.saturating_sub(after_elapsed);
             // Provider web search is not a local call. Local tools cannot continue
-            // once the run cannot hold another measured turn, or the host forced final.
-            let stop_tools = force_final
-                || expired
-                || guard.check_cancel().is_err()
-                || (name == "decide" && (remaining as u64) < minimum_turn_ms);
+            // once the run budget has expired or the run was cancelled.
+            let stop_tools = expired || guard.check_cancel().is_err();
             if stop_tools {
-                if name == "decide" {
-                    if let Some(text) = embedded_plan(output) {
-                        return Ok(text);
-                    }
-                    return Ok(planner::host_budget_abstain());
-                }
                 if name == "digest" {
                     stopped = true;
-                    return stopped_result(name, owner_policy);
+                    return stopped_result(name);
                 }
                 return Err("harness_deadline_expired".into());
             }
@@ -3096,7 +2939,6 @@ pub(super) fn run_collect(
                     Tool::Portfolio => "get_portfolio",
                     Tool::History(_) => "get_recent_decisions",
                     Tool::Session => "get_session_status",
-                    Tool::LunaResults => "get_luna_tool_results",
                     Tool::Workspace(op) => op.name(),
                     Tool::Web(op) => op.name(),
                 };
@@ -3243,7 +3085,6 @@ pub(super) fn run_collect(
                     Tool::Portfolio => Ok(portfolio_view(bundle, now(), tool_limits.fill_limit)),
                     Tool::History(limit) => Ok(recent_decisions(bundle, limit)),
                     Tool::Session => Ok(session_status(c, bundle, name, role, now())),
-                    Tool::LunaResults => Ok(luna_tool_results(bundle)),
                     Tool::Workspace(op) => {
                         if !owner_workspace_tools_allowed(cfg, name, bundle, guard) {
                             Err("harness_workspace_scope_invalid".into())
@@ -3345,9 +3186,6 @@ pub(super) fn run_collect(
                 if failed {
                     failed_tools += 1;
                 }
-                if failed && aborts_on_failed_tool(name, failed_tools, role) {
-                    return Err("harness_decision_tool_failed_no_entries".into());
-                }
                 if !failed && name == "digest" {
                     observations.push(json!({"tool":tool_name,"result":value.clone()}));
                 }
@@ -3359,9 +3197,9 @@ pub(super) fn run_collect(
             }
         }
         match name {
-            "digest" | "decide" => {
+            "digest" => {
                 stopped = true;
-                stopped_result(name, owner_policy)
+                stopped_result(name)
             }
             _ => Err("harness_turn_budget_exhausted".into()),
         }

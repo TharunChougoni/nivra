@@ -1,5 +1,5 @@
-//! Orchestrator review configuration, prompt loading and legacy-role migration.
-//! Digest and decide retain their independent planner identities.
+//! Orchestrator configuration and prompt loading. The digest keeps its own
+//! planner identity; every other model role runs through the orchestrator.
 
 use super::Result;
 use super::planner::ModelRole;
@@ -30,12 +30,9 @@ pub(crate) struct LoadedPrompt {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Trigger {
-    /// Legacy selector retained for old configs. Digest always runs through its
-    /// own planner role and is never an orchestrator trigger.
+    /// Luna's factual digest. It runs through its own planner role and is
+    /// never an orchestrator trigger.
     Digest,
-    /// Legacy selector retained for old configs. Decide always runs through its
-    /// own planner role and is never an orchestrator trigger.
-    Decide,
     Operations,
     Strategy,
     Scorer,
@@ -45,15 +42,14 @@ pub(crate) enum Trigger {
 }
 
 impl Trigger {
-    /// Configured orchestrator triggers. Digest and decide remain separate model
-    /// roles with their own sandbox, credential and budget.
+    /// Configured orchestrator triggers. The digest remains a separate model
+    /// role with its own sandbox, credential and budget.
     #[cfg(test)]
     pub(crate) const ALL: [Self; 3] = [Self::Operations, Self::Strategy, Self::Scorer];
 
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Digest => "digest",
-            Self::Decide => "decide",
             Self::Operations => "operations",
             Self::Strategy => "strategy",
             Self::Scorer => "scorer",
@@ -180,8 +176,8 @@ impl Default for RunFirstSettings {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct TriggerSettings {
-    /// A disabled legacy role migrates to a disabled trigger. True is omitted
-    /// from serialization so existing configuration hashes do not change.
+    /// True is omitted from serialization so existing configuration hashes do
+    /// not change.
     #[serde(default = "enabled_true", skip_serializing_if = "is_true")]
     pub enabled: bool,
     pub prompt: PathBuf,
@@ -210,10 +206,6 @@ pub(crate) struct TriggerSettings {
     pub idle_interval_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_fill: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub after_decide: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub luna_no_decide_streak: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_streak: Option<u32>,
     /// Optional owner failure backoff. Absent keeps the historical wake-only
@@ -257,8 +249,6 @@ impl Default for TriggerSettings {
             replay: None,
             idle_interval_ms: None,
             after_fill: None,
-            after_decide: None,
-            luna_no_decide_streak: None,
             failure_streak: None,
             failure_backoff_ms: None,
             session_open_minute: None,
@@ -486,8 +476,6 @@ impl OrchestratorModelSettings {
                 for key in [
                     "idle_interval_ms",
                     "after_fill",
-                    "after_decide",
-                    "luna_no_decide_streak",
                     "failure_streak",
                     "failure_backoff_ms",
                     "session_open_minute",

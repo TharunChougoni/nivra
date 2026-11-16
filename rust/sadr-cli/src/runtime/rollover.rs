@@ -173,27 +173,12 @@ fn migration_evidence(c: &Config, day: NaiveDate) -> Result<Value> {
     } else {
         "explicit_prior_config"
     };
-    let mut result = json!({
+    let result = json!({
         "kind": kind,
         "old_binding": digest(&serde_json::to_vec(&old)?),
         "new_binding": digest(&serde_json::to_vec(&successor)?),
         "original_state_preserved": true
     });
-    if c.allow_legacy_model_led_default
-        && c.legacy_directory
-            .as_ref()
-            .is_none_or(|d| d == &c.directory)
-    {
-        let (_, body) = bound_state(c)?;
-        let ack: Value = serde_json::from_slice(
-            &crate::read_bounded(&c.directory.join("review.json"), 1_048_576)
-                .map_err(|_| "acknowledgment_unavailable")?,
-        )?;
-        let prior = acknowledged_body(c, &body, &ack)?;
-        if prior != body {
-            result["serialization_compatibility"] = json!({"kind":"explicit_missing_model_led_false_v1","current_state_sha256":digest(body.as_bytes()),"original_sealed_state_sha256":digest(prior.as_bytes()),"financial_values_unchanged":true,"original_acknowledgment_preserved":true});
-        }
-    }
     Ok(result)
 }
 pub(super) fn bound_state(c: &Config) -> Result<(Connection, String)> {
@@ -644,35 +629,11 @@ fn sealed_before_stop(c: &Config, body: &str) -> Result<bool> {
     Ok(prior == current)
 }
 const ACK_REASON: &str = "operator_acknowledged_closed_stopped_book";
-fn acknowledged_body(c: &Config, body: &str, ack: &Value) -> Result<String> {
+fn acknowledged_body(body: &str, ack: &Value) -> Result<String> {
     if ack["state_hash"] == digest(body.as_bytes()) {
         return Ok(body.to_owned());
     }
-    if !c.allow_legacy_model_led_default
-        || c.prior_config.is_none()
-        || c.legacy_directory
-            .as_ref()
-            .is_some_and(|d| d != &c.directory)
-        || ack["reason"] != ACK_REASON
-    {
-        return Err(Fail::new("acknowledgment_binding_changed").into());
-    }
-    let current: Portfolio = serde_json::from_str(body)?;
-    current.reconcile()?;
-    if current.model_led || !current.closed || current.halted || !current.positions.is_empty() {
-        return Err(Fail::new("acknowledgment_binding_changed").into());
-    }
-    let prior = body.replacen(",\"model_led\":false", "", 1);
-    let old: Portfolio = serde_json::from_str(&prior)?;
-    old.reconcile()?;
-    if prior == body
-        || old != current
-        || ack["state_hash"] != digest(prior.as_bytes())
-        || ack["report_hash"] != digest(&matching_report(c, &prior)?)
-    {
-        return Err(Fail::new("acknowledgment_binding_changed").into());
-    }
-    Ok(prior)
+    Err(Fail::new("acknowledgment_binding_changed").into())
 }
 fn matching_report(c: &Config, body: &str) -> Result<Vec<u8>> {
     let bytes = crate::read_bounded(&c.directory.join("report.json"), 16_000_000)
@@ -696,7 +657,7 @@ fn acknowledged_review(c: &Config, body: &str) -> Result<Option<Value>> {
     if ack["reason"] != ACK_REASON {
         return Ok(None);
     }
-    let sealed_body = acknowledged_body(c, body, &ack)?;
+    let sealed_body = acknowledged_body(body, &ack)?;
     if ack["status"] != SealVerdict::EligibleToSeal.as_str()
         || ack["session"] != json!(c.session)
         || ack["closed"] != true

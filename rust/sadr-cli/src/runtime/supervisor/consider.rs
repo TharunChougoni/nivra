@@ -408,7 +408,6 @@ fn consider_with_owner(
                 tick.now,
                 ok,
                 &hashes,
-                pending.decides_at_start,
                 failure_binding.as_deref(),
             );
             if !ok {
@@ -553,7 +552,6 @@ fn consider_with_owner(
             tick.now,
             &summary,
             hashes.clone(),
-            state.decides,
             tick.now,
             &compaction,
         ) {
@@ -611,7 +609,6 @@ fn consider_with_owner(
                     tick.now,
                     &summary,
                     hashes.clone(),
-                    state.decides,
                     &compaction,
                 ) {
                     Ok(started) => *worker = Some(started),
@@ -666,7 +663,6 @@ fn consider_with_owner(
                         tick.now,
                         &summary,
                         hashes.clone(),
-                        state.decides,
                         tick.now,
                         &compaction,
                     ) {
@@ -709,7 +705,6 @@ fn consider_with_owner(
     } else {
         tick.now
     };
-    let decides_at_start = state.decides;
     match start(
         c,
         cfg,
@@ -717,7 +712,6 @@ fn consider_with_owner(
         tick.now,
         &summary,
         hashes.clone(),
-        decides_at_start,
         hold_until_ms,
         &compaction,
     ) {
@@ -786,7 +780,6 @@ fn start_compaction_turn(
         tick.now,
         &summary,
         hashes.clone(),
-        state.decides,
         tick.now,
         bounds,
     ) {

@@ -2432,11 +2432,7 @@ fn planner_recover_checked(
             .ok_or("planner_config_required")?,
         c.session,
     )?;
-    let recovery_role = cfg.role(if cfg.orchestrator_owns_decisions() {
-        Trigger::Supervisor
-    } else {
-        Trigger::Decide
-    });
+    let recovery_role = cfg.role(Trigger::Supervisor);
     if !cfg.enabled || !recovery_role.enabled {
         return Err("planner_recover_planner_disabled".into());
     }

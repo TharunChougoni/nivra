@@ -344,9 +344,7 @@ fn run(
     // Recorded replies only: remove credential references, native network search and workers.
     cfg.model_config = None;
     cfg.digest.model_config = None;
-    cfg.decide.model_config = None;
     cfg.digest.tools.clear();
-    cfg.decide.tools.clear();
     cfg.research_tools = None;
     cfg.post_close = None;
     cfg.usage_namespace = Some("usage".into());
@@ -1937,8 +1935,6 @@ fn demo(output: &Path) -> Result<Value> {
         "full_universe_features":true,
         "discovery":{"max_scan_age_ms":180000,"max_prospects":10000},
         "digest":{"enabled":true,"model_id":"gpt-6-luna","transport":"openai_codex","timeout_ms":120000,"output_cap":8192,"daily_call_budget":5000,"budget_unit":"event","max_turns":64,"max_read_tools":256},
-        "decision_owner":{"version":1,"owner":"orchestrator"},
-        "decide":{"enabled":false,"model_id":"grok-4.7","transport":"direct_oauth","timeout_ms":150000,"run_timeout_ms":450000,"output_cap":8192,"daily_call_budget":500,"budget_unit":"event","max_turns":64,"max_read_tools":256,"minimum_turn_ms":30000},
         "orchestrator":{
             "enabled":true,
             "model":{"model_id":"grok-4.7","transport":"direct_oauth","timeout_ms":120000,"output_cap":8192,"daily_call_budget":200},
@@ -2003,10 +1999,8 @@ pub(super) fn exercise() {
         report["provider_requests"]["digest"], 375,
         "owner policy records a digest for each screened minute in this fixture"
     );
-    assert_eq!(
-        report["provider_requests"]["decide"].as_u64().unwrap_or(0),
-        0
-    );
+    assert!(report["provider_requests"].get("decide").is_none());
+    assert!(report["usage"].get("decide").is_none());
     assert_eq!(report["attempt_states"]["deferred"], 375);
     assert_eq!(report["attempt_states"]["planned"].as_u64().unwrap_or(0), 0);
     assert_eq!(report["portfolio"]["fills"].as_array().unwrap().len(), 0);
@@ -2166,7 +2160,6 @@ pub(super) fn exercise() {
     let mut cfg: Value =
         serde_json::from_slice(&fs::read(input.join("planner.json")).unwrap()).unwrap();
     cfg["digest"]["daily_call_budget"] = json!(5000);
-    cfg["decide"]["daily_call_budget"] = json!(500);
     rollover::atomic(&dir.path().join("liberal-planner.json"), &cfg).unwrap();
     planner::PlannerConfig::load(&dir.path().join("liberal-planner.json")).unwrap();
 }

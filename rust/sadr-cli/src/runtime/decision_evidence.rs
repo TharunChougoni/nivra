@@ -9,10 +9,6 @@ use sadr_core::{
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const PROMPT: &str =
-    include_str!("../../../../packaging/rust/prompts/profit_under_uncertainty.md");
-pub const DIGEST_PROMPT: &str =
-    include_str!("../../../../packaging/rust/prompts/decision_evidence_digest.md");
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Settings {
@@ -61,18 +57,6 @@ impl Settings {
         }
         self.volume_proxy.validate()?;
         Ok(())
-    }
-}
-pub fn bind_policy(value: &mut Value) {
-    if let Some(settings) = value
-        .get_mut("decision_evidence")
-        .and_then(Value::as_object_mut)
-    {
-        settings.insert("prompt_sha256".into(), json!(digest(PROMPT.as_bytes())));
-        settings.insert(
-            "digest_prompt_sha256".into(),
-            json!(digest(DIGEST_PROMPT.as_bytes())),
-        );
     }
 }
 struct Row {
@@ -465,7 +449,7 @@ mod tests {
         assert!(invalid.validate().is_err());
     }
     #[test]
-    fn configured_context_reaches_archived_tool_and_policy_without_changing_legacy_contracts() {
+    fn configured_context_reaches_archived_tool_and_policy_without_changing_default_contracts() {
         use super::super::{harness, planner};
         let (settings, instruments, scan, store) = fixture();
         let now = at(562);
@@ -479,10 +463,10 @@ mod tests {
             None,
         )
         .unwrap();
-        let legacy = planner::PlannerConfig::default();
-        let legacy_bytes = planner::policy_bytes(&legacy).unwrap();
+        let default_cfg = planner::PlannerConfig::default();
+        let default_bytes = planner::policy_bytes(&default_cfg).unwrap();
         assert!(
-            !String::from_utf8(legacy_bytes.clone())
+            !String::from_utf8(default_bytes.clone())
                 .unwrap()
                 .contains("decision_evidence")
         );
@@ -496,13 +480,14 @@ mod tests {
         let cfg = planner::PlannerConfig {
             decision_evidence: Some(settings),
             max_handoff_instruments: 1,
-            ..legacy.clone()
+            ..default_cfg.clone()
         };
         let policy = planner::policy_bytes(&cfg).unwrap();
-        assert_ne!(policy, legacy_bytes);
-        assert_eq!(
-            serde_json::from_slice::<Value>(&policy).unwrap()["decision_evidence"]["prompt_sha256"],
-            digest(PROMPT.as_bytes())
+        assert_ne!(policy, default_bytes);
+        assert!(
+            serde_json::from_slice::<Value>(&policy).unwrap()["decision_evidence"]
+                .get("prompt_sha256")
+                .is_none()
         );
         let dir = tempfile::tempdir().unwrap();
         let c = super::super::tests::config(dir.path());
@@ -519,7 +504,7 @@ mod tests {
         impl planner::Backend for Fake<'_> {
             fn call(&mut self, _: &planner::ModelRole, prompt: &str) -> Result<String> {
                 self.requests.push(serde_json::from_str(prompt)?);
-                Ok(if self.requests.len()==1 {json!({"output":[{"type":"function_call","name":"get_intraday_context","call_id":"context-one","arguments":"{\"instrument_keys\":[\"A\"]}"}]})} else {json!({"actions":[{"instrument_key":"A","side":"buy","units":1,"rupees":null,"max_price":"107.10","rationale":"fixture technical setup under uncertainty","exit_intent":{"target":"110","stop":"100"}}],"stance":"fixture long","notes":"model-estimated setup; not a fill"})}.to_string())
+                Ok(if self.requests.len()==1 {json!({"output":[{"type":"function_call","name":"get_intraday_context","call_id":"context-one","arguments":"{\"instrument_keys\":[\"A\"]}"}]})} else {json!({"complete":true,"as_of_ms":0,"coverage":{"universe":1,"scanned":1,"quoted":1,"featured":1,"experiments":0},"gaps":[],"changed_prospects":[],"active_rankings":[],"candidate_rankings":[],"bar_context":[],"spread_depth":[],"holdings":[],"cash":{"available":"0"},"fees":{"per_order":"0","buy_bps":"0","sell_bps":"0"},"recent_actions":[],"experiments":[],"evidence_ids":["bundle"]})}.to_string())
             }
             fn intraday_context(&mut self, keys: &[String], at: i64) -> Option<Result<Value>> {
                 Some(self.context.read(keys, at))
@@ -534,15 +519,14 @@ mod tests {
         guard.clock = &clock;
         let role = planner::ModelRole {
             enabled: true,
-            model_id: "grok-4.7".into(),
+            model_id: "gpt-6-luna".into(),
             daily_call_budget: 8,
-            minimum_turn_ms: Some(1),
             ..Default::default()
         };
         let answer = harness::run(
             &c,
             &cfg,
-            "decide",
+            "digest",
             &role,
             "fixture",
             &json!({"allowlist":instruments}),
@@ -550,23 +534,18 @@ mod tests {
             &guard,
         )
         .unwrap();
-        let p = super::super::tests::test_portfolio();
-        let verdicts = planner::validate(&answer, &p, &instruments).unwrap();
-        assert_eq!(verdicts.len(), 1);
-        assert!(verdicts[0].action.is_some());
+        assert_eq!(
+            serde_json::from_str::<Value>(&answer).unwrap()["complete"],
+            true
+        );
         assert_eq!(backend.requests.len(), 2);
         let frame: harness::Frame = serde_json::from_value(backend.requests[0].clone()).unwrap();
-        assert!(
-            harness::frame_instructions(&frame)
-                .unwrap()
-                .contains(PROMPT)
-        );
         assert_eq!(
             frame.tools,
-            harness::configured_definitions("decide", &role.tools, false, true, 1).unwrap()
+            harness::configured_definitions("digest", &role.tools, false, true, 1).unwrap()
         );
         assert!(
-            !harness::definitions("decide", &[], false)
+            !harness::definitions("digest", &[], false)
                 .unwrap()
                 .iter()
                 .any(|t| t["name"] == "get_intraday_context")
@@ -588,7 +567,7 @@ mod tests {
                 p.file_name()
                     .unwrap()
                     .to_string_lossy()
-                    .starts_with("harness-decide-")
+                    .starts_with("harness-digest-")
             })
             .unwrap();
         let archive = fs::read_dir(run)
@@ -607,7 +586,6 @@ mod tests {
         assert!(!c.directory.join("paper.sqlite").exists());
         assert!(!c.token_file.exists());
         let owner_cfg = planner::PlannerConfig::default();
-        assert!(owner_cfg.orchestrator_owns_decisions());
         let digest_frame = harness::Frame {
             role: "digest".into(),
             input: vec![],

@@ -852,7 +852,6 @@ pub(super) fn consider(
             .prompt_version
             .clone(),
         notes_version: 0,
-        decides_at_start: state.decides,
         fills_at_start: tick.fill_count,
         started_at_ms: tick.now,
         request: facts.clone(),
@@ -869,7 +868,6 @@ pub(super) fn consider(
         tick.now,
         timeout_ms.min(cutoff.saturating_sub(tick.now).max(1) as u64),
         hashes.clone(),
-        state.decides,
         tick.now,
         TurnRef {
             session: c.session.to_string(),
@@ -2738,7 +2736,6 @@ pub(super) fn exercise() {
         trigger: "review".into(),
         prompt_version: old_prompt,
         notes_version: 0,
-        decides_at_start: 0,
         fills_at_start: 0,
         started_at_ms: onow,
         request: json!({

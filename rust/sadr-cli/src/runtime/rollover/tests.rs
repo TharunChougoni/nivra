@@ -93,7 +93,7 @@ fn stopped_carry_fixture(dir: &Path) -> (Config, i64) {
     let mut db = open_book(&c).unwrap();
     let mut p: Portfolio = serde_json::from_str(&state_body(&c)).unwrap();
     let cfg: planner::PlannerConfig = serde_json::from_value(json!({"enabled":true,
-            "decide":{"enabled":true,"model_id":"fixture-model","daily_call_budget":8},
+            "digest":{"enabled":true,"model_id":"fixture-model","daily_call_budget":8},"orchestrator":{"enabled":true,"model":{"model_id":"grok-4.7"},"triggers":{"supervisor":{"prompt":concat!(env!("CARGO_MANIFEST_DIR"),"/../../packaging/rust/prompts/supervisor.md")}}},
             "events":{"enabled":true,"cooldown_ms":0,"max_pending":10,
                 "policy":{"price_move_bps":100,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
     // Authority is recorded while the book can still trade. A closed book
@@ -137,7 +137,7 @@ fn halted_carry_fixture(dir: &Path) -> (Config, i64, planner::PlannerConfig) {
     c.read_journal_device = metadata.dev();
     c.read_journal_inode = metadata.ino();
     let cfg: planner::PlannerConfig = serde_json::from_value(json!({"enabled":true,
-            "decide":{"enabled":true,"model_id":"fixture-model","daily_call_budget":8},
+            "digest":{"enabled":true,"model_id":"fixture-model","daily_call_budget":8},"orchestrator":{"enabled":true,"model":{"model_id":"grok-4.7"},"triggers":{"supervisor":{"prompt":concat!(env!("CARGO_MANIFEST_DIR"),"/../../packaging/rust/prompts/supervisor.md")}}},
             "events":{"enabled":true,"cooldown_ms":0,"max_pending":10,
                 "policy":{"price_move_bps":100,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
     let config_path = dir.join("planner.json");
@@ -1154,143 +1154,6 @@ fn offline_advance_resolves_pointer_source_and_stays_idempotent() {
         fs::read(old.directory.join("paper.sqlite")).unwrap(),
         source
     );
-}
-#[test]
-fn prior_config_migration_preserves_stopped_book_and_creates_only_abstaining_successor() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut old = super::super::tests::config(dir.path());
-    old.sessions_root = Some(dir.path().join("sessions"));
-    old.strategy = "deterministic_momentum_v1".into();
-    old.capital = None;
-    fs::write(&old.read_journal, b"synthetic journal identity only").unwrap();
-    let jm = fs::metadata(&old.read_journal).unwrap();
-    old.read_journal_device = jm.dev();
-    old.read_journal_inode = jm.ino();
-    let db = open_book(&old).unwrap();
-    let mut p = crate::runtime::tests::test_portfolio();
-    p.cash = sadr_core::execution::a("100000");
-    p.high_water = p.cash;
-    p.initial_allocation = None; // Exact deployed legacy schema.
-    p.stopped = true;
-    p.closed = true;
-    p.health = "operator_stopped".into();
-    let body = serde_json::to_string(&p)
-        .unwrap()
-        .replacen(",\"model_led\":false", "", 1);
-    db.execute(
-        "INSERT INTO state VALUES(1,?,?)",
-        rusqlite::params![book_binding(&old).unwrap(), body],
-    )
-    .unwrap();
-    let report = json!({"paper_only":true,"account":old.account,"session":old.session,"portfolio":serde_json::from_str::<Value>(&body).unwrap()});
-    fs::write(
-        old.directory.join("report.json"),
-        serde_json::to_vec(&report).unwrap(),
-    )
-    .unwrap();
-    drop(db);
-    acknowledge(&old, true, 1).unwrap();
-    let db = open_book(&old).unwrap();
-    let current_body = serde_json::to_string(&p).unwrap();
-    db.execute("UPDATE state SET body=? WHERE id=1", [&current_body])
-        .unwrap();
-    drop(db);
-    let original = [
-        "paper.sqlite",
-        "book-identity.json",
-        "report.json",
-        "review.json",
-    ]
-    .map(|name| fs::read(old.directory.join(name)).unwrap());
-    let prior = dir.path().join("prior-paper.json");
-    fs::write(&prior, serde_json::to_vec(&old).unwrap()).unwrap();
-    let mut c = old.clone();
-    c.capital = Some(sadr_core::execution::a("5000"));
-    c.strategy = "model_planner_v1".into();
-    assert!(preview(&c, 1792371600000).is_err()); // Changed config alone never rebinds.
-    c.prior_config = Some(prior.clone());
-    let monday = DateTime::parse_from_rfc3339("2026-10-19T08:30:00+05:30")
-        .unwrap()
-        .timestamp_millis();
-    assert!(preview(&c, monday).is_err());
-    c.allow_legacy_model_led_default = true;
-    let ack: Value =
-        serde_json::from_slice(&fs::read(old.directory.join("review.json")).unwrap()).unwrap();
-    assert_eq!(acknowledged_body(&c, &current_body, &ack).unwrap(), body);
-    let mut changed = p.clone();
-    changed.cash = sadr_core::execution::a("99999");
-    assert!(acknowledged_body(&c, &serde_json::to_string(&changed).unwrap(), &ack).is_err());
-    assert!(
-        acknowledged_body(
-            &c,
-            &current_body.replace("\"model_led\":false", "\"model_led\":true"),
-            &ack
-        )
-        .is_err()
-    );
-    assert!(
-        acknowledged_body(
-            &c,
-            &current_body.replace("\"model_led\":false", "\"model_led\":false,\"unknown\":1"),
-            &ack
-        )
-        .is_err()
-    );
-    let plan = preview(&c, monday).unwrap();
-    assert_eq!(
-        plan["strategy_decision"]["migration"]["serialization_compatibility"]["financial_values_unchanged"],
-        true
-    );
-    assert_eq!(plan["status"], "rollover_ready");
-    assert_eq!(plan["strategy_decision"]["reviewer"], "none_model_led");
-    assert_eq!(plan["strategy_decision"]["capital"], "5000");
-    assert_ne!(
-        plan["strategy_decision"]["migration"]["old_binding"],
-        plan["strategy_decision"]["migration"]["new_binding"]
-    );
-    assert_eq!(wide::load_wide(&mut open_book(&c).unwrap(), &c).unwrap(), p);
-    let mut wrong = c.clone();
-    wrong.read_scope = "other".into();
-    assert!(preview(&wrong, monday).is_err());
-    let next = advance(&c, monday).unwrap().unwrap();
-    let new_binding = plan["strategy_decision"]["migration"]["new_binding"]
-        .as_str()
-        .unwrap();
-    assert_eq!(book_binding(&next).unwrap(), new_binding);
-    let mut next_db = open_book(&next).unwrap();
-    let mut next_p = wide::load_wide(&mut next_db, &next).unwrap();
-    assert_eq!(next_p.cash, sadr_core::execution::a("5000"));
-    assert!(next_p.positions.is_empty());
-    assert!(!next.directory.join("carry-over.json").exists());
-    assert!(next_p.fills.is_empty());
-    let at = monday + 45 * 60000;
-    wide::commit_quotes(
-        &mut next_db,
-        &next,
-        &mut next_p,
-        &Default::default(),
-        &[],
-        at,
-        "fixture",
-        || at,
-    )
-    .unwrap();
-    assert!(next_p.fills.is_empty());
-    assert_eq!(current(&c).unwrap().session, next.session);
-    for (name, bytes) in [
-        "paper.sqlite",
-        "book-identity.json",
-        "report.json",
-        "review.json",
-    ]
-    .into_iter()
-    .zip(original)
-    {
-        assert_eq!(fs::read(old.directory.join(name)).unwrap(), bytes, "{name}");
-    }
-    fs::write(prior, b"{}").unwrap();
-    assert!(preview(&c, monday).is_err());
-    assert!(current(&c).is_ok()); // Successor no longer depends on old config availability.
 }
 #[test]
 fn explicit_cost_transition_carries_closed_book_without_rebinding_source() {

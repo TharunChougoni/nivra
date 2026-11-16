@@ -1431,7 +1431,6 @@ pub(super) fn consider_lane(
         trigger: "research".into(),
         prompt_version: identity.prompt_version.clone(),
         notes_version: 0,
-        decides_at_start: 0,
         fills_at_start: 0,
         started_at_ms: now,
         request: facts.clone(),
@@ -1468,7 +1467,6 @@ pub(super) fn consider_lane(
         now,
         timeout_ms,
         AppliedHashes::default(),
-        0,
         now,
         TurnRef {
             session,

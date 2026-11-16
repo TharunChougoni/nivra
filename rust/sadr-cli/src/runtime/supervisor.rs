@@ -229,7 +229,6 @@ impl AppliedHashes {
 struct LifecycleResult {
     seq: u64,
     trigger: String,
-    decides_at_start: u32,
     hashes: AppliedHashes,
     kind: RunKind,
     result: session::TurnResult,
@@ -314,7 +313,6 @@ fn reconcile_lifecycle_results(
         lifecycle_results.push(LifecycleResult {
             seq: record.seq,
             trigger: turn.trigger.clone(),
-            decides_at_start: turn.decides_at_start,
             hashes,
             kind,
             result: result.clone(),
@@ -342,7 +340,6 @@ fn reconcile_lifecycle_results(
                 entry.result.finished_at_ms,
                 succeeded,
                 &entry.hashes,
-                entry.decides_at_start,
                 entry.selection_binding.as_deref(),
             );
             if let Some(reason) = entry.result.reason.as_deref() {
@@ -370,22 +367,6 @@ fn reconcile_lifecycle_results(
         state.lifecycle_result_seq = state.lifecycle_result_seq.max(through);
         applied
     })
-}
-
-#[cfg(test)]
-pub(crate) fn note_luna(root: &std::path::Path, session: &str, decision: &str) {
-    let result = with_state(root, session, |state| {
-        if decision == "decide" {
-            state.luna_no_decide = 0;
-            state.decides = state.decides.saturating_add(1);
-        } else {
-            state.luna_no_decide = state.luna_no_decide.saturating_add(1);
-        }
-    });
-    if let Err(reason) = result {
-        eprintln!("supervisor_note_luna_failed reason={reason}");
-        record_state_error(root, session, reason);
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -966,9 +947,6 @@ pub(crate) struct Worker {
     receiver: mpsc::Receiver<std::result::Result<String, String>>,
     reason: &'static str,
     hashes: AppliedHashes,
-    /// The decide counter the turn's summary and prompt were built from. Only
-    /// decides at or before this snapshot count as reviewed (#154).
-    decides_at_start: u32,
     run_first: bool,
     hold_until_ms: i64,
     /// Persistent-session identity for this turn (#141).
@@ -1024,7 +1002,6 @@ fn test_worker(session: &str, turn_id: &str, notes_version: u64) -> Worker {
         receiver,
         reason: "idle",
         hashes: AppliedHashes::default(),
-        decides_at_start: 0,
         run_first: false,
         hold_until_ms: 0,
         session: session.to_owned(),
@@ -1054,7 +1031,6 @@ fn test_worker_with(
         receiver,
         reason: "idle",
         hashes: AppliedHashes::default(),
-        decides_at_start: 0,
         run_first: false,
         hold_until_ms: 0,
         session: session.to_owned(),
@@ -1087,7 +1063,6 @@ fn begin_turn(root: &std::path::Path, session: &str, turn_id: &str, now: i64) ->
                     trigger: "idle".into(),
                     prompt_version: "prompt-test".into(),
                     notes_version,
-                    decides_at_start: 0,
                     fills_at_start: 0,
                     started_at_ms: now,
                     request: json!({"trigger":"idle"}),
@@ -1130,7 +1105,6 @@ fn begin_test_lifecycle(
                     trigger: reason.into(),
                     prompt_version: "prompt-test".into(),
                     notes_version,
-                    decides_at_start: 0,
                     fills_at_start: 0,
                     started_at_ms: now,
                     request: json!({"host_lifecycle": lifecycle}),
@@ -1172,8 +1146,6 @@ fn summary_for(
         "session_minute": tick.minute,
         "session_end_ms": tick.session_end_ms,
         "fills_today": tick.fill_count,
-        "luna_no_decide_streak": state.luna_no_decide,
-        "decides_today": state.decides,
         "supervisor_failures": state.failures,
         "supervisor_runs": state.runs,
         "active_directives": active,
@@ -1259,8 +1231,6 @@ fn session_trigger(reason: &str) -> SessionTrigger {
         "change" => SessionTrigger::Change,
         "pre_close" => SessionTrigger::PreClose,
         "post_fill" => SessionTrigger::PostFill,
-        "post_decide" => SessionTrigger::PostDecide,
-        "luna_no_decide_streak" => SessionTrigger::LunaNoDecideStreak,
         "failure_streak" => SessionTrigger::FailureStreak,
         "decision" => SessionTrigger::Decision,
         "research" => SessionTrigger::Research,
@@ -1277,8 +1247,6 @@ fn reason_static(trigger: &str) -> &'static str {
         "change" => "change",
         "pre_close" => "pre_close",
         "post_fill" => "post_fill",
-        "post_decide" => "post_decide",
-        "luna_no_decide_streak" => "luna_no_decide_streak",
         "failure_streak" => "failure_streak",
         "decision" => "decision",
         "review" => "review",
@@ -1580,7 +1548,6 @@ fn spawn(
     now: i64,
     timeout_ms: u64,
     hashes: AppliedHashes,
-    decides_at_start: u32,
     hold_until_ms: i64,
     turn: TurnRef,
     kind: RunKind,
@@ -1651,7 +1618,6 @@ fn spawn(
         receiver,
         reason,
         hashes,
-        decides_at_start,
         run_first: matches!(reason, "session_open" | "resume" | "change"),
         hold_until_ms,
         session: turn.session,
@@ -1688,7 +1654,6 @@ fn start(
     now: i64,
     summary: &Value,
     hashes: AppliedHashes,
-    decides_at_start: u32,
     hold_until_ms: i64,
     bounds: &Compaction,
 ) -> std::result::Result<Worker, &'static str> {
@@ -1731,7 +1696,6 @@ fn start(
         trigger: reason.to_owned(),
         prompt_version: prompt_version.clone(),
         notes_version,
-        decides_at_start,
         fills_at_start: summary["fills_today"].as_u64().unwrap_or(0) as usize,
         started_at_ms: now,
         request: facts.clone(),
@@ -1750,7 +1714,6 @@ fn start(
         now,
         timeout_ms,
         hashes,
-        decides_at_start,
         hold_until_ms,
         TurnRef {
             session,
@@ -1823,7 +1786,6 @@ fn resume(
         now,
         timeout_ms,
         hashes,
-        turn.decides_at_start,
         hold_until_ms,
         TurnRef {
             session: turn.session.clone(),
@@ -1850,7 +1812,6 @@ fn start_lifecycle(
     now: i64,
     summary: &Value,
     hashes: AppliedHashes,
-    decides_at_start: u32,
     hold_until_ms: i64,
     bounds: &Compaction,
 ) -> std::result::Result<Worker, &'static str> {
@@ -1924,7 +1885,6 @@ fn start_lifecycle(
         trigger: reason.to_owned(),
         prompt_version: prompt_version.clone(),
         notes_version,
-        decides_at_start,
         fills_at_start: summary["fills_today"].as_u64().unwrap_or(0) as usize,
         started_at_ms: now,
         request: facts.clone(),
@@ -1946,7 +1906,6 @@ fn start_lifecycle(
         now,
         timeout_ms,
         hashes,
-        decides_at_start,
         hold_until_ms,
         TurnRef {
             session,
@@ -2175,7 +2134,6 @@ fn host_handoff_failure(
             trigger: "handoff".into(),
             prompt_version: "host_handoff_v1".into(),
             notes_version: session::Notes::new(&c.directory, &session).version(),
-            decides_at_start: facts["decides_today"].as_u64().unwrap_or(0) as u32,
             fills_at_start: facts["fills_today"].as_u64().unwrap_or(0) as usize,
             started_at_ms: now,
             request: super::transcript::redact(
@@ -2287,7 +2245,6 @@ fn finish_lifecycle(
             now,
             ok && logged,
             &worker.hashes,
-            worker.decides_at_start,
             worker.selection_binding.as_deref(),
         );
     }
@@ -2504,7 +2461,6 @@ fn fail_reply(
             now,
             false,
             &worker.hashes,
-            worker.decides_at_start,
             worker.selection_binding.as_deref(),
         );
     }
@@ -2581,7 +2537,6 @@ fn handle_reply(
             now,
             false,
             &worker.hashes,
-            worker.decides_at_start,
             worker.selection_binding.as_deref(),
         );
         record_failure(root, &worker.session, now, "session_notes_changed");
@@ -2678,7 +2633,6 @@ fn handle_reply(
         now,
         logged,
         &worker.hashes,
-        worker.decides_at_start,
         worker.selection_binding.as_deref(),
     );
     if !logged {
@@ -2750,18 +2704,10 @@ fn apply_finish(
     now: i64,
     ok: bool,
     hashes: &AppliedHashes,
-    decides_at_start: u32,
     failure_binding: Option<&str>,
 ) {
     state.last_run_ms = Some(now);
     state.runs = state.runs.saturating_add(1);
-    if !matches!(kind, RunKind::Review | RunKind::Research) {
-        // Only the decides the turn was built from count as reviewed. Anything
-        // Luna handed off while this run was in flight stays pending and wakes
-        // the next turn (#154). Research is evidence work, not a decision turn,
-        // so it never advances the reviewed-decides cursor.
-        state.seen_decides = state.seen_decides.max(decides_at_start);
-    }
     if ok {
         // A review or host lifecycle success is not evidence that decisions
         // recovered.
@@ -2795,9 +2741,6 @@ fn apply_finish(
         if reason == "pre_close" {
             state.pre_close_fired = true;
         }
-        if reason == "luna_no_decide_streak" {
-            state.luna_no_decide = 0;
-        }
     } else {
         state.failures = state.failures.saturating_add(1);
         // Only an actual owner decision/supervisor failure arms the optional
@@ -2828,20 +2771,10 @@ fn finish(
     now: i64,
     ok: bool,
     hashes: &AppliedHashes,
-    decides_at_start: u32,
     failure_binding: Option<&str>,
 ) {
     let result = with_state(root, session, |state| {
-        apply_finish(
-            state,
-            kind,
-            reason,
-            now,
-            ok,
-            hashes,
-            decides_at_start,
-            failure_binding,
-        );
+        apply_finish(state, kind, reason, now, ok, hashes, failure_binding);
     });
     if let Err(error) = result {
         eprintln!("supervisor_finish_unrecorded reason={error}");
@@ -2981,7 +2914,6 @@ fn start_aside(
         now,
         timeout_ms,
         AppliedHashes::current(cfg),
-        0,
         now,
         TurnRef {
             session: request.session.clone(),
@@ -3178,8 +3110,6 @@ const PENDING_KINDS: &[&str] = &[
     "change",
     "pre_close",
     "post_fill",
-    "post_decide",
-    "luna_no_decide_streak",
     "failure_streak",
     "decision",
     "review",

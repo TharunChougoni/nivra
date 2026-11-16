@@ -2029,7 +2029,6 @@ fn existing_wide_book_and_identity_survive_patch() {
                 trigger: "research".into(),
                 prompt_version: identity.prompt_version.clone(),
                 notes_version: 0,
-                decides_at_start: 0,
                 fills_at_start: 0,
                 started_at_ms: completed_at_ms,
                 request: serde_json::json!({
@@ -2746,7 +2745,7 @@ fn resume_preflight_requires_flat_paper_operator_stop() {
 fn pending_model_recovery_preserves_charges_and_busy_is_not_a_halt() {
     let d = tempfile::tempdir().unwrap();
     let mut c = super::super::tests::config(d.path());
-    let cfg: planner::PlannerConfig=serde_json::from_value(serde_json::json!({"enabled":true,"decide":{"enabled":true,"model_id":"fixture","daily_call_budget":4},"events":{"enabled":true,"cooldown_ms":0,"max_pending":10,"policy":{"price_move_bps":100,"max_event_age_ms":300000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
+    let cfg: planner::PlannerConfig=serde_json::from_value(serde_json::json!({"enabled":true,"digest":{"enabled":true,"model_id":"fixture","daily_call_budget":4},"orchestrator":{"enabled":true,"model":{"model_id":"grok-4.7"},"triggers":{"supervisor":{"prompt":concat!(env!("CARGO_MANIFEST_DIR"),"/../../packaging/rust/prompts/supervisor.md")}}},"events":{"enabled":true,"cooldown_ms":0,"max_pending":10,"policy":{"price_move_bps":100,"max_event_age_ms":300000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
     let file = d.path().join("planner.json");
     fs::write(&file, serde_json::to_vec(&cfg).unwrap()).unwrap();
     c.planner_config = Some(file);
@@ -2877,7 +2876,7 @@ fn pending_model_recovery_preserves_charges_and_busy_is_not_a_halt() {
 }
 fn issue_137_planner_config(dir: &std::path::Path) -> (Config, planner::PlannerConfig) {
     let mut c = super::super::tests::config(dir);
-    let cfg: planner::PlannerConfig = serde_json::from_value(serde_json::json!({"enabled":true,"decide":{"enabled":true,"model_id":"fixture-model","daily_call_budget":8},"events":{"enabled":true,"cooldown_ms":0,"max_pending":10,"policy":{"price_move_bps":100,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
+    let cfg: planner::PlannerConfig = serde_json::from_value(serde_json::json!({"enabled":true,"digest":{"enabled":true,"model_id":"fixture-model","daily_call_budget":8},"orchestrator":{"enabled":true,"model":{"model_id":"grok-4.7"},"triggers":{"supervisor":{"prompt":concat!(env!("CARGO_MANIFEST_DIR"),"/../../packaging/rust/prompts/supervisor.md")}}},"events":{"enabled":true,"cooldown_ms":0,"max_pending":10,"policy":{"price_move_bps":100,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
     let file = dir.join("planner.json");
     fs::write(&file, serde_json::to_vec(&cfg).unwrap()).unwrap();
     c.planner_config = Some(file);
@@ -2887,7 +2886,6 @@ fn closed_flat_planner_halt_is_recovered_without_financial_change() {
     let d = tempfile::tempdir().unwrap();
     let (c, cfg) = super::super::decision_owner::owner_fixture_config(d.path());
     cfg.validate_decision_owner().unwrap();
-    assert!(!cfg.role(Trigger::Decide).enabled);
     assert!(cfg.role(Trigger::Supervisor).enabled);
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
@@ -2987,7 +2985,6 @@ fn halted_model_led_book_enters_reviewed_protection_only_mode(corrected: bool) {
     let d = tempfile::tempdir().unwrap();
     let (c, mut cfg) = super::super::decision_owner::owner_fixture_config(d.path());
     cfg.validate_decision_owner().unwrap();
-    assert!(!cfg.role(Trigger::Decide).enabled);
     assert!(cfg.role(Trigger::Supervisor).enabled);
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
@@ -3185,7 +3182,6 @@ fn stopped_recovery_retires_interrupted_pending_claim_without_replay() {
     let d = tempfile::tempdir().unwrap();
     let (c, cfg) = super::super::decision_owner::owner_fixture_config(d.path());
     cfg.validate_decision_owner().unwrap();
-    assert!(!cfg.role(Trigger::Decide).enabled);
     assert!(cfg.role(Trigger::Supervisor).enabled);
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
@@ -3347,6 +3343,32 @@ fn halted_owner_book(
     .unwrap();
     (c, cfg, db, p)
 }
+/// A book whose authority predates the owner-only policy carries a stored
+/// `legacy` owner marker. Initialization can no longer write one, so the
+/// fixture rewrites the marker the way an older binary left it.
+fn initialize_legacy_marked(
+    db: &mut Connection,
+    c: &Config,
+    p: &Portfolio,
+    legacy: &planner::PlannerConfig,
+    at: i64,
+) {
+    redecision::initialize(db, c, p, Some(legacy), at).unwrap();
+    let body: String = db
+        .query_row(
+            "SELECT body FROM planner_authority_owner WHERE id=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut body: serde_json::Value = serde_json::from_str(&body).unwrap();
+    body["owner"] = serde_json::json!("legacy");
+    db.execute(
+        "UPDATE planner_authority_owner SET body=? WHERE id=1",
+        [body.to_string()],
+    )
+    .unwrap();
+}
 fn halted_legacy_book(
     dir: &std::path::Path,
 ) -> (
@@ -3359,11 +3381,11 @@ fn halted_legacy_book(
     let (c, legacy) = issue_137_planner_config(dir);
     let mut db = open_book(&c).unwrap();
     let p = load_wide(&mut db, &c).unwrap();
-    redecision::initialize(&mut db, &c, &p, Some(&legacy), start()).unwrap();
+    initialize_legacy_marked(&mut db, &c, &p, &legacy, start());
     let claim = redecision::reserve(&mut db, &c, &legacy, &p, start(), true)
         .unwrap()
         .unwrap();
-    redecision::initialize(&mut db, &c, &p, Some(&legacy), start() + 1).unwrap();
+    initialize_legacy_marked(&mut db, &c, &p, &legacy, start() + 1);
     let mut p = p;
     p.halted = true;
     p.stopped = true;
@@ -3719,7 +3741,7 @@ fn authority_audit_hardening() {
     fs::create_dir_all(&archive).unwrap();
     fs::write(
         archive.join("input.json"),
-        serde_json::to_vec(&serde_json::json!({"digest":old.digest,"decide":old.decide})).unwrap(),
+        serde_json::to_vec(&serde_json::json!({"digest":old.digest})).unwrap(),
     )
     .unwrap();
     let raw = marker_raw(&db).unwrap();
@@ -3787,47 +3809,6 @@ fn recovery_authority_snapshot(db: &Connection, c: &Config) -> serde_json::Value
     serde_json::json!({"portfolio":portfolio,"authority":authority,"ticks":ticks,
         "attempts":attempts,"receipt_exists":receipt_exists,"receipt":receipt,
         "usage":planner::usage(c).unwrap()})
-}
-fn recovery_refuses_legacy_to_owner_policy_migration() {
-    let d = tempfile::tempdir().unwrap();
-    let (c, legacy) = issue_137_planner_config(d.path());
-    let mut db = open_book(&c).unwrap();
-    let mut p = load_wide(&mut db, &c).unwrap();
-    redecision::initialize(&mut db, &c, &p, Some(&legacy), start()).unwrap();
-    redecision::reserve(&mut db, &c, &legacy, &p, start(), true)
-        .unwrap()
-        .unwrap();
-    p.halted = true;
-    p.stopped = true;
-    p.health = "planner_authority_invalid_recovery_required".into();
-    persist(
-        &mut db,
-        &c,
-        &p,
-        start(),
-        None,
-        None,
-        "planner_authority_invalid",
-    )
-    .unwrap();
-    let before = recovery_authority_snapshot(&db, &c);
-    drop(db);
-    let (owner_c, owner) = super::super::decision_owner::owner_fixture_config(d.path());
-    owner.validate_decision_owner().unwrap();
-    assert_eq!(
-        planner_recover(&owner_c, true).unwrap_err().to_string(),
-        "decision_owner_migration_required"
-    );
-    assert_eq!(
-        recovery_authority_snapshot(&open_book(&c).unwrap(), &c),
-        before
-    );
-
-    // Normal config-apply cannot migrate a halted legacy book.
-    assert_eq!(
-        config_apply(&owner_c, true).unwrap_err().to_string(),
-        "config_apply_halted_requires_planner_recover"
-    );
 }
 fn recovery_owner_receipt_compatibility() {
     for case in [
@@ -4058,7 +4039,7 @@ fn recovery_owner_receipt_compatibility() {
     let (c, legacy) = issue_137_planner_config(d.path());
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
-    redecision::initialize(&mut db, &c, &p, Some(&legacy), start()).unwrap();
+    initialize_legacy_marked(&mut db, &c, &p, &legacy, start());
     p.halted = true;
     p.stopped = true;
     p.health = "planner_authority_invalid_recovery_required".into();
@@ -4314,28 +4295,23 @@ fn recovery_owner_receipt_compatibility() {
         before["portfolio"]
     );
 
-    // The same repair path supports a legacy archive marker with an explicit
-    // legacy assertion; it does not migrate or recover the book.
+    // The owner is implicit, so a legacy owner assertion can never match the
+    // current policy; the refusal leaves the book and its authority untouched.
     let d = tempfile::tempdir().unwrap();
-    let (c, legacy, db, _p, _claim) = halted_legacy_book(d.path());
+    let (c, _legacy, db, _p, _claim) = halted_legacy_book(d.path());
     db.execute_batch("DROP TABLE planner_authority_owner")
         .unwrap();
     let before = recovery_authority_snapshot(&db, &c);
     drop(db);
-    planner_authority_repair(&c, "legacy", true).unwrap();
-    let db = open_book(&c).unwrap();
-    let marker = marker_receipt(&db).unwrap();
-    assert_eq!(marker["owner"], "legacy");
     assert_eq!(
-        marker["config_hash"],
-        digest(&planner::policy_bytes(&legacy).unwrap())
+        planner_authority_repair(&c, "legacy", true)
+            .unwrap_err()
+            .to_string(),
+        "planner_authority_repair_owner_mismatch"
     );
-    let audit = authority_audit_last(&db).unwrap();
-    assert_eq!(audit["kind"], "absent");
-    assert_eq!(audit["expected_owner"], "legacy");
     assert_eq!(
-        recovery_authority_snapshot(&db, &c)["portfolio"],
-        before["portfolio"]
+        recovery_authority_snapshot(&open_book(&c).unwrap(), &c),
+        before
     );
 
     // An exact archived full-config policy proves a stale hash upgrade.
@@ -4600,7 +4576,7 @@ fn recovery_owner_receipt_compatibility() {
     let (c, legacy) = issue_137_planner_config(d.path());
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
-    redecision::initialize(&mut db, &c, &p, Some(&legacy), start()).unwrap();
+    initialize_legacy_marked(&mut db, &c, &p, &legacy, start());
     mark_operator_stopped(&mut p);
     persist(&mut db, &c, &p, start(), None, None, "operator_stopped").unwrap();
     let charges = planner::usage(&c).unwrap();
@@ -4644,10 +4620,8 @@ fn resume_clears_operator_stop_with_audit_when_flat() {
     protection_only_retains_integrity_block();
     resume_resolves_active_session_book_and_keeps_safety_checks();
     pending_model_recovery_preserves_charges_and_busy_is_not_a_halt();
-    recovery_refuses_legacy_to_owner_policy_migration();
     recovery_owner_receipt_compatibility();
-    // Recovery success is owner-only. Legacy recovery is refused in production
-    // and covered by the explicit gate cases above.
+    // Recovery success is owner-only.
     closed_flat_planner_halt_is_recovered_without_financial_change();
     halted_model_led_book_enters_reviewed_protection_only_mode(false);
     stopped_recovery_retires_interrupted_pending_claim_without_replay();
@@ -5057,7 +5031,7 @@ fn resume_resolves_active_session_book_and_keeps_safety_checks() {
         "operator_stopped",
     )
     .unwrap();
-    let cfg: planner::PlannerConfig = serde_json::from_value(serde_json::json!({"enabled":true,"decide":{"enabled":true,"model_id":"fixture-model","daily_call_budget":4},"events":{"enabled":true,"cooldown_ms":0,"max_pending":10,"policy":{"price_move_bps":100,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
+    let cfg: planner::PlannerConfig = serde_json::from_value(serde_json::json!({"enabled":true,"digest":{"enabled":true,"model_id":"fixture-model","daily_call_budget":4},"orchestrator":{"enabled":true,"model":{"model_id":"grok-4.7"},"triggers":{"supervisor":{"prompt":concat!(env!("CARGO_MANIFEST_DIR"),"/../../packaging/rust/prompts/supervisor.md")}}},"events":{"enabled":true,"cooldown_ms":0,"max_pending":10,"policy":{"price_move_bps":100,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
     redecision::initialize(&mut db, &active, &book, Some(&cfg), start()).unwrap();
     let authority: String = db
         .query_row(
@@ -5105,7 +5079,7 @@ fn resume_resolves_active_session_book_and_keeps_safety_checks() {
     let mut edited = cfg.clone();
     edited.model_led = Some(true);
     edited.usage_namespace = Some("usage".into());
-    edited.decide.daily_call_budget = 19;
+    edited.digest.daily_call_budget = 19;
     fs::write(&planner_path, serde_json::to_vec(&edited).unwrap()).unwrap();
     legacy.planner_config = Some(planner_path.clone());
     let original_pin = fs::read(active.directory.join("model/usage-identity.json")).unwrap();
@@ -5384,6 +5358,8 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
         let plan = serde_json::json!({"decision_id":"fixture-predecessor","session_binding":book_binding(&c).unwrap(),"input_hash":digest(&serde_json::to_vec(&input).unwrap()),"input":input,"fake":false,"dry_run":false,"verdicts":planner::validate(&raw,&p,&[i.clone(),second.clone()]).unwrap()});
         fs::create_dir_all(c.directory.join("model/fixture-predecessor")).unwrap();
         planner::prepare_review_usage(&c).unwrap();
+        // Before any planner authority exists, the saved plan file primes the
+        // first entry.
         rollover::atomic(&c.directory.join("model/session-plan.json"), &plan).unwrap();
         commit_quotes(
             &mut db,
@@ -5398,8 +5374,28 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
         .unwrap();
         assert_eq!(p.positions.len(), 1);
         assert_eq!(p.fills.len(), 1);
-        let cfg:planner::PlannerConfig=serde_json::from_value(serde_json::json!({"enabled":true,"decide":{"enabled":true,"model_id":"fixture","daily_call_budget":2},"events":{"enabled":true,"cooldown_ms":0,"max_pending":20,"policy":{"price_move_bps":100,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
+        let cfg:planner::PlannerConfig=serde_json::from_value(serde_json::json!({"enabled":true,"digest":{"enabled":true,"model_id":"fixture","daily_call_budget":2},"orchestrator":{"enabled":true,"model":{"model_id":"grok-4.7"},"triggers":{"supervisor":{"prompt":concat!(env!("CARGO_MANIFEST_DIR"),"/../../packaging/rust/prompts/supervisor.md")}}},"events":{"enabled":true,"cooldown_ms":0,"max_pending":20,"policy":{"price_move_bps":100,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
         redecision::initialize(&mut db, &c, &p, Some(&cfg), at).unwrap();
+        // An earlier executable plan is the active head the event claim suspends.
+        db.execute(
+            "INSERT INTO planner_plan VALUES(?,?)",
+            rusqlite::params!["fixture-predecessor", plan.to_string()],
+        )
+        .unwrap();
+        let control: String = db
+            .query_row(
+                "SELECT body FROM planner_event_control WHERE id=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let mut control: serde_json::Value = serde_json::from_str(&control).unwrap();
+        control["active"] = serde_json::json!("fixture-predecessor");
+        db.execute(
+            "UPDATE planner_event_control SET body=? WHERE id=1",
+            [control.to_string()],
+        )
+        .unwrap();
         let observation = |time, price| sadr_core::redecision::MarketObservation {
             instrument: i.clone(),
             quote: quote(time, price),
@@ -5443,23 +5439,46 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
         ]
         .contains(&fault)
         {
+            // A failed digest settles the claim without changing the head.
             let mut current = plan.clone();
-            current["decision_id"] = serde_json::json!(format!("{}-{}", c.session, claim.id));
-            current["attempt_id"] = serde_json::json!(claim.id);
+            current["decision_id"] = serde_json::json!("fixture-successor");
             if fault == "audit_projection" {
                 current["verdicts"] = serde_json::json!([]);
             }
-            redecision::settle(
-                &mut db,
-                &c,
-                &cfg,
-                &p,
-                &claim,
-                Ok(current.clone()),
-                at + 1001,
-                true,
+            assert!(
+                redecision::settle(
+                    &mut db,
+                    &c,
+                    &cfg,
+                    &p,
+                    &claim,
+                    Err("fixture_digest_failed".into()),
+                    at + 1001,
+                    true,
+                )
+                .unwrap()
+                .is_none()
+            );
+            // A newer accepted plan is the active head; its damaged evidence
+            // is read on the next tick.
+            db.execute(
+                "INSERT INTO planner_plan VALUES(?,?)",
+                rusqlite::params!["fixture-successor", current.to_string()],
             )
-            .unwrap()
+            .unwrap();
+            let control: String = db
+                .query_row(
+                    "SELECT body FROM planner_event_control WHERE id=1",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let mut control: serde_json::Value = serde_json::from_str(&control).unwrap();
+            control["active"] = serde_json::json!("fixture-successor");
+            db.execute(
+                "UPDATE planner_event_control SET body=? WHERE id=1",
+                [control.to_string()],
+            )
             .unwrap();
             if fault == "malformed_verdict" {
                 current["verdicts"] = serde_json::json!([{}]);
@@ -5538,7 +5557,7 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
             );
             assert!(c.directory.join("model/usage").is_file());
         }
-        assert!(p.positions.is_empty());
+        assert!(p.positions.is_empty(), "{fault}");
         assert_eq!(p.fills.len(), 2);
         assert!(!p.fills[1].buy);
         assert_eq!(p.halted, fault != "none");
@@ -5553,7 +5572,7 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
             );
         } else {
             let rows:i64=db.query_row("SELECT count(*) FROM planner_action WHERE decision='fixture-predecessor' AND idx=1",[],|r|r.get(0)).unwrap();
-            assert_eq!(rows, 0); // Its second action never executes through the compatibility file.
+            assert_eq!(rows, 0); // Its second action never executes while suspended or damaged.
         }
         p.reconcile().unwrap();
         let saved = load_wide(&mut db, &c).unwrap();

@@ -140,13 +140,11 @@ projection starts no model call, probe, network request, queue or journal.
 
 ### Decision-owner migration policy
 
-The optional top-level `decision_owner` block versions order authority:
-`{"version": 1, "owner": "orchestrator"}`. Absent or `owner:"legacy"` preserves
-legacy policy identity for decoding, but enabled runtime planners require
-reviewed migration before model work. The two-role policy requires an enabled
-orchestrator with an enabled supervisor trigger, an enabled digest, a disabled
-decide role and enabled events; a missing prerequisite is refused at load with
-its specific `decision_owner_*` code. The policy is reviewable without applying
+The persistent orchestrator is the only decision owner; the planner config has
+no `decision_owner`, `decide` or `handoff_gate` key. An enabled policy requires
+an enabled orchestrator with an enabled supervisor trigger, an enabled digest
+and enabled events; a missing prerequisite is refused at load with its specific
+`decision_owner_*` code. The policy is reviewable without applying
 it via `sadr-rs planner config-check --planner FILE --session DATE`, which reports
 the policy hash and refuses a missing prerequisite. It never writes a policy.
 
@@ -318,8 +316,7 @@ profile's supervisor prompt, then the compiled supervisor default. If the
 explicit field is absent, the existing profile/default behavior is unchanged.
 `orchestrator.trigger_prompts.<trigger>` overrides the short user-turn template
 for one of `session_open`, `resume`,
-`change`, `pre_close`, `post_fill`, `post_decide`, `luna_no_decide_streak`,
-`failure_streak`, `idle`, `compaction` or `handoff`. Templates may use only the
+`change`, `pre_close`, `post_fill`, `failure_streak`, `idle`, `compaction` or `handoff`. Templates may use only the
 placeholders documented for that trigger (for example `{{session}}`,
 `{{notes}}`, `{{recent_turns}}`, `{{summary}}` and `{{change}}`); an unknown or
 misspelled placeholder is a configuration error, never an empty render. The
@@ -695,8 +692,6 @@ explicit; daily bars never become live quotes.
   `get_portfolio`, `get_recent_decisions` and `get_session_status` expose
   current cash/holdings/exit intents, bounded prior Luna/Grok/advisory memory and
   clock/phase/budget/trigger facts.
-- `get_luna_tool_results`: decide-only view of Luna's completed observations from
-  this run. It is untrusted, may age, and never replaces a fresh quote.
 - `web_search` / `x_search`: configured Grok provider-native tools, no local shell
   or browser. Archive actual provider receipts/citations; entitlement is separate.
 - `web_search`, `web_fetch` and `news_lookup`: opt-in host tools for the
@@ -811,9 +806,8 @@ portfolio records `portfolio_changed`, a changed or unresolvable policy
 `policy_changed`, and a changed profile `profile_changed` in `planner_action`
 and performs no fill. The plan remains archived; a new decision supersedes it.
 Plans without these fields keep the legacy compatible path, so archived plans
-remain readable and executable. The reviewed `decision_owner` policy uses the
-persistent orchestrator to produce these plans; legacy policies retain their
-separate decide role.
+remain readable and executable. The persistent orchestrator produces these
+plans.
 
 ## What model observations establish
 

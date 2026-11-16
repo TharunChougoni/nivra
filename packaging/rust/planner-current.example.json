@@ -2,10 +2,6 @@
   "enabled": true,
   "provider": "xai_subscription",
   "model_led": true,
-  "decision_owner": {
-    "version": 1,
-    "owner": "orchestrator"
-  },
   "require_digest": true,
   "digest": {
     "enabled": true,
@@ -19,9 +15,6 @@
     "max_turns": 8,
     "max_read_tools": 24,
     "max_analysis_tools": 4
-  },
-  "decide": {
-    "enabled": false
   },
   "orchestrator": {
     "enabled": true,

@@ -53,9 +53,6 @@ Example planner fields, merged with existing role/credential settings:
                 "scan_batch_size": 200, "scan_interval_ms": 8000},
   "digest": {"daily_call_budget": 5000, "budget_unit": "event",
              "max_turns": 64, "max_read_tools": 256, "timeout_ms": 120000},
-  "decide": {"daily_call_budget": 500, "budget_unit": "event",
-             "max_turns": 64, "max_read_tools": 256, "minimum_turn_ms": 30000,
-             "timeout_ms": 150000, "run_timeout_ms": 600000},
   "events": {"cooldown_ms": 10000, "decision_timeout_ms": 900000}
 }
 ```

@@ -2,21 +2,6 @@ use super::*;
 use sadr_core::execution::Instrument;
 use sadr_core::finance::Price;
 #[test]
-fn shadow_policy_upgrade_requires_exact_old_configuration() {
-    let d = tempfile::tempdir().unwrap();
-    let c = super::super::tests::config(d.path());
-    let mut cfg = cfg();
-    cfg.discovery = Some(serde_json::from_value(json!({"max_scan_age_ms":180000,"max_prospects":40,"strategy_selection":{"enabled":true,"library_path":"/shadow/library"}})).unwrap());
-    let old = digest(&planner::legacy_policy_bytes(&cfg).unwrap());
-    assert_eq!(
-        upgrade_config_hash(&c, &cfg, &old).unwrap(),
-        Some((config_hash(&cfg).unwrap(), "legacy_policy"))
-    );
-    cfg.discovery.as_mut().unwrap().max_prospects += 1;
-    assert!(upgrade_config_hash(&c, &cfg, &old).unwrap().is_none());
-
-    configuration_check_names_the_failed_prompt_or_config_hash();
-}
 fn configuration_check_names_the_failed_prompt_or_config_hash() {
     let d = tempfile::tempdir().unwrap();
     let mut c = super::super::tests::config(d.path());
@@ -24,9 +9,9 @@ fn configuration_check_names_the_failed_prompt_or_config_hash() {
     fs::write(&prompt, "scorer v1").unwrap();
     let mut planner: planner::PlannerConfig = serde_json::from_value(json!({
             "enabled":true,
-            "decide":{"enabled":true,"model_id":"fixture-model","daily_call_budget":4},
+            "digest":{"enabled":true,"model_id":"fixture-model","daily_call_budget":4},
             "events":{"enabled":true,"cooldown_ms":0,"max_pending":10,"policy":{"price_move_bps":100,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}},
-            "orchestrator":{"enabled":true,"triggers":{"scorer":{"prompt":prompt,"after_minute":931}}}
+            "orchestrator":{"enabled":true,"model":{"model_id":"grok-4.7"},"triggers":{"scorer":{"prompt":prompt,"after_minute":931},"supervisor":{"prompt":prompt}}}
         }))
         .unwrap();
     let path = d.path().join("planner.json");
@@ -106,7 +91,6 @@ fn collapsed_recheck_cites_real_triggers() {
     enqueue_owner_research_event(
         &owner_db,
         &c,
-        &owner_cfg,
         &task_id,
         2,
         Some(&result_sha256),
@@ -117,7 +101,6 @@ fn collapsed_recheck_cites_real_triggers() {
     enqueue_owner_research_event(
         &owner_db,
         &c,
-        &owner_cfg,
         &task_id,
         2,
         Some(&result_sha256),
@@ -129,7 +112,6 @@ fn collapsed_recheck_cites_real_triggers() {
         enqueue_owner_research_event(
             &owner_db,
             &c,
-            &owner_cfg,
             &task_id,
             2,
             Some(&"c".repeat(64)),
@@ -174,7 +156,6 @@ fn collapsed_recheck_cites_real_triggers() {
         enqueue_owner_research_event(
             &owner_db,
             &c,
-            &owner_cfg,
             &task_id,
             2,
             Some(&result_sha256),
@@ -186,18 +167,9 @@ fn collapsed_recheck_cites_real_triggers() {
         "planner_owner_research_event_invalid"
     );
     assert_eq!(
-        enqueue_owner_research_event(
-            &owner_db,
-            &c,
-            &owner_cfg,
-            &task_id,
-            3,
-            None,
-            "succeeded",
-            at() + 100,
-        )
-        .unwrap_err()
-        .to_string(),
+        enqueue_owner_research_event(&owner_db, &c, &task_id, 3, None, "succeeded", at() + 100,)
+            .unwrap_err()
+            .to_string(),
         "planner_owner_research_event_invalid"
     );
     let pending = logged_pending(&owner_db).unwrap();
@@ -238,7 +210,7 @@ fn at() -> i64 {
         .timestamp_millis()
 }
 fn cfg() -> planner::PlannerConfig {
-    serde_json::from_value(json!({"enabled":true,"decide":{"enabled":true,"model_id":"fixture-model","daily_call_budget":4},"events":{"enabled":true,"cooldown_ms":0,"max_pending":10,"policy":{"price_move_bps":100,"volume_step_units":null,"gap_bps":null,"proximity_bps":null,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap()
+    serde_json::from_value(json!({"enabled":true,"digest":{"enabled":true,"model_id":"fixture-model","daily_call_budget":4},"orchestrator":{"enabled":true,"model":{"model_id":"grok-4.7"},"triggers":{"supervisor":{"prompt":"supervisor.md"}}},"events":{"enabled":true,"cooldown_ms":0,"max_pending":10,"policy":{"price_move_bps":100,"volume_step_units":null,"gap_bps":null,"proximity_bps":null,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap()
 }
 fn instrument() -> Instrument {
     Instrument {
@@ -295,7 +267,7 @@ fn admitted_deadline_survives_old_backlog() {
         &cfg,
         &p,
         &first,
-        Ok(plan(&c, &first)),
+        Ok(owner_plan(&c, &cfg, &first)),
         at(),
         true,
     )
@@ -322,12 +294,12 @@ fn admitted_deadline_survives_old_backlog() {
             &cfg,
             &p,
             &claim,
-            Ok(plan(&c, &claim)),
+            Ok(owner_plan(&c, &cfg, &claim)),
             admitted + 200_000,
             true
         )
         .unwrap()
-        .is_some()
+        .is_none()
     );
     assert!(
         reserve(&mut db, &c, &cfg, &p, admitted + 200_001, true)
@@ -337,74 +309,10 @@ fn admitted_deadline_survives_old_backlog() {
     assert!(!p.halted);
 }
 #[test]
-fn idle_digest_runs_only_after_interval_since_last_digest_and_every_digest_has_a_reason() {
-    let d = tempfile::tempdir().unwrap();
-    let c = super::super::tests::config(d.path());
-    let mut db = open_book(&c).unwrap();
-    let p = crate::runtime::tests::test_portfolio();
-    let mut cfg = cfg();
-    cfg.discovery = Some(
-        serde_json::from_value(
-            json!({"max_scan_age_ms":180000,"max_prospects":10,"idle_digest_interval_ms":300000}),
-        )
-        .unwrap(),
-    );
-    initialize(&mut db, &c, &p, Some(&cfg), at()).unwrap();
-    let first = reserve(&mut db, &c, &cfg, &p, at(), true).unwrap().unwrap();
-    assert_eq!(trigger_reason(&first.trigger), "startup");
-    settle(
-        &mut db,
-        &c,
-        &cfg,
-        &p,
-        &first,
-        Ok(plan(&c, &first)),
-        at(),
-        true,
-    )
-    .unwrap();
-    assert!(
-        reserve(&mut db, &c, &cfg, &p, at() + 299_000, true)
-            .unwrap()
-            .is_none(),
-        "no idle digest inside the interval"
-    );
-    // A triggered digest resets the idle clock.
-    let (id, body) = disk_event("price_move", "NSE_EQ|FIXTURE", at() + 295_000, true);
-    insert_pending(&db, &id, at() + 295_000, &body);
-    let triggered = reserve(&mut db, &c, &cfg, &p, at() + 299_500, true)
-        .unwrap()
-        .unwrap();
-    assert_eq!(trigger_reason(&triggered.trigger), "price_move");
-    settle(
-        &mut db,
-        &c,
-        &cfg,
-        &p,
-        &triggered,
-        Ok(plan(&c, &triggered)),
-        at() + 299_500,
-        true,
-    )
-    .unwrap();
-    assert!(
-        reserve(&mut db, &c, &cfg, &p, at() + 400_000, true)
-            .unwrap()
-            .is_none()
-    );
-    let idle = reserve(&mut db, &c, &cfg, &p, at() + 599_500, true)
-        .unwrap()
-        .unwrap();
-    assert_eq!(trigger_reason(&idle.trigger), "idle_interval");
-
+fn owner_cadence_waits_for_the_initial_event_and_every_digest_has_a_reason() {
     // The owner cadence defaults to 60 s, waits for the initial event, and
     // never outranks a material event that is already due.
     let mut owner_cfg = crate::runtime::redecision::tests::cfg();
-    owner_cfg.decide.enabled = false;
-    owner_cfg.decision_owner = Some(planner::DecisionOwnerPolicy {
-        version: 1,
-        owner: planner::DecisionOwner::Orchestrator,
-    });
     owner_cfg.discovery =
         Some(serde_json::from_value(json!({"max_scan_age_ms":180000,"max_prospects":10})).unwrap());
     let owner_dir = tempfile::tempdir().unwrap();
@@ -848,7 +756,7 @@ fn event_claims_supersede_once_and_preserve_crashes_failures_and_original_usage(
                 .unwrap()
                 .is_none()
         );
-        let original = plan(&c, &initial);
+        let original = owner_plan(&c, &cfg, &initial);
         assert!(
             settle(
                 &mut db,
@@ -861,12 +769,10 @@ fn event_claims_supersede_once_and_preserve_crashes_failures_and_original_usage(
                 true
             )
             .unwrap()
-            .is_some()
+            .is_none()
         );
-        assert_eq!(
-            planner::saved_plan(&db, &c).unwrap(),
-            Some(original.clone())
-        );
+        // An accepted digest defers to the owner; it never becomes a plan head.
+        assert!(planner::saved_plan(&db, &c).unwrap().is_none());
         assert!(
             settle(
                 &mut db,
@@ -916,10 +822,7 @@ fn event_claims_supersede_once_and_preserve_crashes_failures_and_original_usage(
             .unwrap()
             .unwrap();
         assert_ne!(next.id, initial.id);
-        assert_eq!(
-            next.predecessor,
-            original["decision_id"].as_str().map(str::to_owned)
-        );
+        assert!(next.predecessor.is_none());
         assert_eq!(next.deadline_ms, at() + 12000);
         // A compatibility file cannot revive the superseded decision.
         fs::create_dir_all(c.directory.join("model")).unwrap();
@@ -936,7 +839,7 @@ fn event_claims_supersede_once_and_preserve_crashes_failures_and_original_usage(
                     &cfg,
                     &p,
                     &next,
-                    Ok(plan(&c, &next)),
+                    Ok(owner_plan(&c, &cfg, &next)),
                     at() + 2001,
                     true
                 )
@@ -947,7 +850,7 @@ fn event_claims_supersede_once_and_preserve_crashes_failures_and_original_usage(
             let result = if outcome == "failure" || outcome == "changed_failure" {
                 Err("synthetic-provider-secret-must-not-be-stored".into())
             } else {
-                Ok(plan(&c, &next))
+                Ok(owner_plan(&c, &cfg, &next))
             };
             if outcome == "late" {
                 now = next.deadline_ms + 1;
@@ -975,18 +878,8 @@ fn event_claims_supersede_once_and_preserve_crashes_failures_and_original_usage(
                 block(&mut db, &c, "fixture_observation_failure").unwrap();
             }
             let result = settle(&mut db, &c, &cfg, &p, &next, result, now, true).unwrap();
-            assert_eq!(result.is_some(), outcome == "success");
-            if outcome == "changed_failure" {
-                assert!(blocked(&db, &c).unwrap());
-            }
-            if outcome == "success" {
-                assert_eq!(
-                    planner::saved_plan(&db, &c).unwrap().unwrap()["attempt_id"],
-                    next.id
-                );
-            } else {
-                assert!(planner::saved_plan(&db, &c).unwrap().is_none());
-            }
+            assert!(result.is_none());
+            assert!(planner::saved_plan(&db, &c).unwrap().is_none());
         }
         assert!(
             reserve(&mut db, &c, &cfg, &p, at() + 3000, true)
@@ -1006,7 +899,7 @@ fn event_claims_supersede_once_and_preserve_crashes_failures_and_original_usage(
                 |r| r.get::<_, i64>(0)
             )
             .unwrap(),
-            1
+            0
         );
         let result: Option<String> = db
             .query_row(
@@ -1016,7 +909,7 @@ fn event_claims_supersede_once_and_preserve_crashes_failures_and_original_usage(
             )
             .unwrap();
         assert!(!result.unwrap_or_default().contains("secret"));
-        assert_eq!(planner::usage(&c).unwrap()["decide"], 0); // Admission initializes the namespace without charging a call.
+        assert_eq!(planner::usage(&c).unwrap()["digest"], 0); // Admission initializes the namespace without charging a call.
         if outcome == "success" {
             db.execute_batch("DELETE FROM planner_event_control;")
                 .unwrap();
@@ -1041,7 +934,7 @@ fn event_claims_supersede_once_and_preserve_crashes_failures_and_original_usage(
         &cfg,
         &p,
         &claim,
-        Ok(plan(&c, &claim)),
+        Ok(owner_plan(&c, &cfg, &claim)),
         at(),
         true,
     )
@@ -1617,7 +1510,7 @@ fn full_recheck_backlog_collapses_on_restart_and_records_prior_closes() {
         events.policy.max_event_age_ms = 300_000;
         events.policy.price_move_bps = Some(100);
     }
-    assert_eq!(planner.decide.daily_call_budget, 4);
+    assert_eq!(planner.digest.daily_call_budget, 4);
     initialize(&mut db, &c, &p, Some(&planner), restart).unwrap();
     let usage_path = planner::fixture_reservation(&c, &planner);
     let usage_bytes = fs::read(&usage_path).unwrap();
@@ -1782,17 +1675,18 @@ fn full_recheck_backlog_collapses_on_restart_and_records_prior_closes() {
         &planner,
         &p,
         &claim,
-        Ok(plan(&c, &claim)),
+        Ok(owner_plan(&c, &planner, &claim)),
         restart,
         true,
     )
     .unwrap();
-    assert!(accepted.is_some());
+    // An accepted digest defers to the persistent owner; it never becomes an
+    // executable plan head and never fills.
+    assert!(accepted.is_none());
     assert!(p.fills.is_empty());
     assert!(p.positions.is_empty());
     let view = status(&db, &c).unwrap().unwrap();
-    assert_eq!(view["status"], "validated_plan");
-    assert!(view["actions"].as_array().unwrap().is_empty());
+    assert_eq!(view["status"], "waiting_for_eligible_event");
     assert_eq!(fs::read(&usage_path).unwrap(), usage_bytes);
     quote.bid = Price::parse("110").unwrap();
     quote.ask = Price::parse("110").unwrap();
@@ -1839,7 +1733,7 @@ fn full_recheck_backlog_collapses_on_restart_and_records_prior_closes() {
     let view = status(&db, &c).unwrap().unwrap();
     assert_eq!(view["status"], "operator_stopped_no_replay");
     assert_eq!(view["coverage"]["market_observations"], seen);
-    assert_eq!(planner.decide.daily_call_budget, 4);
+    assert_eq!(planner.digest.daily_call_budget, 4);
 }
 fn recoverable_planner_failure_rechecks_after_cooldown() {
     let d = tempfile::tempdir().unwrap();
@@ -1867,10 +1761,10 @@ fn recoverable_planner_failure_rechecks_after_cooldown() {
         )
         .unwrap();
         assert!(settled.is_none());
-        assert_eq!(
-            status(&db, &c).unwrap().unwrap()["status"],
-            "planner_failed_no_replay"
-        );
+        // A failed digest is one bad attempt, not a decision block (#221).
+        let view = status(&db, &c).unwrap().unwrap();
+        assert_eq!(view["status"], "waiting_for_eligible_event");
+        assert_eq!(view["last_digest_failure"], "planner_failed_no_replay");
         let stored: String = db
             .query_row(
                 "SELECT result FROM planner_attempt_log WHERE id=?",
@@ -1889,7 +1783,7 @@ fn recoverable_planner_failure_rechecks_after_cooldown() {
                 .unwrap()
                 .is_none()
         );
-        assert!(blocked(&db, &c).unwrap());
+        assert!(!blocked(&db, &c).unwrap());
         observe(&mut db, &c, &cfg, &p, &[], &[], at() + 1_500).unwrap();
         let view = status(&db, &c).unwrap().unwrap();
         assert_eq!(view["status"], "waiting_for_eligible_event");
@@ -1913,7 +1807,7 @@ fn recoverable_planner_failure_rechecks_after_cooldown() {
         assert_ne!(next.id, claim.id);
         assert_eq!(next.trigger["kind"], "price_move");
         assert_eq!(fs::read(&usage_path).unwrap(), usage_bytes);
-        assert_eq!(cfg.decide.daily_call_budget, 4);
+        assert_eq!(cfg.digest.daily_call_budget, 4);
     }
 
     let held = tempfile::tempdir().unwrap();
@@ -1931,16 +1825,16 @@ fn recoverable_planner_failure_rechecks_after_cooldown() {
         &planner,
         &p,
         &claim,
-        Ok(plan(&c, &claim)),
+        Ok(owner_plan(&c, &planner, &claim)),
         claim.started_ms,
         true,
     )
     .unwrap();
-    assert!(accepted.is_some());
+    assert!(accepted.is_none());
     assert!(!blocked(&db, &c).unwrap());
     assert_eq!(
         status(&db, &c).unwrap().unwrap()["status"],
-        "validated_plan"
+        "waiting_for_eligible_event"
     );
 
     let late = tempfile::tempdir().unwrap();
@@ -1952,7 +1846,7 @@ fn recoverable_planner_failure_rechecks_after_cooldown() {
         .unwrap()
         .unwrap();
     let mut changed = planner.clone();
-    changed.decide.daily_call_budget = 9;
+    changed.digest.daily_call_budget = 9;
     assert_eq!(
         config_hash(&planner).unwrap(),
         config_hash(&changed).unwrap()
@@ -1980,11 +1874,7 @@ fn recoverable_planner_failure_rechecks_after_cooldown() {
         .unwrap();
     let audit = migration_c.directory.join("model/original-attempt");
     fs::create_dir_all(&audit).unwrap();
-    rollover::atomic(
-        &audit.join("input.json"),
-        &json!({"digest":planner.digest,"decide":planner.decide}),
-    )
-    .unwrap();
+    rollover::atomic(&audit.join("input.json"), &json!({"digest":planner.digest})).unwrap();
     initialize(&mut migration_db, &migration_c, &p, Some(&changed), at()).unwrap();
     assert!(!blocked(&migration_db, &migration_c).unwrap());
     assert_eq!(
@@ -1992,7 +1882,7 @@ fn recoverable_planner_failure_rechecks_after_cooldown() {
         config_hash(&changed).unwrap()
     );
 
-    changed.decide.output_cap += 1;
+    changed.digest.output_cap += 1;
     assert!(
         settle(
             &mut db,
@@ -2039,8 +1929,11 @@ fn recoverable_planner_failure_rechecks_after_cooldown() {
         .unwrap()
         .is_none()
     );
+    // A recoverable digest failure is recorded, never a decision block (#221).
+    let view = status(&db, &c).unwrap().unwrap();
+    assert_eq!(view["status"], "waiting_for_eligible_event");
     assert_eq!(
-        status(&db, &c).unwrap().unwrap()["status"],
+        view["last_digest_failure"],
         "planner_completion_expired_or_changed"
     );
     observe(&mut db, &c, &planner, &p, &[], &[], at() + 1).unwrap();
@@ -2071,8 +1964,11 @@ fn recoverable_planner_failure_rechecks_after_cooldown() {
         .unwrap()
         .is_none()
     );
+    // A recoverable digest failure is recorded, never a decision block (#221).
+    let view = status(&db, &c).unwrap().unwrap();
+    assert_eq!(view["status"], "waiting_for_eligible_event");
     assert_eq!(
-        status(&db, &c).unwrap().unwrap()["status"],
+        view["last_digest_failure"],
         "planner_invalid_plan_no_entries"
     );
     observe(&mut db, &c, &planner, &p, &[], &[], at() + 1).unwrap();
@@ -2103,70 +1999,13 @@ fn recoverable_planner_failure_rechecks_after_cooldown() {
         "operator_stopped_no_replay"
     );
 
-    // Production recovery admits the owner policy but never infers the legacy
-    // Decide path. The gate refuses before any durable mutation.
-    let production = tempfile::tempdir().unwrap();
-    let c = super::super::tests::config(production.path());
-    let mut db = open_book(&c).unwrap();
     let p = crate::runtime::tests::test_portfolio();
-    let legacy = cfg();
-    initialize(&mut db, &c, &p, Some(&legacy), at()).unwrap();
-    reserve(&mut db, &c, &legacy, &p, at(), true)
-        .unwrap()
-        .unwrap();
-    initialize(&mut db, &c, &p, Some(&legacy), at() + 1).unwrap();
-    let before = serde_json::to_value(load(&db).unwrap().unwrap()).unwrap();
-    let ticks: i64 = db
-        .query_row("SELECT count(*) FROM ticks", [], |r| r.get(0))
-        .unwrap();
-    let attempts: Vec<(String, String, Option<String>)> = db
-        .prepare("SELECT id,state,result FROM planner_attempt_log ORDER BY id")
-        .unwrap()
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-        .unwrap()
-        .collect::<std::result::Result<_, _>>()
-        .unwrap();
-    let usage = planner::usage(&c).unwrap();
-    assert!(settings_for(&legacy, false).is_none());
-    assert!(settings_for(&legacy, true).is_some());
-    assert_eq!(
-        recover_for(&db, &c, &legacy, false, RecoveryClearance::Reviewed)
-            .unwrap_err()
-            .to_string(),
-        "planner_recover_events_disabled"
-    );
-    assert_eq!(
-        serde_json::to_value(load(&db).unwrap().unwrap()).unwrap(),
-        before
-    );
-    assert_eq!(
-        db.query_row("SELECT count(*) FROM ticks", [], |r| r.get::<_, i64>(0))
-            .unwrap(),
-        ticks
-    );
-    let after_attempts: Vec<(String, String, Option<String>)> = db
-        .prepare("SELECT id,state,result FROM planner_attempt_log ORDER BY id")
-        .unwrap()
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-        .unwrap()
-        .collect::<std::result::Result<_, _>>()
-        .unwrap();
-    assert_eq!(after_attempts, attempts);
-    assert_eq!(planner::usage(&c).unwrap(), usage);
-
     let owner_dir = tempfile::tempdir().unwrap();
     let (owner_c, owner) = super::super::decision_owner::owner_fixture_config(owner_dir.path());
     let mut owner_db = open_book(&owner_c).unwrap();
     initialize(&mut owner_db, &owner_c, &p, Some(&owner), at()).unwrap();
-    assert!(settings_for(&owner, false).is_some());
-    recover_for(
-        &owner_db,
-        &owner_c,
-        &owner,
-        false,
-        RecoveryClearance::Reviewed,
-    )
-    .unwrap();
+    assert!(settings(&owner).is_some());
+    recover(&owner_db, &owner_c, &owner, RecoveryClearance::Reviewed).unwrap();
     assert!(config_current(&owner_db, &owner).unwrap());
 
     // Startup preserves an integrity block that is not a known recoverable

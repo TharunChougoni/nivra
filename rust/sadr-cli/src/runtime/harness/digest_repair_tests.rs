@@ -1,166 +1,19 @@
 use super::*;
 #[test]
-fn decide_survives_failed_tools_up_to_the_configured_count() {
-    // 26 Oct 14:22 IST: one snapshot returned empty_depth and the grok decide
-    // aborted with harness_decision_tool_failed_no_entries (#43).
-    let mut role = crate::runtime::planner::ModelRole::default();
-    assert!(!aborts_on_failed_tool("decide", 1, &role));
-    assert!(!aborts_on_failed_tool("decide", 3, &role));
-    assert!(aborts_on_failed_tool("decide", 4, &role));
-    role.max_failed_tools = Some(0);
-    assert!(aborts_on_failed_tool("decide", 1, &role));
-    role.max_failed_tools = Some(10);
-    assert!(!aborts_on_failed_tool("decide", 10, &role));
-    assert!(!aborts_on_failed_tool("digest", 99, &role));
-}
-#[test]
-fn digest_directive_acknowledgements_and_bounds_preserve_rejection() {
+fn owner_digest_bounds_normalize_rows_and_retain_rejections() {
     let now = 1_000;
-    let directive = super::directives::Directive {
-        id: "dir-0123456789abcdef".into(),
-        text: "review A".into(),
-        keys: vec![],
-        target: "both".into(),
-        issued_at_ms: now,
-        expires_at_ms: now + 60_000,
-        supersedes: None,
-        request_id: None,
-        session: None,
-        authorization_scope: None,
-        expected_revision: None,
-        idempotency_key: None,
-    };
-    let store = tempfile::tempdir().unwrap();
-    super::directives::issue(store.path(), &directive).unwrap();
-    let base = json!({
-        "summary":"ok",
-        "evidence_ids":[],
-        "missing_data":[],
-        "uncertainties":[]
-    });
-    let mut acknowledged = base.clone();
-    acknowledged["directive_acknowledgements"] = json!([directive.id.clone()]);
-    let normalized: Value = serde_json::from_str(
-        &normalize_digest(&acknowledged.to_string(), &Value::Null, &BTreeSet::new()).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(
-        normalized["directive_acknowledgements"],
-        json!([directive.id.clone()])
-    );
-    assert!(super::directives::unacknowledged(store.path(), &normalized, now).is_empty());
-    assert!(
-        super::directives::unacknowledged_for(store.path(), &normalized, now, "decide").is_empty()
-    );
-    for candidate in [
-        base.clone(),
-        json!({
-            "summary":"ok","evidence_ids":[],"missing_data":[],
-            "uncertainties":[],"directive_acknowledgements":[]
-        }),
-        json!({
-            "summary":"ok","evidence_ids":[],"missing_data":[],
-            "uncertainties":[],"directive_acknowledgements":["dir-unknown"]
-        }),
-    ] {
-        let normalized: Value = serde_json::from_str(
-            &normalize_digest(&candidate.to_string(), &Value::Null, &BTreeSet::new()).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            super::directives::unacknowledged(store.path(), &normalized, now),
-            vec![directive.id.clone()]
-        );
-    }
-    // Decide accepts the same optional field without changing its plan.
+    // A paper plan accepts optional directive acknowledgements without
+    // changing its actions.
     let plan = json!({
         "actions":[],"stance":"abstain","notes":"wait",
-        "directive_acknowledgements":[directive.id.clone()]
+        "directive_acknowledgements":["dir-0123456789abcdef"]
     });
     let parsed = planner::plan_document(&plan.to_string()).unwrap();
     assert_eq!(
         parsed["directive_acknowledgements"],
-        json!([directive.id.clone()])
+        json!(["dir-0123456789abcdef"])
     );
     serde_json::from_value::<planner::TradePlan>(plan).unwrap();
-
-    let base = json!({"summary":"ok","evidence_ids":[],"missing_data":[],"uncertainties":[]});
-    let cases = [
-        ("summary_empty", "summary", json!(" ")),
-        ("summary_length", "summary", json!("x".repeat(8193))),
-        ("missing_data_count", "missing_data", json!(vec!["x"; 65])),
-        ("uncertainties_count", "uncertainties", json!(vec!["x"; 65])),
-        ("thesis_bounds", "thesis", json!("not an object")),
-        (
-            "missing_data_item_length",
-            "missing_data",
-            json!(["x".repeat(513)]),
-        ),
-        (
-            "uncertainties_item_length",
-            "uncertainties",
-            json!(["x".repeat(513)]),
-        ),
-    ];
-    assert_eq!(
-        digest_bounds_violation(&serde_json::from_value(base.clone()).unwrap(), &json!({})),
-        None
-    );
-    let held = json!({"positions":{"NSE_EQ|A":{"units":10}}});
-    let missing = json!({"summary":"ok","evidence_ids":[],"missing_data":[],
-            "uncertainties":[],"positions_review":[]});
-    assert_eq!(
-        normalize_digest(&missing.to_string(), &held, &BTreeSet::new())
-            .unwrap_err()
-            .to_string(),
-        "harness_digest_positions_review_invalid"
-    );
-    let reviewed = json!({"summary":"ok","evidence_ids":[],"missing_data":[],
-            "uncertainties":[],"positions_review":[{"instrument_key":"NSE_EQ|A",
-            "opinion":"exit","thesis_status":"weakened","worth_keeping_reason":"thesis broke",
-            "evidence_ids":["portfolio"],"confidence":"med"}]});
-    assert!(normalize_digest(&reviewed.to_string(), &held, &BTreeSet::new()).is_ok());
-    for (expected, field, value) in cases {
-        let mut candidate = base.clone();
-        candidate[field] = value;
-        let digest = serde_json::from_value(candidate.clone()).unwrap();
-        assert_eq!(digest_bounds_violation(&digest, &json!({})), Some(expected));
-        assert_eq!(
-            normalize_digest(&candidate.to_string(), &Value::Null, &BTreeSet::new())
-                .unwrap_err()
-                .to_string(),
-            "harness_digest_bounds_invalid"
-        );
-    }
-    // 27 Oct 13:19 IST: a valid digest cited 13 known IDs and was rejected
-    // as harness_digest_bounds_invalid (#69). Keep the first 12.
-    let ids: Vec<String> = (0..13).map(|i| format!("citation-{i}")).collect();
-    let raw = json!({
-        "summary":"ok",
-        "evidence_ids": ids,
-        "missing_data":[],
-        "uncertainties":[]
-    })
-    .to_string();
-    let tool_ids: BTreeSet<String> = ids.iter().cloned().collect();
-    let normalized = normalize_digest(&raw, &Value::Null, &tool_ids).unwrap();
-    let value: Value = serde_json::from_str(&normalized).unwrap();
-    assert_eq!(value["evidence_ids"].as_array().unwrap().len(), 12);
-    assert_eq!(value["evidence_ids"][0], "citation-0");
-    assert_eq!(value["evidence_ids"][11], "citation-11");
-
-    // Unknown citations are still dropped before the cap, so an oversized
-    // list of unknown IDs cannot fail the digest or survive normalization.
-    let unknown = json!({
-        "summary":"ok",
-        "evidence_ids": vec!["unknown"; 13],
-        "missing_data":[],
-        "uncertainties":[]
-    })
-    .to_string();
-    let normalized = normalize_digest(&unknown, &Value::Null, &BTreeSet::new()).unwrap();
-    let value: Value = serde_json::from_str(&normalized).unwrap();
-    assert_eq!(value["evidence_ids"], json!([]));
 
     // Owner facts are a separate, bounded schema: no handoff/thesis prose,
     // one holding per held key, allowlisted instruments and sanitized
@@ -335,10 +188,6 @@ fn digest_directive_acknowledgements_and_bounds_preserve_rejection() {
     }
     let owner_policy = PlannerConfig {
         orchestrator: Some(Default::default()),
-        decision_owner: Some(planner::DecisionOwnerPolicy {
-            version: 1,
-            owner: planner::DecisionOwner::Orchestrator,
-        }),
         ..Default::default()
     };
     let archive_of = |c: &Config| {
@@ -420,63 +269,53 @@ fn digest_directive_acknowledgements_and_bounds_preserve_rejection() {
 }
 #[test]
 fn premature_close_is_repaired_but_garbage_is_not() {
-    // 26 Oct 12:09 IST: the object closed after `uncertainties`, then continued.
-    let raw = "{\"summary\":\"s\",\"evidence_ids\":[\"bundle\"],\"missing_data\":[],\"uncertainties\":[\"u\"]}\n,\"handoff\":{\"decision\":\"decide\",\"instrument_keys\":[\"A\"]}}";
-    let v: Value =
-        serde_json::from_str(&normalize_digest(raw, &Value::Null, &BTreeSet::new()).unwrap())
-            .unwrap();
-    assert_eq!(v["handoff"]["decision"], "decide");
-    assert_eq!(v["uncertainties"], json!(["u"]));
-    // Repair never changes the model's no-trade choice, including CRLF.
+    // 26 Oct 12:09 IST: the object closed early, then continued on a new line.
+    let head = r#"{"complete":true,"as_of_ms":0,"coverage":{"universe":1,"scanned":1,"quoted":1,"featured":1,"experiments":0},"gaps":[],"changed_prospects":[],"active_rankings":[],"candidate_rankings":[],"bar_context":[],"spread_depth":[],"holdings":[],"cash":{"available":"0"},"fees":{"per_order":"0","buy_bps":"0","sell_bps":"0"},"recent_actions":[],"experiments":[]}"#;
+    let raw = format!("{head}\n,\"evidence_ids\":[\"bundle\"]}}");
     for separator in ["}\n,", "}\r\n,"] {
-        let no_trade = raw.replace("}\n,", separator).replace(
-            r#"{"decision":"decide","instrument_keys":["A"]}"#,
-            r#"{"decision":"wait","reason":"no edge"}"#,
-        );
-        let normalized = normalize_digest(&no_trade, &Value::Null, &BTreeSet::new()).unwrap();
-        let value: Value = serde_json::from_str(&normalized).unwrap();
-        assert_eq!(value["handoff"]["decision"], "wait");
+        let input = raw.replace("}\n,", separator);
+        let v: Value = serde_json::from_str(
+            &normalize_owner_digest(&input, &Value::Null, &BTreeSet::new()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(v["evidence_ids"], json!(["bundle"]));
+        assert_eq!(v["complete"], true);
     }
-    // Both strict and repaired inputs retain schema and bound enforcement;
-    // errors contain no model-controlled field names or values.
+    // Both strict and repaired inputs retain schema enforcement; errors
+    // contain no model-controlled field names or values.
     for (input, reason) in [
         (
-            raw.replace(r#""summary":"s""#, r#""summary":7"#),
+            raw.replace(r#""complete":true"#, r#""complete":7"#),
             "harness_digest_schema_invalid",
         ),
         (
             raw.replace(
-                r#""summary":"s""#,
-                r#""private_model_field":"secret","summary":"s""#,
+                r#""complete":true"#,
+                r#""private_model_field":"secret","complete":true"#,
             ),
             "harness_digest_schema_invalid",
         ),
         (
-            raw.replace(r#""summary":"s""#, r#""summary":" ""#),
-            "harness_digest_bounds_invalid",
-        ),
-        (
-            raw.replace(r#""summary":"s""#, r#""summary":"s","summary":"duplicate""#),
+            raw.replace(r#""complete":true"#, r#""complete":true,"complete":false"#),
             "harness_digest_json_invalid",
         ),
     ] {
         for input in [input.clone(), input.replace("}\n,", ",")] {
             assert_eq!(
-                normalize_digest(&input, &Value::Null, &BTreeSet::new())
+                normalize_owner_digest(&input, &Value::Null, &BTreeSet::new())
                     .unwrap_err()
                     .to_string(),
                 reason
             );
         }
     }
-
     for bad in [
-        "{\"summary\":\"s\"}\n,{",
+        "{\"complete\":true}\n,{",
         "not json",
-        "{\"summary\":\"s\"}{\"x\":1}",
+        "{\"complete\":true}{\"x\":1}",
     ] {
         assert_eq!(
-            normalize_digest(bad, &Value::Null, &BTreeSet::new())
+            normalize_owner_digest(bad, &Value::Null, &BTreeSet::new())
                 .unwrap_err()
                 .to_string(),
             "harness_digest_json_invalid"

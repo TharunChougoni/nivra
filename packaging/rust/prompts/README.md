@@ -18,11 +18,11 @@ Two prompt layers, both part of the sealed trading-policy hash:
 | `objective.md` | system prefix | every model role | keep |
 | `data_owner.md` | system | owner-policy digest (Luna) | keep |
 | `orchestrator.md` | system | owner-policy decision owner | keep; documents owner research, optional workspace and web tools |
-| `data.md` | system | legacy digest only | keep for migration/archive |
-| `decision.md` | system | legacy decide only | keep for migration/archive |
+| `data.md` | none | no longer read by the binary | shipped only for the fixed release list |
+| `decision.md` | none | no longer read by the binary | shipped only for the fixed release list |
 | `supervisor.md` | system fallback | legacy supervisor only; not selected by the owner policy | keep for migration/archive |
-| `decision_evidence_digest.md` | appended evidence policy | legacy digest only | rewritten; no Grok handoff language |
-| `profit_under_uncertainty.md` | appended evidence policy | legacy decide only | keep for migration/archive |
+| `decision_evidence_digest.md` | none | no longer read by the binary | shipped only for the fixed release list |
+| `profit_under_uncertainty.md` | none | no longer read by the binary | shipped only for the fixed release list |
 | `review.md` | system | post-session `operations` / `strategy` review roles | keep |
 | `scorer.md` | system | strategy scorer role | keep |
 | `operations.md` | legacy trigger default | legacy `operations` trigger | kept byte-identical to `review.md` |
@@ -38,7 +38,7 @@ read for the owner policy.
 ## Trigger templates
 
 `SessionTrigger::ALL` — `session_open`, `resume`, `change`, `pre_close`,
-`post_fill`, `post_decide`, `luna_no_decide_streak`, `failure_streak`, `idle`,
+`post_fill`, `failure_streak`, `idle`,
 `decision`, `compaction`, `handoff`. The owner decision turn uses `decision`.
 Placeholders are validated against the facts each trigger supplies; an unknown
 placeholder fails policy validation instead of rendering empty. The `decision`

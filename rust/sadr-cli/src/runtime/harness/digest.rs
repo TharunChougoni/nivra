@@ -1,28 +1,9 @@
-//! Digest schema, bounds checks and owner-eligibility helpers.
+//! Owner factual digest schema, bounds checks and eligibility helpers.
 use super::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Digest {
-    summary: String,
-    evidence_ids: Vec<String>,
-    missing_data: Vec<String>,
-    uncertainties: Vec<String>,
-    #[serde(default)]
-    handoff: Option<Value>,
-    /// Some replies put the decide thesis beside the handoff; the host lifts it.
-    #[serde(default)]
-    thesis: Option<Value>,
-    /// Required for every held key; empty is valid only for a flat book.
-    #[serde(default)]
-    positions_review: Vec<super::super::discovery::PositionReview>,
-    /// Optional advisory acknowledgements of directive IDs delivered to Luna.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    directive_acknowledgements: Option<Vec<String>>,
-}
 /// Strict decode, plus one narrow repair (#40): a reply that closed its object
 /// early and then continued with `,"key":...` on a new line. The repaired text
 /// must still decode strictly and pass every digest bound below.
@@ -44,116 +25,6 @@ fn decode_digest(raw: &str) -> Result<Value> {
     }
     Err("harness_digest_json_invalid".into())
 }
-pub(crate) fn validate_digest(raw: &str, bundle: &Value) -> Result<()> {
-    normalize_digest(raw, bundle, &BTreeSet::new()).map(|_| ())
-}
-
-/// Only this invocation's completed tool results extend the citation namespace.
-pub(crate) fn normalize_digest(
-    raw: &str,
-    bundle: &Value,
-    tool_ids: &BTreeSet<String>,
-) -> Result<String> {
-    let allowlisted = |s: &str| {
-        bundle["allowlist"]
-            .as_array()
-            .is_some_and(|a| a.iter().any(|i| i["key"] == s))
-    };
-    let mut v: Digest =
-        serde_json::from_value(decode_digest(raw)?).map_err(|_| "harness_digest_schema_invalid")?;
-    let _ = (&v.handoff, &v.thesis);
-    if let Some(field) = digest_bounds_violation(&v, bundle) {
-        // Static labels only: never include model text or credentials in logs.
-        eprintln!("digest_bounds_invalid field={field}");
-        if field.starts_with("positions_review") {
-            return Err("harness_digest_positions_review_invalid".into());
-        }
-        return Err("harness_digest_bounds_invalid".into());
-    }
-    let before = v.evidence_ids.len();
-    v.evidence_ids.retain(|id| {
-        allowlisted(id)
-            || tool_ids.contains(id)
-            || [
-                "bundle",
-                "portfolio",
-                "shortlist",
-                "fees",
-                "session_evidence",
-            ]
-            .contains(&id.as_str())
-    });
-    if before != v.evidence_ids.len() {
-        eprintln!(
-            "digest_citation_warning reason=unknown_evidence_id_dropped count={}",
-            before - v.evidence_ids.len()
-        );
-    }
-    // Citations are advisory, so one extra valid ID must not discard the whole
-    // digest. Keep the host-side cap after unknown citations have been removed.
-    if v.evidence_ids.len() > MAX_EVIDENCE_IDS {
-        let excess = v.evidence_ids.len() - MAX_EVIDENCE_IDS;
-        v.evidence_ids.truncate(MAX_EVIDENCE_IDS);
-        eprintln!("digest_citation_warning reason=excess_evidence_ids_truncated count={excess}");
-    }
-    Ok(serde_json::to_string(&v)?)
-}
-pub(crate) fn digest_bounds_violation(v: &Digest, bundle: &Value) -> Option<&'static str> {
-    let held = bundle["positions"]
-        .as_object()
-        .map(|positions| positions.keys().cloned().collect::<BTreeSet<_>>())
-        .unwrap_or_default();
-    let mut seen = BTreeSet::new();
-    for review in &v.positions_review {
-        if !held.contains(&review.instrument_key) {
-            return Some("positions_review_unknown_key");
-        }
-        if !seen.insert(review.instrument_key.clone()) {
-            return Some("positions_review_duplicate_key");
-        }
-        if !["hold", "exit", "trim", "revise_exit"].contains(&review.opinion.as_str())
-            || !["intact", "weakened", "invalidated", "unknown"]
-                .contains(&review.thesis_status.as_str())
-            || !["low", "med", "high"].contains(&review.confidence.as_str())
-            || review.worth_keeping_reason.trim().is_empty()
-            || review.worth_keeping_reason.chars().count() > 300
-            || review.evidence_ids.len() > MAX_EVIDENCE_IDS
-            || review.evidence_ids.iter().any(|id| id.len() > 256)
-            || review
-                .suggested_exit
-                .as_ref()
-                .is_some_and(|exit| !exit.is_object() || exit.to_string().len() > 1024)
-        {
-            return Some("positions_review_invalid");
-        }
-    }
-    if !held.is_empty() && (seen.len() != held.len() || !held.iter().all(|key| seen.contains(key)))
-    {
-        return Some("positions_review_missing_key");
-    }
-    if v.summary.trim().is_empty() {
-        Some("summary_empty")
-    } else if v.summary.len() > 8192 {
-        Some("summary_length")
-    } else if v.missing_data.len() > 64 {
-        Some("missing_data_count")
-    } else if v.uncertainties.len() > 64 {
-        Some("uncertainties_count")
-    } else if v
-        .thesis
-        .as_ref()
-        .is_some_and(|t| !t.is_object() || t.to_string().len() > 4096)
-    {
-        Some("thesis_bounds")
-    } else if v.missing_data.iter().any(|s| s.len() > 512) {
-        Some("missing_data_item_length")
-    } else if v.uncertainties.iter().any(|s| s.len() > 512) {
-        Some("uncertainties_item_length")
-    } else {
-        None
-    }
-}
-
 /// The owner policy's factual digest. It deliberately has no handoff, thesis
 /// or holding opinion: the host wakes the persistent orchestrator for every
 /// validated, usable digest and the orchestrator owns any later decision.

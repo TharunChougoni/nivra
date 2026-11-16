@@ -313,6 +313,8 @@ pub(crate) fn reservations(
         // `research` is the separate research-lane bucket charged by the
         // orchestrator role (#238); it must validate like every other role or a
         // completed research turn poisons the whole usage journal.
+        // `decide-` charges written before the owner-only policy stay valid,
+        // readable journal records.
         let valid = [
             "digest-",
             "decide-",
@@ -350,12 +352,11 @@ pub(crate) fn checked_reservations(
         .as_ref()
         .map(|cfg| {
             let digest_role = cfg.role(Trigger::Digest);
-            let decide_role = cfg.role(Trigger::Decide);
             let operations_role = cfg.role(Trigger::Operations);
             let strategy_role = cfg.role(Trigger::Strategy);
             let scorer_role = cfg.role(Trigger::Scorer);
             let supervisor_role = cfg.role(Trigger::Supervisor);
-            let mut roles = vec![&digest_role, &decide_role, &scorer_role, &supervisor_role];
+            let mut roles = vec![&digest_role, &scorer_role, &supervisor_role];
             if cfg.post_close.is_some() {
                 roles.extend([&operations_role, &strategy_role]);
             }
@@ -421,7 +422,6 @@ pub(crate) fn reserve_usage(
 ) -> Result<(PathBuf, usize, usize)> {
     if ![
         "digest",
-        "decide",
         "operations",
         "strategy",
         "scorer",
@@ -511,8 +511,8 @@ pub(crate) fn fixture_reservation(c: &Config, cfg: &PlannerConfig) -> PathBuf {
     let (journal, used, _) = reserve_usage(
         c,
         cfg,
-        "decide",
-        &cfg.decide,
+        "digest",
+        &cfg.digest,
         "synthetic fixture",
         &CallGuard {
             cancel: None,
@@ -529,7 +529,7 @@ pub(crate) fn fixture_reservation(c: &Config, cfg: &PlannerConfig) -> PathBuf {
         },
     )
     .unwrap();
-    journal.join(format!("decide-{used:04}.attempt.json"))
+    journal.join(format!("digest-{used:04}.attempt.json"))
 }
 
 #[cfg(test)]
