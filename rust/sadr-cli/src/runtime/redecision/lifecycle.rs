@@ -13,8 +13,7 @@ pub(crate) fn reserve(
         return Ok(None);
     };
     if cfg.model_led == Some(false)
-        || (cfg.orchestrator_owns_decisions()
-            && !super::super::decision_owner::in_window(c, cfg, now))
+        || !super::super::decision_owner::in_window(c, cfg, now)
         || !eligible
         || p.stopped
         || p.halted
@@ -73,7 +72,6 @@ pub(crate) fn reserve(
     }
     let mut event: Option<(String,String)> = tx.query_row("SELECT id,body FROM planner_event_log WHERE state='pending' AND at<=? ORDER BY at,id LIMIT 1", [now], |r|Ok((r.get(0)?,r.get(1)?))).optional()?;
     if event.is_none()
-        && cfg.orchestrator_owns_decisions()
         && !state.initial_available
         && let Some(settings) = cfg.discovery.as_ref()
     {
@@ -167,11 +165,7 @@ pub(crate) fn reserve(
                     .unwrap_or(settings.policy.max_event_age_ms),
             )
             .ok_or("planner_event_clock_range")?,
-        predecessor: if cfg.orchestrator_owns_decisions() {
-            state.active.clone()
-        } else {
-            state.active.take()
-        },
+        predecessor: state.active.clone(),
         previous_attempts: tx
             .query_row("SELECT count(*) FROM planner_attempt_log", [], |r| {
                 r.get::<_, i64>(0)
@@ -231,7 +225,6 @@ pub(crate) fn settle(
     if PlannerLogPhase::parse(&reserved) != Ok(PlannerLogPhase::Reserved) {
         return Err("planner_attempt_not_pending".into());
     }
-    let owner_policy = cfg.orchestrator_owns_decisions();
     let mut failure = None;
     let mut superseded = false;
     let sticky = state
@@ -269,7 +262,7 @@ pub(crate) fn settle(
         plan["attempt_id"] != claim.id
             || plan["decision_id"] != format!("{}-{}", c.session, claim.id)
             || planner::validate_saved(c, plan).is_err()
-            || (owner_policy && !owner_digest_completion(plan))
+            || !owner_digest_completion(plan)
     }) {
         failure = Some("planner_result_binding_invalid".to_owned());
         None
@@ -283,7 +276,7 @@ pub(crate) fn settle(
                 if plan["attempt_id"] != claim.id
                     || plan["decision_id"] != format!("{}-{}", c.session, claim.id)
                     || planner::validate_saved(c, &plan).is_err()
-                    || (owner_policy && !owner_digest_completion(&plan))
+                    || !owner_digest_completion(&plan)
                 {
                     failure = Some("planner_result_binding_invalid".to_owned());
                     None
@@ -297,11 +290,11 @@ pub(crate) fn settle(
             }
         }
     };
-    let deferred = accepted
-        .as_ref()
-        .is_some_and(|plan| owner_policy || plan["luna_handoff_requested"] == false);
+    // Every accepted digest defers to the persistent owner; it never becomes
+    // an executable plan head here.
+    let deferred = accepted.is_some();
     let mut cadence_facts = None;
-    if owner_policy && let Some(plan) = accepted.as_ref() {
+    if let Some(plan) = accepted.as_ref() {
         // The digest and its durable decision wake share this claim transaction.
         // A rollback leaves the claim pending and cannot activate a plan.
         let enqueued = super::super::decision_owner::enqueue_digest(
@@ -325,23 +318,8 @@ pub(crate) fn settle(
         .clone()
         .unwrap_or_else(|| json!({"status":failure}));
     if deferred {
-        if !owner_policy {
-            state.active = None;
-        }
         state.blocked = None;
-    } else if let Some(plan) = &accepted {
-        let id = plan["decision_id"]
-            .as_str()
-            .ok_or("planner_saved_plan_invalid")?;
-        // An owner-policy digest is deferred above and never reaches this
-        // branch, so it cannot replace the committed owner plan head.
-        tx.execute(
-            "INSERT INTO planner_plan VALUES(?,?)",
-            rusqlite::params![id, serde_json::to_string(plan)?],
-        )?;
-        state.active = Some(id.to_owned());
-        state.blocked = None;
-    } else if owner_policy && failure.as_deref().is_some_and(recoverable_block) {
+    } else if failure.as_deref().is_some_and(recoverable_block) {
         // A failed digest is one bad attempt, not a decision block. The owner
         // keeps the earlier valid digest and the attempt keeps its reason (#221).
         state.digest_failed = failure;
@@ -367,7 +345,7 @@ pub(crate) fn settle(
     state.pending = None;
     save(&tx, &state)?;
     tx.commit()?;
-    Ok(if deferred { None } else { accepted })
+    Ok(None)
 }
 pub(crate) fn status(db: &Connection, c: &Config) -> Result<Option<Value>> {
     let Some(state) = load(db)? else {

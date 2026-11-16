@@ -33,8 +33,7 @@ fn post_close_deadline(
     let start_at = now.max(close);
     Ok((start_at
         + chrono::Duration::milliseconds(
-            (operations.invocation_budget_ms("operations")
-                + strategy.invocation_budget_ms("strategy")) as i64,
+            (operations.run_budget_ms() + strategy.run_budget_ms()) as i64,
         ))
     .min(cutoff_at))
 }
@@ -127,7 +126,7 @@ pub(super) fn credential_warnings(models: &Value) -> Vec<Value> {
                 return None;
             }
             let name = role["role"].as_str()?;
-            if !["digest", "decide", "operations", "strategy", "orchestrator"].contains(&name) {
+            if !["digest", "operations", "strategy", "orchestrator"].contains(&name) {
                 return None;
             }
             let credential = &role["credential_check"];
@@ -183,12 +182,10 @@ pub(super) fn report(c: &Config, now_ms: i64) -> Result<Value> {
     let usage: Value;
     let mut usage_unknown = false;
     let mut planner_enabled = false;
-    let mut migration_required = false;
     let mut research = json!({"status":"disabled","reason":"research_tools_not_configured"});
     if let Some(path) = c.planner_config.as_deref() {
         match planner::PlannerConfig::load_for_session(path, session) {
             Ok(cfg) => {
-                migration_required = cfg.enabled && !cfg.orchestrator_owns_decisions();
                 planner_enabled = cfg.enabled;
                 if let Some(settings) = cfg.research_tools.as_ref() {
                     // Registered inputs are checked before a post-close review can
@@ -206,12 +203,9 @@ pub(super) fn report(c: &Config, now_ms: i64) -> Result<Value> {
                 };
                 let digest_deadline = close
                     + chrono::Duration::milliseconds(
-                        cfg.digest
-                            .invocation_budget_ms("digest")
-                            .max(cfg.digest.timeout_ms) as i64,
+                        cfg.digest.run_budget_ms().max(cfg.digest.timeout_ms) as i64,
                     );
                 // Digest and orchestrator retain their independent credentials.
-                // Old decide usage remains in the journal, never a live peer.
                 roles.push(role_report(
                     "digest",
                     &cfg.digest,
@@ -235,9 +229,7 @@ pub(super) fn report(c: &Config, now_ms: i64) -> Result<Value> {
                         deadline = deadline.max(
                             close
                                 + chrono::Duration::milliseconds(
-                                    role.invocation_budget_ms(trigger.as_str())
-                                        .max(role.timeout_ms)
-                                        as i64,
+                                    role.run_budget_ms().max(role.timeout_ms) as i64,
                                 ),
                         );
                     }
@@ -325,7 +317,6 @@ pub(super) fn report(c: &Config, now_ms: i64) -> Result<Value> {
         .iter()
         .any(|r| r["enabled"] == true && r["status"] == "blocked")
         || !planner_enabled
-        || migration_required
         || !roles.iter().any(|r| r["enabled"] == true);
     let unknown = roles
         .iter()
@@ -338,13 +329,11 @@ pub(super) fn report(c: &Config, now_ms: i64) -> Result<Value> {
     } else {
         "model_roles_ready"
     };
-    Ok(
-        json!({"status":status,"reason":if migration_required {Some("decision_owner_migration_required")} else {None},
+    Ok(json!({"status":status,"reason":null,
         "target_session":session,"previous_session":previous,"opens_at":start,"closes_at":close,
         "planner_enabled":planner_enabled,"roles":roles,"current_usage":usage,
         "research":research,
-        "future_usage":{"status":"unknown","reason":"future_session_namespace_not_created"}}),
-    )
+        "future_usage":{"status":"unknown","reason":"future_session_namespace_not_created"}}))
 }
 
 // The dashboard snapshot nests the model report. Only older snapshots without
@@ -486,24 +475,24 @@ pub(crate) fn check_boundaries() {
         "disabled"
     );
     let planner = root.path().join("disabled-planner.json");
-    std::fs::write(&planner, br#"{"enabled":true}"#).unwrap();
+    std::fs::write(&planner, br#"{"enabled":false}"#).unwrap();
     let mut with_planner = c.clone();
     with_planner.planner_config = Some(planner);
     let disabled = report(&with_planner, after_close.timestamp_millis()).unwrap();
     assert_eq!(disabled["status"], "model_roles_blocked");
-    assert_eq!(disabled["planner_enabled"], true);
+    assert_eq!(disabled["planner_enabled"], false);
 
     let disabled_roles = root.path().join("disabled-roles.json");
     std::fs::write(
         &disabled_roles,
-        br#"{"enabled":true,"digest":{"enabled":false},"decide":{"enabled":false}}"#,
+        br#"{"enabled":false,"digest":{"enabled":false}}"#,
     )
     .unwrap();
     let mut no_roles = with_planner.clone();
     no_roles.planner_config = Some(disabled_roles);
     let no_roles_report = report(&no_roles, after_close.timestamp_millis()).unwrap();
     assert_eq!(no_roles_report["status"], "model_roles_blocked");
-    assert_eq!(no_roles_report["planner_enabled"], true);
+    assert_eq!(no_roles_report["planner_enabled"], false);
     assert_eq!(no_roles_report["roles"][0]["status"], "disabled");
     // A disabled role still reports the model the policy declares for it, so the
     // dashboard shows the switch target without a second configuration read.
@@ -524,7 +513,7 @@ pub(crate) fn check_boundaries() {
     std::fs::write(
         &research_planner,
         serde_json::to_vec(&json!({
-            "enabled":true,
+            "enabled":false,
             "research_tools":{
                 "queue":root.path().join("research.sqlite"),
                 "stage_root":root.path().join("research-stage"),
@@ -585,7 +574,7 @@ mod warning_tests {
             {"role":"digest","enabled":true,"status":"unknown",
              "reason":"usage_namespace_unavailable",
              "credential_check":{"status":"unknown","secret":"synthetic-private"}},
-            {"role":"decide","enabled":true,"status":"blocked",
+            {"role":"orchestrator","enabled":true,"status":"blocked",
              "reason":"grant_login_required"},
             {"role":"operations","enabled":true,"status":"blocked",
              "reason":"daily_budget_exhausted","credential_check":{"status":"validated"}},
@@ -595,7 +584,7 @@ mod warning_tests {
             credential_warnings(&models),
             vec![
                 json!({"model":"digest","reason":"grant_refresh_required_or_expiry_unverified"}),
-                json!({"model":"decide","reason":"grant_login_required"})
+                json!({"model":"orchestrator","reason":"grant_login_required"})
             ]
         );
         assert!(credential_warnings(&json!({})).is_empty());
@@ -608,7 +597,7 @@ mod warning_tests {
         );
         assert!(
             credential_warnings(&json!({"roles":[
-                {"role":"decide","enabled":true,"status":"ready",
+                {"role":"digest","enabled":true,"status":"ready",
                  "credential_check":{"status":"validated"}}
             ]}))
             .is_empty()
@@ -639,11 +628,11 @@ mod orchestrator_tests {
     }
 
     #[test]
-    fn two_live_readiness_identities_preserve_legacy_usage() {
+    fn two_live_readiness_identities_project_trigger_usage() {
         let root = tempfile::tempdir_in("/var/tmp").unwrap();
         let value = report_for(
             root.path(),
-            r#"{"enabled":true,"digest":{"enabled":true,"model_id":"gpt-6-luna","transport":"openai_codex","daily_call_budget":5},"decide":{"enabled":true,"model_id":"grok-4.7","transport":"direct_oauth","daily_call_budget":5},"orchestrator":{"enabled":true,"scorer_after_minute":960,"model":{"model_id":"grok-4.7","transport":"direct_oauth"}}}"#,
+            r#"{"enabled":false,"digest":{"enabled":true,"model_id":"gpt-6-luna","transport":"openai_codex","daily_call_budget":5},"orchestrator":{"enabled":true,"scorer_after_minute":960,"model":{"model_id":"grok-4.7","transport":"direct_oauth"}}}"#,
         );
         let roles = value["roles"].as_array().unwrap();
         assert_eq!(roles.len(), 2, "{value}");
@@ -658,7 +647,7 @@ mod orchestrator_tests {
         // Trigger counts, rather than a new role namespace, carry existing usage.
         let zero = orchestrator_usage(Some(&json!({"operations":0})), "operations").unwrap();
         assert_eq!(remaining_calls(3, zero["orchestrator"].as_u64()), Some(3));
-        let usage = json!({"digest":4,"decide":2,"operations":3,"strategy":1});
+        let usage = json!({"digest":4,"operations":3,"strategy":1});
         let before = usage.clone();
         for (trigger, count) in [("operations", 3), ("strategy", 1)] {
             let projected = orchestrator_usage(Some(&usage), trigger).unwrap();
@@ -674,14 +663,5 @@ mod orchestrator_tests {
             orchestrator_usage(Some(&json!({})), "operations").unwrap()["orchestrator"],
             Value::Null
         );
-
-        // Legacy configurations still keep their two role reports.
-        let legacy = report_for(
-            root.path(),
-            r#"{"enabled":true,"digest":{"enabled":false},"decide":{"enabled":false}}"#,
-        );
-        let roles = legacy["roles"].as_array().unwrap();
-        assert_eq!(roles.len(), 1, "{legacy}");
-        assert_eq!(roles[0]["role"], "digest");
     }
 }

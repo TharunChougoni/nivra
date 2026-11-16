@@ -1,10 +1,7 @@
 fn enabled_scorer_requires_after_minute_from_either_setting() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("planner.json");
-    let base = serde_json::json!({
-        "enabled": true,
-        "decide": {"enabled": true, "model_id": "fixture-model", "daily_call_budget": 4}
-    });
+    let base = serde_json::json!({"enabled": false});
     let mut missing = base.clone();
     missing["orchestrator"] = serde_json::json!({"enabled": true});
     std::fs::write(&path, serde_json::to_vec(&missing).unwrap()).unwrap();
@@ -34,7 +31,7 @@ fn enabled_scorer_requires_after_minute_from_either_setting() {
     assert!(super::PlannerConfig::load(&path).is_ok());
 }
 #[test]
-fn legacy_policy_bytes_do_not_gain_an_orchestrator_block() {
+fn packaged_owner_policy_binds_prompt_content_and_refuses_removed_keys() {
     // Validate the current setup as a complete input set. The prompt files
     // are public package sources; application grant paths are never opened.
     let setup = tempfile::tempdir().unwrap();
@@ -44,11 +41,7 @@ fn legacy_policy_bytes_do_not_gain_an_orchestrator_block() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/rust/prompts");
     for name in [
         "objective.md",
-        "data.md",
         "data_owner.md",
-        "decision.md",
-        "profit_under_uncertainty.md",
-        "decision_evidence_digest.md",
         "supervisor.md",
         "orchestrator.md",
         "review.md",
@@ -59,27 +52,35 @@ fn legacy_policy_bytes_do_not_gain_an_orchestrator_block() {
     let current = include_str!("../../../../../packaging/rust/planner-current.example.json")
         .replace("${CONFIG_DIR}", setup.path().to_str().unwrap());
     let path = setup.path().join("planner.json");
-    std::fs::write(&path, current).unwrap();
+    std::fs::write(&path, &current).unwrap();
     let baseline = super::PlannerConfig::load(&path).unwrap();
-    baseline.runtime_decision_owner_gate().unwrap();
+    baseline.validate_decision_owner().unwrap();
     assert!(baseline.file_prompts.is_some());
-    assert!(baseline.orchestrator_owns_decisions());
-    assert!(!baseline.decide.enabled);
     assert!(!super::policy_bytes(&baseline).unwrap().is_empty());
-    let mut obsolete = baseline.clone();
-    obsolete.handoff_gate = Some(super::super::discovery::GateSettings::default());
-    assert_eq!(
-        obsolete.validate_decision_owner().unwrap_err().to_string(),
-        "decision_owner_legacy_handoff_gate_refused"
-    );
-    obsolete.decision_owner = None;
-    obsolete.validate_decision_owner().unwrap();
+    // The owner is implicit. A config that still carries a removed legacy key
+    // is refused until the reviewed migration rewrites it.
+    for (key, value) in [
+        ("decide", serde_json::json!({"enabled": false})),
+        (
+            "decision_owner",
+            serde_json::json!({"version": 1, "owner": "orchestrator"}),
+        ),
+        ("handoff_gate", serde_json::json!({})),
+    ] {
+        let mut old: serde_json::Value = serde_json::from_str(&current).unwrap();
+        old[key] = value;
+        std::fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
+        assert_eq!(
+            super::PlannerConfig::load(&path).err().unwrap().to_string(),
+            "planner_config_invalid",
+            "{key}"
+        );
+    }
 
     let cfg: super::PlannerConfig = serde_json::from_value(serde_json::json!({
         "enabled": true,
         "digest": {"enabled": true, "model_id": "gpt-6-luna",
-            "transport": "openai_codex", "daily_call_budget": 30},
-        "decide": {"enabled": true, "model_id": "grok-4.7", "daily_call_budget": 20}
+            "transport": "openai_codex", "daily_call_budget": 30}
     }))
     .unwrap();
     assert!(cfg.orchestrator.is_none());
@@ -107,8 +108,7 @@ fn legacy_policy_bytes_do_not_gain_an_orchestrator_block() {
         "experiment_profile": profile_path,
         "discovery": {"max_scan_age_ms":180000, "max_prospects":10},
         "digest": {"enabled": true, "model_id": "gpt-6-luna",
-            "transport": "openai_codex", "daily_call_budget": 30},
-        "decide": {"enabled": true, "model_id": "grok-4.7", "daily_call_budget": 20}
+            "transport": "openai_codex", "daily_call_budget": 30}
     }))
     .unwrap();
     let policy = super::policy_bytes(&configured).unwrap();
@@ -137,11 +137,10 @@ fn legacy_policy_bytes_do_not_gain_an_orchestrator_block() {
     std::fs::write(
         &planner_path,
         serde_json::to_vec(&serde_json::json!({
-            "enabled": true,
+            "enabled": false,
             "discovery": {"max_scan_age_ms":180000, "max_prospects":10},
             "digest": {"enabled": true, "model_id": "gpt-6-luna",
-                "transport": "openai_codex", "daily_call_budget": 30},
-            "decide": {"enabled": true, "model_id": "grok-4.7", "daily_call_budget": 20}
+                "transport": "openai_codex", "daily_call_budget": 30}
         }))
         .unwrap(),
     )
@@ -150,35 +149,27 @@ fn legacy_policy_bytes_do_not_gain_an_orchestrator_block() {
     assert_eq!(checked["status"], "experiment_profile_valid");
     assert!(checked["profile_sha256"].is_string());
 
-    // An explicit profile digest prompt binds both ownership modes. A
-    // profile without one uses the owner prompt for owner policy and the
-    // legacy prompt otherwise, and the recorded prompt identity follows.
+    // An explicit profile digest prompt is the recorded digest identity; a
+    // profile without one records the code-owned owner digest prompt.
     let explicit_prompts = configured.prompt_hashes().unwrap();
-    configured.decision_owner = Some(super::DecisionOwnerPolicy {
-        version: 1,
-        owner: super::DecisionOwner::Orchestrator,
-    });
-    assert_eq!(configured.prompt_hashes().unwrap(), explicit_prompts);
     let default_profile = dir.path().join("default-profile.json");
     std::fs::write(&default_profile, br#"{"version":1}"#).unwrap();
     configured.experiment_profile = Some(default_profile);
     configured.apply_experiment_profile().unwrap();
     let owner_prompts = configured.prompt_hashes().unwrap();
-    configured.decision_owner = None;
-    let legacy_prompts = configured.prompt_hashes().unwrap();
-    assert_ne!(owner_prompts["digest"], legacy_prompts["digest"]);
-    assert_eq!(owner_prompts["decide"], legacy_prompts["decide"]);
+    assert_ne!(owner_prompts["digest"], explicit_prompts["digest"]);
+    assert_eq!(
+        owner_prompts["digest"],
+        super::super::digest(super::super::harness::DATA_OWNER_PROMPT.as_bytes())
+    );
+    assert!(owner_prompts.get("decide").is_none());
 
     // Default files bind content, not directory names, into sealed policy.
     let prompt_dir = dir.path().join("prompts");
     std::fs::create_dir(&prompt_dir).unwrap();
     for name in [
         "objective",
-        "data",
         "data_owner",
-        "decision",
-        "profit_under_uncertainty",
-        "decision_evidence_digest",
         "supervisor",
         "orchestrator",
         "review",
@@ -193,11 +184,11 @@ fn legacy_policy_bytes_do_not_gain_an_orchestrator_block() {
     let files = super::PlannerConfig::load(&planner_path).unwrap();
     let sealed = super::policy_bytes(&files).unwrap();
     assert_eq!(
-        files.prompt_set().unwrap().role_for("digest", true),
+        files.prompt_set().unwrap().role_for("digest"),
         Some("file data_owner")
     );
     assert_eq!(
-        files.prompt_set().unwrap().role_for("supervisor", true),
+        files.prompt_set().unwrap().role_for("supervisor"),
         Some("file orchestrator")
     );
     let moved = tempfile::tempdir().unwrap();
@@ -216,20 +207,20 @@ fn legacy_policy_bytes_do_not_gain_an_orchestrator_block() {
         super::policy_bytes(&super::PlannerConfig::load(&moved_config).unwrap()).unwrap(),
         sealed
     );
-    std::fs::write(prompt_dir.join("data.md"), "new digest").unwrap();
+    std::fs::write(prompt_dir.join("data_owner.md"), "new digest").unwrap();
     assert_ne!(
         super::policy_bytes(&super::PlannerConfig::load(&planner_path).unwrap()).unwrap(),
         sealed
     );
     // A previously loaded set retains its bytes; bad reloads never use embedded fallback.
     for invalid in [Vec::new(), vec![b'x'; 65_537], vec![0xff]] {
-        std::fs::write(prompt_dir.join("data.md"), invalid).unwrap();
+        std::fs::write(prompt_dir.join("data_owner.md"), invalid).unwrap();
         assert!(super::PlannerConfig::load(&planner_path).is_err());
         assert_eq!(super::policy_bytes(&files).unwrap(), sealed);
     }
-    std::fs::remove_file(prompt_dir.join("data.md")).unwrap();
+    std::fs::remove_file(prompt_dir.join("data_owner.md")).unwrap();
     assert!(super::PlannerConfig::load(&planner_path).is_err());
-    std::fs::create_dir(prompt_dir.join("data.md")).unwrap();
+    std::fs::create_dir(prompt_dir.join("data_owner.md")).unwrap();
     assert!(super::PlannerConfig::load(&planner_path).is_err());
 }
 
@@ -471,10 +462,10 @@ fn orchestrator_policy_excludes_budgets_but_includes_tools_and_sandbox() {
 }
 
 #[test]
-fn load_accepts_orchestrator_beside_digest_and_decide() {
+fn load_accepts_orchestrator_beside_digest() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("planner.json");
-    let legacy_digest = serde_json::json!({
+    let digest_role = serde_json::json!({
         "enabled": true,
         "model_id": "grok-4.7",
         "tools": [],
@@ -488,16 +479,15 @@ fn load_accepts_orchestrator_beside_digest_and_decide() {
     std::fs::write(&path, serde_json::to_vec(&enabled_only).unwrap()).unwrap();
     super::PlannerConfig::load(&path).unwrap();
 
-    // Digest and decide stay outside the orchestrator and may coexist with it.
-    let with_digest_decide = serde_json::json!({
-        "digest": legacy_digest,
-        "decide": legacy_digest,
+    // The digest stays outside the orchestrator and coexists with it.
+    let with_digest = serde_json::json!({
+        "digest": digest_role,
         "orchestrator": {"enabled": true, "scorer_after_minute": 931}
     });
-    std::fs::write(&path, serde_json::to_vec(&with_digest_decide).unwrap()).unwrap();
+    std::fs::write(&path, serde_json::to_vec(&with_digest).unwrap()).unwrap();
     super::PlannerConfig::load(&path).unwrap();
 
-    let legacy_only = serde_json::json!({"digest": legacy_digest});
+    let legacy_only = serde_json::json!({"digest": digest_role});
     std::fs::write(&path, serde_json::to_vec(&legacy_only).unwrap()).unwrap();
     super::PlannerConfig::load(&path).unwrap();
 
@@ -554,7 +544,6 @@ fn shadow_selector_does_not_change_trading_policy() {
         .unwrap(),
     );
     assert_eq!(super::policy_bytes(&cfg).unwrap(), original);
-    assert_ne!(super::legacy_policy_bytes(&cfg).unwrap(), original);
     cfg.discovery.as_mut().unwrap().max_prospects += 1;
     assert_ne!(super::policy_bytes(&cfg).unwrap(), original);
 }
@@ -698,7 +687,7 @@ fn quota_burst_and_review_roles() {
     };
     let roles = [
         ("digest", 50),
-        ("decide", 10),
+        ("supervisor", 10),
         ("operations", 8),
         ("strategy", 8),
     ];
@@ -760,7 +749,7 @@ fn quota_burst_and_review_roles() {
     assert_eq!(backend.0, 76);
     let counts = usage(&c).unwrap();
     assert_eq!(counts["digest"], 50);
-    assert_eq!(counts["decide"], 10);
+    assert_eq!(counts["supervisor"], 10);
     assert_eq!(counts["operations"], 8);
     assert_eq!(counts["strategy"], 8);
 
@@ -793,7 +782,7 @@ fn dated_discovery_configuration() {
     let dir = tempfile::tempdir().unwrap();
     let old_path = dir.path().join("old.json");
     let future_path = dir.path().join("future.json");
-    let old:PlannerConfig=serde_json::from_value(json!({"enabled":true,"digest":{"enabled":true,"model_id":"gpt-6-luna","transport":"openai_codex","daily_call_budget":30},"decide":{"enabled":true,"model_id":"grok-4.7","daily_call_budget":20}})).unwrap();
+    let old:PlannerConfig=serde_json::from_value(json!({"enabled":false,"digest":{"enabled":true,"model_id":"gpt-6-luna","transport":"openai_codex","daily_call_budget":30}})).unwrap();
     fs::write(&old_path, serde_json::to_vec(&old).unwrap()).unwrap();
     let mut future = old.clone();
     future.effective_from = Some(NaiveDate::from_ymd_opt(2026, 10, 23).unwrap());
@@ -801,7 +790,6 @@ fn dated_discovery_configuration() {
     future.full_universe_features = Some(true);
     future.discovery=Some(serde_json::from_value(json!({"max_scan_age_ms":180000,"max_prospects":10000,"scan_batch_size":200,"scan_interval_ms":8000})).unwrap());
     future.digest.daily_call_budget = 5000;
-    future.decide.daily_call_budget = 500;
     fs::write(&future_path, serde_json::to_vec(&future).unwrap()).unwrap();
     let today = PlannerConfig::load_for_session(
         &future_path,
@@ -817,7 +805,6 @@ fn dated_discovery_configuration() {
     .unwrap();
     assert!(next.discovery.is_some());
     assert_eq!(next.digest.daily_call_budget, 5000);
-    assert_eq!(next.decide.daily_call_budget, 500);
     future.previous_config = Some(future_path.clone());
     fs::write(&future_path, serde_json::to_vec(&future).unwrap()).unwrap();
     assert_eq!(
@@ -834,7 +821,7 @@ fn dated_discovery_configuration() {
 fn large_configured_usage_journal() {
     let dir = tempfile::tempdir().unwrap();
     let mut c = super::super::tests::config(dir.path());
-    let cfg:PlannerConfig=serde_json::from_value(json!({"digest":{"enabled":true,"model_id":"gpt-6-luna","transport":"openai_codex","daily_call_budget":5000,"budget_unit":"event","max_turns":64},"decide":{"daily_call_budget":500}})).unwrap();
+    let cfg:PlannerConfig=serde_json::from_value(json!({"digest":{"enabled":true,"model_id":"gpt-6-luna","transport":"openai_codex","daily_call_budget":5000,"budget_unit":"event","max_turns":64}})).unwrap();
     let path = dir.path().join("planner.json");
     fs::write(&path, serde_json::to_vec(&cfg).unwrap()).unwrap();
     c.planner_config = Some(path);
@@ -916,8 +903,8 @@ fn logical_event_budget_preserves_provider_turns() {
     let d = tempfile::tempdir().unwrap();
     let c = super::super::tests::config(d.path());
     let mut cfg = PlannerConfig::default();
-    cfg.decide.daily_call_budget = 1;
-    cfg.decide.budget_unit = Some("event".into());
+    cfg.digest.daily_call_budget = 1;
+    cfg.digest.budget_unit = Some("event".into());
     struct Count(usize);
     impl Backend for Count {
         fn call(&mut self, _: &ModelRole, _: &str) -> Result<String> {
@@ -932,15 +919,15 @@ fn logical_event_budget_preserves_provider_turns() {
         call_guarded(
             &c,
             &cfg,
-            "decide",
-            &cfg.decide,
+            "digest",
+            &cfg.digest,
             "fixture",
             &mut backend,
             &guard,
         )
         .unwrap();
     }
-    assert_eq!(usage(&c).unwrap()["decide"], 1);
+    assert_eq!(usage(&c).unwrap()["digest"], 1);
     assert_eq!(backend.0, 2);
     assert_eq!(
         fs::read_dir(c.directory.join("model/usage"))
@@ -955,8 +942,8 @@ fn logical_event_budget_preserves_provider_turns() {
         call_guarded(
             &c,
             &cfg,
-            "decide",
-            &cfg.decide,
+            "digest",
+            &cfg.digest,
             "fixture",
             &mut backend,
             &guard
@@ -966,7 +953,7 @@ fn logical_event_budget_preserves_provider_turns() {
         "planner_budget_exhausted"
     );
     assert_eq!(backend.0, 2);
-    assert_eq!(usage(&c).unwrap()["decide"], 1);
+    assert_eq!(usage(&c).unwrap()["digest"], 1);
 }
 #[test]
 fn serialized_provider_envelope_allows_encrypted_reasoning_overhead() {
@@ -1008,7 +995,7 @@ fn serialized_provider_envelope_allows_encrypted_reasoning_overhead() {
     call_guarded(
         &c,
         &cfg,
-        "decide",
+        "supervisor",
         &role,
         "fixture",
         &mut Payload(just_over_old),
@@ -1018,7 +1005,7 @@ fn serialized_provider_envelope_allows_encrypted_reasoning_overhead() {
     call_guarded(
         &c,
         &cfg,
-        "decide",
+        "supervisor",
         &role,
         "fixture",
         &mut Payload(at_raised),
@@ -1029,7 +1016,7 @@ fn serialized_provider_envelope_allows_encrypted_reasoning_overhead() {
         call_guarded(
             &c,
             &cfg,
-            "decide",
+            "supervisor",
             &role,
             "fixture",
             &mut Payload(String::new()),
@@ -1043,7 +1030,7 @@ fn serialized_provider_envelope_allows_encrypted_reasoning_overhead() {
         call_guarded(
             &c,
             &cfg,
-            "decide",
+            "supervisor",
             &role,
             "fixture",
             &mut Payload(runaway),
@@ -1063,10 +1050,10 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
     large_configured_usage_journal();
     quota_burst_and_review_roles();
     logical_event_budget_preserves_provider_turns();
-    measured_digest_without_owner_requires_migration();
-    plan_text_and_decide_budget_keep_the_config_hash();
+    plan_text_and_digest_budget_keep_the_config_hash();
 
-    // Restart reads the original successful digest without reserving another call.
+    // Digest reservations count against the configured allowance and a raised
+    // allowance admits the next call.
     let restart_dir = tempfile::tempdir().unwrap();
     let restart = super::super::tests::config(restart_dir.path());
     let digest_role = ModelRole {
@@ -1093,12 +1080,7 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
         &guard,
     )
     .unwrap();
-    for _ in 0..3 {
-        assert_eq!(
-            existing_digest(&restart, &digest_role, &preview_guard()).unwrap(),
-            Some(raw.clone())
-        );
-    }
+    assert!(!raw.is_empty());
     assert_eq!(usage(&restart).unwrap()["digest"], 1);
     for _ in 1..8 {
         call_guarded(
@@ -1137,9 +1119,6 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
     )
     .unwrap();
     assert_eq!(usage(&restart).unwrap()["digest"], 9);
-    let mut other = restart.clone();
-    other.session = other.previous_session;
-    assert!(existing_digest(&other, &digest_role, &preview_guard()).is_err());
     let role = ModelRole::default();
     assert_eq!(role.run_budget_ms(), role.timeout_ms);
     assert!(
@@ -1250,11 +1229,11 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
     };
     let mut backend = Failure(0);
     let before = p.clone();
-    assert!(call(&c, &cfg, "decide", &role, "fixture", &mut backend).is_err());
-    assert!(call(&c, &cfg, "decide", &role, "fixture", &mut backend).is_err());
+    assert!(call(&c, &cfg, "digest", &role, "fixture", &mut backend).is_err());
+    assert!(call(&c, &cfg, "digest", &role, "fixture", &mut backend).is_err());
     assert_eq!(backend.0, 2);
     assert_eq!(p, before);
-    assert!(!cfg.enabled && !cfg.digest.enabled && !cfg.decide.enabled);
+    assert!(!cfg.enabled && !cfg.digest.enabled);
     assert!(produce(&c, &cfg, &p, std::slice::from_ref(&i), false).is_err());
     assert!(!c.directory.join("model/session-plan.json").exists());
     assert_eq!(p, before);
@@ -1297,7 +1276,7 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
         call_guarded(
             &c,
             &cfg,
-            "decide",
+            "supervisor",
             &role,
             "fixture",
             &mut cancelling,
@@ -1308,7 +1287,7 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
     assert_eq!(cancelling.1, 1);
     assert_eq!(
         usage(&c).unwrap(),
-        json!({"digest":1,"decide":0,"operations":0,"strategy":0,"scorer":0,"supervisor":0,"research":0})
+        json!({"digest":1,"operations":0,"strategy":0,"scorer":0,"supervisor":0,"research":0})
     );
     let clock = std::cell::Cell::new(0i64);
     struct Advancing<'a>(&'a std::cell::Cell<i64>, usize);
@@ -1338,11 +1317,22 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
     };
     let mut advancing = Advancing(&clock, 0);
     assert!(call_guarded(&c, &cfg, "digest", &two, "fixture", &mut advancing, &guard).is_ok());
-    assert!(call_guarded(&c, &cfg, "decide", &two, "fixture", &mut advancing, &guard).is_err());
+    assert!(
+        call_guarded(
+            &c,
+            &cfg,
+            "supervisor",
+            &two,
+            "fixture",
+            &mut advancing,
+            &guard
+        )
+        .is_err()
+    );
     assert_eq!(advancing.1, 1);
     assert_eq!(
         usage(&c).unwrap(),
-        json!({"digest":2,"decide":0,"operations":0,"strategy":0,"scorer":0,"supervisor":0,"research":0})
+        json!({"digest":2,"operations":0,"strategy":0,"scorer":0,"supervisor":0,"research":0})
     );
     let enough = ModelRole {
         daily_call_budget: 10,
@@ -1365,7 +1355,7 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
         call_guarded(
             &c,
             &cfg,
-            "decide",
+            "supervisor",
             &enough,
             "fixture",
             &mut advancing,
@@ -1400,6 +1390,9 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
     };
     write_reservation("research-0000.attempt.json");
     write_reservation("supervisor-0000.attempt.json");
+    // Journals written before the owner-only policy may hold decide charges;
+    // they stay valid, readable records.
+    write_reservation("decide-0000.attempt.json");
     assert!(super::usage::reservations(journal_dir.path(), 16).is_ok());
     write_reservation("bogus-0000.attempt.json");
     assert!(super::usage::reservations(journal_dir.path(), 16).is_err());
@@ -1407,7 +1400,7 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
         call(
             &c,
             &cfg,
-            "decide",
+            "supervisor",
             &enough,
             "fixture preview 1",
             &mut previews
@@ -1418,27 +1411,59 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
         call(
             &c,
             &cfg,
-            "decide",
+            "supervisor",
             &enough,
             "fixture preview 2",
             &mut previews
         )
         .is_ok()
     );
-    let latest = c.directory.join("model/usage/decide-0002.attempt.json");
-    let preserved = c.directory.join("model/preserved-decide-0002.json");
+    let latest = fs::read_dir(c.directory.join("model/usage"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("supervisor-")
+                && path.to_string_lossy().ends_with(".attempt.json")
+        })
+        .max()
+        .unwrap();
+    let preserved = c.directory.join("model/preserved-supervisor-latest.json");
     fs::rename(&latest, &preserved).unwrap();
-    assert!(call(&c, &cfg, "decide", &enough, "fixture event", &mut previews).is_err());
+    assert!(
+        call(
+            &c,
+            &cfg,
+            "supervisor",
+            &enough,
+            "fixture event",
+            &mut previews
+        )
+        .is_err()
+    );
     assert!(usage(&c).is_err());
     assert_eq!(previews.0, 2); // A missing preview reservation cannot refund a call.
     fs::rename(&preserved, &latest).unwrap();
     assert_eq!(
         usage(&c).unwrap(),
-        json!({"digest":2,"decide":2,"operations":0,"strategy":0,"scorer":0,"supervisor":0,"research":0})
+        json!({"digest":2,"operations":0,"strategy":0,"scorer":0,"supervisor":2,"research":0})
     );
     let original_bytes = fs::read(&latest).unwrap();
     fs::write(&latest, b"{\"changed\":\"synthetic reservation\"}").unwrap();
-    assert!(call(&c, &cfg, "decide", &enough, "fixture event", &mut previews).is_err());
+    assert!(
+        call(
+            &c,
+            &cfg,
+            "supervisor",
+            &enough,
+            "fixture event",
+            &mut previews
+        )
+        .is_err()
+    );
     assert_eq!(previews.0, 2);
     fs::copy(
         &latest,
@@ -1448,7 +1473,7 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
     fs::write(&latest, &original_bytes).unwrap();
     assert_eq!(
         usage(&c).unwrap(),
-        json!({"digest":2,"decide":2,"operations":0,"strategy":0,"scorer":0,"supervisor":0,"research":0})
+        json!({"digest":2,"operations":0,"strategy":0,"scorer":0,"supervisor":2,"research":0})
     );
     let mut augmented = p.clone();
     assert!(
@@ -1571,10 +1596,17 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
         )
         .is_err()
     );
-    let failed: Value = serde_json::from_slice(
-        &fs::read(c.directory.join("model/usage/digest-0002.result.json")).unwrap(),
-    )
-    .unwrap();
+    let latest_digest = fs::read_dir(c.directory.join("model/usage"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            name.starts_with("digest-") && name.ends_with(".result.json")
+        })
+        .max()
+        .unwrap();
+    let failed: Value = serde_json::from_slice(&fs::read(latest_digest).unwrap()).unwrap();
     assert_eq!(failed["failed"], true);
     assert_eq!(
         failed["transport_evidence"]["origin"],
@@ -1588,17 +1620,6 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
     let config_file = d.path().join("direct-digest.json");
     fs::write(&config_file, serde_json::to_vec(&direct_cfg).unwrap()).unwrap();
     PlannerConfig::load(&config_file).unwrap();
-    direct_cfg.decide = ModelRole {
-        model_id: "grok-4.7".into(),
-        transport: sadr_cli::native_transport::Transport::DirectOauth,
-        ..Default::default()
-    };
-    fs::write(&config_file, serde_json::to_vec(&direct_cfg).unwrap()).unwrap();
-    PlannerConfig::load(&config_file).unwrap();
-    direct_cfg.decide.tools = vec!["x_search".into(), "web_search".into()];
-    fs::write(&config_file, serde_json::to_vec(&direct_cfg).unwrap()).unwrap();
-    PlannerConfig::load(&config_file).unwrap();
-    direct_cfg.decide.tools.clear();
     direct_cfg.digest.transport = sadr_cli::native_transport::Transport::OpenaiCodex;
     direct_cfg.digest.model_id = crate::model::LUNA.into();
     fs::write(&config_file, serde_json::to_vec(&direct_cfg).unwrap()).unwrap();
@@ -1606,27 +1627,16 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
     direct_cfg.digest.model_id = "gpt-6.1-sol".into();
     fs::write(&config_file, serde_json::to_vec(&direct_cfg).unwrap()).unwrap();
     PlannerConfig::load(&config_file).unwrap();
+    // The digest never runs native search tools.
     direct_cfg.digest.model_id = crate::model::LUNA.into();
-    direct_cfg.decide.transport = sadr_cli::native_transport::Transport::OpenaiCodex;
-    fs::write(&config_file, serde_json::to_vec(&direct_cfg).unwrap()).unwrap();
-    PlannerConfig::load(&config_file).unwrap();
-    // Luna may decide over its own grant, but never with native search tools.
-    direct_cfg.decide.model_id = crate::model::LUNA.into();
-    fs::write(&config_file, serde_json::to_vec(&direct_cfg).unwrap()).unwrap();
-    PlannerConfig::load(&config_file).unwrap();
-    direct_cfg.decide.tools = vec!["web_search".into()];
+    direct_cfg.digest.tools = vec!["web_search".into()];
     fs::write(&config_file, serde_json::to_vec(&direct_cfg).unwrap()).unwrap();
     assert!(PlannerConfig::load(&config_file).is_err());
-    direct_cfg.decide.tools.clear();
-    direct_cfg.decide.transport = sadr_cli::native_transport::Transport::DirectOauth;
-    direct_cfg.decide.model_id = crate::model::FAST_VARIANT.into();
-    fs::write(&config_file, serde_json::to_vec(&direct_cfg).unwrap()).unwrap();
-    PlannerConfig::load(&config_file).unwrap();
     let journal = c.directory.join("model/usage");
     fs::rename(&journal, c.directory.join("model/preserved-usage")).unwrap();
     fs::create_dir(&journal).unwrap();
     assert!(usage(&c).is_err());
-    assert!(call(&c, &cfg, "decide", &enough, "fixture", &mut advancing).is_err());
+    assert!(call(&c, &cfg, "digest", &enough, "fixture", &mut advancing).is_err());
     assert_eq!(advancing.1, 1);
     postclose::behavioral_assertions();
 }
@@ -1677,8 +1687,8 @@ fn listed() -> Instrument {
         tick: Price::parse("0.05").unwrap(),
     }
 }
-fn paper_cfg(timeout_ms: u64, run_timeout_ms: Option<u64>) -> PlannerConfig {
-    let mut cfg: PlannerConfig = serde_json::from_value(json!({
+fn paper_cfg() -> PlannerConfig {
+    serde_json::from_value(json!({
         "enabled": true,
         "provider": "xai_subscription",
         "shortlist_n": 40,
@@ -1689,15 +1699,6 @@ fn paper_cfg(timeout_ms: u64, run_timeout_ms: Option<u64>) -> PlannerConfig {
             "timeout_ms": 60000,
             "output_cap": 4096,
             "daily_call_budget": 0
-        },
-        "decide": {
-            "enabled": true,
-            "model_id": "grok-4.7",
-            "transport": "direct_oauth",
-            "tools": ["web_search", "x_search"],
-            "timeout_ms": timeout_ms,
-            "output_cap": 8192,
-            "daily_call_budget": 8
         },
         "events": {
             "enabled": true,
@@ -1715,9 +1716,7 @@ fn paper_cfg(timeout_ms: u64, run_timeout_ms: Option<u64>) -> PlannerConfig {
             }
         }
     }))
-    .unwrap();
-    cfg.decide.run_timeout_ms = run_timeout_ms;
-    cfg
+    .unwrap()
 }
 fn seed_history(c: &mut Config, key: &str, at: i64) {
     let history = c.directory.join("daily-history");
@@ -1772,20 +1771,6 @@ fn seed_history(c: &mut Config, key: &str, at: i64) {
 }
 struct Outcome {
     c: Config,
-    #[allow(dead_code)]
-    db: rusqlite::Connection,
-    #[allow(dead_code)]
-    p: Portfolio,
-    cfg: PlannerConfig,
-    claim: redecision::Claim,
-    #[allow(dead_code)]
-    i: Instrument,
-    #[allow(dead_code)]
-    at: i64,
-    #[allow(dead_code)]
-    now: i64,
-    #[allow(dead_code)]
-    produce_wall_us: u128,
     requests: Vec<Value>,
     plan: std::result::Result<Value, String>,
     /// Keeps the session directory alive for the assertions.
@@ -1906,17 +1891,15 @@ fn drive(
     );
     redecision::initialize(&mut db, &c, &p, Some(cfg), at).unwrap();
     assert!(c.directory.join("model/usage-identity.json").is_file());
-    if cfg.orchestrator_owns_decisions() {
-        rollover::atomic(
-            &c.directory.join("model/luna-latest.json"),
-            &json!({
-                "session_binding": book_binding(&c).unwrap(),
-                "at_ms": at,
-                "digest": {"summary":"old Luna context must not be replayed"}
-            }),
-        )
-        .unwrap();
-    }
+    rollover::atomic(
+        &c.directory.join("model/luna-latest.json"),
+        &json!({
+            "session_binding": book_binding(&c).unwrap(),
+            "at_ms": at,
+            "digest": {"summary":"old Luna context must not be replayed"}
+        }),
+    )
+    .unwrap();
     if cfg.digest.enabled {
         // Reproduce v0.5.37: seven pre-inference failures on a rolled book,
         // before coverage became eligible and before a namespace existed.
@@ -1950,7 +1933,7 @@ fn drive(
         redecision::initialize(&mut db, &c, &p, Some(cfg), at).unwrap();
         assert_eq!(
             usage(&c).unwrap(),
-            json!({"digest":0,"decide":0,"operations":0,"strategy":0,"scorer":0,"supervisor":0,"research":0})
+            json!({"digest":0,"operations":0,"strategy":0,"scorer":0,"supervisor":0,"research":0})
         );
     }
     let claim = redecision::reserve(&mut db, &c, cfg, &p, at, true)
@@ -1966,7 +1949,6 @@ fn drive(
         cancel_at,
         cancel: Some(&flag),
     };
-    let measurement_started = std::time::Instant::now();
     let plan = produce_with_backend(
         &c,
         cfg,
@@ -1979,14 +1961,6 @@ fn drive(
     );
     Outcome {
         c,
-        db,
-        p,
-        cfg: cfg.clone(),
-        claim,
-        i,
-        at,
-        now: clock.get(),
-        produce_wall_us: measurement_started.elapsed().as_micros(),
         requests: backend.requests,
         plan: plan.map_err(|error| error.to_string()),
         dir,
@@ -1994,7 +1968,7 @@ fn drive(
 }
 #[test]
 fn tools_only_digest_sees_only_the_trigger_envelope() {
-    let mut cfg = paper_cfg(120_000, None);
+    let mut cfg = paper_cfg();
     cfg.digest = ModelRole {
         enabled: true,
         model_id: "gpt-6-luna".into(),
@@ -2012,59 +1986,9 @@ fn tools_only_digest_sees_only_the_trigger_envelope() {
         mode: ContextMode::ToolsOnly,
     });
     cfg.full_universe_features = Some(true);
-    let digest = json!({
-        "summary":"one fresh scanner prospect",
-        "evidence_ids":["bundle"],
-        "missing_data":[],
-        "uncertainties":[],
-        "handoff":{"decision":"wait","instrument_keys":[],"reason":"no actionable setup"}
-    })
-    .to_string();
-    let out = drive(
-        &cfg,
-        vec![
-            json!({"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":digest}]}]}),
-        ],
-        vec![100],
-        None,
-    );
-    assert_eq!(out.requests.len(), 1, "wait must not call Grok");
-    let prompt = out.requests[0]["input"].to_string();
-    assert!(
-        prompt.len() <= 1024,
-        "trigger envelope is {} bytes",
-        prompt.len()
-    );
-    for forbidden in [
-        "universe_features",
-        "shortlist",
-        "allowlist_reference",
-        "historical_features",
-        "\"discovery\":",
-        "\"prospects\":",
-        "\"cash\":",
-        "\"positions\":",
-        "\"fees\":",
-        "\"previous_",
-    ] {
-        assert!(!prompt.contains(forbidden), "Luna input leaked {forbidden}");
-    }
-    assert!(prompt.contains("maximize the continuing paper account"));
-    assert_eq!(
-        out.plan.as_ref().unwrap_err().to_string(),
-        "decision_owner_migration_required"
-    );
-
-    // A v1 orchestrator owner records Luna's valid wait digest as evidence,
-    // without parsing its handoff, reserving a decide call or carrying old
-    // Luna/Grok advisory context into this fresh digest request.
+    // The orchestrator owner records Luna's valid factual digest as evidence
+    // without carrying old Luna/Grok advisory context into this fresh request.
     let mut owner_cfg = cfg.clone();
-    owner_cfg.require_digest = None;
-    owner_cfg.decide.enabled = false;
-    owner_cfg.decision_owner = Some(DecisionOwnerPolicy {
-        version: 1,
-        owner: DecisionOwner::Orchestrator,
-    });
     let mut orchestrator = super::super::orchestrator_model::OrchestratorModelSettings {
         enabled: true,
         ..Default::default()
@@ -2120,6 +2044,27 @@ fn tools_only_digest_sees_only_the_trigger_envelope() {
         None,
     );
     assert_eq!(owner_out.requests.len(), 1, "owner mode calls Luna only");
+    let prompt = owner_out.requests[0]["input"].to_string();
+    assert!(
+        prompt.len() <= 1024,
+        "trigger envelope is {} bytes",
+        prompt.len()
+    );
+    for forbidden in [
+        "universe_features",
+        "shortlist",
+        "allowlist_reference",
+        "historical_features",
+        "\"discovery\":",
+        "\"prospects\":",
+        "\"cash\":",
+        "\"positions\":",
+        "\"fees\":",
+        "\"previous_",
+    ] {
+        assert!(!prompt.contains(forbidden), "Luna input leaked {forbidden}");
+    }
+    assert!(prompt.contains("maximize the continuing paper account"));
     assert!(owner_out.plan.is_ok(), "{:?}", owner_out.plan);
     let owner_plan = owner_out.plan.as_ref().unwrap();
     assert_eq!(owner_plan["parsed_plan"]["actions"], json!([]));
@@ -2167,65 +2112,7 @@ fn tools_only_digest_sees_only_the_trigger_envelope() {
         assert!(owner_plan["input"].get(key).is_none(), "unexpected {key}");
     }
     assert_eq!(usage(&owner_out.c).unwrap()["digest"], 1);
-    assert_eq!(usage(&owner_out.c).unwrap()["decide"], 0);
-}
-
-#[test]
-fn measured_digest_without_owner_requires_migration() {
-    const {
-        assert!(!super::super::LIVE_ENABLED);
-    }
-    let mut pipeline = paper_cfg(120_000, None);
-    pipeline.digest = ModelRole {
-        enabled: true,
-        model_id: "gpt-6-luna".into(),
-        transport: sadr_cli::native_transport::Transport::OpenaiCodex,
-        daily_call_budget: 30,
-        ..Default::default()
-    };
-    pipeline.decide.daily_call_budget = 20;
-    pipeline.full_universe_features = Some(true);
-    pipeline.context = Some(ContextSettings {
-        universe_rows: 150,
-        include_allowlist: false,
-        decimals: None,
-        mode: ContextMode::Projection,
-    });
-    pipeline.require_digest = Some(true);
-    pipeline.operator_context = Some("Synthetic startup mandate context".into());
-    let digest = json!({"summary":"Synthetic dated market bundle", "evidence_ids":["bundle"], "missing_data":[], "uncertainties":[]}).to_string();
-    let initial = drive(
-        &pipeline,
-        vec![
-            json!({"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":digest}]}]}),
-        ],
-        vec![100],
-        None,
-    );
-    assert_eq!(initial.claim.previous_attempts, 7);
-    assert_eq!(initial.cfg.digest.model_id, "gpt-6-luna");
-    assert_eq!(initial.cfg.decide.model_id, "grok-4.7");
-    assert!(
-        initial.requests[0]["input"]
-            .to_string()
-            .contains("universe_features")
-    );
-    assert!(
-        initial.requests[0]["input"]
-            .to_string()
-            .contains("Synthetic startup mandate context")
-    );
-    assert_eq!(
-        initial.requests.len(),
-        1,
-        "owner-less digest must not call decide"
-    );
-    assert_eq!(
-        initial.plan.as_ref().unwrap_err().to_string(),
-        "decision_owner_migration_required"
-    );
-    assert_eq!(usage(&initial.c).unwrap()["digest"], 1);
-    assert_eq!(usage(&initial.c).unwrap()["decide"], 0);
+    assert!(usage(&owner_out.c).unwrap().get("decide").is_none());
 }
 
 #[test]
@@ -2404,7 +2291,7 @@ fn provider_failures_retain_bounded_reason_and_stage_without_raw_text() {
         );
     }
 }
-fn plan_text_and_decide_budget_keep_the_config_hash() {
+fn plan_text_and_digest_budget_keep_the_config_hash() {
     let abstain = json!({"actions":[],"stance":"abstain","notes":"wait"});
     let raw = format!("Prefer {{cash}} until the open.\n{abstain}");
     assert_eq!(plan_document(&raw).unwrap()["notes"], "wait");
@@ -2474,25 +2361,23 @@ fn plan_text_and_decide_budget_keep_the_config_hash() {
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("planner.json");
-    let defaults: PlannerConfig = serde_json::from_value(json!({"digest":{},"decide":{}})).unwrap();
+    let defaults: PlannerConfig = serde_json::from_value(json!({"digest":{}})).unwrap();
     assert_eq!(defaults.digest.daily_call_budget, 0);
-    assert_eq!(defaults.decide.daily_call_budget, 0);
-    assert_eq!(defaults.decide.timeout_ms, 150_000);
+    assert_eq!(defaults.digest.timeout_ms, 20_000);
     let mut explicit = defaults.clone();
-    explicit.enabled = true;
-    explicit.decide.enabled = true;
-    explicit.decide.model_id = "fixture-model".into();
+    explicit.digest.enabled = true;
+    explicit.digest.model_id = "fixture-model".into();
     fs::write(&path, serde_json::to_vec(&explicit).unwrap()).unwrap();
     assert_eq!(
         PlannerConfig::load(&path).err().unwrap().to_string(),
         "planner_role_invalid"
     );
-    explicit.decide.daily_call_budget = 17;
+    explicit.digest.daily_call_budget = 17;
     explicit.model_led = Some(true);
     explicit.usage_namespace = Some("custom-usage".into());
     fs::write(&path, serde_json::to_vec(&explicit).unwrap()).unwrap();
     assert_eq!(
-        PlannerConfig::load(&path).unwrap().decide.daily_call_budget,
+        PlannerConfig::load(&path).unwrap().digest.daily_call_budget,
         17
     );
     let mut c = super::super::tests::config(dir.path());
@@ -2514,61 +2399,32 @@ fn plan_text_and_decide_budget_keep_the_config_hash() {
     }
     let mut raised = defaults.clone();
     raised.digest.daily_call_budget = 500;
-    raised.decide.daily_call_budget = 100;
     assert_eq!(
         policy_bytes(&defaults).unwrap(),
         policy_bytes(&raised).unwrap()
     );
-    raised.decide.output_cap += 1;
+    raised.digest.output_cap += 1;
     assert_ne!(
         policy_bytes(&defaults).unwrap(),
         policy_bytes(&raised).unwrap()
     );
-    let cfg = paper_cfg(120_000, None);
+    let mut cfg = paper_cfg();
+    cfg.enabled = false;
     fs::write(&path, serde_json::to_vec(&cfg).unwrap()).unwrap();
     let loaded = PlannerConfig::load(&path).unwrap();
     assert!(
-        serde_json::to_value(&loaded).unwrap()["decide"]
+        serde_json::to_value(&loaded).unwrap()["digest"]
             .get("run_timeout_ms")
             .is_none()
     );
-    assert_eq!(loaded.decide.run_budget_ms(), 120_000);
-    assert_eq!(loaded.decide.invocation_budget_ms("decide"), DEFAULT_RUN_MS);
-    assert_eq!(
-        loaded.digest.invocation_budget_ms("digest"),
-        loaded.digest.timeout_ms
-    );
+    assert_eq!(loaded.digest.run_budget_ms(), loaded.digest.timeout_ms);
     let hash = digest(&serde_json::to_vec(&loaded).unwrap());
     assert_eq!(
         hash,
         digest(&serde_json::to_vec(&PlannerConfig::load(&path).unwrap()).unwrap())
     );
-    let mut bounded = paper_cfg(120_000, Some(MAX_RUN_MS));
-    fs::write(&path, serde_json::to_vec(&bounded).unwrap()).unwrap();
-    let loaded = PlannerConfig::load(&path).unwrap();
-    assert_eq!(loaded.decide.invocation_budget_ms("decide"), MAX_RUN_MS);
-    assert_ne!(digest(&serde_json::to_vec(&loaded).unwrap()), hash);
-    bounded.decide.run_timeout_ms = Some(MAX_RUN_MS + 1);
-    fs::write(&path, serde_json::to_vec(&bounded).unwrap()).unwrap();
-    assert!(PlannerConfig::load(&path).is_err());
-    bounded.decide.run_timeout_ms = Some(119_999);
-    fs::write(&path, serde_json::to_vec(&bounded).unwrap()).unwrap();
-    assert!(PlannerConfig::load(&path).is_err());
-    bounded.decide.timeout_ms = 150_001;
-    bounded.decide.run_timeout_ms = Some(150_001);
-    fs::write(&path, serde_json::to_vec(&bounded).unwrap()).unwrap();
-    assert!(PlannerConfig::load(&path).is_err());
-    bounded.decide.timeout_ms = 60_000;
-    bounded.decide.run_timeout_ms = Some(60_000);
-    fs::write(&path, serde_json::to_vec(&bounded).unwrap()).unwrap();
-    assert_eq!(
-        PlannerConfig::load(&path)
-            .unwrap()
-            .decide
-            .invocation_budget_ms("decide"),
-        60_000
-    );
-    let mut digest_cfg = paper_cfg(120_000, None);
+    let mut digest_cfg = paper_cfg();
+    digest_cfg.enabled = false;
     digest_cfg.digest.timeout_ms = 60_000;
     digest_cfg.digest.run_timeout_ms = Some(120_000);
     fs::write(&path, serde_json::to_vec(&digest_cfg).unwrap()).unwrap();
@@ -2736,56 +2592,6 @@ fn plan_text_and_decide_budget_keep_the_config_hash() {
 }
 
 #[test]
-fn legacy_role_accessor_returns_the_stored_blocks() {
-    use super::super::orchestrator_model::Trigger;
-    let cfg: super::PlannerConfig = serde_json::from_value(serde_json::json!({
-        "enabled": true,
-        "digest": {"enabled": true, "model_id": "gpt-6-luna",
-            "transport": "openai_codex", "tools": [], "timeout_ms": 20000,
-            "output_cap": 4096, "daily_call_budget": 30},
-        "decide": {"enabled": true, "model_id": "grok-4.7",
-            "transport": "direct_oauth", "tools": ["web_search"],
-            "timeout_ms": 150000, "output_cap": 8192, "daily_call_budget": 20}
-    }))
-    .unwrap();
-    assert_eq!(
-        serde_json::to_value(cfg.role(Trigger::Digest)).unwrap(),
-        serde_json::to_value(&cfg.digest).unwrap()
-    );
-    assert_eq!(
-        serde_json::to_value(cfg.role(Trigger::Decide)).unwrap(),
-        serde_json::to_value(&cfg.decide).unwrap()
-    );
-    {
-        use super::super::orchestrator_model::Trigger;
-        let cfg: super::PlannerConfig = serde_json::from_value(serde_json::json!({
-            "enabled": true,
-            "post_close": {
-                "enabled": true,
-                "operations": {"enabled": true, "model_id": "grok-4.7",
-                    "transport": "direct_oauth", "tools": [],
-                    "timeout_ms": 20000, "output_cap": 4096,
-                    "daily_call_budget": 3},
-                "strategy": {"enabled": true, "model_id": "grok-4.7",
-                    "transport": "direct_oauth", "tools": ["web_search", "x_search"],
-                    "timeout_ms": 150000, "output_cap": 8192,
-                    "daily_call_budget": 2}
-            }
-        }))
-        .unwrap();
-        let review = cfg.post_close.as_ref().unwrap();
-        assert_eq!(
-            serde_json::to_value(cfg.role(Trigger::Operations)).unwrap(),
-            serde_json::to_value(&review.operations).unwrap()
-        );
-        assert_eq!(
-            serde_json::to_value(cfg.role(Trigger::Strategy)).unwrap(),
-            serde_json::to_value(&review.strategy).unwrap()
-        );
-    }
-}
-
-#[test]
 fn unconfigured_orchestrator_trigger_is_disabled() {
     use super::super::orchestrator_model::{OrchestratorModelSettings, Trigger};
     let mut settings = OrchestratorModelSettings {
@@ -2804,17 +2610,7 @@ fn unconfigured_orchestrator_trigger_is_disabled() {
     };
     assert!(!cfg.role(Trigger::Strategy).enabled);
     assert_eq!(cfg.role(Trigger::Digest).model_id, "luna");
-    assert!(!cfg.role(Trigger::Decide).enabled);
     let mut cfg = cfg;
-    cfg.decide.enabled = true;
-    cfg.decide.model_id = "independent-decide".into();
-    cfg.decide.model_config = Some("decide-credentials.json".into());
-    cfg.decide.daily_call_budget = 17;
-    let decide = cfg.role(Trigger::Decide);
-    assert!(decide.enabled);
-    assert_eq!(decide.model_id, "independent-decide");
-    assert_eq!(decide.model_config, cfg.decide.model_config);
-    assert_eq!(decide.daily_call_budget, 17);
     cfg.orchestrator
         .as_mut()
         .unwrap()
@@ -2823,7 +2619,8 @@ fn unconfigured_orchestrator_trigger_is_disabled() {
         .unwrap()
         .enabled = false;
     assert!(!cfg.role(Trigger::Operations).enabled);
-    assert!(cfg.role(Trigger::Decide).enabled);
+    cfg.orchestrator = None;
+    assert!(!cfg.role(Trigger::Supervisor).enabled);
 }
 
 #[test]

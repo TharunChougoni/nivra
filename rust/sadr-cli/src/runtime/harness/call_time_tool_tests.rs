@@ -85,12 +85,7 @@ fn schemas_use_configured_limits_and_digest_has_no_search() {
         tool("get_recent_decisions")["parameters"]["properties"]["limit"]["maximum"],
         2
     );
-    let decide = configured_definitions_with("decide", &[], false, false, &settings).unwrap();
-    assert!(
-        decide
-            .iter()
-            .any(|tool| tool["name"] == "get_luna_tool_results")
-    );
+    assert!(configured_definitions_with("decide", &[], false, false, &settings).is_err());
     // OpenAI strict function schemas require every property in `required`;
     // optional arguments are nullable instead (#123).
     let owner = call_tool_definitions(
@@ -308,7 +303,7 @@ fn schemas_use_configured_limits_and_digest_has_no_search() {
         run["parameters"]["properties"]["input_path"]["type"],
         json!(["string", "null"])
     );
-    for tool in digest.iter().chain(decide.iter()).chain(owner.iter()) {
+    for tool in digest.iter().chain(owner.iter()) {
         strict_schema(&tool["parameters"]);
         if tool["strict"] != true {
             continue;
@@ -511,9 +506,6 @@ fn call_limits_unknown_data_and_execution_authority_are_explicit() {
     let recent = recent_decisions(&bundle(), 2);
     assert_eq!(recent["status"], "no_prior_decisions");
     assert_eq!(recent["execution_authorized"], false);
-    let luna = luna_tool_results(&json!({}));
-    assert_eq!(luna["status"], "unknown");
-    assert_eq!(luna["execution_authorized"], false);
     let c = crate::runtime::tests::config(std::path::Path::new("fixture"));
     let now = chrono::DateTime::parse_from_rfc3339("2026-10-16T10:00:00+05:30")
         .unwrap()
@@ -532,7 +524,7 @@ fn prompts_share_the_code_owned_objective_and_stay_short() {
         assert!(prompt.contains("Nifty"));
         assert!(!prompt.contains("equities/ETFs only"));
     }
-    for role in ["digest", "decide", "scorer"] {
+    for role in ["digest", "scorer"] {
         let text = system_instructions(role, &[]).unwrap();
         assert!(
             text.starts_with(objective()),
@@ -540,40 +532,25 @@ fn prompts_share_the_code_owned_objective_and_stay_short() {
         );
         assert!(text.contains(instructions(role).unwrap()));
     }
-    for prompt in [DATA_PROMPT, DECISION_PROMPT, SCORER_PROMPT] {
-        assert!(prompt.len() <= 2048, "prompt is {} bytes", prompt.len());
-        assert!(!prompt.contains("universe_features"));
-        assert!(!prompt.contains("shortlist"));
-        assert!(!prompt.contains("Rs5000"));
-        assert!(!prompt.contains("maximize the continuing paper account"));
-    }
-    assert!(!DATA_PROMPT.contains("paper decision model"));
-    assert!(!DECISION_PROMPT.contains("data analyst"));
+    assert!(
+        SCORER_PROMPT.len() <= 2048,
+        "prompt is {} bytes",
+        SCORER_PROMPT.len()
+    );
+    assert!(!SCORER_PROMPT.contains("universe_features"));
+    assert!(!SCORER_PROMPT.contains("shortlist"));
+    assert!(!SCORER_PROMPT.contains("Rs5000"));
+    assert!(!SCORER_PROMPT.contains("maximize the continuing paper account"));
     assert!(DATA_OWNER_PROMPT.len() <= 4096);
     assert!(DATA_OWNER_PROMPT.contains("facts"));
     let prompts = crate::runtime::experiment_profile::PromptSet::default();
     assert_eq!(
         prompts.hashes()["digest"],
-        prompts.hashes_for(false)["digest"]
-    );
-    assert_ne!(
-        prompts.hashes()["digest"],
-        prompts.hashes_for(true)["digest"]
-    );
-    assert_eq!(
-        prompts.hashes_for(true)["digest"],
         json!(digest(DATA_OWNER_PROMPT.as_bytes()))
     );
-    for prompt in [DATA_PROMPT, DECISION_PROMPT] {
-        assert!(prompt.contains("directive_acknowledgements"));
-        assert!(prompt.contains("Acknowledge each active directive id"));
-    }
+    assert!(prompts.hashes().get("decide").is_none());
 
     let owner_cfg = PlannerConfig {
-        decision_owner: Some(super::super::planner::DecisionOwnerPolicy {
-            version: 1,
-            owner: super::super::planner::DecisionOwner::Orchestrator,
-        }),
         ..Default::default()
     };
     let owner_frame = Frame {
@@ -591,8 +568,12 @@ fn prompts_share_the_code_owned_objective_and_stay_short() {
     };
     let owner_instructions = frame_instructions_for(&owner_cfg, &owner_frame).unwrap();
     assert!(owner_instructions.contains(DATA_OWNER_PROMPT));
-    assert!(!owner_instructions.contains(DATA_PROMPT));
-    assert!(!owner_instructions.contains(super::decision_evidence::DIGEST_PROMPT));
+    // The owner digest carries its own evidence rules; no handoff fragment is
+    // appended, with or without a policy.
+    assert_eq!(
+        frame_instructions(&owner_frame).unwrap(),
+        owner_instructions
+    );
 
     let frame = Frame {
         role: "supervisor".into(),
@@ -607,13 +588,17 @@ fn prompts_share_the_code_owned_objective_and_stay_short() {
         instructions: None,
         tool_limits: None,
     };
-    let default_cfg = legacy_test_config();
+    let default_cfg = PlannerConfig::default();
     let default_instructions = frame_instructions_for(&default_cfg, &frame).unwrap();
     assert_eq!(
         default_instructions,
-        system_instructions("supervisor", &[]).unwrap()
+        format!("{}\n\n{}", objective(), ORCHESTRATOR_PROMPT)
     );
-    assert!(default_instructions.contains(SUPERVISOR_PROMPT));
+    assert!(
+        system_instructions("supervisor", &[])
+            .unwrap()
+            .contains(SUPERVISOR_PROMPT)
+    );
 
     let prompt_dir = tempfile::tempdir().unwrap();
     let system_prompt = prompt_dir.path().join("orchestrator-system.md");
@@ -663,13 +648,9 @@ fn final_answer_frames_use_the_roles_own_prompt() {
         tool_limits: None,
     };
     let digest = frame_instructions(&frame("digest")).unwrap();
-    assert!(digest.contains(DATA_PROMPT));
+    assert!(digest.contains(DATA_OWNER_PROMPT));
     assert!(digest.starts_with(objective()));
-    assert!(!digest.contains("paper decision model"));
-    let decide = frame_instructions(&frame("decide")).unwrap();
-    assert!(decide.contains(DECISION_PROMPT));
-    assert!(decide.starts_with(objective()));
-    assert!(!decide.contains("data analyst"));
+    assert!(frame_instructions(&frame("decide")).is_err());
     let mut configured = frame("scorer");
     configured.instructions = Some("host configured scorer prompt".into());
     assert_eq!(
@@ -684,22 +665,7 @@ fn prompt_tool_lists_match_the_configured_definitions() {
     let digest = configured_definitions_with("digest", &[], false, false, &settings).unwrap();
     for tool in &digest {
         let name = tool["name"].as_str().unwrap();
-        assert!(DATA_PROMPT.contains(name), "Luna prompt omits {name}");
-    }
-    let decide = configured_definitions_with(
-        "decide",
-        &["web_search".into(), "x_search".into()],
-        false,
-        false,
-        &settings,
-    )
-    .unwrap();
-    for tool in &decide {
-        let Some(name) = tool["name"].as_str() else {
-            assert!(DECISION_PROMPT.contains(tool["type"].as_str().unwrap()));
-            continue;
-        };
-        assert!(DECISION_PROMPT.contains(name), "Grok prompt omits {name}");
+        assert!(DATA_OWNER_PROMPT.contains(name), "Luna prompt omits {name}");
     }
     assert!(SCORER_PROMPT.contains("sandbox_write"));
     assert!(SCORER_PROMPT.contains("replay"));
@@ -721,7 +687,7 @@ fn successful_call_result_is_archived_without_authority() {
     }
     let dir = tempfile::tempdir().unwrap();
     let c = super::super::tests::config(dir.path());
-    let cfg = legacy_test_config();
+    let cfg = PlannerConfig::default();
     let role = ModelRole {
         enabled: true,
         model_id: crate::model::LUNA.into(),
@@ -730,7 +696,7 @@ fn successful_call_result_is_archived_without_authority() {
         ..Default::default()
     };
     let call = |id: &str, name: &str, arguments: Value| json!({"output":[{"type":"function_call","call_id":id,"name":name,"arguments":arguments.to_string()}]});
-    let digest = json!({"summary":"call-time tools observed","evidence_ids":["call_scan","call_rank","call_portfolio","call_history","call_status"],"missing_data":[],"uncertainties":[]});
+    let digest = json!({"complete":true,"as_of_ms":0,"coverage":{"universe":1,"scanned":1,"quoted":1,"featured":1,"experiments":0},"gaps":[],"changed_prospects":[],"active_rankings":[],"candidate_rankings":[],"bar_context":[],"spread_depth":[],"holdings":[],"cash":{"available":"0"},"fees":{"per_order":"0","buy_bps":"0","sell_bps":"0"},"recent_actions":[],"experiments":[],"evidence_ids":["call_scan","call_rank","call_portfolio","call_history","call_status"]});
     let final_turn = json!({"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":digest.to_string()}]}]});
     let mut fake = Fake {
         responses: VecDeque::from([
@@ -753,7 +719,7 @@ fn successful_call_result_is_archived_without_authority() {
         &planner::preview_guard(),
     )
     .unwrap();
-    validate_digest(&result, &bundle()).unwrap();
+    validate_owner_digest(&result, &bundle()).unwrap();
     let archive = std::fs::read_dir(c.directory.join("model"))
         .unwrap()
         .flatten()

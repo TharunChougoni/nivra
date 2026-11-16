@@ -39,7 +39,6 @@ pub(super) fn start_decision(
     now: i64,
     summary: &Value,
     hashes: AppliedHashes,
-    decides_at_start: u32,
     bounds: &Compaction,
 ) -> std::result::Result<Worker, &'static str> {
     let (role, path, timeout_ms, selection) = role_and_model(c, cfg)?;
@@ -71,7 +70,6 @@ pub(super) fn start_decision(
         trigger: "decision".into(),
         prompt_version: prompt_version.clone(),
         notes_version,
-        decides_at_start,
         fills_at_start: context.portfolio.fills.len(),
         started_at_ms: now,
         request: facts.clone(),
@@ -125,7 +123,6 @@ pub(super) fn start_decision(
         now,
         timeout_ms,
         hashes,
-        decides_at_start,
         now,
         TurnRef {
             session: c.session.to_string(),

@@ -442,7 +442,7 @@ pub(crate) fn repair_authority(
     if expected_owner == AuthorityOwner::Orchestrator {
         cfg.validate_decision_owner()?;
     }
-    if AuthorityOwner::for_config(cfg) != expected_owner {
+    if expected_owner != AuthorityOwner::Orchestrator {
         return Err("planner_authority_repair_owner_mismatch".into());
     }
     let current_hash = config_hash(cfg)?;

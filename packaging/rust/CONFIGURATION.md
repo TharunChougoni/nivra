@@ -94,12 +94,10 @@ approvals to make readiness pass.
 
 | Input/path | Current treatment |
 | --- | --- |
-| Absent/legacy `decision_owner` | Decodes for original hashes/archive/migration; runtime model work refuses `decision_owner_migration_required` |
-| Enabled independent Decide | Refused under owner policy; original config/usage/run labels stay distinct |
+| `decision_owner`, `decide` or `handoff_gate` key | Removed; the persistent orchestrator is the only decision owner. A planner file that still carries one refuses with `planner_config_invalid` until it is rewritten and applied with `config-apply` |
 | Absent `workspace` | No owner workspace tools; sealed policy hash unchanged. Enable with a reviewed `workspace` block and `config-apply` |
 | `workspace.network` | Default off and omitted from serialized policy. Explicit opt-in outbound network for allowlisted scanner scripts only; the scorer sandbox refuses it |
 | Absent `web_tools` | No orchestrator web tools and no outbound call; sealed policy hash unchanged. Enable with a reviewed `web_tools` block and `config-apply`. See `web-tools.fragment.json` |
-| Owner `handoff_gate` | Refused as `decision_owner_legacy_handoff_gate_refused`; reviewed two-role migration drops this obsolete Luna veto |
 | Enabled Operations/Strategy/post-close | Refused under owner policy; historical records remain readable |
 | Orchestrator plus old review-role blocks | Refused as `orchestrator_and_legacy_roles_conflict`; do not grow compatibility shims to reuse a clashing config |
 | Old `max_handoff_instruments`/context schema | Retained for sealed historical policy and tool bounds; new template uses factual tools-only defaults and no handoff gate |

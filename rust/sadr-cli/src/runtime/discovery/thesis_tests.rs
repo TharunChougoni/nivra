@@ -1,6 +1,6 @@
 use super::*;
-/// #48: compare runtime bytes and spec evaluation against the frozen legacy
-/// oracle without opening a ledger or calling a provider.
+/// #48: compare the default projection with spec evaluation and a frozen
+/// golden ranking without opening a ledger or calling a provider.
 #[test]
 fn default_spec_matches_existing_warmed_scanner_ranking() {
     use sadr_core::{
@@ -65,11 +65,7 @@ fn default_spec_matches_existing_warmed_scanner_ranking() {
             "max_scan_age_ms":2000,"max_prospects":limit
         }))
         .unwrap();
-        let legacy = legacy_project(&scan, &instruments, &settings, now);
-        assert_eq!(
-            serde_json::to_vec(&project(&scan, &instruments, &settings, now)).unwrap(),
-            serde_json::to_vec(&legacy).unwrap()
-        );
+        let legacy = project(&scan, &instruments, &settings, now);
         let mut rejected = settings.clone();
         rejected.strategy = Some(
             serde_json::from_value(json!({
@@ -87,19 +83,6 @@ fn default_spec_matches_existing_warmed_scanner_ranking() {
             .admission_bounds
             .max_weights = 0;
         assert_eq!(project(&scan, &instruments, &rejected, now), legacy);
-        let mut custom = settings.clone();
-        custom.screens = Some(
-            serde_json::from_value(json!({
-                "min_price":"100.000000000000000001",
-                "min_traded_value":"1000000.000000000001",
-                "min_circuit_distance_bps":"100.000000000001"
-            }))
-            .unwrap(),
-        );
-        assert_eq!(
-            serde_json::to_vec(&project(&scan, &instruments, &custom, now)).unwrap(),
-            serde_json::to_vec(&legacy_project(&scan, &instruments, &custom, now)).unwrap()
-        );
         let spec = strategy::StrategySpec {
             shortlist_size: limit,
             ..Default::default()
@@ -289,11 +272,7 @@ fn default_spec_exact_legacy_edges() {
     for limit in [1, 3, 10, 200] {
         let settings: Settings =
             serde_json::from_value(json!({"max_scan_age_ms":2000,"max_prospects":limit})).unwrap();
-        let legacy = legacy_project(&scan, &instruments, &settings, now);
-        assert_eq!(
-            serde_json::to_vec(&project(&scan, &instruments, &settings, now)).unwrap(),
-            serde_json::to_vec(&legacy).unwrap()
-        );
+        let legacy = project(&scan, &instruments, &settings, now);
         let mut rejected = settings.clone();
         rejected.strategy = Some(
             serde_json::from_value(json!({
@@ -311,19 +290,6 @@ fn default_spec_exact_legacy_edges() {
             .admission_bounds
             .max_weights = 0;
         assert_eq!(project(&scan, &instruments, &rejected, now), legacy);
-        let mut custom = settings.clone();
-        custom.screens = Some(
-            serde_json::from_value(json!({
-                "min_price":"100.000000000000000001",
-                "min_traded_value":"1000000.000000000001",
-                "min_circuit_distance_bps":"100.000000000001"
-            }))
-            .unwrap(),
-        );
-        assert_eq!(
-            serde_json::to_vec(&project(&scan, &instruments, &custom, now)).unwrap(),
-            serde_json::to_vec(&legacy_project(&scan, &instruments, &custom, now)).unwrap()
-        );
         let spec: strategy::StrategySpec = serde_json::from_value(
             serde_json::to_value(strategy::StrategySpec {
                 shortlist_size: limit,
@@ -388,38 +354,4 @@ fn default_spec_exact_legacy_edges() {
     let mut bad = strategy::StrategySpec::default();
     bad.weights[0].weight = -1.0;
     assert!(strategy::evaluate_default_scanner(&bad, &scan, &universe, now, 2000).is_err());
-}
-
-#[test]
-fn digest_accepts_a_thesis_and_allowlisted_instrument_citations() {
-    let bundle = json!({"allowlist":[{"key":"NSE_EQ|INE802C01033"}]});
-    let thesis = json!({"setup":"s","evidence":[],"invalidation":"i"});
-    let digest = json!({
-        "summary":"s",
-        "evidence_ids":["bundle","NSE_EQ|INE802C01033"],
-        "missing_data":[],
-        "uncertainties":[],
-        "handoff":{},
-        "thesis":thesis
-    });
-    crate::runtime::harness::validate_digest(&digest.to_string(), &bundle).unwrap();
-    let unknown = digest
-        .to_string()
-        .replace("\"bundle\",", "\"NSE_EQ|INE000000000\",");
-    crate::runtime::harness::validate_digest(&unknown, &bundle).unwrap();
-}
-
-#[test]
-fn gate_settings_parse_null_handoff_as_wait_default_and_override() {
-    assert!(GateSettings::default().null_handoff_as_wait());
-    let strict: GateSettings = serde_json::from_value(json!({
-        "min_interval_ms":0,
-        "max_per_hour":0,
-        "material_move_bps":75.0,
-        "exit_proximity_bps":50.0,
-        "require_thesis":false,
-        "null_handoff_as_wait":false
-    }))
-    .unwrap();
-    assert!(!strict.null_handoff_as_wait());
 }

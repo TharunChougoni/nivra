@@ -8,8 +8,6 @@ use serde_json::Value;
 pub(crate) struct Wake {
     pub idle_interval_ms: i64,
     pub after_fill: bool,
-    pub after_decide: bool,
-    pub luna_no_decide_streak: u32,
     pub failure_streak: u32,
     /// Optional owner failure backoff. Absent keeps the historical wake-only
     /// failure streak and leaves old config/state bytes unchanged.
@@ -27,8 +25,6 @@ impl Default for Wake {
         Self {
             idle_interval_ms: 900_000,
             after_fill: true,
-            after_decide: true,
-            luna_no_decide_streak: 8,
             failure_streak: 3,
             failure_backoff_ms: None,
             session_open_minute: 555,
@@ -47,10 +43,6 @@ impl Wake {
         Self {
             idle_interval_ms: settings.idle_interval_ms.unwrap_or(base.idle_interval_ms),
             after_fill: settings.after_fill.unwrap_or(base.after_fill),
-            after_decide: settings.after_decide.unwrap_or(base.after_decide),
-            luna_no_decide_streak: settings
-                .luna_no_decide_streak
-                .unwrap_or(base.luna_no_decide_streak),
             failure_streak: settings.failure_streak.unwrap_or(base.failure_streak),
             failure_backoff_ms: settings.failure_backoff_ms,
             session_open_minute: settings
@@ -121,12 +113,6 @@ impl Wake {
                 next.run_first.hold_luna_ms = value;
             }
         }
-        if let Some(value) = raw.get("luna_no_decide_streak").and_then(Value::as_u64) {
-            if !(1..=100).contains(&value) {
-                return Err("supervisor_setting_invalid");
-            }
-            next.luna_no_decide_streak = value as u32;
-        }
         if let Some(value) = raw.get("failure_streak").and_then(Value::as_u64) {
             if !(1..=20).contains(&value) {
                 return Err("supervisor_setting_invalid");
@@ -142,9 +128,6 @@ impl Wake {
         }
         if let Some(value) = raw.get("after_fill").and_then(Value::as_bool) {
             next.after_fill = value;
-        }
-        if let Some(value) = raw.get("after_decide").and_then(Value::as_bool) {
-            next.after_decide = value;
         }
         Ok(next)
     }
@@ -253,12 +236,6 @@ pub(super) fn due(
     }
     if input.fill_count > state.last_fill_count && wake.after_fill && cooled {
         return Some("post_fill");
-    }
-    if state.decides > state.seen_decides && wake.after_decide && cooled {
-        return Some("post_decide");
-    }
-    if state.luna_no_decide >= wake.luna_no_decide_streak && cooled {
-        return Some("luna_no_decide_streak");
     }
     if state.failures >= wake.failure_streak && cooled {
         return Some("failure_streak");

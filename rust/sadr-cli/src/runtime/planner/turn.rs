@@ -58,60 +58,6 @@ pub(crate) fn produce_with_backend(
         None,
     )
 }
-/// Read the original session's charged successful digest, including pre-upgrade turns.
-/// Never refund attempts or replace a missing/damaged usage namespace.
-#[cfg(test)]
-pub(super) fn existing_digest(
-    c: &Config,
-    role: &ModelRole,
-    guard: &CallGuard<'_>,
-) -> Result<Option<String>> {
-    let journal = usage_directory(c, guard.journal_required.get())?;
-    let _lock = usage_lock(c, false)?;
-    let records = checked_reservations(c, &journal)?;
-    for name in records.keys().filter(|n| n.starts_with("digest-")) {
-        let attempt: Value = serde_json::from_slice(
-            &crate::read_bounded(&journal.join(name), 4096)
-                .map_err(|_| "planner_usage_manifest_invalid")?,
-        )?;
-        if guard
-            .context_hash
-            .is_some_and(|hash| attempt["context_sha256"] != hash)
-        {
-            continue;
-        }
-        if attempt["model"] != role.model_id || attempt["transport"] != json!(role.transport) {
-            continue;
-        }
-        let result_path = journal.join(name.replace(".attempt.json", ".result.json"));
-        if !result_path.exists() {
-            continue;
-        }
-        let result: Value = serde_json::from_slice(
-            &crate::read_bounded(&result_path, 1_000_000)
-                .map_err(|_| "planner_saved_digest_invalid")?,
-        )?;
-        if result["failed"] != false {
-            continue;
-        }
-        let Some(raw) = result["output"].as_str() else {
-            continue;
-        };
-        let response: Value = serde_json::from_str(raw)?;
-        let text = if let Some(output) = response["output"].as_array() {
-            let Ok(text) = super::super::harness::final_text(output) else {
-                continue;
-            };
-            text
-        } else {
-            raw.to_owned()
-        };
-        if super::super::harness::validate_digest(&text, &Value::Null).is_ok() {
-            return Ok(Some(text));
-        }
-    }
-    Ok(None)
-}
 /// The only market-facing content a `tools_only` model receives: when, why and
 /// which keys woke it, plus the host clock, session and exact objective.
 fn trigger_envelope(
@@ -198,45 +144,15 @@ pub(in crate::runtime) fn produce_clocked(
     };
     guard.check()?;
     #[cfg(not(test))]
-    cfg.runtime_decision_owner_gate()?;
-    let orchestrator_owns_decisions = cfg.orchestrator_owns_decisions();
+    cfg.validate_decision_owner()?;
     let digest_role = cfg.role(Trigger::Digest);
-    let decide_role = cfg.role(Trigger::Decide);
-    if orchestrator_owns_decisions && !digest_role.enabled {
+    if !digest_role.enabled {
         return Err("decision_owner_digest_required".into());
     }
     let mode = cfg.context.as_ref().map(|c| c.mode).unwrap_or_default();
     let (mut input, references) = bundle_with_references(c, p, instruments, cfg.shortlist_n)?;
     if let Some(settings) = &cfg.discovery {
         input["discovery"] = super::super::discovery::snapshot(c, instruments, settings, clock())?;
-        if !orchestrator_owns_decisions
-            && let Ok(bytes) =
-                crate::read_bounded(&c.directory.join("model/luna-latest.json"), 131072)
-            && let Ok(prior) = serde_json::from_slice::<Value>(&bytes)
-            && prior["session_binding"] == book_binding(c)?
-            && prior["at_ms"].as_i64().is_some_and(|at| at <= clock())
-        {
-            input["previous_luna"] = prior;
-        }
-        if !orchestrator_owns_decisions {
-            let db = Connection::open_with_flags(
-                c.directory.join("paper.sqlite"),
-                OpenFlags::SQLITE_OPEN_READ_ONLY,
-            )?;
-            use rusqlite::OptionalExtension;
-            if let Some(body) = db
-                .query_row(
-                    "SELECT body FROM planner_plan ORDER BY rowid DESC LIMIT 1",
-                    [],
-                    |r| r.get::<_, String>(0),
-                )
-                .optional()?
-            {
-                let plan: Value = serde_json::from_str(&body)?;
-                input["previous_grok_decision"] =
-                    json!({"decision_id":plan["decision_id"],"plan":plan["parsed_plan"]});
-            }
-        }
     }
     input["paper_mandate"] = json!({"paper_only":true,"capital":c.allocation()?,"objective":super::super::harness::objective_for(cfg),"risk_caps":"none","overnight_holds_allowed":true,"operator_context":cfg.operator_context,"initialization":"validated_universe_then_history_then_digest_then_orchestrator_then_fresh_quote_execution"});
     input["paper_mandate"]["products"] = if c.nifty_options.enabled {
@@ -272,29 +188,6 @@ pub(in crate::runtime) fn produce_clocked(
         "session_realized_pnl_net":session_realized.map(|value| value.to_string()),
         "fees_paid_session":session_fees.to_string(),
     });
-    if cfg.discovery.is_some() && !orchestrator_owns_decisions {
-        let mut grok = Vec::new();
-        if let Ok(db) = Connection::open_with_flags(
-            c.directory.join("paper.sqlite"),
-            OpenFlags::SQLITE_OPEN_READ_ONLY,
-        ) && let Ok(mut stmt) =
-            db.prepare("SELECT body FROM planner_plan ORDER BY rowid DESC LIMIT ?1")
-            && let Ok(rows) = stmt.query_map([cfg.effective_tools().history_limit as i64], |r| {
-                r.get::<_, String>(0)
-            })
-        {
-            for body in rows.flatten() {
-                if let Ok(plan) = serde_json::from_str::<Value>(&body) {
-                    grok.push(json!({"decision_id":plan["decision_id"],"session":plan["decision_id"].as_str().and_then(|id|id.split('-').next()),"input_hash":plan["input_hash"],"parsed_plan":plan["parsed_plan"],"luna_handoff_requested":plan["luna_handoff_requested"]}));
-                }
-            }
-        }
-        input["decision_history"] = json!({
-            "luna":input["previous_luna"],
-            "grok":grok,
-            "advisory_memory":input["advisory_memory"],
-        });
-    }
     let digest_context = digest(&serde_json::to_vec(
         &json!({"features":input["historical_features"],"mandate":input["paper_mandate"],"cash":input["cash"],"positions":input["positions"]}),
     )?);
@@ -317,26 +210,6 @@ pub(in crate::runtime) fn produce_clocked(
     }
     let reference_hash = digest(&serde_json::to_vec(&references)?);
     persist_session_references(c, &references)?;
-    if cfg.post_close.as_ref().is_some_and(|s| s.enabled) {
-        input["advisory_memory"] = postclose::memory(
-            c,
-            claim.map(|c| c.started_ms).unwrap_or_else(millis),
-            cfg.post_close.as_ref().unwrap().memory_limit,
-        )?;
-    }
-    if cfg.discovery.is_some() {
-        input["decision_history"]["advisory_memory"] = input["advisory_memory"].clone();
-    }
-    if orchestrator_owns_decisions && let Some(object) = input.as_object_mut() {
-        for key in [
-            "previous_luna",
-            "previous_grok_decision",
-            "decision_history",
-            "advisory_memory",
-        ] {
-            object.remove(key);
-        }
-    }
     if let Some(claim) = claim {
         if claim.binding != book_binding(c)? {
             return Err("planner_attempt_binding_invalid".into());
@@ -348,9 +221,6 @@ pub(in crate::runtime) fn produce_clocked(
     }
     let hash = digest(&serde_json::to_vec(&input)?);
     if !cfg.enabled || cfg.model_led == Some(false) {
-        return Err("model_plan_unavailable_no_trades".into());
-    }
-    if !orchestrator_owns_decisions && !decide_role.enabled {
         return Err("model_plan_unavailable_no_trades".into());
     }
     // Nothing to buy and nothing to manage is a normal no-op, not a failed
@@ -373,23 +243,15 @@ pub(in crate::runtime) fn produce_clocked(
     fs::create_dir(&audit)?;
     rollover::atomic(
         &audit.join("input.json"),
-        &json!({"input":input,"input_hash":hash,"prompt_version":PROMPT_VERSION,"provider":cfg.provider,"digest":digest_role,"decide":decide_role}),
+        &json!({"input":input,"input_hash":hash,"prompt_version":PROMPT_VERSION,"provider":cfg.provider,"digest":digest_role}),
     )?;
     let start = std::time::Instant::now();
-    #[cfg(test)]
-    let handoff_requested = std::cell::Cell::new(true);
-    #[cfg(not(test))]
-    let handoff_requested = std::cell::Cell::new(false);
     let digest_attribution = std::cell::RefCell::new(Value::Null);
     let strategy_attribution = super::super::discovery::attribution(&input["discovery"]);
     let ask = |backend: &mut dyn Backend| -> Result<String> {
         let mut projection = input.clone();
         // These are call-time tool facts, not part of the v2 rollback message.
         projection.as_object_mut().unwrap().remove("book_state");
-        projection
-            .as_object_mut()
-            .unwrap()
-            .remove("decision_history");
         if cfg.full_universe_features == Some(true) {
             projection["feature_columns"] = json!([
                 "instrument_key",
@@ -473,55 +335,35 @@ pub(in crate::runtime) fn produce_clocked(
             compact_projection(&mut projection, settings);
         }
         let mut digest_tools = Vec::new();
-        let data = if digest_role.enabled {
-            if orchestrator_owns_decisions && !super::super::harness::owner_feed_usable(&input) {
-                // An empty or unusable feed must not spend a digest call.
-                super::super::harness::minimal_owner_digest()
-            } else if let Some(raw) = if !orchestrator_owns_decisions && cfg.discovery.is_none() {
-                {
-                    #[cfg(test)]
-                    {
-                        existing_digest(c, &digest_role, &guard)?
-                    }
-                    #[cfg(not(test))]
-                    {
-                        None::<String>
-                    }
-                }
-            } else {
-                None
-            } {
-                raw
-            } else {
-                let prompt = match mode {
-                    ContextMode::ToolsOnly => {
-                        trigger_envelope(c, cfg, &input, clock(), "luna").to_string()
-                    }
-                    ContextMode::Projection => format!(
-                        "Summarise this untrusted data, retain identities, fees, dates and missing data. No trade instructions. {projection}"
-                    ),
-                };
-                super::super::harness::run_collect(
-                    c,
-                    cfg,
-                    "digest",
-                    &digest_role,
-                    &prompt,
-                    &input,
-                    backend,
-                    &guard,
-                    &mut digest_tools,
-                    mode == ContextMode::Projection,
-                )?
-            }
+        let data = if !super::super::harness::owner_feed_usable(&input) {
+            // An empty or unusable feed must not spend a digest call.
+            super::super::harness::minimal_owner_digest()
         } else {
-            json!({"shortlist":input["shortlist"],"cash":input["cash"],"positions":input["positions"],"fees":input["fees"],"missing_history":input["history_missing"]}).to_string()
+            let prompt = match mode {
+                ContextMode::ToolsOnly => {
+                    trigger_envelope(c, cfg, &input, clock(), "luna").to_string()
+                }
+                ContextMode::Projection => format!(
+                    "Summarise this untrusted data, retain identities, fees, dates and missing data. No trade instructions. {projection}"
+                ),
+            };
+            super::super::harness::run_collect(
+                c,
+                cfg,
+                "digest",
+                &digest_role,
+                &prompt,
+                &input,
+                backend,
+                &guard,
+                &mut digest_tools,
+                mode == ContextMode::Projection,
+            )?
         };
         let digest_id = digest(data.as_bytes());
-        if orchestrator_owns_decisions {
+        {
             let parsed_digest: Value =
                 serde_json::from_str(&data).map_err(|_| "planner_owner_digest_invalid")?;
-            handoff_requested.set(false);
             let eligible = super::super::harness::owner_digest_eligible(&parsed_digest, &input);
             let facts_sha256 = super::super::harness::owner_facts_sha256(&json!({
                 "digest": parsed_digest,
@@ -543,16 +385,15 @@ pub(in crate::runtime) fn produce_clocked(
                 "owner_digest": owner_digest,
             });
             // This is a host-created evidence-completion wrapper. The
-            // persistent orchestrator, not the legacy decide role, consumes
-            // the digest and owns any later paper decision.
-            return Ok(json!({
+            // persistent orchestrator consumes the digest and owns any later
+            // paper decision.
+            Ok(json!({
                 "actions": [],
                 "stance": "wait",
                 "notes": "orchestrator_digest_ready",
             })
-            .to_string());
+            .to_string())
         }
-        Err("decision_owner_migration_required".into())
     };
     let (raw_result, provider_evidence) = if let Some(backend) = injected {
         let result = ask(backend);
@@ -657,27 +498,13 @@ pub(in crate::runtime) fn produce_clocked(
     } else {
         None
     };
-    let budgets = if orchestrator_owns_decisions {
-        json!({
-            "digest": digest_role.daily_call_budget,
-            "supervisor": cfg.role(Trigger::Supervisor).daily_call_budget,
-        })
-    } else {
-        json!({
-            "digest": digest_role.daily_call_budget,
-            "decide": decide_role.daily_call_budget,
-        })
-    };
-    let owner_digest =
-        orchestrator_owns_decisions.then(|| digest_attribution["owner_digest"].clone());
-    let mut result = json!({"strategy_attribution":strategy_attribution,"selection_provenance":super::super::decision_owner::selected_version(&json!({"strategy_attribution":strategy_attribution})),"digest_attribution":digest_attribution,"digest_id":digest_attribution["digest_id"].clone(),"portfolio_revision":portfolio_revision,"policy_sha256":policy_sha256,"profile_sha256":profile_sha256,"decision_id":decision_id,"attempt_id":claim.map(|c|&c.id),"valid_until_ms":claim.map(|c|c.deadline_ms),"session_binding":book_binding(c)?,"input_hash":hash,"input":input,"market_references":references,"market_references_hash":reference_hash,"prompt_version":PROMPT_VERSION,"provider":cfg.provider,"model_id":if handoff_requested.get() {&decide_role.model_id} else {&digest_role.model_id},"luna_handoff_requested":if orchestrator_owns_decisions {Some(false)}else if cfg.discovery.is_some() {Some(handoff_requested.get())}else{None},"raw_output":raw,"parsed_plan":parsed,"verdicts":verdicts,"latency_ms":start.elapsed().as_millis(),"fake":false,"dry_run":preview,"budgets":budgets,"budget_used":budget_used});
-    if let Some(owner_digest) = owner_digest {
-        result["owner_digest"] = owner_digest;
-    }
-    #[cfg(test)]
-    if handoff_requested.get() {
-        super::super::harness::publish_validated(c, Trigger::Decide.as_str(), &decide_role, &raw);
-    }
+    let budgets = json!({
+        "digest": digest_role.daily_call_budget,
+        "supervisor": cfg.role(Trigger::Supervisor).daily_call_budget,
+    });
+    let owner_digest = digest_attribution["owner_digest"].clone();
+    let mut result = json!({"strategy_attribution":strategy_attribution,"selection_provenance":super::super::decision_owner::selected_version(&json!({"strategy_attribution":strategy_attribution})),"digest_attribution":digest_attribution,"digest_id":digest_attribution["digest_id"].clone(),"portfolio_revision":portfolio_revision,"policy_sha256":policy_sha256,"profile_sha256":profile_sha256,"decision_id":decision_id,"attempt_id":claim.map(|c|&c.id),"valid_until_ms":claim.map(|c|c.deadline_ms),"session_binding":book_binding(c)?,"input_hash":hash,"input":input,"market_references":references,"market_references_hash":reference_hash,"prompt_version":PROMPT_VERSION,"provider":cfg.provider,"model_id":digest_role.model_id,"luna_handoff_requested":false,"raw_output":raw,"parsed_plan":parsed,"verdicts":verdicts,"latency_ms":start.elapsed().as_millis(),"fake":false,"dry_run":preview,"budgets":budgets,"budget_used":budget_used});
+    result["owner_digest"] = owner_digest;
     rollover::atomic(&audit.join("plan.json"), &result)?;
     Ok(result)
 }

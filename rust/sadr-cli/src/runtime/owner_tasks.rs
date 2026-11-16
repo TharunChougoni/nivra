@@ -64,7 +64,7 @@ pub(crate) struct AgendaSettings {
 
 /// One explicit owner agenda turn. Each runs at most once per session through
 /// the existing supervisor turn (notes and digest directives only; no order
-/// tools), never through the legacy decide / operations / post-close paths.
+/// tools), never through the operations / post-close review paths.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AgendaTurn {
     /// The session-open turn, at the supervisor `session_open_minute`.
@@ -341,10 +341,9 @@ impl OwnerResearchSettings {
                 .workspace
                 .as_ref()
                 .is_some_and(|workspace| workspace.enabled);
-            if !cfg.orchestrator_owns_decisions()
-                || !cfg
-                    .role(super::orchestrator_model::Trigger::Supervisor)
-                    .enabled
+            if !cfg
+                .role(super::orchestrator_model::Trigger::Supervisor)
+                .enabled
                 || (!candidate && !workspace)
             {
                 return Err("owner_research_requires_decision_owner".into());
@@ -422,10 +421,9 @@ impl OwnerTasksSettings {
             return Err("owner_tasks_settings_invalid".into());
         }
         if self.review.enabled
-            && (!cfg.orchestrator_owns_decisions()
-                || !cfg
-                    .role(super::orchestrator_model::Trigger::Supervisor)
-                    .enabled
+            && (!cfg
+                .role(super::orchestrator_model::Trigger::Supervisor)
+                .enabled
                 || cfg.post_close.as_ref().is_some_and(|s| s.enabled))
         {
             return Err("owner_review_requires_decision_owner".into());
@@ -434,10 +432,9 @@ impl OwnerTasksSettings {
             research.validate(cfg)?;
         }
         if self.agenda.is_some_and(|a| a.pre_open || a.pre_close)
-            && (!cfg.orchestrator_owns_decisions()
-                || !cfg
-                    .role(super::orchestrator_model::Trigger::Supervisor)
-                    .enabled)
+            && !cfg
+                .role(super::orchestrator_model::Trigger::Supervisor)
+                .enabled
         {
             return Err("owner_agenda_requires_decision_owner".into());
         }
@@ -898,7 +895,6 @@ pub(crate) fn validate_review_bundle(
         trigger: "review".into(),
         prompt_version: digest(REVIEW_PROMPT.as_bytes()),
         notes_version: 0,
-        decides_at_start: 0,
         fills_at_start: 0,
         started_at_ms: 0,
         request: facts.clone(),
@@ -912,7 +908,6 @@ pub(crate) fn validate_review_bundle(
         .as_ref()
         .map_or(0, |selected| selected.revision);
     if !cfg.owner_tasks.as_ref().is_some_and(|s| s.review.enabled)
-        || !cfg.orchestrator_owns_decisions()
         || bundle["trigger"]["kind"] != "review"
         || invocation_id != Some(id)
         || recorded_revision != current_revision
@@ -950,7 +945,6 @@ pub(crate) fn validate_research_bundle(
         trigger: "research".into(),
         prompt_version: digest(RESEARCH_PROMPT.as_bytes()),
         notes_version: 0,
-        decides_at_start: 0,
         fills_at_start: 0,
         started_at_ms: 0,
         request: facts.clone(),
@@ -970,7 +964,6 @@ pub(crate) fn validate_research_bundle(
         .as_ref()
         .and_then(|s| s.research.as_ref())
         .is_some_and(|research| research.enabled)
-        || !cfg.orchestrator_owns_decisions()
         || bundle["trigger"]["kind"] != "research"
         || invocation_id != Some(id)
         || recorded_revision != current_revision

@@ -72,7 +72,7 @@ fn duplicate_snapshot_keys_are_folded_and_do_not_abort_the_run() {
             Ok(self.0.pop_front().ok_or("fixture_exhausted")?.to_string())
         }
     }
-    let digest = json!({"summary":"Synthetic observations only","evidence_ids":["bundle"],"missing_data":[],"uncertainties":[]});
+    let digest = json!({"complete":true,"as_of_ms":0,"coverage":{"universe":1,"scanned":1,"quoted":1,"featured":1,"experiments":0},"gaps":[],"changed_prospects":[],"active_rankings":[],"candidate_rankings":[],"bar_context":[],"spread_depth":[],"holdings":[],"cash":{"available":"0"},"fees":{"per_order":"0","buy_bps":"0","sell_bps":"0"},"recent_actions":[],"experiments":[],"evidence_ids":["bundle"]});
     let batch = json!({"output":[
         {"type":"function_call","call_id":"feat","name":"get_instrument_features","arguments":"{\"instrument_keys\":[\"INE614G01033\",\"INE614G01033\"]}"},
         {"type":"function_call","call_id":"ev","name":"read_evidence","arguments":"{\"evidence_id\":\"bundle\"}"}
@@ -90,7 +90,7 @@ fn duplicate_snapshot_keys_are_folded_and_do_not_abort_the_run() {
     let mut fake = Script(VecDeque::from([batch, terminal]));
     let result = run(
         &c,
-        &legacy_test_config(),
+        &PlannerConfig::default(),
         "digest",
         &role,
         "Duplicate snapshot keys fixture",
@@ -99,5 +99,5 @@ fn duplicate_snapshot_keys_are_folded_and_do_not_abort_the_run() {
         &planner::preview_guard(),
     )
     .unwrap();
-    validate_digest(&result, &Value::Null).unwrap();
+    validate_owner_digest(&result, &Value::Null).unwrap();
 }

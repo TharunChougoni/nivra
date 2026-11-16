@@ -107,11 +107,9 @@ pub(crate) fn owner_fixture_config(dir: &std::path::Path) -> (Config, planner::P
             "policy":{"price_move_bps":100,"volume_step_units":null,"gap_bps":null,
                 "proximity_bps":null,"max_event_age_ms":60000,"max_news_age_ms":60000,
                 "max_instruments":20,"max_identities":100}},
-        "decision_owner":{"version":1,"owner":"orchestrator"},
         "orchestrator":{"enabled":true,"model":{"model_id":"grok-4.7","transport":"direct_oauth"},"triggers":{"supervisor":{"enabled":true,"prompt":"prompts/supervisor.md"}}}
     }))
     .unwrap();
-    cfg.decide.enabled = false;
     let supervisor_prompt = dir.join("owner-supervisor.md");
     fs::write(&supervisor_prompt, "owner decision fixture").unwrap();
     cfg.orchestrator
@@ -1014,10 +1012,10 @@ pub(crate) fn exercise() {
     assert_eq!(no_owner_report.financials, report.financials);
     assert!(no_owner_report.experiment_attributions.is_empty());
 
-    // Reviewed authority migration: a legacy-initialized book refuses the owner
-    // policy until config-apply transitions the exact policy. The financial
-    // state bytes and active plan stay untouched, and rollback is the same
-    // reviewed transition back to the predecessor policy.
+    // Reviewed config shape change: a book whose authority binds the hash of the
+    // pre-owner-only config (it still serialized `decide` and `decision_owner`)
+    // refuses startup until config-apply rebinds the exact current policy. The
+    // financial state bytes stay untouched.
     let migration_dir = tempfile::tempdir().unwrap();
     let migration_c = super::super::tests::config(migration_dir.path());
     let mut migration_db = super::super::open_book(&migration_c).unwrap();
@@ -1031,10 +1029,27 @@ pub(crate) fn exercise() {
         "fixture_book",
     )
     .unwrap();
-    let mut legacy_cfg = cfg.clone();
-    legacy_cfg.decision_owner = None;
-    legacy_cfg.decide.enabled = true;
-    redecision::initialize(&mut migration_db, &migration_c, &p, Some(&legacy_cfg), now).unwrap();
+    redecision::initialize(&mut migration_db, &migration_c, &p, Some(&cfg), now).unwrap();
+    let mut old_policy: serde_json::Value =
+        serde_json::from_slice(&planner::policy_bytes(&cfg).unwrap()).unwrap();
+    old_policy["decide"] = json!({"enabled":false});
+    old_policy["decision_owner"] = json!({"version":1,"owner":"orchestrator"});
+    let old_hash = super::super::digest(&serde_json::to_vec(&old_policy).unwrap());
+    for table in ["planner_event_control", "planner_authority_owner"] {
+        let body: String = migration_db
+            .query_row(&format!("SELECT body FROM {table} WHERE id=1"), [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let mut body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        body["config_hash"] = json!(old_hash);
+        migration_db
+            .execute(
+                &format!("UPDATE {table} SET body=? WHERE id=1"),
+                [body.to_string()],
+            )
+            .unwrap();
+    }
     let book_before: String = migration_db
         .query_row("SELECT body FROM state WHERE id=1", [], |r| r.get(0))
         .unwrap();
@@ -1050,13 +1065,4 @@ pub(crate) fn exercise() {
         .query_row("SELECT body FROM state WHERE id=1", [], |r| r.get(0))
         .unwrap();
     assert_eq!(book_before, book_after, "migration changed the paper book");
-    redecision::apply_config(&migration_db, &migration_c, &legacy_cfg).unwrap();
-    redecision::owner_startup_check(&migration_db, &migration_c, &legacy_cfg).unwrap();
-    let book_rolled_back: String = migration_db
-        .query_row("SELECT body FROM state WHERE id=1", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(
-        book_before, book_rolled_back,
-        "rollback changed the paper book"
-    );
 }

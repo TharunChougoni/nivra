@@ -2,7 +2,6 @@
 //! The original book owns the active decision and every consumed attempt.
 use super::orchestrator_model::Trigger;
 use super::phases::PlannerLogPhase;
-use super::planner::PlannerConfig;
 use super::*;
 use rusqlite::OptionalExtension;
 use sadr_core::{
@@ -98,15 +97,6 @@ struct Control {
 pub(crate) enum AuthorityOwner {
     Legacy,
     Orchestrator,
-}
-impl AuthorityOwner {
-    fn for_config(cfg: &planner::PlannerConfig) -> Self {
-        if cfg.orchestrator_owns_decisions() {
-            Self::Orchestrator
-        } else {
-            Self::Legacy
-        }
-    }
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -308,9 +298,6 @@ fn upgrade_config_hash(
     if old == digest(&serde_json::to_vec(cfg)?) {
         return Ok(Some((config_hash(cfg)?, "current_config")));
     }
-    if old == digest(&planner::legacy_policy_bytes(cfg)?) {
-        return Ok(Some((config_hash(cfg)?, "legacy_policy")));
-    }
     let root = c.directory.join("model");
     if !root.exists() {
         return Ok(None);
@@ -327,13 +314,11 @@ fn upgrade_config_hash(
         let value: Value = serde_json::from_slice(
             &crate::read_bounded(&path, 1_000_000).map_err(|_| "planner_config_audit_invalid")?,
         )?;
-        let (Some(digest_role), Some(decide_role)) = (value.get("digest"), value.get("decide"))
-        else {
+        let Some(digest_role) = value.get("digest") else {
             continue;
         };
         let mut prior = cfg.clone();
         prior.digest = serde_json::from_value(digest_role.clone())?;
-        prior.decide = serde_json::from_value(decide_role.clone())?;
         if digest(&serde_json::to_vec(&prior)?) == old
             && planner::policy_bytes(&prior)? == planner::policy_bytes(cfg)?
         {
@@ -342,17 +327,8 @@ fn upgrade_config_hash(
     }
     Ok(None)
 }
-fn settings_for(cfg: &planner::PlannerConfig, allow_legacy_decide: bool) -> Option<&Settings> {
-    let decision_enabled = (allow_legacy_decide && cfg.role(Trigger::Decide).enabled)
-        || cfg.orchestrator_owns_decisions();
-    cfg.events
-        .as_ref()
-        .filter(|e| e.enabled && cfg.enabled && decision_enabled)
-}
-/// Unit mechanics keep the legacy Decide path available; production admits it
-/// only through the reviewed migration and never as independent inference.
 fn settings(cfg: &planner::PlannerConfig) -> Option<&Settings> {
-    settings_for(cfg, cfg!(test))
+    cfg.events.as_ref().filter(|e| e.enabled && cfg.enabled)
 }
 /// Ignore quote marks: a protection tick may update marks while a model is running.
 /// Cash, holdings, costs, exit instructions and the complete fill sequence must agree.
@@ -537,22 +513,7 @@ pub(crate) fn initialize(
         Some(state) => state,
         None => {
             let cfg = cfg.ok_or("planner_event_configuration_required")?;
-            let mut active = None;
-            let legacy = c.directory.join("model/session-plan.json");
-            if legacy.exists() && !cfg.orchestrator_owns_decisions() {
-                let plan = planner::read_legacy_plan(c)?.ok_or("planner_saved_plan_invalid")?;
-                planner::validate_saved(c, &plan)?;
-                let id = plan["decision_id"]
-                    .as_str()
-                    .ok_or("planner_saved_plan_invalid")?;
-                tx.execute(
-                    "INSERT INTO planner_plan VALUES(?,?)",
-                    rusqlite::params![id, serde_json::to_string(&plan)?],
-                )?;
-                active = Some(id.to_owned());
-            }
             let attempted = c.directory.join("model/attempt.json").exists()
-                || planner::usage(c)?["decide"].as_u64().unwrap_or(0) > 0
                 || planner::usage(c)?["digest"].as_u64().unwrap_or(0) > 0;
             let (config_hash, prompt_sha256, config_without_prompt_sha256) = config_identity(cfg)?;
             Control {
@@ -565,14 +526,14 @@ pub(crate) fn initialize(
                 fill_hash: digest(&serde_json::to_vec(&p.fills)?),
                 last_started_ms: None,
                 pending: None,
-                blocked: if attempted && active.is_none() {
+                blocked: if attempted {
                     Some("prior_attempt_incomplete_no_replay".into())
                 } else {
                     None
                 },
-                initial_available: !attempted && active.is_none(),
+                initial_available: !attempted,
                 digest_failed: None,
-                active,
+                active: None,
                 last_cadence_facts_sha256: None,
                 market_observations: 0,
                 missing_volume: 0,
@@ -589,7 +550,7 @@ pub(crate) fn initialize(
             version: 1,
             binding: state.binding.clone(),
             config_hash: state.config_hash.clone(),
-            owner: AuthorityOwner::for_config(cfg.ok_or("planner_event_configuration_required")?),
+            owner: AuthorityOwner::Orchestrator,
         })
     } else {
         authority_owner(&tx, &state)?
@@ -617,7 +578,6 @@ pub(crate) fn initialize(
     if !original_authority
         && owner_receipt.is_none()
         && let Some(cfg) = cfg
-        && cfg.orchestrator_owns_decisions()
         && cfg.validate_decision_owner().is_ok()
         && state.config_hash == config_hash(cfg)?
         && active_plan_owner_or_absent(&tx, &state)?
@@ -669,12 +629,9 @@ pub(crate) fn initialize(
         && let Some(cfg) = cfg
     {
         let digest_role = cfg.role(Trigger::Digest);
-        let decide_role = cfg.role(Trigger::Decide);
         let usage = planner::usage(c)?;
-        if (!decide_role.enabled
-            || usage["decide"].as_u64().unwrap_or(0) < u64::from(decide_role.daily_call_budget))
-            && (!digest_role.enabled
-                || usage["digest"].as_u64().unwrap_or(0) < u64::from(digest_role.daily_call_budget))
+        if !digest_role.enabled
+            || usage["digest"].as_u64().unwrap_or(0) < u64::from(digest_role.daily_call_budget)
         {
             state.blocked = None;
         }
@@ -1015,25 +972,12 @@ pub(crate) fn recover(
     cfg: &planner::PlannerConfig,
     clearance: RecoveryClearance,
 ) -> Result<()> {
-    recover_for(db, c, cfg, cfg!(test), clearance)
-}
-/// Production recovery never infers a legacy Decide path. Unit mechanics keep
-/// the legacy branch available only through an explicit test-only flag.
-fn recover_for(
-    db: &Connection,
-    c: &Config,
-    cfg: &planner::PlannerConfig,
-    allow_legacy_decide: bool,
-    clearance: RecoveryClearance,
-) -> Result<()> {
     let mut state = load(db)?.ok_or("planner_event_state_missing")?;
     check(&state, c)?;
     let reviewed = recovery_block_for(db, &state)?;
-    let next_owner = AuthorityOwner::for_config(cfg);
-    if next_owner == AuthorityOwner::Orchestrator {
-        cfg.validate_decision_owner()?;
-    }
-    if settings_for(cfg, allow_legacy_decide).is_none() {
+    let next_owner = AuthorityOwner::Orchestrator;
+    cfg.validate_decision_owner()?;
+    if settings(cfg).is_none() {
         return Err("planner_recover_events_disabled".into());
     }
     let mut owner_receipt = authority_owner(db, &state)?;
@@ -1041,7 +985,7 @@ fn recover_for(
         if receipt.owner != next_owner {
             return Err("decision_owner_migration_required".into());
         }
-    } else if next_owner == AuthorityOwner::Orchestrator {
+    } else {
         if state.config_hash != config_hash(cfg)? {
             return Err("planner_recover_owner_unproven_restore_original_config".into());
         }
@@ -1149,7 +1093,7 @@ pub(crate) fn apply_config(
             version: 1,
             binding: state.binding.clone(),
             config_hash: state.config_hash.clone(),
-            owner: AuthorityOwner::for_config(cfg),
+            owner: AuthorityOwner::Orchestrator,
         },
     )
 }
@@ -1162,9 +1106,6 @@ pub(crate) fn owner_startup_check(
     c: &Config,
     cfg: &planner::PlannerConfig,
 ) -> Result<()> {
-    if !cfg.orchestrator_owns_decisions() {
-        return Ok(());
-    }
     cfg.validate_decision_owner()?;
     let Some(state) = load(db)? else {
         return Ok(());
@@ -1231,7 +1172,7 @@ pub(crate) fn owner_ready(
     c: &Config,
     cfg: &planner::PlannerConfig,
 ) -> Result<bool> {
-    if !cfg.orchestrator_owns_decisions() || settings(cfg).is_none() {
+    if settings(cfg).is_none() {
         return Ok(false);
     }
     let Some(state) = load(db)? else {
@@ -1261,7 +1202,7 @@ pub(crate) fn activate_owner_plan(
     plan: &Value,
     now: i64,
 ) -> Result<()> {
-    if !cfg.orchestrator_owns_decisions() || settings(cfg).is_none() {
+    if settings(cfg).is_none() {
         return Err("planner_decision_owner_policy_required".into());
     }
     let mut state = load(db)?.ok_or("planner_event_authority_missing")?;

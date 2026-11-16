@@ -78,7 +78,6 @@ fn lane_turn(c: &Config, seq: u64, evidence: ResearchEvidenceV1, started: i64) -
         trigger: "research".into(),
         prompt_version: identity.prompt_version.clone(),
         notes_version: 0,
-        decides_at_start: 0,
         fills_at_start: 0,
         started_at_ms: started,
         request: json!({
@@ -557,7 +556,6 @@ fn agenda_turns_are_typed_once_per_session_and_bounds_share_one_source() {
             1_000,
             ok,
             &hashes,
-            0,
             None,
         );
         super::state::load(root, &session).unwrap()
@@ -702,7 +700,6 @@ fn decision_prompts_reference_owner_task_turns_without_replaying_them() {
         trigger: "review".into(),
         prompt_version: "p".into(),
         notes_version: 0,
-        decides_at_start: 0,
         fills_at_start: 0,
         started_at_ms: at,
         request: json!({"owner_task":{"kind":"review","identity":{"session":session}},

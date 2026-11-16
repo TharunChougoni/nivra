@@ -13,20 +13,19 @@ pub(super) use turn::produce_clocked;
 #[allow(unused_imports)]
 pub(crate) use turn::produce_for;
 #[cfg(test)]
-use turn::{existing_digest, produce_with_backend};
+use turn::produce_with_backend;
 
 mod config;
 use config::role_invalid;
-pub(crate) use config::{DEFAULT_TURN_MS, FallbackProfile, MAX_RUN_MS, ModelRole};
-// Preserve the original crate paths for the moved constants, including test consumers.
+pub(crate) use config::{FallbackProfile, ModelRole};
+// Preserve the original crate path for the moved constant, including test consumers.
 #[allow(unused_imports)]
-pub(crate) use config::{DEFAULT_MAX_FAILED_TOOLS, DEFAULT_RUN_MS, OUTPUT_BYTE_CAP_MULTIPLIER};
+pub(crate) use config::OUTPUT_BYTE_CAP_MULTIPLIER;
 
 mod plan;
 #[allow(unused_imports)] // re-exported for crate callers and tests
 pub(crate) use plan::{
-    Action, CandidateReason, PlanSide, TradePlan, Verdict, host_budget_abstain, plan_document,
-    validate,
+    Action, CandidateReason, PlanSide, TradePlan, Verdict, plan_document, validate,
 };
 mod failure;
 #[cfg(test)]
@@ -63,36 +62,6 @@ impl ContextMode {
     fn is_tools_only(&self) -> bool {
         *self == Self::ToolsOnly
     }
-}
-/// Versioned decision-owner policy. New policies select the persistent owner.
-/// Absent policies retain legacy identity for archive/migration decoding only;
-/// the production runtime refuses legacy model work until reviewed migration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct DecisionOwnerPolicy {
-    pub version: u32,
-    #[serde(default = "legacy_decision_owner")]
-    pub owner: DecisionOwner,
-}
-fn legacy_decision_owner() -> DecisionOwner {
-    DecisionOwner::Legacy
-}
-impl Default for DecisionOwnerPolicy {
-    fn default() -> Self {
-        Self {
-            version: 1,
-            owner: DecisionOwner::Orchestrator,
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum DecisionOwner {
-    /// Historical authority marker, retained for migration and archives only.
-    Legacy,
-    /// One persistent orchestrator owns paper decisions; decide is disabled.
-    #[default]
-    Orchestrator,
 }
 /// Bounds what each model turn re-sends. The host still holds the full evidence:
 /// tools answer for every allowlisted key and validation uses the full allowlist.
@@ -268,20 +237,12 @@ pub(crate) struct PlannerConfig {
     /// Call-time retrieval bounds. Defaults are omitted from serialized policy.
     #[serde(default, skip_serializing_if = "ToolsSettings::is_default")]
     pub tools: ToolsSettings,
-    /// Deterministic gate on Luna's decide handoffs. Omission keeps Luna's choice.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handoff_gate: Option<super::discovery::GateSettings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_from: Option<NaiveDate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_config: Option<PathBuf>,
     #[serde(default = "default_digest", deserialize_with = "deserialize_digest")]
     pub digest: ModelRole,
-    /// Parse-compatible leftover. Deployed planner JSON still contains
-    /// `"decide": {"enabled": false}` and the schema denies unknown fields.
-    /// Production inference never calls this role; owner policy requires it disabled.
-    #[serde(default = "default_decide", deserialize_with = "deserialize_decide")]
-    pub decide: ModelRole,
     pub events: Option<redecision::Settings>,
     pub post_close: Option<postclose::Settings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -300,10 +261,6 @@ pub(crate) struct PlannerConfig {
     pub decision_evidence: Option<super::decision_evidence::Settings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orchestrator: Option<super::orchestrator_model::OrchestratorModelSettings>,
-    /// Absent preserves legacy bytes/hashes for reviewed migration and archives;
-    /// production model work requires explicit orchestrator authority.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decision_owner: Option<DecisionOwnerPolicy>,
     /// Frozen exit behaviour. Absent keeps the historical execute/liquidate path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_policy: Option<sadr_core::execution::ExitPolicy>,
@@ -343,21 +300,9 @@ fn deserialize_digest<'de, D: serde::Deserializer<'de>>(
 ) -> std::result::Result<ModelRole, D::Error> {
     deserialize_role(d, 20_000)
 }
-fn deserialize_decide<'de, D: serde::Deserializer<'de>>(
-    d: D,
-) -> std::result::Result<ModelRole, D::Error> {
-    deserialize_role(d, 150_000)
-}
 fn default_digest() -> ModelRole {
     ModelRole {
         daily_call_budget: 0,
-        ..Default::default()
-    }
-}
-fn default_decide() -> ModelRole {
-    ModelRole {
-        daily_call_budget: 0,
-        timeout_ms: 150_000,
         ..Default::default()
     }
 }
@@ -379,38 +324,20 @@ pub(super) fn policy_bytes(cfg: &PlannerConfig) -> Result<Vec<u8>> {
     {
         discovery.strategy_selection = None;
     }
-    let Some(orchestrator) = cfg.orchestrator.as_ref() else {
-        return legacy_policy_bytes(&cfg);
-    };
-    let view = orchestrator.policy_value()?;
     cfg.digest.daily_call_budget = 0;
-    cfg.decide.daily_call_budget = 0;
     let mut value = serde_json::to_value(&cfg)?;
-    *value
-        .get_mut("orchestrator")
-        .ok_or("orchestrator_policy_invalid")? = view;
-    super::owner_tasks::bind_policy(&cfg, &mut value);
-    super::decision_evidence::bind_policy(&mut value);
-    bind_file_prompts(&cfg, &mut value);
-    Ok(serde_json::to_vec(&value)?)
-}
-/// Exact pre-shadow-policy representation for immutable legacy evidence checks.
-pub(super) fn legacy_policy_bytes(cfg: &PlannerConfig) -> Result<Vec<u8>> {
-    let mut cfg = cfg.without_experiment_profile();
-    cfg.digest.daily_call_budget = 0;
-    cfg.decide.daily_call_budget = 0;
-    if cfg.decision_evidence.is_none() && cfg.file_prompts.is_none() {
-        return Ok(serde_json::to_vec(&cfg)?);
+    if let Some(orchestrator) = cfg.orchestrator.as_ref() {
+        *value
+            .get_mut("orchestrator")
+            .ok_or("orchestrator_policy_invalid")? = orchestrator.policy_value()?;
     }
-    let mut value = serde_json::to_value(&cfg)?;
     super::owner_tasks::bind_policy(&cfg, &mut value);
-    super::decision_evidence::bind_policy(&mut value);
     bind_file_prompts(&cfg, &mut value);
     Ok(serde_json::to_vec(&value)?)
 }
 fn bind_file_prompts(cfg: &PlannerConfig, value: &mut Value) {
     if let Some(prompts) = &cfg.file_prompts {
-        value["default_prompt_sha256"] = prompts.hashes_for(cfg.orchestrator_owns_decisions());
+        value["default_prompt_sha256"] = prompts.hashes();
     }
 }
 impl Default for PlannerConfig {
@@ -431,11 +358,9 @@ impl Default for PlannerConfig {
             discovery: None,
             context: None,
             tools: ToolsSettings::default(),
-            handoff_gate: None,
             effective_from: None,
             previous_config: None,
             digest: default_digest(),
-            decide: default_decide(),
             events: None,
             post_close: None,
             owner_tasks: None,
@@ -445,7 +370,6 @@ impl Default for PlannerConfig {
             web_tools: None,
             decision_evidence: None,
             orchestrator: None,
-            decision_owner: Some(DecisionOwnerPolicy::default()),
             exit_policy: None,
             experiment_profile: None,
             prompt_max_bytes: default_prompt_max_bytes(),
@@ -456,47 +380,24 @@ impl Default for PlannerConfig {
     }
 }
 impl PlannerConfig {
-    /// Resolve role identity without merging historical charges. The Decide
-    /// selector is retained for original journal/config accounting only;
-    /// production inference admits digest and persistent orchestrator work.
+    /// Resolve role identity without merging historical charges. The digest
+    /// has its own planner role; every other role runs through the orchestrator
+    /// and is disabled when the orchestrator is absent.
     pub(crate) fn role(&self, trigger: Trigger) -> ModelRole {
-        match trigger {
-            Trigger::Digest => self.digest.clone(),
-            Trigger::Decide => self.decide.clone(),
-            Trigger::Operations | Trigger::Strategy | Trigger::Scorer | Trigger::Supervisor => {
-                if let Some(o) = &self.orchestrator {
-                    let mut role = o.role_for(trigger);
-                    role.enabled = o.enabled
-                        && o.triggers
-                            .get(&trigger)
-                            .is_some_and(|settings| settings.enabled);
-                    role
-                } else {
-                    match trigger {
-                        Trigger::Operations => self
-                            .post_close
-                            .as_ref()
-                            .map(|settings| settings.operations.clone())
-                            .unwrap_or_else(|| ModelRole {
-                                enabled: false,
-                                ..ModelRole::default()
-                            }),
-                        Trigger::Strategy => self
-                            .post_close
-                            .as_ref()
-                            .map(|settings| settings.strategy.clone())
-                            .unwrap_or_else(|| ModelRole {
-                                enabled: false,
-                                ..ModelRole::default()
-                            }),
-                        Trigger::Scorer | Trigger::Supervisor => ModelRole {
-                            enabled: false,
-                            ..ModelRole::default()
-                        },
-                        Trigger::Digest | Trigger::Decide => unreachable!(),
-                    }
-                }
+        match (trigger, &self.orchestrator) {
+            (Trigger::Digest, _) => self.digest.clone(),
+            (_, Some(o)) => {
+                let mut role = o.role_for(trigger);
+                role.enabled = o.enabled
+                    && o.triggers
+                        .get(&trigger)
+                        .is_some_and(|settings| settings.enabled);
+                role
             }
+            (_, None) => ModelRole {
+                enabled: false,
+                ..ModelRole::default()
+            },
         }
     }
     fn default_max_handoff_instruments(v: &usize) -> bool {
@@ -520,19 +421,14 @@ impl PlannerConfig {
         }
         Ok(())
     }
-    /// Prerequisites for the versioned two-role decision policy. Empty for
-    /// legacy/absent ownership. The same list feeds config validation.
+    /// Prerequisites for the two-role decision policy: Luna compiles the
+    /// factual digest and the persistent orchestrator owns paper decisions.
+    /// Empty for a disabled planner. The same list feeds config validation.
     pub(crate) fn decision_owner_requirements(&self) -> Vec<&'static str> {
-        let Some(policy) = self.decision_owner else {
-            return Vec::new();
-        };
-        if policy.owner != DecisionOwner::Orchestrator || !self.enabled {
+        if !self.enabled {
             return Vec::new();
         }
         let mut missing = Vec::new();
-        if policy.version != 1 {
-            missing.push("decision_owner_version_invalid");
-        }
         let supervisor = self.orchestrator.as_ref().is_some_and(|orchestrator| {
             orchestrator.enabled
                 && orchestrator
@@ -573,12 +469,6 @@ impl PlannerConfig {
         if !self.digest.enabled {
             missing.push("decision_owner_digest_required");
         }
-        if self.decide.enabled {
-            missing.push("decision_owner_decide_must_be_disabled");
-        }
-        if self.handoff_gate.is_some() {
-            missing.push("decision_owner_legacy_handoff_gate_refused");
-        }
         if !self.events.as_ref().is_some_and(|events| events.enabled) {
             missing.push("decision_owner_events_required");
         }
@@ -587,23 +477,6 @@ impl PlannerConfig {
     pub(crate) fn validate_decision_owner(&self) -> Result<()> {
         if let Some(reason) = self.decision_owner_requirements().first() {
             return Err((*reason).into());
-        }
-        Ok(())
-    }
-    pub(crate) fn orchestrator_owns_decisions(&self) -> bool {
-        self.decision_owner.is_some_and(|policy| {
-            policy.version == 1 && policy.owner == DecisionOwner::Orchestrator
-        })
-    }
-    /// Fail-closed runtime gate. An owner policy is admitted only after the
-    /// reviewed migration prerequisites hold; the durable authority transition
-    /// is checked separately at controller startup.
-    pub(crate) fn runtime_decision_owner_gate(&self) -> Result<()> {
-        if self.enabled && !self.orchestrator_owns_decisions() {
-            return Err("decision_owner_migration_required".into());
-        }
-        if self.orchestrator_owns_decisions() {
-            self.validate_decision_owner()?;
         }
         Ok(())
     }
@@ -670,29 +543,17 @@ impl PlannerConfig {
         if c.provider != "xai_subscription"
             || !(1..=1000).contains(&c.shortlist_n)
             || !c.digest.tools.is_empty()
-            || (!c.decide.tools.is_empty()
-                && !matches!(
-                    c.decide.transport,
-                    sadr_cli::native_transport::Transport::DirectOauth
-                        | sadr_cli::native_transport::Transport::SubscriptionProxy
-                ))
         {
             return Err("planner_config_invalid".into());
         }
-        let orchestrator_owns_decisions = c.orchestrator_owns_decisions();
-        if c.require_digest == Some(true)
-            && (!c.digest.enabled || (!orchestrator_owns_decisions && !c.decide.enabled))
-        {
+        if c.require_digest == Some(true) && !c.digest.enabled {
             return Err("planner_initialization_roles_required".into());
         }
         if let Some(discovery) = &c.discovery {
             discovery.validate()?;
             let projection =
                 c.context.as_ref().map(|x| x.mode).unwrap_or_default() == ContextMode::Projection;
-            if !c.digest.enabled
-                || (!orchestrator_owns_decisions && !c.decide.enabled)
-                || (projection && c.full_universe_features != Some(true))
-            {
+            if !c.digest.enabled || (projection && c.full_universe_features != Some(true)) {
                 return Err("planner_discovery_roles_and_full_features_required".into());
             }
         }
@@ -739,13 +600,10 @@ impl PlannerConfig {
                 .map_err(|error| error.to_string())?;
         }
         c.validate_decision_owner()?;
-        if let Some(gate) = &c.handoff_gate {
-            gate.validate()?;
-        }
         if let Some(policy) = &c.exit_policy {
             policy.validate().map_err(|error| error.to_string())?;
         }
-        if role_invalid(&c.digest, 120_000) || role_invalid(&c.decide, MAX_RUN_MS) {
+        if role_invalid(&c.digest, 120_000) {
             return Err("planner_role_invalid".into());
         }
         if c.usage_namespace.as_deref().is_some_and(|name| {
@@ -1286,10 +1144,7 @@ pub(super) fn has_eligible_input(
         .as_deref()
         .map(|path| PlannerConfig::load_for_session(path, c.session))
         .transpose()?;
-    if let Some(cfg) = cfg.as_ref()
-        && cfg.orchestrator_owns_decisions()
-        && !p.positions.is_empty()
-    {
+    if cfg.is_some() && !p.positions.is_empty() {
         // A held book is evidence enough to compile a fresh factual digest,
         // even when the scanner has no new prospect.
         return Ok(true);
@@ -1301,18 +1156,7 @@ pub(super) fn has_eligible_input(
             || snapshot["prospects"]
                 .as_array()
                 .is_some_and(|rows| !rows.is_empty());
-        return Ok(
-            if cfg
-                .as_ref()
-                .is_some_and(PlannerConfig::orchestrator_owns_decisions)
-            {
-                fresh
-            } else {
-                snapshot["prospects"]
-                    .as_array()
-                    .is_some_and(|a| !a.is_empty())
-            },
-        );
+        return Ok(fresh);
     }
     let (input, _) = bundle_with_references(c, p, instruments, 1)?;
     Ok(input["shortlist"].as_array().is_some_and(|a| !a.is_empty())
@@ -1341,7 +1185,6 @@ pub(crate) fn usage(c: &Config) -> Result<Value> {
         let mut counts = serde_json::Map::new();
         for role in [
             "digest",
-            "decide",
             "operations",
             "strategy",
             "scorer",
@@ -1368,7 +1211,6 @@ pub(crate) fn usage(c: &Config) -> Result<Value> {
     }
     let mut counts = BTreeMap::from([
         ("digest", 0usize),
-        ("decide", 0usize),
         ("operations", 0usize),
         ("strategy", 0usize),
         ("scorer", 0usize),
@@ -1445,10 +1287,9 @@ pub fn entry(cmd: Command) -> ExitCode {
         return match PlannerConfig::load_for_session(planner, *session) {
             Ok(cfg) => {
                 let digest_role = cfg.role(Trigger::Digest);
-                let decide_role = cfg.role(Trigger::Decide);
                 println!(
                     "{}",
-                    json!({"status":"planner_config_valid","session":session,"policy_sha256":digest(&policy_bytes(&cfg).expect("serializable")),"enabled":cfg.enabled,"model_led":cfg.model_led,"discovery":cfg.discovery,"digest_model":digest_role.model_id,"decide_model":decide_role.model_id,"digest_daily_allowance":digest_role.daily_call_budget,"decide_daily_allowance":decide_role.daily_call_budget,"effective_from":cfg.effective_from,"paper_only":true,"model_calls":0})
+                    json!({"status":"planner_config_valid","session":session,"policy_sha256":digest(&policy_bytes(&cfg).expect("serializable")),"enabled":cfg.enabled,"model_led":cfg.model_led,"discovery":cfg.discovery,"digest_model":digest_role.model_id,"digest_daily_allowance":digest_role.daily_call_budget,"effective_from":cfg.effective_from,"paper_only":true,"model_calls":0})
                 );
                 ExitCode::SUCCESS
             }

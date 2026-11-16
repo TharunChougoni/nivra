@@ -2,7 +2,7 @@ use super::*;
 use sadr_core::execution::{ExitIntent, Instrument, Portfolio};
 use sadr_core::finance::{Amount, FinancialError, Money, Price, Side};
 use sadr_core::market::{OptionOrder, PaperMandate, Segment};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -49,10 +49,6 @@ pub(crate) struct Verdict {
     pub action: Option<Action>,
     pub units: u64,
     pub reason: String,
-}
-/// Accepted no-trade plan recorded when the decide run cannot hold another turn.
-pub(crate) fn host_budget_abstain() -> String {
-    json!({"actions":[],"stance":"abstain","notes":"host_budget_no_trade"}).to_string()
 }
 fn balanced_object_spans(raw: &str) -> Vec<(usize, usize)> {
     let bytes = raw.as_bytes();

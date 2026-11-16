@@ -11,8 +11,6 @@ pub(crate) enum SessionTrigger {
     Change,
     PreClose,
     PostFill,
-    PostDecide,
-    LunaNoDecideStreak,
     FailureStreak,
     Idle,
     Decision,
@@ -22,14 +20,12 @@ pub(crate) enum SessionTrigger {
 }
 
 impl SessionTrigger {
-    pub(crate) const ALL: [Self; 13] = [
+    pub(crate) const ALL: [Self; 11] = [
         Self::SessionOpen,
         Self::Resume,
         Self::Change,
         Self::PreClose,
         Self::PostFill,
-        Self::PostDecide,
-        Self::LunaNoDecideStreak,
         Self::FailureStreak,
         Self::Idle,
         Self::Decision,
@@ -45,8 +41,6 @@ impl SessionTrigger {
             Self::Change => "change",
             Self::PreClose => "pre_close",
             Self::PostFill => "post_fill",
-            Self::PostDecide => "post_decide",
-            Self::LunaNoDecideStreak => "luna_no_decide_streak",
             Self::FailureStreak => "failure_streak",
             Self::Idle => "idle",
             Self::Decision => "decision",
@@ -74,12 +68,6 @@ impl SessionTrigger {
             }
             Self::PostFill => {
                 "A fill was recorded in session {{session}} ({{fills}} today). Notes: {{notes}}. Review the position."
-            }
-            Self::PostDecide => {
-                "A digest decision was recorded in session {{session}}. Notes: {{notes}}. Review it."
-            }
-            Self::LunaNoDecideStreak => {
-                "No digest decision has been recorded for {{luna_no_decide_streak}} turns in session {{session}}. Notes: {{notes}}."
             }
             Self::FailureStreak => {
                 "Supervisor failure streak {{supervisor_failures}} in session {{session}}. Notes: {{notes}}."
@@ -135,10 +123,6 @@ impl SessionTrigger {
                 "fills",
             ],
             Self::PostFill => &["session", "notes", "fills", "positions"],
-            Self::PostDecide => &["session", "notes", "latest_luna_review"],
-            Self::LunaNoDecideStreak => {
-                &["session", "notes", "luna_no_decide_streak", "recent_turns"]
-            }
             Self::FailureStreak => &["session", "notes", "supervisor_failures"],
             Self::Idle => &[
                 "session",

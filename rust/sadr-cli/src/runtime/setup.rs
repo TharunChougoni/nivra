@@ -183,10 +183,7 @@ fn prepare(args: &Args) -> Result<()> {
         &serde_json::to_vec_pretty(&planner)?,
     )?;
     let loaded = planner::PlannerConfig::load(&config.join("planner.json"))?;
-    loaded.runtime_decision_owner_gate()?;
-    if !loaded.orchestrator_owns_decisions() {
-        return Err("setup_current_owner_required".into());
-    }
+    loaded.validate_decision_owner()?;
     write_new(
         &config.join("paper.json"),
         &serde_json::to_vec_pretty(&paper)?,
@@ -263,10 +260,7 @@ pub(super) fn exercise() {
     assert!(generated.get("prior_config").is_none());
     let planner =
         planner::PlannerConfig::load(&args.config_directory.join("planner.json")).unwrap();
-    planner.runtime_decision_owner_gate().unwrap();
-    assert!(planner.orchestrator_owns_decisions());
-    assert!(!planner.decide.enabled);
-    assert!(planner.handoff_gate.is_none());
+    planner.validate_decision_owner().unwrap();
     assert_eq!(
         planner.digest.model_config,
         Some(args.digest_model_config.clone())

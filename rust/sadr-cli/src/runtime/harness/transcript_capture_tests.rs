@@ -16,7 +16,7 @@ fn role() -> ModelRole {
     }
 }
 fn final_response() -> Value {
-    json!({"usage":{"input_tokens":20,"output_tokens":5,"input_tokens_details":{"cached_tokens":4}},"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":json!({"summary":"Fixture summary","evidence_ids":["bundle"],"missing_data":[],"uncertainties":[]}).to_string()}]}]})
+    json!({"usage":{"input_tokens":20,"output_tokens":5,"input_tokens_details":{"cached_tokens":4}},"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":json!({"complete":true,"as_of_ms":0,"coverage":{"universe":1,"scanned":1,"quoted":1,"featured":1,"experiments":0},"gaps":[],"changed_prospects":[],"active_rankings":[],"candidate_rankings":[],"bar_context":[],"spread_depth":[],"holdings":[],"cash":{"available":"0"},"fees":{"per_order":"0","buy_bps":"0","sell_bps":"0"},"recent_actions":[],"experiments":[],"evidence_ids":["bundle"]}).to_string()}]}]})
 }
 fn events(c: &Config) -> Vec<Value> {
     let archive = fs::read_dir(c.directory.join("model"))
@@ -41,7 +41,7 @@ fn captures_two_turns_two_tools_and_survives_unwritable_capture() {
     let mut backend = Script(VecDeque::from([Ok(first.clone()), Ok(final_response())]));
     let result = run(
         &c,
-        &legacy_test_config(),
+        &PlannerConfig::default(),
         "digest",
         &role(),
         "Capture fixture",
@@ -94,7 +94,7 @@ fn captures_two_turns_two_tools_and_survives_unwritable_capture() {
     let mut repeated = Script(VecDeque::from([Ok(final_response())]));
     run(
         &c,
-        &legacy_test_config(),
+        &PlannerConfig::default(),
         "digest",
         &role(),
         "Another input, same instructions",
@@ -199,50 +199,10 @@ fn captures_two_turns_two_tools_and_survives_unwritable_capture() {
         format!("{}\n\nPersisted orchestrator instructions", objective())
     );
 
-    let legacy_dir = tempfile::tempdir().unwrap();
-    let legacy_config = super::super::tests::config(legacy_dir.path());
-    let mut legacy_capture = FrameCapture(None);
-    run(
-        &legacy_config,
-        &legacy_test_config(),
-        "supervisor",
-        &role(),
-        "Legacy supervisor fixture",
-        &json!({"trigger":{"kind":"idle","reason":"idle"}}),
-        &mut legacy_capture,
-        &planner::preview_guard(),
-    )
-    .unwrap();
-    assert!(legacy_capture.0.unwrap().instructions.is_none());
-    assert_eq!(
-        frame_instructions_for(
-            &legacy_test_config(),
-            &Frame {
-                role: "supervisor".into(),
-                input: vec![],
-                tools: vec![],
-                citation_ids: vec![],
-                final_answer_only: false,
-                review_only: false,
-                owner_tools: Default::default(),
-                decision_evidence: false,
-                max_instrument_keys: None,
-                instructions: None,
-                tool_limits: None,
-            }
-        )
-        .unwrap(),
-        system_instructions("supervisor", &[]).unwrap()
-    );
-
     let owner_dir = tempfile::tempdir().unwrap();
     let owner_config = super::super::tests::config(owner_dir.path());
     let owner_policy = PlannerConfig {
         orchestrator: Some(Default::default()),
-        decision_owner: Some(planner::DecisionOwnerPolicy {
-            version: 1,
-            owner: planner::DecisionOwner::Orchestrator,
-        }),
         ..Default::default()
     };
     let mut owner_capture = FrameCapture(None);
@@ -453,7 +413,7 @@ fn captures_two_turns_two_tools_and_survives_unwritable_capture() {
             .is_some_and(|name| name.starts_with("research_task_"))
     }));
     let legacy_task_tools = definitions_for_call(
-        &legacy_test_config(),
+        &PlannerConfig::default(),
         "supervisor",
         &[],
         true,
@@ -476,7 +436,7 @@ fn captures_two_turns_two_tools_and_survives_unwritable_capture() {
     assert_eq!(
         run(
             &blocked,
-            &legacy_test_config(),
+            &PlannerConfig::default(),
             "digest",
             &role(),
             "Capture fixture",
@@ -513,7 +473,7 @@ fn delta_requests_rebuild_exact_provider_bytes_and_reduce_archive_size() {
     };
     run(
         &c,
-        &legacy_test_config(),
+        &PlannerConfig::default(),
         "digest",
         &role(),
         &"Fixture context ".repeat(4000),
@@ -606,7 +566,7 @@ fn daily_index_records_three_finished_runs_and_exact_estimated_cost() {
     let mut accepted = Script(VecDeque::from([Ok(final_response())]));
     run(
         &c,
-        &legacy_test_config(),
+        &PlannerConfig::default(),
         "digest",
         &role(),
         "Accepted index fixture",
@@ -624,8 +584,8 @@ fn daily_index_records_three_finished_runs_and_exact_estimated_cost() {
     )]));
     run(
         &c,
-        &legacy_test_config(),
-        "decide",
+        &PlannerConfig::default(),
+        "supervisor",
         &role(),
         "Abstain index fixture",
         &json!({}),
@@ -637,7 +597,7 @@ fn daily_index_records_three_finished_runs_and_exact_estimated_cost() {
     assert!(
         run(
             &c,
-            &legacy_test_config(),
+            &PlannerConfig::default(),
             "digest",
             &role(),
             "Failed index fixture",
@@ -652,7 +612,7 @@ fn daily_index_records_three_finished_runs_and_exact_estimated_cost() {
     let mut archived = Script(VecDeque::from([Ok(final_response())]));
     run(
         &c,
-        &legacy_test_config(),
+        &PlannerConfig::default(),
         "supervisor",
         &supervisor,
         "Run first",
@@ -704,7 +664,7 @@ fn captures_failed_tools_and_backend_failure_with_terminal_events() {
     ]));
     run(
         &c,
-        &legacy_test_config(),
+        &PlannerConfig::default(),
         "digest",
         &role(),
         "Failed tool fixture",
@@ -726,7 +686,7 @@ fn captures_failed_tools_and_backend_failure_with_terminal_events() {
     assert!(
         run(
             &failed,
-            &legacy_test_config(),
+            &PlannerConfig::default(),
             "digest",
             &role(),
             "Backend failure fixture",
@@ -748,7 +708,7 @@ fn captures_failed_tools_and_backend_failure_with_terminal_events() {
     ]));
     run(
         &capped,
-        &legacy_test_config(),
+        &PlannerConfig::default(),
         "digest",
         &role(),
         "Oversized read fixture",

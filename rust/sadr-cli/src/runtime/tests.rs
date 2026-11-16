@@ -60,7 +60,6 @@ pub(super) fn config(dir: &Path) -> Config {
         strategy: "model_planner_v1".into(),
         capital: Some(sadr_core::execution::a("5000")),
         prior_config: None,
-        allow_legacy_model_led_default: false,
     }
 }
 #[test]

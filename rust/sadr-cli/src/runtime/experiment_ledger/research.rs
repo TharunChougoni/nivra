@@ -131,11 +131,7 @@ fn reconcile_row(
 /// Read the original ingest ledger without creating, migrating or repairing it.
 /// The caller may report unavailable metadata; it must never halt the paper book.
 pub(crate) fn library(c: &Config, cfg: &super::super::planner::PlannerConfig) -> Result<Value> {
-    let Some(settings) = cfg
-        .research_tools
-        .as_ref()
-        .filter(|_| cfg.orchestrator_owns_decisions())
-    else {
+    let Some(settings) = cfg.research_tools.as_ref() else {
         return Ok(json!({"status":"disabled","items":[],"activation_authorized":false}));
     };
     settings.validate()?;

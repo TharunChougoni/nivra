@@ -207,7 +207,7 @@ mod tests {
             fs::write(
                 &planner,
                 serde_json::to_vec(&serde_json::json!({
-                    "enabled":true,
+                    "enabled":false,
                     "research_tools":{
                         "queue":root.join("research.sqlite"),
                         "stage_root":root.join("research-stage"),

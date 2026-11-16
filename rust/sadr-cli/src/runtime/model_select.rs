@@ -699,7 +699,7 @@ pub(crate) fn exercise() {
         "provider": "xai_subscription",
         "shortlist_n": 40,
         "digest": {"enabled": true, "model_id": "gpt-6-luna", "model_config": digest_model, "transport": "openai_codex", "daily_call_budget": 10, "timeout_ms": 20000},
-        "decide": {"enabled": false},
+        "events": {"enabled": true, "cooldown_ms": 0, "max_pending": 10, "policy": {"price_move_bps":100,"max_event_age_ms":300000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}},
         "orchestrator": {
             "enabled": true,
             "daily_call_budget": 40,

@@ -29,12 +29,12 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
         .open(c.directory.join("controller.lock"))?;
     lock.try_lock_exclusive()?;
     let mut lock = AdvisoryLock::new(lock);
-    // A reviewed two-role policy is admitted at load for migration preview, but
-    // the controller refuses it until the orchestrator decision executor exists.
+    // The controller refuses a policy that does not meet the decision-owner
+    // prerequisites before it opens the book.
     if let Some(path) = &c.planner_config
         && let Ok(planner_config) = planner::PlannerConfig::load_for_session(path, c.session)
     {
-        planner_config.runtime_decision_owner_gate()?;
+        planner_config.validate_decision_owner()?;
     }
     let mut db = open_book(c)?;
     let action_fault = ensure_actions(&db).is_err();
@@ -273,34 +273,30 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
                 session_end_ms,
                 positions: serde_json::to_value(&p.positions).unwrap_or(serde_json::Value::Null),
             };
-            if cfg.orchestrator_owns_decisions() {
-                let mut context = super::super::decision_owner::Context {
-                    db: &mut db,
-                    portfolio: &p,
-                    instruments: &tradable,
-                };
-                super::super::supervisor::consider_owner(
-                    c,
-                    cfg,
-                    &mut supervisor_worker,
-                    &mut aside_worker,
-                    &tick,
-                    Some(&alerts),
-                    &mut context,
-                );
-                // Research ticks after trading and never gates it.
-                super::super::supervisor::research::tick_lane(
-                    c,
-                    cfg,
-                    &mut research_lane,
-                    now,
-                    session_end_ms,
-                    !p.halted && !p.stopped,
-                    p.fills.iter().map(|fill| fill.at).max(),
-                );
-            } else {
-                research_lane.stop();
-            }
+            let mut context = super::super::decision_owner::Context {
+                db: &mut db,
+                portfolio: &p,
+                instruments: &tradable,
+            };
+            super::super::supervisor::consider_owner(
+                c,
+                cfg,
+                &mut supervisor_worker,
+                &mut aside_worker,
+                &tick,
+                Some(&alerts),
+                &mut context,
+            );
+            // Research ticks after trading and never gates it.
+            super::super::supervisor::research::tick_lane(
+                c,
+                cfg,
+                &mut research_lane,
+                now,
+                session_end_ms,
+                !p.halted && !p.stopped,
+                p.fills.iter().map(|fill| fill.at).max(),
+            );
         }
         if stopping.load(std::sync::atomic::Ordering::Relaxed) {
             if let Some(worker) = history_worker.take() {
@@ -1248,10 +1244,7 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
                 }
             };
         }
-        if let Some(cfg) = event_config
-            .as_ref()
-            .filter(|cfg| cfg.orchestrator_owns_decisions())
-        {
+        if let Some(cfg) = event_config.as_ref() {
             let owner_blocked =
                 super::super::decision_owner::research_priority_blocked(&db, c).unwrap_or(true);
             let launch = harness::ResearchLaunch::for_book(harness::LaunchBook {
@@ -1511,10 +1504,9 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
             planner_status["status"] =
                 serde_json::json!("planner_usage_unavailable_recovery_required");
         }
-        planner_status["budget_used"] = match (usage["digest"].as_u64(), usage["decide"].as_u64()) {
-            (Some(digest), Some(decide)) => serde_json::json!(digest + decide),
-            _ => serde_json::Value::Null,
-        };
+        planner_status["budget_used"] = usage["digest"]
+            .as_u64()
+            .map_or(serde_json::Value::Null, |digest| serde_json::json!(digest));
         planner_status["calls_used"] = usage;
         if p.halted {
             status = "risk_halted_protective_exits_only".into();
@@ -1585,10 +1577,7 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
         }
         let initialization = serde_json::json!({"stage":if p.halted {"halted_requires_review"} else if !history_admitted {"waiting_for_history"} else if planner_status["pending_attempt"].is_string() {"digest_and_decide_in_progress"} else if entry_status=="model_plan_ready" {"model_initialized"} else {"waiting_for_initial_or_next_model_plan"},"paper_only":true,"financial_execution_requires_accepted_plan":true});
         let updater_status = crate::update::dashboard_status();
-        let owner_activity = if event_config
-            .as_ref()
-            .is_some_and(|cfg| cfg.orchestrator_owns_decisions())
-        {
+        let owner_activity = if event_config.is_some() {
             super::super::decision_owner::activity_analytics(&db, c, &p).ok()
         } else {
             None

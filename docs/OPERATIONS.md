@@ -65,7 +65,7 @@ Review the complete set together:
 | --- | --- |
 | Paper config | Explicit broker, account, session, original read-journal and sessions/history/source paths; continuing account cash comes from its original ledger, never a replacement journal |
 | Costs and instruments | Complete `paper_costs` (see packaged fragment), verified cash instrument identities/tick units, calendar and provider metadata; no derivative execution |
-| Planner | Explicit `decision_owner={version:1,owner:"orchestrator"}`; factual Digest enabled; independent Decide disabled; events and supervisor enabled; Operations/Strategy/post-close disabled by the two-role migration |
+| Planner | Owner-only policy (no `decision_owner`, `decide` or `handoff_gate` key); factual Digest enabled; events and supervisor enabled; Operations/Strategy/post-close disabled by the two-role migration |
 | Models | Digest `gpt-6-luna`; reviewed owner profile for `grok-4.7` or `gpt-6.1-sol`, with exact model/transport/application credential binding and explicit admission; catalog presence does not establish entitlement |
 | Prompts | Complete revision-matched `prompts/` beside the planner JSON; reviewed prompt bytes participate in authority; see [model harness](MODEL_HARNESS.md) |
 | Credentials | Application-owned private grants and a live-catalog model ID; never reuse another application's authentication or put credentials in templates/history |
@@ -1126,8 +1126,8 @@ instructions. The book remains stopped; a restart is never a resume.
 
 Planner authority changes on a closed sealed book apply to the next session.
 
-Legacy migrations (`prior_config`, `allow_legacy_model_led_default`) admit only
-exact documented original bindings/default-field proofs. Keep original configs
+Legacy migrations (`prior_config`) admit only exact documented original
+bindings. Keep original configs
 and predecessor seals; do not generalise compatibility flags to new successors.
 
 ## Grants and model admission
@@ -1388,8 +1388,9 @@ config. The normal [release transition](#releases-and-updates) and reviewed
 
 ### Reviewing the decision-owner migration
 
-The top-level `decision_owner` policy is reviewed without applying it. Write the
-owner policy to a new planner config and validate it offline:
+The owner policy is reviewed without applying it. Write the planner config
+without the removed `decision_owner`, `decide` and `handoff_gate` keys to a new
+file and validate it offline:
 
 ```sh
 sadr-rs planner config-check --planner NEW_PLANNER.json --session SESSION
@@ -1403,7 +1404,7 @@ predecessor planner file and the same reviewed transition.
 A two-role policy whose durable authority was initialized under a different
 policy is refused at controller startup with `decision_owner_migration_required`
 (or `decision_owner_legacy_plan_requires_migration` for a legacy active plan);
-host protection continues and it never falls back to the decide role. See the
+host protection continues until a reviewed `config-apply` rebinds it. See the
 [model harness](MODEL_HARNESS.md#decision-owner-migration-policy).
 
 ### Personal-agent status and requests
@@ -2022,9 +2023,9 @@ config does not authorize starting a session.
 
 ### Owner-only planner migration
 
-Production model work requires explicit reviewed orchestrator ownership. Existing
-planner JSON without `decision_owner` still decodes as legacy and retains its
-policy hash, but enabled legacy planners refuse with
+The persistent orchestrator is the only decision owner. Planner JSON that still
+carries `decision_owner`, `decide` or `handoff_gate` refuses with
+`planner_config_invalid`, and a book bound to an older policy hash refuses with
 `decision_owner_migration_required`. On a stopped book, write the owner policy
 to a new planner config, check it with `planner config-check`, review its exact
 prompt and credential bindings, then use `config-apply --confirm-paper-review`

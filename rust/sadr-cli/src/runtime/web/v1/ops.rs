@@ -291,7 +291,6 @@ pub(crate) fn session_view(
                 "trigger":turn.trigger,
                 "prompt_version":turn.prompt_version,
                 "notes_version":turn.notes_version,
-                "decides_at_start":turn.decides_at_start,
                 "fills_at_start":turn.fills_at_start,
                 "started_at_ms":turn.started_at_ms,
                 "result":result.map(|result| serde_json::json!({

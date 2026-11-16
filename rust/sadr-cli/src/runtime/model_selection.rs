@@ -931,7 +931,7 @@ pub(crate) fn exercise() {
         "provider": "xai_subscription",
         "shortlist_n": 40,
         "digest": {"enabled": true, "model_id": "gpt-6-luna", "model_config": dir.path().join("digest-model.json"), "transport": "openai_codex", "daily_call_budget": 10, "timeout_ms": 20000},
-        "decide": {"enabled": true, "model_id": "grok-4.7", "daily_call_budget": 10},
+        "events": {"enabled": true, "cooldown_ms": 0, "max_pending": 10, "policy": {"price_move_bps":100,"max_event_age_ms":300000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}},
         "orchestrator": {
             "enabled": true,
             "daily_call_budget": 40,
@@ -1217,51 +1217,27 @@ pub(crate) fn exercise() {
     );
     assert_eq!(resolve(&c, &cfg).unwrap().unwrap().revision, 9);
 
-    // Versioned decision-owner policy: prerequisites and the policy-level gate
-    // are reported by the same validator used at load. The durable authority
-    // transition is still checked separately at controller startup.
-    use super::planner::{DecisionOwner, DecisionOwnerPolicy};
-    assert!(super::planner::PlannerConfig::default().orchestrator_owns_decisions());
-    assert!(!cfg.orchestrator_owns_decisions());
-    assert_eq!(
-        cfg.runtime_decision_owner_gate().unwrap_err().to_string(),
-        "decision_owner_migration_required"
-    );
-    let empty_legacy: super::planner::PlannerConfig =
-        serde_json::from_value(json!({"decision_owner":{}})).unwrap();
-    assert!(!empty_legacy.orchestrator_owns_decisions());
-    let mut two_role = cfg.clone();
-    two_role.decision_owner = Some(DecisionOwnerPolicy {
-        version: 1,
-        owner: DecisionOwner::Orchestrator,
-    });
-    two_role.orchestrator.as_mut().unwrap().model.model_id = "grok-4.7".into();
-    two_role.decide.enabled = false;
-    two_role.events = Some(
-        serde_json::from_value(json!({
-            "enabled": true,
-            "cooldown_ms": 0,
-            "max_pending": 10,
-            "policy": {"price_move_bps":100,"max_event_age_ms":300000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}
-        }))
-        .unwrap(),
-    );
-    assert!(two_role.decision_owner_requirements().is_empty());
-    two_role.runtime_decision_owner_gate().unwrap();
-    let mut decide_on = two_role.clone();
-    decide_on.decide.enabled = true;
-    assert!(
-        decide_on
-            .decision_owner_requirements()
-            .contains(&"decision_owner_decide_must_be_disabled")
-    );
-    let mut no_events = two_role.clone();
-    no_events.events = None;
-    assert!(
-        no_events
-            .decision_owner_requirements()
-            .contains(&"decision_owner_events_required")
-    );
+    // Decision-owner prerequisites are reported by the same validator used at
+    // load. The durable authority transition is checked at controller startup.
+    assert!(cfg.decision_owner_requirements().is_empty());
+    cfg.validate_decision_owner().unwrap();
+    for (missing, reason) in [
+        ("events", "decision_owner_events_required"),
+        ("digest", "decision_owner_digest_required"),
+    ] {
+        let mut incomplete = cfg.clone();
+        match missing {
+            "events" => incomplete.events = None,
+            _ => incomplete.digest.enabled = false,
+        }
+        assert_eq!(
+            incomplete
+                .validate_decision_owner()
+                .unwrap_err()
+                .to_string(),
+            reason
+        );
+    }
 
     // Non-binding policy drift invalidates active and pending attribution. The
     // same model must be explicitly reselected under the new policy revision;

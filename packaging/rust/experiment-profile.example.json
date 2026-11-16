@@ -2,16 +2,7 @@
   "version": 1,
   "prompts": {
     "objective": "prompts/objective.md",
-    "digest": "prompts/data.md",
-    "decide": "prompts/decision.md",
-    "decision_evidence": "prompts/profit_under_uncertainty.md",
-    "decision_evidence_digest": "prompts/decision_evidence_digest.md"
-  },
-  "handoff_gate": {
-    "material_move_bps": 75,
-    "exit_proximity_bps": 50,
-    "anti_loop_floor_ms": 60000,
-    "material_quote_change_bps": 75
+    "digest": "prompts/data_owner.md"
   },
   "tools": {
     "scanner_limit": 40,
@@ -26,11 +17,6 @@
     "digest": {
       "max_turns": 8,
       "max_read_tools": 16
-    },
-    "decide": {
-      "max_turns": 12,
-      "max_read_tools": 16,
-      "run_timeout_ms": 450000
     }
   },
   "supervisor": {
