@@ -287,20 +287,17 @@ fn admitted_deadline_survives_old_backlog() {
         .unwrap();
     assert_eq!(claim.deadline_ms, admitted + 300_000);
     assert_eq!(pending_count(&db).unwrap(), 0);
-    assert!(
-        settle(
-            &mut db,
-            &c,
-            &cfg,
-            &p,
-            &claim,
-            Ok(owner_plan(&c, &cfg, &claim)),
-            admitted + 200_000,
-            true
-        )
-        .unwrap()
-        .is_none()
-    );
+    settle(
+        &mut db,
+        &c,
+        &cfg,
+        &p,
+        &claim,
+        Ok(owner_plan(&c, &cfg, &claim)),
+        admitted + 200_000,
+        true,
+    )
+    .unwrap();
     assert!(
         reserve(&mut db, &c, &cfg, &p, admitted + 200_001, true)
             .unwrap()
@@ -398,21 +395,17 @@ fn owner_cadence_waits_for_the_initial_event_and_every_digest_has_a_reason() {
     .unwrap()
     .unwrap();
     assert_eq!(trigger_reason(&repeated.trigger), "digest_cadence");
-    assert!(
-        settle(
-            &mut owner_db,
-            &owner_c,
-            &owner_cfg,
-            &owner_p,
-            &repeated,
-            Ok(owner_plan(&owner_c, &owner_cfg, &repeated)),
-            at() + 120_000,
-            true,
-        )
-        .unwrap()
-        .is_none(),
-        "unchanged cadence facts do not wake the orchestrator"
-    );
+    settle(
+        &mut owner_db,
+        &owner_c,
+        &owner_cfg,
+        &owner_p,
+        &repeated,
+        Ok(owner_plan(&owner_c, &owner_cfg, &repeated)),
+        at() + 120_000,
+        true,
+    )
+    .unwrap();
     let queued: i64 = owner_db
         .query_row(
             "SELECT count(*) FROM owner_digest_work WHERE state='pending'",
@@ -757,20 +750,17 @@ fn event_claims_supersede_once_and_preserve_crashes_failures_and_original_usage(
                 .is_none()
         );
         let original = owner_plan(&c, &cfg, &initial);
-        assert!(
-            settle(
-                &mut db,
-                &c,
-                &cfg,
-                &p,
-                &initial,
-                Ok(original.clone()),
-                at(),
-                true
-            )
-            .unwrap()
-            .is_none()
-        );
+        settle(
+            &mut db,
+            &c,
+            &cfg,
+            &p,
+            &initial,
+            Ok(original.clone()),
+            at(),
+            true,
+        )
+        .unwrap();
         // An accepted digest defers to the owner; it never becomes a plan head.
         assert!(planner::saved_plan(&db, &c).unwrap().is_none());
         assert!(
@@ -877,8 +867,7 @@ fn event_claims_supersede_once_and_preserve_crashes_failures_and_original_usage(
             if outcome == "blocked" {
                 block(&mut db, &c, "fixture_observation_failure").unwrap();
             }
-            let result = settle(&mut db, &c, &cfg, &p, &next, result, now, true).unwrap();
-            assert!(result.is_none());
+            settle(&mut db, &c, &cfg, &p, &next, result, now, true).unwrap();
             assert!(planner::saved_plan(&db, &c).unwrap().is_none());
         }
         assert!(
@@ -1669,7 +1658,7 @@ fn full_recheck_backlog_collapses_on_restart_and_records_prior_closes() {
     assert_eq!(claim.trigger["observed_ms"], restart);
     assert_eq!(claim.deadline_ms, restart + 300_000);
     assert!(p.fills.is_empty());
-    let accepted = settle(
+    settle(
         &mut db,
         &c,
         &planner,
@@ -1682,7 +1671,6 @@ fn full_recheck_backlog_collapses_on_restart_and_records_prior_closes() {
     .unwrap();
     // An accepted digest defers to the persistent owner; it never becomes an
     // executable plan head and never fills.
-    assert!(accepted.is_none());
     assert!(p.fills.is_empty());
     assert!(p.positions.is_empty());
     let view = status(&db, &c).unwrap().unwrap();
@@ -1749,7 +1737,7 @@ fn recoverable_planner_failure_rechecks_after_cooldown() {
         }
         initialize(&mut db, &c, &p, Some(&cfg), at()).unwrap();
         let claim = reserve(&mut db, &c, &cfg, &p, at(), true).unwrap().unwrap();
-        let settled = settle(
+        settle(
             &mut db,
             &c,
             &cfg,
@@ -1760,7 +1748,6 @@ fn recoverable_planner_failure_rechecks_after_cooldown() {
             true,
         )
         .unwrap();
-        assert!(settled.is_none());
         // A failed digest is one bad attempt, not a decision block (#221).
         let view = status(&db, &c).unwrap().unwrap();
         assert_eq!(view["status"], "waiting_for_eligible_event");
@@ -1819,7 +1806,7 @@ fn recoverable_planner_failure_rechecks_after_cooldown() {
         .unwrap()
         .unwrap();
     block(&mut db, &c, "planner_event_observation_invalid").unwrap();
-    let accepted = settle(
+    settle(
         &mut db,
         &c,
         &planner,
@@ -1830,7 +1817,6 @@ fn recoverable_planner_failure_rechecks_after_cooldown() {
         true,
     )
     .unwrap();
-    assert!(accepted.is_none());
     assert!(!blocked(&db, &c).unwrap());
     assert_eq!(
         status(&db, &c).unwrap().unwrap()["status"],
@@ -1851,7 +1837,8 @@ fn recoverable_planner_failure_rechecks_after_cooldown() {
         config_hash(&planner).unwrap(),
         config_hash(&changed).unwrap()
     );
-    // A pre-upgrade controller hash can accept a cap raise using its original audit.
+    // A control hash that no longer matches its owner marker refuses and is
+    // left exactly as stored; no archived policy upgrades it.
     let migration = tempfile::tempdir().unwrap();
     let migration_c = super::super::tests::config(migration.path());
     let mut migration_db = open_book(&migration_c).unwrap();
@@ -1869,34 +1856,19 @@ fn recoverable_planner_failure_rechecks_after_cooldown() {
         serde_json::to_value(load(&migration_db).unwrap().unwrap()).unwrap(),
         serde_json::to_value(&legacy).unwrap()
     );
-    migration_db
-        .execute_batch("DROP TABLE planner_authority_owner")
-        .unwrap();
-    let audit = migration_c.directory.join("model/original-attempt");
-    fs::create_dir_all(&audit).unwrap();
-    rollover::atomic(&audit.join("input.json"), &json!({"digest":planner.digest})).unwrap();
-    initialize(&mut migration_db, &migration_c, &p, Some(&changed), at()).unwrap();
-    assert!(!blocked(&migration_db, &migration_c).unwrap());
-    assert_eq!(
-        load(&migration_db).unwrap().unwrap().config_hash,
-        config_hash(&changed).unwrap()
-    );
 
     changed.digest.output_cap += 1;
-    assert!(
-        settle(
-            &mut db,
-            &c,
-            &changed,
-            &p,
-            &claim,
-            Ok(plan(&c, &claim)),
-            claim.deadline_ms + 1,
-            true,
-        )
-        .unwrap()
-        .is_none()
-    );
+    settle(
+        &mut db,
+        &c,
+        &changed,
+        &p,
+        &claim,
+        Ok(plan(&c, &claim)),
+        claim.deadline_ms + 1,
+        true,
+    )
+    .unwrap();
     assert_eq!(
         status(&db, &c).unwrap().unwrap()["status"],
         "planner_event_configuration_changed"
@@ -1915,20 +1887,17 @@ fn recoverable_planner_failure_rechecks_after_cooldown() {
     let claim = reserve(&mut db, &c, &planner, &p, at(), true)
         .unwrap()
         .unwrap();
-    assert!(
-        settle(
-            &mut db,
-            &c,
-            &planner,
-            &p,
-            &claim,
-            Ok(plan(&c, &claim)),
-            claim.deadline_ms + 1,
-            true,
-        )
-        .unwrap()
-        .is_none()
-    );
+    settle(
+        &mut db,
+        &c,
+        &planner,
+        &p,
+        &claim,
+        Ok(plan(&c, &claim)),
+        claim.deadline_ms + 1,
+        true,
+    )
+    .unwrap();
     // A recoverable digest failure is recorded, never a decision block (#221).
     let view = status(&db, &c).unwrap().unwrap();
     assert_eq!(view["status"], "waiting_for_eligible_event");
@@ -1950,20 +1919,17 @@ fn recoverable_planner_failure_rechecks_after_cooldown() {
     let claim = reserve(&mut db, &c, &planner, &p, at(), true)
         .unwrap()
         .unwrap();
-    assert!(
-        settle(
-            &mut db,
-            &c,
-            &planner,
-            &p,
-            &claim,
-            Err("planner_invalid_plan_no_entries".into()),
-            at(),
-            true,
-        )
-        .unwrap()
-        .is_none()
-    );
+    settle(
+        &mut db,
+        &c,
+        &planner,
+        &p,
+        &claim,
+        Err("planner_invalid_plan_no_entries".into()),
+        at(),
+        true,
+    )
+    .unwrap();
     // A recoverable digest failure is recorded, never a decision block (#221).
     let view = status(&db, &c).unwrap().unwrap();
     assert_eq!(view["status"], "waiting_for_eligible_event");

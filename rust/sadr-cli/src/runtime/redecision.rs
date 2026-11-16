@@ -92,10 +92,11 @@ struct Control {
     missing_volume: u64,
     missing_prior_close: u64,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+/// The only decision owner. A stored marker naming any other owner fails to
+/// decode and refuses as `planner_authority_owner_invalid`.
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum AuthorityOwner {
-    Legacy,
+enum AuthorityOwner {
     Orchestrator,
 }
 #[derive(Debug, Serialize, Deserialize)]
@@ -106,14 +107,42 @@ struct AuthorityOwnerReceipt {
     config_hash: String,
     owner: AuthorityOwner,
 }
+/// The companion owner marker of an existing authority. A journal without the
+/// marker table predates it and has no proven owner; any other missing,
+/// malformed, foreign or stale marker refuses.
 fn authority_owner(db: &Connection, state: &Control) -> Result<Option<AuthorityOwnerReceipt>> {
-    match authority::read_marker_state(db, state)? {
-        authority::MarkerState::TableAbsent => Ok(None),
-        authority::MarkerState::RowMissing => Err("planner_authority_owner_missing".into()),
-        authority::MarkerState::Malformed { error, .. } => Err(error.into()),
-        authority::MarkerState::Stale { .. } => Err("planner_authority_owner_mismatch".into()),
-        authority::MarkerState::Current { receipt, .. } => Ok(Some(receipt)),
+    let present: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='planner_authority_owner')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !present {
+        return Ok(None);
     }
+    let raw: Option<rusqlite::types::Value> = db
+        .query_row(
+            "SELECT body FROM planner_authority_owner WHERE id=1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let raw = match raw.ok_or("planner_authority_owner_missing")? {
+        rusqlite::types::Value::Text(text) => text.into_bytes(),
+        rusqlite::types::Value::Blob(bytes) => bytes,
+        _ => Vec::new(),
+    };
+    if raw.len() > 4096 {
+        return Err("planner_authority_owner_invalid".into());
+    }
+    let receipt: AuthorityOwnerReceipt =
+        serde_json::from_slice(&raw).map_err(|_| "planner_authority_owner_invalid")?;
+    if receipt.version != 1
+        || receipt.binding != state.binding
+        || receipt.config_hash != state.config_hash
+    {
+        return Err("planner_authority_owner_mismatch".into());
+    }
+    Ok(Some(receipt))
 }
 fn save_authority_owner(db: &Connection, receipt: &AuthorityOwnerReceipt) -> Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS planner_authority_owner(id INTEGER PRIMARY KEY CHECK(id=1),body TEXT NOT NULL);")?;
@@ -287,46 +316,6 @@ pub(crate) fn configuration_check(db: &Connection, c: &Config) -> Value {
         "current_config_without_prompt_sha256":current_without
     })
 }
-/// Upgrade a legacy full-config hash only using an exact matching archived policy.
-/// The source names the exact proof so the startup audit does not call every
-/// upgrade an exact pre-marker match.
-fn upgrade_config_hash(
-    c: &Config,
-    cfg: &planner::PlannerConfig,
-    old: &str,
-) -> Result<Option<(String, &'static str)>> {
-    if old == digest(&serde_json::to_vec(cfg)?) {
-        return Ok(Some((config_hash(cfg)?, "current_config")));
-    }
-    let root = c.directory.join("model");
-    if !root.exists() {
-        return Ok(None);
-    }
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let path = entry.path().join("input.json");
-        if !path.exists() {
-            continue;
-        }
-        let value: Value = serde_json::from_slice(
-            &crate::read_bounded(&path, 1_000_000).map_err(|_| "planner_config_audit_invalid")?,
-        )?;
-        let Some(digest_role) = value.get("digest") else {
-            continue;
-        };
-        let mut prior = cfg.clone();
-        prior.digest = serde_json::from_value(digest_role.clone())?;
-        if digest(&serde_json::to_vec(&prior)?) == old
-            && planner::policy_bytes(&prior)? == planner::policy_bytes(cfg)?
-        {
-            return Ok(Some((config_hash(cfg)?, "archived_policy")));
-        }
-    }
-    Ok(None)
-}
 fn settings(cfg: &planner::PlannerConfig) -> Option<&Settings> {
     cfg.events.as_ref().filter(|e| e.enabled && cfg.enabled)
 }
@@ -464,21 +453,6 @@ fn prepare_usage(db: &Connection, c: &Config) -> Result<()> {
     planner::prepare_review_usage(c)
 }
 
-/// A pre-marker proof is safe only when the active plan is absent or is the
-/// owner's own plan head. A legacy plan keeps the marker absent for migration.
-fn active_plan_owner_or_absent(db: &Connection, state: &Control) -> Result<bool> {
-    let Some(id) = &state.active else {
-        return Ok(true);
-    };
-    let body: String = db.query_row("SELECT body FROM planner_plan WHERE id=?", [id], |r| {
-        r.get(0)
-    })?;
-    let plan: Value = serde_json::from_str(&body)?;
-    if plan["decision_id"] != *id {
-        return Err("planner_saved_plan_invalid".into());
-    }
-    Ok(plan["decision_owner"] == "orchestrator" && id.starts_with("owner-"))
-}
 /// Called once under the book's controller lock. An abandoned claim is never replayed.
 pub(crate) fn initialize(
     db: &mut Connection,
@@ -542,75 +516,18 @@ pub(crate) fn initialize(
         }
     };
     check(&state, c)?;
-    let mut owner_receipt = if original_authority {
-        if authority_owner(&tx, &state)?.is_some() {
-            return Err("planner_authority_owner_without_authority".into());
-        }
-        Some(AuthorityOwnerReceipt {
-            version: 1,
-            binding: state.binding.clone(),
-            config_hash: state.config_hash.clone(),
-            owner: AuthorityOwner::Orchestrator,
-        })
-    } else {
-        authority_owner(&tx, &state)?
-    };
-    let current_identity = cfg.map(config_identity).transpose()?;
-    let mut upgrade: Option<(String, &'static str)> = None;
-    if let (Some(cfg), Some((hash, prompts, without_prompt))) = (cfg, current_identity.as_ref()) {
-        if state.config_hash != *hash
-            && let Some((upgraded, source)) = upgrade_config_hash(c, cfg, &state.config_hash)?
-        {
-            upgrade = Some((state.config_hash.clone(), source));
-            state.config_hash = upgraded;
-            if let Some(receipt) = &mut owner_receipt {
-                receipt.config_hash = state.config_hash.clone();
-            }
-        }
-        if state.config_hash == *hash {
-            state.prompt_sha256 = prompts.clone();
-            state.config_without_prompt_sha256 = without_prompt.clone();
-        }
+    // Only a new authority writes the owner marker. An existing marker must be
+    // current; a journal without one is refused by `owner_startup_check`.
+    let marker = authority_owner(&tx, &state)?;
+    if original_authority && marker.is_some() {
+        return Err("planner_authority_owner_without_authority".into());
     }
-    // A pre-marker owner journal proves the same owner from the exact current
-    // policy hash. The active plan must be absent or demonstrably owner; a
-    // legacy plan keeps the marker absent so startup names the migration.
-    if !original_authority
-        && owner_receipt.is_none()
-        && let Some(cfg) = cfg
-        && cfg.validate_decision_owner().is_ok()
-        && state.config_hash == config_hash(cfg)?
-        && active_plan_owner_or_absent(&tx, &state)?
+    let current_identity = cfg.map(config_identity).transpose()?;
+    if let Some((hash, prompts, without_prompt)) = current_identity.as_ref()
+        && state.config_hash == *hash
     {
-        owner_receipt = Some(AuthorityOwnerReceipt {
-            version: 1,
-            binding: state.binding.clone(),
-            config_hash: state.config_hash.clone(),
-            owner: AuthorityOwner::Orchestrator,
-        });
-        let (source, prior_config_hash, upgrade_source) = match &upgrade {
-            Some((prior, source)) => (
-                "pre_marker_hash_upgrade",
-                Some(prior.clone()),
-                Some(*source),
-            ),
-            None => ("pre_marker_exact", None, None),
-        };
-        tx.execute(
-            "INSERT INTO ticks(at,receipt,body,event) VALUES(?,NULL,?,'operator_planner_authority_proof_created')",
-            rusqlite::params![
-                now,
-                json!({
-                    "source":source,
-                    "prior_config_hash":prior_config_hash,
-                    "upgrade_source":upgrade_source,
-                    "config_hash":state.config_hash.clone(),
-                    "owner":"orchestrator",
-                    "active":state.active.clone()
-                })
-                .to_string()
-            ],
-        )?;
+        state.prompt_sha256 = prompts.clone();
+        state.config_without_prompt_sha256 = without_prompt.clone();
     }
     if (!enabled
         || current_identity.as_ref().map(|(hash, _, _)| hash.as_str())
@@ -673,8 +590,16 @@ pub(crate) fn initialize(
         }
     }
     save(&tx, &state)?;
-    if let Some(receipt) = owner_receipt {
-        save_authority_owner(&tx, &receipt)?;
+    if original_authority {
+        save_authority_owner(
+            &tx,
+            &AuthorityOwnerReceipt {
+                version: 1,
+                binding: state.binding.clone(),
+                config_hash: state.config_hash.clone(),
+                owner: AuthorityOwner::Orchestrator,
+            },
+        )?;
     }
     tx.commit()?;
     Ok(true)
@@ -975,31 +900,11 @@ pub(crate) fn recover(
     let mut state = load(db)?.ok_or("planner_event_state_missing")?;
     check(&state, c)?;
     let reviewed = recovery_block_for(db, &state)?;
-    let next_owner = AuthorityOwner::Orchestrator;
     cfg.validate_decision_owner()?;
     if settings(cfg).is_none() {
         return Err("planner_recover_events_disabled".into());
     }
-    let mut owner_receipt = authority_owner(db, &state)?;
-    if let Some(receipt) = &owner_receipt {
-        if receipt.owner != next_owner {
-            return Err("decision_owner_migration_required".into());
-        }
-    } else {
-        if state.config_hash != config_hash(cfg)? {
-            return Err("planner_recover_owner_unproven_restore_original_config".into());
-        }
-        // A pre-marker proof cannot be inferred by clearing a legacy plan head.
-        if !active_plan_owner_or_absent(db, &state)? {
-            return Err("planner_recover_owner_active_plan_unproven".into());
-        }
-        owner_receipt = Some(AuthorityOwnerReceipt {
-            version: 1,
-            binding: state.binding.clone(),
-            config_hash: state.config_hash.clone(),
-            owner: next_owner,
-        });
-    }
+    let mut receipt = authority_owner(db, &state)?.ok_or("planner_authority_owner_missing")?;
     if let Some(claim) = state.pending.take() {
         retire_interrupted(db, c, claim)?;
     }
@@ -1021,11 +926,8 @@ pub(crate) fn recover(
     state.active = None;
     state.initial_available = true;
     save(db, &state)?;
-    if let Some(mut receipt) = owner_receipt {
-        receipt.config_hash = state.config_hash.clone();
-        save_authority_owner(db, &receipt)?;
-    }
-    Ok(())
+    receipt.config_hash = state.config_hash.clone();
+    save_authority_owner(db, &receipt)
 }
 /// Explicit operator application. Never clears an existing block or refunds a call.
 pub(crate) fn fail_pending(db: &mut Connection, c: &Config, reason: &str) -> Result<()> {
@@ -1125,11 +1027,8 @@ pub(crate) fn owner_startup_check(
             return Err("decision_owner_legacy_plan_requires_migration".into());
         }
     }
-    match authority_owner(db, &state)? {
-        Some(receipt) if receipt.owner == AuthorityOwner::Orchestrator => Ok(()),
-        Some(_) => Err("decision_owner_migration_required".into()),
-        None => Err("planner_authority_owner_missing".into()),
-    }
+    authority_owner(db, &state)?.ok_or("planner_authority_owner_missing")?;
+    Ok(())
 }
 /// None means the journal suspended/superseded the old plan; never fall back to a file.
 pub(crate) fn active_plan(db: &Connection, c: &Config) -> Result<Option<Option<Value>>> {
@@ -1179,9 +1078,7 @@ pub(crate) fn owner_ready(
         return Ok(false);
     };
     check(&state, c)?;
-    if !authority_owner(db, &state)?
-        .is_some_and(|receipt| receipt.owner == AuthorityOwner::Orchestrator)
-    {
+    if authority_owner(db, &state)?.is_none() {
         return Ok(false);
     }
     // Consistent with `activate_owner_plan`: a recoverable digest failure is
@@ -1207,11 +1104,7 @@ pub(crate) fn activate_owner_plan(
     }
     let mut state = load(db)?.ok_or("planner_event_authority_missing")?;
     check(&state, c)?;
-    match authority_owner(db, &state)? {
-        Some(receipt) if receipt.owner == AuthorityOwner::Orchestrator => {}
-        Some(_) => return Err("decision_owner_migration_required".into()),
-        None => return Err("planner_authority_owner_missing".into()),
-    }
+    authority_owner(db, &state)?.ok_or("planner_authority_owner_missing")?;
     if state.config_hash != config_hash(cfg)? {
         return Err("planner_event_configuration_changed".into());
     }
@@ -1282,10 +1175,8 @@ fn append(db: &Connection, event: &Event) -> Result<()> {
     Ok(())
 }
 
-mod authority;
 mod events;
 mod lifecycle;
-pub(crate) use authority::repair_authority;
 pub(crate) use events::*;
 pub(crate) use lifecycle::*;
 

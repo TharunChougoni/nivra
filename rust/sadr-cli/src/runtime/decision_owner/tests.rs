@@ -337,11 +337,7 @@ pub(crate) fn exercise() {
     let large = serde_json::to_vec(&first_plan).unwrap();
     assert!(large.len() > 1_000_000 && large.len() < planner::SAVED_PLAN_MAX_BYTES);
     assert!(sadr_core::native::decode(&large).is_err());
-    assert!(
-        redecision::settle(&mut db, &c, &cfg, &p, &first, Ok(first_plan), now, true,)
-            .unwrap()
-            .is_none()
-    );
+    redecision::settle(&mut db, &c, &cfg, &p, &first, Ok(first_plan), now, true).unwrap();
     let mut context = Context {
         db: &mut db,
         portfolio: &p,

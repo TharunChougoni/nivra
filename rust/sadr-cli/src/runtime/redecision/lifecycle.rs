@@ -210,7 +210,7 @@ pub(crate) fn settle(
     result: std::result::Result<Value, String>,
     now: i64,
     eligible: bool,
-) -> Result<Option<Value>> {
+) -> Result<()> {
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let mut state = load(&tx)?.ok_or("planner_event_state_missing")?;
     check(&state, c)?;
@@ -313,7 +313,7 @@ pub(crate) fn settle(
             cadence_facts = Some(facts.to_owned());
         }
     }
-    let status = PlannerLogPhase::settle(deferred, accepted.is_some(), superseded);
+    let status = PlannerLogPhase::settle(deferred, superseded);
     let record = accepted
         .clone()
         .unwrap_or_else(|| json!({"status":failure}));
@@ -345,7 +345,7 @@ pub(crate) fn settle(
     state.pending = None;
     save(&tx, &state)?;
     tx.commit()?;
-    Ok(None)
+    Ok(())
 }
 pub(crate) fn status(db: &Connection, c: &Config) -> Result<Option<Value>> {
     let Some(state) = load(db)? else {

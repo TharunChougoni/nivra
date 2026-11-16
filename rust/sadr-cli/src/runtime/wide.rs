@@ -969,9 +969,6 @@ pub(super) fn checkpoint_scanner(db: &Connection, s: &Scanner) -> Result<()> {
     Ok(())
 }
 pub(super) fn load_wide(db: &mut Connection, c: &Config) -> Result<Portfolio> {
-    load_wide_at(db, c, millis())
-}
-fn load_wide_at(db: &mut Connection, c: &Config, now: i64) -> Result<Portfolio> {
     let record: Option<(String, String)> = db
         .query_row("SELECT binding,body FROM state WHERE id=1", [], |r| {
             Ok((r.get(0)?, r.get(1)?))
@@ -986,31 +983,14 @@ fn load_wide_at(db: &mut Connection, c: &Config, now: i64) -> Result<Portfolio> 
         }
         return Err("state_binding_changed".into());
     }
-    let body = record.map(|(_, body)| body);
-    if let Some(body) = body {
-        if let Ok(mut p) = serde_json::from_str::<Portfolio>(&body) {
-            p.settings = c.execution.clone();
-            p.reconcile()?;
-            if c.paper_costs.is_none() || c.paper_costs != p.costs {
-                return Err("paper_cost_policy_changed".into());
-            }
-            return Ok(p);
+    if let Some((_, body)) = record {
+        let mut p: Portfolio = serde_json::from_str(&body)?;
+        p.settings = c.execution.clone();
+        p.reconcile()?;
+        if c.paper_costs.is_none() || c.paper_costs != p.costs {
+            return Err("paper_cost_policy_changed".into());
         }
-        let old: Book = serde_json::from_str(&body)?;
-        old.reconcile()?;
-        if old.stopped
-            || old.halted
-            || old.closed
-            || old.units != 0
-            || !old.fills.is_empty()
-            || super::local(now).date_naive() >= c.session
-        {
-            return Err("legacy_book_not_pristine_pre_session".into());
-        }
-        db.execute_batch(
-            "CREATE TABLE IF NOT EXISTS schema_history(id INTEGER PRIMARY KEY,body TEXT NOT NULL);",
-        )?;
-        db.execute("INSERT INTO schema_history(body) VALUES(?)", [body])?;
+        return Ok(p);
     }
     let carry = c.directory.join("carry-over.json");
     if carry.exists() {
@@ -1092,23 +1072,6 @@ pub(super) fn last_halt_reason(db: &Connection) -> Result<(String, &'static str)
             .optional()?
     {
         return Ok((reason, "state_transition"));
-    }
-    // Old releases recorded halt events but let shutdown overwrite health. Keep
-    // those rows intact. Any unrelated halt since the last reviewed recovery
-    // takes precedence over repeated planner incidents on an already halted book.
-    let events = db.prepare("SELECT event FROM ticks WHERE rowid>COALESCE((SELECT MAX(rowid) FROM ticks WHERE event IN ('operator_planner_recovery_confirmed_paper_review','operator_resume_confirmed_paper_review')),0) AND (event='planner_authority_invalid' OR event LIKE '%halt%') ORDER BY rowid")?.query_map([], |r|r.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;
-    if let Some(other) = events
-        .iter()
-        .rev()
-        .find(|e| e.as_str() != "planner_authority_invalid")
-    {
-        return Ok((other.clone(), "legacy_halt_events"));
-    }
-    if !events.is_empty() {
-        return Ok((
-            "planner_authority_invalid_recovery_required".into(),
-            "legacy_halt_events",
-        ));
     }
     Err("planner_recover_halt_not_eligible_halt_history_missing".into())
 }
@@ -1927,12 +1890,7 @@ fn event_tick(
             Err(std::sync::mpsc::TryRecvError::Empty) => None,
         };
         if let Some(result) = result {
-            if let Some(plan) =
-                redecision::settle(db, c, cfg, p, &pending.claim, result, now, eligible)?
-            {
-                // Compatibility projection only: SQLite already committed the head.
-                rollover::atomic(&c.directory.join("model/session-plan.json"), &plan)?;
-            }
+            redecision::settle(db, c, cfg, p, &pending.claim, result, now, eligible)?;
             *worker = None;
             return Ok(());
         }
@@ -2682,64 +2640,6 @@ pub(super) fn config_apply_with(
     }
     Ok(())
 }
-/// Offline metadata repair for a missing, malformed or stale authority marker.
-/// The controller lock proves the controller is stopped; no book state is written.
-pub(super) fn planner_authority_repair(
-    c: &Config,
-    expected_owner: &str,
-    confirm: bool,
-) -> Result<()> {
-    if !confirm {
-        return Err("planner_authority_repair_confirm_paper_review_required".into());
-    }
-    let expected_owner = match expected_owner {
-        "orchestrator" => redecision::AuthorityOwner::Orchestrator,
-        "legacy" => redecision::AuthorityOwner::Legacy,
-        _ => return Err("planner_authority_repair_expected_owner_invalid".into()),
-    };
-    let _root_lock = rollover::controller_lock(c)?;
-    let active = rollover::current(c)?;
-    let c = &active;
-    c.validate()?;
-    if LIVE_ENABLED {
-        return Err("planner_authority_repair_live_enabled".into());
-    }
-    if !c.directory.join("paper.sqlite").is_file()
-        || !c.directory.join("book-identity.json").is_file()
-    {
-        return Err("planner_authority_repair_book_missing".into());
-    }
-    let lock = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(c.directory.join("controller.lock"))?;
-    lock.try_lock_exclusive()
-        .map_err(|_| "planner_authority_repair_controller_busy")?;
-    let _lock = rollover::ControllerLock(lock);
-    let cfg = planner::PlannerConfig::load_for_session(
-        c.planner_config
-            .as_deref()
-            .ok_or("planner_config_required")?,
-        c.session,
-    )?;
-    let mut db = open_book(c)?;
-    let receipt = redecision::repair_authority(&mut db, c, &cfg, expected_owner)?;
-    println!(
-        "{}",
-        serde_json::to_string(&serde_json::json!({
-            "authority_repaired":true,
-            "kind":receipt.kind,
-            "prior_marker_sha256":receipt.prior_marker_sha256,
-            "control_config_hash":receipt.control_config_hash,
-            "current_config_hash":receipt.current_config_hash,
-            "transition":receipt.transition.as_ref().map(|transition| transition.kind.clone())
-        }))?
-    );
-    Ok(())
-}
-
 pub(super) fn resume(c: &Config, confirm: bool) -> Result<()> {
     if !confirm {
         return Err(Fail::new("resume_confirm_paper_review_required").into());

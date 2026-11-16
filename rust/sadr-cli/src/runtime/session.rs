@@ -8,7 +8,6 @@
 //! Notes live in their own store, outside the compactable log. Every mutation
 //! bumps the note-set version; a turn records the version it was built from and
 //! its action commit is refused when the set changed (#143).
-#![allow(dead_code)] // wired into the supervisor and the v1 API in stages.
 use super::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -931,6 +930,7 @@ impl Notes {
         Ok(notes)
     }
 
+    #[cfg(test)]
     pub(crate) fn add(&self, text: &str, keep: bool, now: i64) -> Result<Note> {
         let text = text.trim();
         if text.is_empty() || text.chars().count() > 2000 {
@@ -975,42 +975,6 @@ impl Notes {
                 }
             }
             Ok(changed)
-        })?;
-        Ok(notes.version)
-    }
-
-    pub(crate) fn set_keep(&self, id: &str, keep: bool, now: i64) -> Result<u64> {
-        let notes = self.update(now, |notes| {
-            let note = notes
-                .notes
-                .iter_mut()
-                .find(|note| note.id == id)
-                .ok_or("session_note_missing")?;
-            if note.keep == keep || note.state == NoteState::Cleared {
-                return Ok(false);
-            }
-            note.keep = keep;
-            note.revision = note.revision.saturating_add(1);
-            note.updated_by = "operator".into();
-            Ok(true)
-        })?;
-        Ok(notes.version)
-    }
-
-    pub(crate) fn clear(&self, id: &str, now: i64) -> Result<u64> {
-        let notes = self.update(now, |notes| {
-            let note = notes
-                .notes
-                .iter_mut()
-                .find(|note| note.id == id)
-                .ok_or("session_note_missing")?;
-            if note.state == NoteState::Cleared {
-                return Ok(false);
-            }
-            note.state = NoteState::Cleared;
-            note.revision = note.revision.saturating_add(1);
-            note.updated_by = "operator".into();
-            Ok(true)
         })?;
         Ok(notes.version)
     }

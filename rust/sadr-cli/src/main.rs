@@ -359,11 +359,6 @@ enum Command {
         #[arg(long)]
         confirm_paper_review: bool,
     },
-    /// Offline authority-marker repair from exact proof.
-    PlannerAuthority {
-        #[command(subcommand)]
-        command: PlannerAuthorityCommand,
-    },
     /// Resume a reviewed flat paper book; audit model-led activation on pristine legacy books.
     Resume {
         #[arg(long)]
@@ -372,35 +367,6 @@ enum Command {
         #[arg(long)]
         confirm_paper_review: bool,
     },
-}
-
-#[derive(Subcommand)]
-enum PlannerAuthorityCommand {
-    /// Reconstruct a missing, malformed or stale authority marker from exact proof.
-    Repair {
-        #[arg(long)]
-        config: PathBuf,
-        /// Required assertion checked against the reviewed policy and evidence.
-        #[arg(long)]
-        expected_owner: AuthorityOwnerArg,
-        #[arg(long)]
-        confirm_paper_review: bool,
-    },
-}
-
-/// The explicit owner assertion is parsed before any config file is opened.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
-enum AuthorityOwnerArg {
-    Orchestrator,
-    Legacy,
-}
-impl AuthorityOwnerArg {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Orchestrator => "orchestrator",
-            Self::Legacy => "legacy",
-        }
-    }
 }
 
 #[derive(Subcommand)]
@@ -756,17 +722,6 @@ fn main() -> ExitCode {
             config,
             confirm_paper_review,
         } => runtime::config_apply_entry(&config, confirm_paper_review),
-        Command::PlannerAuthority { command } => match command {
-            PlannerAuthorityCommand::Repair {
-                config,
-                expected_owner,
-                confirm_paper_review,
-            } => runtime::planner_authority_repair_entry(
-                &config,
-                expected_owner.as_str(),
-                confirm_paper_review,
-            ),
-        },
         Command::Resume {
             config,
             confirm_paper_review,
@@ -1341,29 +1296,6 @@ mod rollover_cli_tests {
         ] {
             assert!(parse(&invalid).is_err(), "{invalid:?}");
         }
-
-        // The authority owner is a typed CLI value: a bogus owner fails at
-        // parse time, before any config file is opened.
-        let repair = |owner: &str| {
-            Args::try_parse_from([
-                "sadr-rs",
-                "planner-authority",
-                "repair",
-                "--config",
-                "c.json",
-                "--expected-owner",
-                owner,
-                "--confirm-paper-review",
-            ])
-        };
-        assert!(repair("orchestrator").is_ok());
-        assert!(repair("legacy").is_ok());
-        assert!(repair("bogus").is_err());
-        assert!(repair("ORCHESTRATOR").is_err());
-        let help = Args::try_parse_from(["sadr-rs", "planner-authority", "repair", "--help"])
-            .err()
-            .unwrap();
-        assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
 
         // Verify dashboard-token rotate CLI parsing
         let res =

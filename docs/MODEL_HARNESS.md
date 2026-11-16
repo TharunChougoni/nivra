@@ -202,28 +202,14 @@ Starting with a policy whose config hash differs from the durable authority is
 refused rather than rewriting the authority implicitly. A halted legacy book
 cannot run `config-apply` and stays archive-only. A stopped non-halted book uses
 `config-apply`.
-For a missing, malformed or stale marker, the offline repair command
-reconstructs the marker only from the exact current authority hash and explicit
-owner, or from an audited hash transition, and appends the prior raw marker and
-proof to the private `planner_authority_audit` table:
-
-```sh
-sadr-rs planner-authority repair --config PAPER_CONFIG \
-  --expected-owner orchestrator --confirm-paper-review
-```
-
-It never changes the book, halt, blocks, active plan, attempts, usage or
-financial state. The owner is a typed argument: a bogus or uppercase value exits
-2 before any config file is opened, and a missing confirmation refuses before the
-config read. The audit table refuses UPDATE, DELETE and INSERT OR REPLACE,
-including a duplicate id. Transition steps must use strictly increasing tick
-rowids. The receipt records portfolio, Control and attempt-row hashes, not
-account or usage contents, and a recognized marker version other than 1 refuses.
+Every new authority writes its orchestrator owner marker in the same
+transaction. A missing, malformed, foreign-owner (including a stored `legacy`
+owner) or stale marker refuses as `planner_authority_owner_missing`,
+`planner_authority_owner_invalid` or `planner_authority_owner_mismatch`; no
+command reconstructs it, and such a book stays archive-only.
 Startup preserves the original active head and any stronger sticky
 data/news/configuration block; a pending claim is marked interrupted without
-replacing that block or clearing the head. The startup proof tick names
-`pre_marker_exact` or `pre_marker_hash_upgrade` with the actual prior hash and
-upgrade source. Every recovery mode shares one typed block gate: data/news blocks
+replacing that block or clearing the head. Every recovery mode shares one typed block gate: data/news blocks
 need the ordinary input proof, a configuration block is resolved by the exact
 policy rebind, and protection-only or closed recovery retains a data/news block
 because no new decision can execute. Production recovery never
@@ -1108,8 +1094,8 @@ ceiling remains. `budget_unit:"event"` shares one logical allowance across that
 role's tool continuations, retaining each actual immutable request/result and all
 failed/legacy charges. Request accounting remains the compatible default.
 
-`max_turns`, `max_read_tools` and `minimum_turn_ms` are configurable positive role
-settings; omissions keep legacy 12 turns, 16 reads and the 100-second decide floor.
+`max_turns` and `max_read_tools` are configurable positive role settings;
+omissions keep 12 turns and 16 reads.
 The scorer trigger uses its own configured role allowance in the shared usage
 namespace and is reserved once per session.
 Registered experiments remain bounded to four per invocation. Digest run cap is

@@ -494,39 +494,6 @@ pub fn config_apply_entry(path: &Path, confirm: bool) -> ExitCode {
         }
     }
 }
-pub fn planner_authority_repair_entry(
-    path: &Path,
-    expected_owner: &str,
-    confirm: bool,
-) -> ExitCode {
-    if !confirm {
-        eprintln!(
-            "planner_authority_repair_refused: planner_authority_repair_confirm_paper_review_required"
-        );
-        return ExitCode::FAILURE;
-    }
-    if !matches!(expected_owner, "orchestrator" | "legacy") {
-        eprintln!(
-            "planner_authority_repair_refused: planner_authority_repair_expected_owner_invalid"
-        );
-        return ExitCode::FAILURE;
-    }
-    let result = (|| -> Result<()> {
-        let bytes = crate::read_bounded(path, 16384).map_err(|_| "config_unreadable")?;
-        let c: Config = serde_json::from_slice(&bytes).map_err(|_| "config_invalid")?;
-        wide::planner_authority_repair(&c, expected_owner, true)
-    })();
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!(
-                "planner_authority_repair_refused: {}",
-                failure_code(error.as_ref())
-            );
-            ExitCode::FAILURE
-        }
-    }
-}
 pub fn history_recover_entry(
     path: &Path,
     now: Option<DateTime<FixedOffset>>,
