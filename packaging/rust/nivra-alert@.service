@@ -1,0 +1,12 @@
+[Unit]
+Description=Nivra redacted failure notification for %i
+After=network-online.target
+[Service]
+Type=oneshot
+ExecStart=%h/nivra-current/nivra alert --event restart_loop --config %h/.config/nivra/rust-paper.json
+UMask=0077
+NoNewPrivileges=true
+TimeoutStartSec=60
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/nivra

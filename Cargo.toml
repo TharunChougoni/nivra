@@ -1,5 +1,5 @@
 [workspace]
-members = ["rust/sadr-core", "rust/sadr-cli", "rust/sadr-store", "rust/sadr-tools", "rust/sadr-research", "rust/sadr-sandbox"]
+members = ["rust/nivra-core", "rust/nivra-cli", "rust/nivra-store", "rust/nivra-tools", "rust/nivra-research", "rust/nivra-sandbox"]
 resolver = "2"
 
 [workspace.package]

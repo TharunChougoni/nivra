@@ -19,7 +19,7 @@ test('only a stable annotated version tag on the tested commit selects a release
 });
 
 test('CI selector handles absent, lightweight, matching and old tags in a real checkout', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'sadr-release-selection-'));
+  const dir = mkdtempSync(join(tmpdir(), 'nivra-release-selection-'));
   const script = fileURLToPath(new URL('./release-selection.mjs', import.meta.url));
   const git = (...args) => execFileSync('git', ['-c', 'user.name=Fixture', '-c',
     'user.email=fixture@example.test', ...args], { cwd: dir, encoding: 'utf8' }).trim();

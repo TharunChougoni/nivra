@@ -28,7 +28,7 @@ single-use WSS URL; every connection attempt obtains a new one. URLs, codes,
 tokens and provider error bodies are never logged. Only TLS Upstox hosts are
 accepted. Subscribe requests are binary JSON; responses are V3 protobuf. Ping
 frames receive pong replies. The checked-in schema is
-[MarketDataFeed.proto](../rust/sadr-cli/src/runtime/market_feed/MarketDataFeed.proto),
+[MarketDataFeed.proto](../rust/nivra-cli/src/runtime/market_feed/MarketDataFeed.proto),
 from [Upstox's schema](https://assets.upstox.com/feed/market-data-feed/v3/MarketDataFeed.proto).
 
 ## Configuration
@@ -203,7 +203,7 @@ Index context is additive and read-only: the dashboard status carries an
 bps/fresh, and `tradeable: false`), and the model digest carries `index_context`
 in the `get_market_snapshot` output. An optional `index_feeds.regime`
 (`RegimeConfig`) classifies index session return/gap and index minute returns
-through `sadr_core::regime`; the label is advisory digest context only and grants
+through `nivra_core::regime`; the label is advisory digest context only and grants
 no trade authority. A configured regime requires `min_instruments` not to exceed
 the configured index key count. Once `NSE_INDEX|` is in the quote-key prefix
 allowlist, the v3 history path accepts the same keys and percent-encodes the

@@ -55,7 +55,7 @@ trading-policy hash. The controller reloads it only when no digest or decide is 
 flight. An invalid profile keeps the previous one, logs
 `experiment_profile_rejected`, and does not halt. A valid change writes
 `experiment_profile_applied` and alerts once. Check a file with
-`sadr-rs planner profile-check`.
+`nivra planner profile-check`.
 
 Luna returns factual held-position observations, coverage and gaps using the
 owner digest schema. Legacy opinion-bearing `positions_review` records are
@@ -145,7 +145,7 @@ no `decision_owner`, `decide` or `handoff_gate` key. An enabled policy requires
 an enabled orchestrator with an enabled supervisor trigger, an enabled digest
 and enabled events; a missing prerequisite is refused at load with its specific
 `decision_owner_*` code. The policy is reviewable without applying
-it via `sadr-rs planner config-check --planner FILE --session DATE`, which reports
+it via `nivra planner config-check --planner FILE --session DATE`, which reports
 the policy hash and refuses a missing prerequisite. It never writes a policy.
 
 The decision-owner policy provides the digest-to-orchestrator path.
@@ -235,12 +235,12 @@ reviewed config that adds them.
 `model/model-selection.json` is a versioned, session-bound runtime setting. It
 records the active revision, one pending revision and a bounded receipt history
 with the policy hash, model identity and credential hash (never credential
-contents). `sadr-rs agent model show --config PAPER_CONFIG --json` reports the
+contents). `nivra agent model show --config PAPER_CONFIG --json` reports the
 configured model, admitted profiles, active and pending revisions, and the last
-receipt. `sadr-rs agent model set --config PAPER_CONFIG --model NAME --json`
+receipt. `nivra agent model set --config PAPER_CONFIG --model NAME --json`
 validates the profile against the current policy, then writes a durable pending
 revision; `--expect-revision` and a lock serialize concurrent edits.
-`sadr-rs agent model reload --config PAPER_CONFIG --selection-config FILE --json`
+`nivra agent model reload --config PAPER_CONFIG --selection-config FILE --json`
 reads a bounded version 1 JSON selection file containing only `version` and
 `profile`, then follows that same validation and receipt path. It supports the
 same revision and request-ID guards. The separate selection file does not alter
@@ -261,7 +261,7 @@ structured output are still checked by the existing per-call admission. A
 selection file is scoped to one session/book binding; a new trading session
 starts with the configured `default` model.
 
-A persistent policy-level switch is a different operation. `sadr-rs model
+A persistent policy-level switch is a different operation. `nivra model
 select --role orchestrator|digest` rewrites only that role's model identity in a
 new planner config and adopts it through the reviewed `config-apply` transition,
 so the next session starts on the new model. It can only choose an already
@@ -273,17 +273,17 @@ audited config transition. See
 
 ### Local operator questions and owner instructions
 
-`sadr-rs agent ask` writes only the controller's existing read-only
+`nivra agent ask` writes only the controller's existing read-only
 `aside-request.json`; the controller answers it with its read-only aside
 instance and publishes `aside-reply.json`. The CLI never wakes the controller
 and never writes a book, journal, note or directive from `ask`. A bounded
 `model/agent-requests.json` index persists the request id, idempotency key,
-session, expiry and terminal answer or failure. `sadr-rs agent result` polls
+session, expiry and terminal answer or failure. `nivra agent result` polls
 that index and the external aside files by id; it never resubmits. A started
 aside also writes `aside-start.json` so `queued` and `running` remain distinct.
 `cancel` removes only a matching aside request, never the controller or session.
 
-`sadr-rs agent instruct` appends a typed owner directive to the existing
+`nivra agent instruct` appends a typed owner directive to the existing
 `model/directives.ndjson` store with target `owner`, an authorization scope of
 `review_only` or `decision_context`, an exact expected session and instruction
 revision, and a bounded expiry. The decision owner sees it through the existing
@@ -829,7 +829,7 @@ sandbox network stays disabled by default; the reviewed `workspace.network`
 setting is an explicit opt-in for scanner scripts, mounts only read-only host
 resolver/CA material and never exposes the host root, credentials or the trading
 book. The post-close scorer sandbox refuses network unconditionally.
-`sadr-rs experiment-lifecycle` can ingest a stored advisory report into the
+`nivra experiment-lifecycle` can ingest a stored advisory report into the
 A4 lifecycle; scores still do not become orders.
 `workspace_run.input` is a nullable JSON-encoded object string (validated by the
 host); `input_path` is a nullable workspace path. Supply at most one, or nulls
@@ -890,11 +890,11 @@ captures the host machine identity before claiming the shared queue slot; an
 unavailable identity refuses the still-Pending task with
 `machine_identity_unavailable` and no launch receipt. It then writes an immutable
 `candidate_launch` receipt and starts exactly one
-`sadr-candidate-<lease>.service` unit. The unit runs the fixed,
-content-addressed `sadr-rs candidate-supervise` helper with a minimal
+`nivra-candidate-<lease>.service` unit. The unit runs the fixed,
+content-addressed `nivra candidate-supervise` helper with a minimal
 environment; the helper re-verifies the staged source/params/dataset, helper and
 interpreter/bwrap hashes, and executes the existing no-network
-`sadr_sandbox::score_source` bwrap path. The controller never starts a process
+`nivra_sandbox::score_source` bwrap path. The controller never starts a process
 group fallback and never signals a raw PID or PGID.
 
 The only release proof is a typed `CandidateUnitProof` read from the original
@@ -1077,7 +1077,7 @@ this capability.
 
 Owner-research-task candidates remain `insufficient_evidence` with no edge
 qualification until a strategy specification, replay and forward evidence are
-recorded separately. `sadr-rs experiment-lifecycle` persists that path, including
+recorded separately. `nivra experiment-lifecycle` persists that path, including
 ingestion of workspace scanner reports
 Eligible is not an edge and does not authorize activation.
 

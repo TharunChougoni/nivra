@@ -12,7 +12,7 @@ are in [AGENTS](../AGENTS.md).
 
 The repository is Cargo-only: one workspace, one `Cargo.lock`, six crates and a
 pinned Rust toolchain (`1.95.0`, edition 2024). The controller binary is
-`sadr-rs`; `sadr-tools` owns release assembly and repository checks. The release
+`nivra`; `nivra-tools` owns release assembly and repository checks. The release
 target is `x86_64-unknown-linux-musl`.
 
 Keep `target/` on a local SSD or NVMe volume. A fresh clone or worktree starts
@@ -28,10 +28,10 @@ Run this sequence from the repository root:
 cargo fmt --all --check
 cargo build --workspace --all-targets --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-SADR_REQUIRE_SCORER_SANDBOX=1 cargo test --workspace --locked
-target/debug/sadr-tools test-budget
-target/debug/sadr-tools check-release
-npm test --prefix rust/sadr-cli/src/runtime/web/v2
+NIVRA_REQUIRE_SCORER_SANDBOX=1 cargo test --workspace --locked
+target/debug/nivra-tools test-budget
+target/debug/nivra-tools check-release
+npm test --prefix rust/nivra-cli/src/runtime/web/v2
 ```
 
 Why this order:
@@ -41,17 +41,17 @@ Why this order:
   with the dev `test-util` feature.
 - `cargo build --workspace` is redundant after `--all-targets`; it is not a
   separate gate step.
-- Never run `cargo run -p sadr-tools` in the gate. It resolves features for that
+- Never run `cargo run -p nivra-tools` in the gate. It resolves features for that
   package alone and rebuilds shared dependencies. Build once, then execute
-  `target/debug/sadr-tools` directly.
+  `target/debug/nivra-tools` directly.
 - Run one heavy build at a time when the desktop is also in use. The gate is
   CPU- and link-bound; parallel cargo builds compete for memory.
 
 For iterative work, check only the crate you changed:
 
 ```sh
-cargo check -p sadr-cli
-cargo test -p sadr-cli --lib
+cargo check -p nivra-cli
+cargo test -p nivra-cli --lib
 ```
 
 Use the full gate before committing to `main`.
@@ -63,7 +63,7 @@ Use the same profile that produces the release musl artifacts:
 ```sh
 cargo build --release --locked --offline \
   --target x86_64-unknown-linux-musl \
-  -p sadr-cli --bin sadr-rs --bin sadr-analysis
+  -p nivra-cli --bin nivra --bin nivra-analysis
 ```
 
 The release profile keeps thin LTO, strips debug info, and sets
@@ -72,7 +72,7 @@ binary-size increase is not worth a serial multi-minute codegen pass. Check the
 result with:
 
 ```sh
-target/x86_64-unknown-linux-musl/release/sadr-rs self-check \
+target/x86_64-unknown-linux-musl/release/nivra self-check \
   --expected-version vX.Y.Z
 ```
 
@@ -105,7 +105,7 @@ Prefer a targeted clean for a single crate when you need to break a stale
 artifact:
 
 ```sh
-cargo clean -p sadr-cli
+cargo clean -p nivra-cli
 ```
 
 Incremental compilation is useful during an edit loop. Set
@@ -130,13 +130,13 @@ can hide a real build failure.
 
 `.github/workflows/ci.yml` runs formatting + Clippy and the test suite in
 parallel jobs, restores `Swatinem/rust-cache@v2`, sets `CARGO_INCREMENTAL=0`,
-builds `--all-targets` once, and runs the two `sadr-tools` checks from
+builds `--all-targets` once, and runs the two `nivra-tools` checks from
 `target/debug` instead of through `cargo run`. It uploads the already-built
-`sadr-tools` assembler for successful push-main runs (30-day retention).
+`nivra-tools` assembler for successful push-main runs (30-day retention).
 
 The fast release workflow verifies the exact SHA's latest CI run and all three
 required jobs, downloads that assembler, and uses a separate musl cache with
-workspace crates enabled. It builds only `sadr-rs` and `sadr-analysis`,
+workspace crates enabled. It builds only `nivra` and `nivra-analysis`,
 smoke-checks and publishes; there is no repeated test gate, frontend install or
 GNU build.
 

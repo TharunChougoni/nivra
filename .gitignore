@@ -33,7 +33,7 @@ token*.txt
 /.vm/
 
 # Stale nested repo copy
-/ind-sadr/
+/nivra/
 
 # Editor / OS
 .DS_Store

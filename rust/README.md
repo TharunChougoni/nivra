@@ -1,7 +1,7 @@
 # Rust workspace
 
-Members: `sadr-core`, `sadr-cli` (binary `sadr-rs`), `sadr-store`, `sadr-tools`,
-`sadr-research`, and `sadr-sandbox` (CLI-free scorer/replay containment API).
+Members: `nivra-core`, `nivra-cli` (binary `nivra`), `nivra-store`, `nivra-tools`,
+`nivra-research`, and `nivra-sandbox` (CLI-free scorer/replay containment API).
 Toolchain pinned in `rust-toolchain.toml`; dependencies pinned in `Cargo.lock`.
 Version comes from the root `Cargo.toml`.
 
@@ -9,7 +9,7 @@ See [architecture](../docs/ARCHITECTURE.md) and
 [development](../docs/DEVELOPMENT.md).
 See [strategy sandbox](../docs/STRATEGY_SANDBOX.md) for containment behavior.
 
-`sadr-rs memory-check` reads one explicit non-secret JSON file (≤16 KiB) and
+`nivra memory-check` reads one explicit non-secret JSON file (≤16 KiB) and
 reports whether declared peaks fit a budget. It doesn't measure a host or
 authorize installation.
 

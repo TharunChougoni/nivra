@@ -1,0 +1,28 @@
+[Unit]
+Description=Nivra Rust PAPER ONLY daily controller and read-only dashboard
+After=network-online.target
+Wants=network-online.target
+OnFailure=nivra-alert@%n.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+[Service]
+Type=simple
+ExecStartPre=%h/nivra-current/nivra preflight --config %h/.config/nivra/rust-paper.json
+ExecStart=%h/nivra-current/nivra paper --config %h/.config/nivra/rust-paper.json
+Restart=on-failure
+RestartSec=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/nivra-data %h/.config/nivra %h/.local/state/nivra
+# Persistent staging shared with transient workers, outside PrivateTmp.
+ReadWritePaths=-/var/lib/nivra-research
+MemoryHigh=1G
+MemoryMax=1280M
+MemorySwapMax=256M
+TasksMax=32
+LimitNOFILE=256
+[Install]
+WantedBy=default.target

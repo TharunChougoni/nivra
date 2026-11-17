@@ -1,18 +1,18 @@
 # Architecture
 
-Cargo-only workspace; `sadr-rs` owns the paper controller and embedded dashboard.
+Cargo-only workspace; `nivra` owns the paper controller and embedded dashboard.
 No live order transport is enabled.
 
 | Crate | Ownership |
 | --- | --- |
-| `sadr-core` | Decimal finance, fees, instruments/calendar, quotes, paper execution and replay |
-| `sadr-store` | SQLite ledger, durable control/read journals, writer bindings |
-| `sadr-cli` | Controller, scanner, model harness, history, dashboard, recovery and updater |
-| `sadr-research` | Registered jobs, leases, sandbox worker and result contracts |
-| `sadr-sandbox` | CLI-free scorer/replay containment API |
-| `sadr-tools` | Release assembly/checks, streaming replay and progress tooling |
+| `nivra-core` | Decimal finance, fees, instruments/calendar, quotes, paper execution and replay |
+| `nivra-store` | SQLite ledger, durable control/read journals, writer bindings |
+| `nivra-cli` | Controller, scanner, model harness, history, dashboard, recovery and updater |
+| `nivra-research` | Registered jobs, leases, sandbox worker and result contracts |
+| `nivra-sandbox` | CLI-free scorer/replay containment API |
+| `nivra-tools` | Release assembly/checks, streaming replay and progress tooling |
 
-The shared financial engine is `sadr-core`; the paper controller and offline
+The shared financial engine is `nivra-core`; the paper controller and offline
 replay both call it. The research lane is separate from the trading lane and
 cannot place, size or promote a trade.
 
@@ -61,7 +61,7 @@ See [operations](OPERATIONS.md) and [harness](MODEL_HARNESS.md). Future work is
 tracked in [GitHub Issues](https://github.com/TharunChougoni/nivra/issues).
 
 The financial freshness gate derives both clock units from
-`sadr_core::market::MAX_FINANCIAL_AGE: Duration` (two seconds). `_MS` is used
+`nivra_core::market::MAX_FINANCIAL_AGE: Duration` (two seconds). `_MS` is used
 for execution clocks and `_MICROS` for market receipts; receipt timestamps are
 still archived unchanged.
 

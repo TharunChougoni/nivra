@@ -17,7 +17,7 @@ metadata, not automatically the Cargo version. There is no automatic model rewri
 
 ## Commands and grant ownership
 
-Use `sadr-rs model login|list|status|probe --help` for the exact CLI. Each transport
+Use `nivra model login|list|status|probe --help` for the exact CLI. Each transport
 uses its own configured private grant. `status` is read-only; list/probe may refresh
 an expiring grant under one exclusive owner. All Grok roles can name the same model
 config so refresh is shared rather than copied per role.

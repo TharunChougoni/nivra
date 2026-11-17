@@ -92,8 +92,8 @@ output directory with an explicitly identified simulation book. It never copies
 or resets an original session's usage authority.
 
 ```sh
-sadr-rs paper-replay-demo --output /tmp/paper-day-inputs
-sadr-rs paper-replay \
+nivra paper-replay-demo --output /tmp/paper-day-inputs
+nivra paper-replay \
   --manifest /tmp/paper-day-inputs/manifest.json \
   --events /tmp/paper-day-inputs/events.jsonl \
   --planner /tmp/paper-day-inputs/planner.json \
@@ -110,7 +110,7 @@ fixture verifies no fill and no book halt.
 ## Genuine quote archives
 
 ```sh
-sadr-rs paper-replay-export \
+nivra paper-replay-export \
   --source-session /path/to/original/session \
   --capital PAPER_CAPITAL --max-gap-ms 60000 \
   --history /path/to/validated/history \
@@ -129,7 +129,7 @@ planner and a response transcript to `paper-replay`.
 
 ## Archive fill reconciliation
 
-`sadr-rs strategy-lab reconcile-archive --manifest capture-manifest.json
+`nivra strategy-lab reconcile-archive --manifest capture-manifest.json
 --events capture-events.jsonl --fills fills.json --output new-report.json`
 recomputes fees from the configured paper cost schedule, compares recorded fill
 prices with adverse tick-aware execution against the last executable quote at or
