@@ -1847,7 +1847,6 @@ pub(crate) fn exercise() {
             "supervisor",
             &[],
             false,
-            false,
             &super::super::planner::ToolsSettings::default()
         )
         .unwrap(),

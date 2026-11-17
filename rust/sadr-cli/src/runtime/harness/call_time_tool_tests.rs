@@ -43,7 +43,7 @@ fn bundle() -> Value {
 #[test]
 fn schemas_use_configured_limits_and_digest_has_no_search() {
     let settings = limits();
-    let digest = configured_definitions_with("digest", &[], false, false, &settings).unwrap();
+    let digest = configured_definitions_with("digest", &[], false, &settings).unwrap();
     let names: Vec<&str> = digest
         .iter()
         .filter_map(|tool| tool["name"].as_str())
@@ -85,13 +85,12 @@ fn schemas_use_configured_limits_and_digest_has_no_search() {
         tool("get_recent_decisions")["parameters"]["properties"]["limit"]["maximum"],
         2
     );
-    assert!(configured_definitions_with("decide", &[], false, false, &settings).is_err());
+    assert!(configured_definitions_with("decide", &[], false, &settings).is_err());
     // OpenAI strict function schemas require every property in `required`;
     // optional arguments are nullable instead (#123).
     let owner = call_tool_definitions(
         "supervisor",
         &[],
-        false,
         false,
         &settings,
         OwnerTools {
@@ -143,7 +142,6 @@ fn schemas_use_configured_limits_and_digest_has_no_search() {
         "supervisor",
         &[],
         false,
-        false,
         &settings,
         OwnerTools {
             research: true,
@@ -174,7 +172,6 @@ fn schemas_use_configured_limits_and_digest_has_no_search() {
     let research_turn = call_tool_definitions(
         "supervisor",
         &[],
-        false,
         false,
         &settings,
         OwnerTools {
@@ -227,7 +224,7 @@ fn schemas_use_configured_limits_and_digest_has_no_search() {
     assert_eq!(enabled_tools["research_turn"], true);
     assert_eq!(enabled_tools["quote_capture"], true);
     let web_names = |owner: OwnerTools| -> Vec<String> {
-        call_tool_definitions("supervisor", &[], false, false, &settings, owner)
+        call_tool_definitions("supervisor", &[], false, &settings, owner)
             .unwrap()
             .iter()
             .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
@@ -255,7 +252,6 @@ fn schemas_use_configured_limits_and_digest_has_no_search() {
         call_tool_definitions(
             "digest",
             &[],
-            false,
             false,
             &settings,
             OwnerTools {
@@ -343,15 +339,14 @@ fn schemas_use_configured_limits_and_digest_has_no_search() {
         );
     }
     assert!(
-        configured_definitions_with("digest", &["web_search".into()], false, false, &settings)
-            .is_err()
+        configured_definitions_with("digest", &["web_search".into()], false, &settings).is_err()
     );
 }
 
 #[test]
 fn call_limits_unknown_data_and_execution_authority_are_explicit() {
     let settings = limits();
-    let tools = configured_definitions_with("digest", &[], false, false, &settings).unwrap();
+    let tools = configured_definitions_with("digest", &[], false, &settings).unwrap();
     let call = |name: &str, args: Value| json!({"type":"function_call","call_id":"call_fixture","name":name,"arguments":args.to_string()});
     assert!(
         checked_call_with(
@@ -662,7 +657,7 @@ fn final_answer_frames_use_the_roles_own_prompt() {
 #[test]
 fn prompt_tool_lists_match_the_configured_definitions() {
     let settings = ToolsSettings::default();
-    let digest = configured_definitions_with("digest", &[], false, false, &settings).unwrap();
+    let digest = configured_definitions_with("digest", &[], false, &settings).unwrap();
     for tool in &digest {
         let name = tool["name"].as_str().unwrap();
         assert!(DATA_OWNER_PROMPT.contains(name), "Luna prompt omits {name}");

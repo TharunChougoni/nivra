@@ -290,10 +290,6 @@ pub(crate) fn frame_preflight(
     if frame.review_only && (!frame.final_answer_only || frame.role != "supervisor") {
         return Err("harness_final_tools_invalid".into());
     }
-    let has_research = frame
-        .tools
-        .iter()
-        .any(|t| t["name"] == "run_registered_analysis");
     if frame.final_answer_only {
         if !frame.review_only || !frame.tools.is_empty() {
             return Err("harness_final_tools_invalid".into());
@@ -306,7 +302,6 @@ pub(crate) fn frame_preflight(
         let expected = crate::runtime::harness::call_tool_definitions(
             &frame.role,
             &role.tools,
-            has_research,
             frame.decision_evidence,
             &limits,
             frame.owner_tools,

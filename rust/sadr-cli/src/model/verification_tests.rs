@@ -213,7 +213,7 @@ fn provider_diagnostics_and_probe_are_bounded_and_redacted() {
     let frame = crate::runtime::harness::Frame {
         role: "digest".into(),
         input: vec![json!({"role":"user","content":"synthetic"})],
-        tools: crate::runtime::harness::definitions("digest", &role.tools, true).unwrap(),
+        tools: crate::runtime::harness::definitions("digest", &role.tools).unwrap(),
         citation_ids: vec![],
         final_answer_only: false,
         review_only: false,
@@ -239,14 +239,8 @@ fn provider_diagnostics_and_probe_are_bounded_and_redacted() {
     let context_frame = crate::runtime::harness::Frame {
         decision_evidence: true,
         max_instrument_keys: Some(1),
-        tools: crate::runtime::harness::configured_definitions(
-            "digest",
-            &role.tools,
-            true,
-            true,
-            1,
-        )
-        .unwrap(),
+        tools: crate::runtime::harness::configured_definitions("digest", &role.tools, true, 1)
+            .unwrap(),
         ..serde_json::from_value(serde_json::to_value(&frame).unwrap()).unwrap()
     };
     assert_eq!(

@@ -38,13 +38,11 @@ impl MarketDataTransportSettings {
 #[serde(default, deny_unknown_fields)]
 pub struct StorageSettings {
     pub read_journal_busy_timeout_ms: u64,
-    pub registry_busy_timeout_ms: u64,
 }
 impl Default for StorageSettings {
     fn default() -> Self {
         Self {
             read_journal_busy_timeout_ms: 1000,
-            registry_busy_timeout_ms: 250,
         }
     }
 }
@@ -844,7 +842,6 @@ impl Config {
             || !(1..=MAX_IDLE_POLL_INTERVAL_MS).contains(&self.idle_poll_interval_ms)
             || !(1..=120_000).contains(&self.market_data_transport.http_timeout_ms)
             || !(1..=60_000).contains(&self.storage.read_journal_busy_timeout_ms)
-            || !(1..=60_000).contains(&self.storage.registry_busy_timeout_ms)
             || !(1..=300_000).contains(&self.dashboard.refresh_interval_ms)
         {
             return Err(Fail::new("invalid_runtime_timing_settings").into());

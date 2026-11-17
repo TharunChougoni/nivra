@@ -27,7 +27,6 @@ fn offered(owner: OwnerTools) -> bool {
         "supervisor",
         &[],
         false,
-        false,
         &planner::ToolsSettings::default(),
         owner,
     )

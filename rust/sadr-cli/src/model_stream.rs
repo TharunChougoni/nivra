@@ -351,7 +351,6 @@ impl Decoder {
                                 "get_market_snapshot",
                                 "get_instrument_features",
                                 "get_intraday_context",
-                                "run_registered_analysis",
                             ]
                             .contains(s)
                         })

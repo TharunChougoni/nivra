@@ -692,11 +692,9 @@ explicit; daily bars never become live quotes.
   record with its query or URL, latency, bytes and outcome. Results are
   untrusted public evidence, never official filings, quotes, fills or execution
   authority.
-- `run_registered_analysis({"analysis_id":...,"dataset_id":...})`: trusted aliases,
-  never model-supplied paths/scripts/limits. See [worker](RESEARCH_WORKER.md).
 
 Strict argument schemas, unique call IDs and whole-batch validation apply before
-any local dispatch. Duplicate analysis/dataset pairs cannot relaunch within a run.
+any local dispatch.
 
 An oversized result becomes an explicit `unavailable_no_retry` tool failure with
 original byte count/hash and the existing output limit. It contributes no successful

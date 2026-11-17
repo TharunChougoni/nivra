@@ -226,21 +226,20 @@ fn function(name: &str, description: &str, properties: Value, required: Value) -
     json!({"type":"function","name":name,"description":description,"strict":true,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})
 }
 #[cfg(test)]
-pub(crate) fn definitions(role: &str, native: &[String], research: bool) -> Result<Vec<Value>> {
-    definitions_with(role, native, research, &ToolsSettings::default())
+pub(crate) fn definitions(role: &str, native: &[String]) -> Result<Vec<Value>> {
+    definitions_with(role, native, &ToolsSettings::default())
 }
 
 pub(crate) fn definitions_with(
     role: &str,
     native: &[String],
-    research: bool,
     limits: &ToolsSettings,
 ) -> Result<Vec<Value>> {
     instructions(role)?;
     if matches!(role, "scorer" | "supervisor") {
         return Ok(Vec::new());
     }
-    if role == "digest" && !native.is_empty() {
+    if !native.is_empty() {
         return Err("harness_data_tools_invalid".into());
     }
     let max_keys = limits.max_instrument_keys;
@@ -250,27 +249,13 @@ pub(crate) fn definitions_with(
         json!({"evidence_id":{"type":"string","enum":["bundle","portfolio","shortlist","fees","session_evidence"]}}),
         json!(["evidence_id"]),
     )];
-    if role == "digest" {
-        tools.push(function("get_instrument_features","Read dated historical features for unique allowlisted instruments, including names outside the scanner picks. Duplicate keys are folded in first-seen order. Missing/stale history is explicit; never a quote or fill.",json!({"instrument_keys":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":max_keys}}),json!(["instrument_keys"])));
-        tools.push(function("get_market_snapshot","Read a new quote for unique instruments in today's validated allowlist. Duplicate keys are folded in first-seen order. Receipt/source time is original. This tool never places an order or extends freshness.",json!({"instrument_keys":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":max_keys}}),json!(["instrument_keys"])));
-        tools.push(function("get_scanner_prospects","Read the call-time scanner prospects in scanner rank order with sampled moves, market-relative moves, bid/ask depth, ages and the current trigger reason. Missing or stale scans are explicit, never zero.",json!({"limit":{"type":["integer","null"],"minimum":1,"maximum":limits.scanner_limit},"sort":{"type":["string","null"],"enum":["scanner","change_bps","market_relative_bps","symbol",null]}}),json!(["limit","sort"])));
-        tools.push(function("rank_universe","Rank the full validated allowlist by dated historical features. Returns compact rows with as_of/current flags. Missing history is explicit, never a quote or fill.",json!({"sort_by":{"type":["string","null"],"enum":["return_1d","return_5d","return_20d","volume_z_score","gap","liquidity","volatility_20d",null]},"order":{"type":["string","null"],"enum":["asc","desc",null]},"limit":{"type":["integer","null"],"minimum":1,"maximum":limits.ranking_limit},"min_liquidity":{"type":["number","null"],"minimum":0}}),json!(["sort_by","order","limit","min_liquidity"])));
-        tools.push(function("get_portfolio","Read current cash, positions, exit intents, marks, available-to-sell units and book state. Never an order or execution authorization.",json!({}),json!([])));
-        tools.push(function("get_recent_decisions","Read the latest digest review, prior decision-owner plans with their gate outcome, and post-close advisory memory. All entries are untrusted prior observations.",json!({"limit":{"type":["integer","null"],"minimum":1,"maximum":limits.history_limit}}),json!(["limit"])));
-        tools.push(function("get_session_status","Read the host clock, market phase, minutes to close, book state, role budget remaining and current trigger. No execution authority.",json!({}),json!([])));
-    }
-    if role != "digest" && research {
-        tools.push(function("run_registered_analysis","Run one pre-reviewed analysis and dataset alias in the network-disabled resource-limited sandbox. No paths, code, shell, retries, holdout access or strategy promotion.",json!({"analysis_id":{"type":"string"},"dataset_id":{"type":"string"}}),json!(["analysis_id","dataset_id"])));
-    }
-    for name in native {
-        if !["web_search", "x_search"].contains(&name.as_str()) {
-            return Err("harness_tool_not_allowed".into());
-        }
-        if tools.iter().any(|t| t["type"] == *name) {
-            return Err("harness_duplicate_tool".into());
-        }
-        tools.push(json!({"type":name}));
-    }
+    tools.push(function("get_instrument_features","Read dated historical features for unique allowlisted instruments, including names outside the scanner picks. Duplicate keys are folded in first-seen order. Missing/stale history is explicit; never a quote or fill.",json!({"instrument_keys":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":max_keys}}),json!(["instrument_keys"])));
+    tools.push(function("get_market_snapshot","Read a new quote for unique instruments in today's validated allowlist. Duplicate keys are folded in first-seen order. Receipt/source time is original. This tool never places an order or extends freshness.",json!({"instrument_keys":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":max_keys}}),json!(["instrument_keys"])));
+    tools.push(function("get_scanner_prospects","Read the call-time scanner prospects in scanner rank order with sampled moves, market-relative moves, bid/ask depth, ages and the current trigger reason. Missing or stale scans are explicit, never zero.",json!({"limit":{"type":["integer","null"],"minimum":1,"maximum":limits.scanner_limit},"sort":{"type":["string","null"],"enum":["scanner","change_bps","market_relative_bps","symbol",null]}}),json!(["limit","sort"])));
+    tools.push(function("rank_universe","Rank the full validated allowlist by dated historical features. Returns compact rows with as_of/current flags. Missing history is explicit, never a quote or fill.",json!({"sort_by":{"type":["string","null"],"enum":["return_1d","return_5d","return_20d","volume_z_score","gap","liquidity","volatility_20d",null]},"order":{"type":["string","null"],"enum":["asc","desc",null]},"limit":{"type":["integer","null"],"minimum":1,"maximum":limits.ranking_limit},"min_liquidity":{"type":["number","null"],"minimum":0}}),json!(["sort_by","order","limit","min_liquidity"])));
+    tools.push(function("get_portfolio","Read current cash, positions, exit intents, marks, available-to-sell units and book state. Never an order or execution authorization.",json!({}),json!([])));
+    tools.push(function("get_recent_decisions","Read the latest digest review, prior decision-owner plans with their gate outcome, and post-close advisory memory. All entries are untrusted prior observations.",json!({"limit":{"type":["integer","null"],"minimum":1,"maximum":limits.history_limit}}),json!(["limit"])));
+    tools.push(function("get_session_status","Read the host clock, market phase, minutes to close, book state, role budget remaining and current trigger. No execution authority.",json!({}),json!([])));
     Ok(tools)
 }
 
@@ -278,7 +263,6 @@ pub(crate) fn definitions_with(
 pub(crate) fn configured_definitions(
     role: &str,
     native: &[String],
-    research: bool,
     context: bool,
     max_keys: usize,
 ) -> Result<Vec<Value>> {
@@ -286,20 +270,19 @@ pub(crate) fn configured_definitions(
         max_instrument_keys: max_keys,
         ..ToolsSettings::default()
     };
-    configured_definitions_with(role, native, research, context, &limits)
+    configured_definitions_with(role, native, context, &limits)
 }
 
 pub(crate) fn configured_definitions_with(
     role: &str,
     native: &[String],
-    research: bool,
     context: bool,
     limits: &ToolsSettings,
 ) -> Result<Vec<Value>> {
     if !(1..=MAX_INSTRUMENT_KEYS).contains(&limits.max_instrument_keys) {
         return Err("harness_snapshot_args_invalid".into());
     }
-    let mut tools = definitions_with(role, native, research, limits)?;
+    let mut tools = definitions_with(role, native, limits)?;
     if context && role == "digest" {
         tools.push(function("get_intraday_context", "Read frozen receipt-derived minute price bars, aligned market-relative returns and optional sourced VWAP/volume proxies for unique keys. Duplicate keys are folded in first-seen order. Missing/stale fields are explicit; no execution authority.",json!({"instrument_keys":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":limits.max_instrument_keys}}),json!(["instrument_keys"])));
     }
@@ -631,12 +614,10 @@ fn owner_review_for_call(
     super::owner_tasks::validate_review_bundle(c, cfg, bundle, guard.invocation_id)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn definitions_for_call(
     cfg: &PlannerConfig,
     name: &str,
     native: &[String],
-    research: bool,
     context: bool,
     limits: &ToolsSettings,
     bundle: &Value,
@@ -649,7 +630,6 @@ fn definitions_for_call(
     call_tool_definitions(
         name,
         native,
-        research,
         context,
         limits,
         owner_tools_for_call(cfg, name, bundle, guard),
@@ -687,7 +667,6 @@ fn owner_tools_for_call(
 pub(crate) fn call_tool_definitions(
     name: &str,
     native: &[String],
-    research: bool,
     context: bool,
     limits: &ToolsSettings,
     owner: OwnerTools,
@@ -695,7 +674,7 @@ pub(crate) fn call_tool_definitions(
     if !owner.is_empty() && name != "supervisor" {
         return Err("harness_owner_tools_invalid".into());
     }
-    let mut tools = configured_definitions_with(name, native, research, context, limits)?;
+    let mut tools = configured_definitions_with(name, native, context, limits)?;
     if owner.research {
         tools.extend(owner_research_tool_definitions());
     }
@@ -783,12 +762,6 @@ fn owner_task_id_ok(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AnalysisArgs {
-    analysis_id: String,
-    dataset_id: String,
-}
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OwnerResearchEnqueueArgs {
@@ -854,7 +827,6 @@ enum Tool {
     Snapshot(Vec<String>),
     Context(Vec<String>),
     Features(Vec<String>),
-    Analysis(String, String),
     OwnerResearchEnqueue(OwnerResearchEnqueueArgs),
     OwnerResearchStatus(String, u32),
     OwnerResearchResult(String, u32),
@@ -1288,20 +1260,6 @@ fn checked_call_with(
         "get_session_status" => {
             let _: Value = serde_json::from_value(args)?;
             Tool::Session
-        }
-        "run_registered_analysis" => {
-            let a: AnalysisArgs = serde_json::from_value(args)?;
-            for s in [&a.analysis_id, &a.dataset_id] {
-                if s.is_empty()
-                    || s.len() > 64
-                    || !s
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
-                {
-                    return Err("harness_analysis_alias_invalid".into());
-                }
-            }
-            Tool::Analysis(a.analysis_id, a.dataset_id)
         }
         "research_task_enqueue" => {
             let a: OwnerResearchEnqueueArgs = serde_json::from_value(args)?;
@@ -2432,18 +2390,7 @@ pub(super) fn run_collect(
     // frames always carry their exact instructions.
     let custom_prompt =
         cfg.prompt_set().is_some_and(|prompts| prompts.custom()) || name == "supervisor";
-    let tools = definitions_for_call(
-        cfg,
-        name,
-        &role.tools,
-        cfg.research_tools
-            .as_ref()
-            .is_some_and(|settings| !settings.registrations.is_empty()),
-        context,
-        &tool_limits,
-        bundle,
-        guard,
-    )?;
+    let tools = definitions_for_call(cfg, name, &role.tools, context, &tool_limits, bundle, guard)?;
     // Provider-native calls are admitted only when this frame advertises them.
     // A sealed review advertises none even when the role configures web tools.
     let advertised_native: Vec<String> = tools
@@ -2479,7 +2426,6 @@ pub(super) fn run_collect(
     };
     let mut input = vec![json!({"role":"user","content":content})];
     let mut seen = BTreeSet::new();
-    let mut analyses = BTreeSet::new();
     let mut owner_task_keys = BTreeSet::new();
     let mut tool_citations = BTreeSet::new();
     let mut reads = 0;
@@ -2794,11 +2740,6 @@ pub(super) fn run_collect(
                     if !seen.insert(id.clone()) {
                         return Err("harness_duplicate_call_no_replay".into());
                     }
-                    if let Tool::Analysis(a, d) = &tool
-                        && !analyses.insert((a.clone(), d.clone()))
-                    {
-                        return Err("harness_analysis_no_replay".into());
-                    }
                     if let Tool::OwnerResearchEnqueue(args) = &tool
                         && !owner_task_keys.insert(args.task_key.clone())
                     {
@@ -2852,23 +2793,15 @@ pub(super) fn run_collect(
             reads += calls
                 .iter()
                 .filter(|(_, t)| {
-                    !matches!(
-                        t,
-                        Tool::Analysis(_, _)
-                            | Tool::OwnerResearchEnqueue(_)
-                            | Tool::CandidateSubmit(_)
-                    ) && !matches!(t, Tool::Workspace(op) if op.is_analysis())
+                    !matches!(t, Tool::OwnerResearchEnqueue(_) | Tool::CandidateSubmit(_))
+                        && !matches!(t, Tool::Workspace(op) if op.is_analysis())
                 })
                 .count();
             experiments += calls
                 .iter()
                 .filter(|(_, t)| {
-                    matches!(
-                        t,
-                        Tool::Analysis(_, _)
-                            | Tool::OwnerResearchEnqueue(_)
-                            | Tool::CandidateSubmit(_)
-                    ) || matches!(t, Tool::Workspace(op) if op.is_analysis())
+                    matches!(t, Tool::OwnerResearchEnqueue(_) | Tool::CandidateSubmit(_))
+                        || matches!(t, Tool::Workspace(op) if op.is_analysis())
                 })
                 .count();
             if reads > role.max_read_tools.unwrap_or(16) || experiments > role.max_analysis_tools {
@@ -2892,7 +2825,6 @@ pub(super) fn run_collect(
                     Tool::Snapshot(_) => "get_market_snapshot",
                     Tool::Features(_) => "get_instrument_features",
                     Tool::Context(_) => "get_intraday_context",
-                    Tool::Analysis(_, _) => "run_registered_analysis",
                     Tool::OwnerResearchEnqueue(_) => "research_task_enqueue",
                     Tool::OwnerResearchStatus(_, _) => "research_task_status",
                     Tool::OwnerResearchResult(_, _) => "research_task_result",
@@ -2922,20 +2854,6 @@ pub(super) fn run_collect(
                     Tool::Context(keys) => backend
                         .intraday_context(&keys, now())
                         .unwrap_or_else(|| Err("decision_evidence_unavailable".into())),
-                    Tool::Analysis(a, d) => research::execute(
-                        cfg.research_tools
-                            .as_ref()
-                            .ok_or("harness_analysis_disabled")?,
-                        &a,
-                        &d,
-                        &digest(archive.as_os_str().as_encoded_bytes()),
-                        &key,
-                        &c.directory.join("model"),
-                        || {
-                            guard.check().is_err()
-                                || clock.elapsed_ms().saturating_sub(budget_start) > budget_ms
-                        },
-                    ),
                     Tool::OwnerResearchEnqueue(args) => owner_research_task(
                         c,
                         cfg,
