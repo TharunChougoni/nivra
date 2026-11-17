@@ -631,15 +631,10 @@ fn daily_index_records_three_finished_runs_and_exact_estimated_cost() {
     assert_eq!(lines[3]["role"], "supervisor");
     assert_eq!(lines[3]["trigger_kind"], "session_open");
     assert_eq!(lines[3]["outcome"], "accepted");
-    let archive = fs::read_dir(c.directory.join("model"))
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.path())
-        .find(|path| {
-            path.file_name()
-                .is_some_and(|name| name.to_string_lossy().starts_with("harness-supervisor-"))
-        })
-        .unwrap();
+    let archive = c
+        .directory
+        .join("model")
+        .join(lines[3]["run"].as_str().unwrap());
     let events =
         super::super::transcript::read(&archive.join("transcript.ndjson"), 1_000_000).unwrap();
     assert_eq!(events[0]["kind"], "run_started");

@@ -317,6 +317,7 @@ fn accept_stopped_carry(c: &Config, confirmed: bool, now: i64) -> Result<Value> 
         .custom_flags(libc::O_NOFOLLOW)
         .open(c.directory.join("controller.lock"))?;
     lock.try_lock_exclusive()?;
+    let _lock = AdvisoryLock::new(lock);
     let (db, body) = bound_state(&c)?;
     if let Some(previous) = accepted_stopped_carry(&c, &db, &body)? {
         return Ok(previous);
@@ -429,6 +430,7 @@ fn accept_halted_carry(c: &Config, confirmed: bool, now: i64) -> Result<Value> {
         .custom_flags(libc::O_NOFOLLOW)
         .open(c.directory.join("controller.lock"))?;
     lock.try_lock_exclusive()?;
+    let _lock = AdvisoryLock::new(lock);
     let (db, body) = bound_state(&c)?;
     if let Some(previous) = accepted_halted_carry(&c, &db, &body)? {
         return Ok(previous);

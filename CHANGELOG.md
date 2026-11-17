@@ -1,5 +1,14 @@
 # Source snapshot
 
+## 0.10.1 — 2026-11-17
+
+Fix the transcript index test to inspect the supervisor archive named by its
+recorded run ID. Filesystem directory order could select an earlier supervisor
+run and fail CI despite correct recorded output. Explicitly release stopped-
+and halted-carry acceptance locks with the existing advisory guard, so concurrent
+process creation cannot keep a completed operation locked. Includes the 0.10.0 cleanup
+below; that source tag did not pass CI and has no binary release.
+
 ## 0.10.0 — 2026-11-17
 
 Keep one paper decision path. Luna compiles factual digests and the persistent
