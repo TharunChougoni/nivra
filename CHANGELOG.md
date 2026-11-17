@@ -1,5 +1,25 @@
 # Source snapshot
 
+## 0.10.0 — 2026-11-17
+
+Keep one paper decision path. Luna compiles factual digests and the persistent
+orchestrator owns actions, sizes, holding periods and exits. Remove the retired
+Decide role, handoff gates, legacy policy migrations and repair commands. Old
+usage reservations and archived transcripts retain their original identities.
+Planner configs must use the owner-only shape and pass reviewed `config-apply`
+before an existing book resumes.
+
+Rename the crates, binaries, environment variables, release assets and service
+templates to Nivra. Add `nivra host-migrate` to review and apply the one-time
+installation transition while preserving bound book and credential paths. The
+command defaults to a dry run and requires `--during-market-hours` inside the
+activation window. It never starts a service or resumes a book.
+
+Remove the retired dashboard routes and Decide identity filter, split large
+runtime modules, and delete unreachable financial and storage implementations.
+The offline full-day demo now records factual digest attempts without running
+the persistent owner or creating fills. Live orders remain disabled.
+
 ## 0.9.33 — 2026-11-16
 
 Tighten the bounded prompt inputs. Replay now keeps at most 4 KB for one replayed

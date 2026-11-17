@@ -1,9 +1,9 @@
 # Dashboard
 
 The React workspace is served at `/` as committed static assets. There is no
-Node, CDN or provider call on page load. Legacy `/legacy/`, `/assets/dashboard.*`
-and `/api/model-*` paths are not served; unknown non-v1 paths return 404. The
-updater probes `/api/v1/health`; no legacy `/api/status` alias is served.
+Node, CDN or provider call on page load. The older `/legacy/`, `/v2/`,
+`/assets/dashboard.*`, `/api/model-*` and `/api/status` paths are not served;
+unknown non-v1 paths return 404. The updater probes `/api/v1/health`.
 Unfinished work and telemetry qualification are tracked in
 [GitHub Issues](https://github.com/TharunChougoni/nivra/issues).
 
@@ -42,7 +42,7 @@ Radix UI, Lucide icons and uPlot. It is a presentation layer; the Rust runtime
 owns trading. The operator builds pinned npm dependencies
 locally; the generated static `bundle/` is committed and embedded in the Rust
 binary. There is no Node service, SSR, CDN, remote font or runtime package
-installation. The bundle is served from `/`; the former `/v2/` aliases return 404.
+installation. The bundle is served from `/`.
 `/SOURCES.md` and `/LICENSES.txt` carry the vendored-source and licence manifest.
 
 The eight sections are Overview, Models, Portfolio & fills, Sessions, Market
@@ -98,16 +98,15 @@ wordmark and standalone arrow are retained.
   catalog**, projected only from the validated NSE cash EQ session universe. It
   shows symbol, series, tick and source-file hashes; before preparation it stays
   explicitly unavailable. F&O, option chains and margin data are not exposed.
-- **Strategies** shows strategy references projected by scanner prospects
-  (spec ID, version, hash, scan ID and recorded score), plus research jobs and
-  reviews carried by session rows. Strategy library snapshots, active selection
-  and switch history are explicitly unavailable because the v1 scanner does not
-  expose them; no library record is reconstructed from prospect references.
+- **Strategies** has two tabs. **Strategy references** shows references
+  projected by scanner prospects (spec ID, version, hash, scan ID and recorded
+  score); no library record is reconstructed from them. **Library & switches**
+  shows the registered-research library described below.
 - **Backtest lab** takes an original manifest/events pair, uses the existing
   local bounded replay endpoint and shows actual replay equity points, fees,
   fills and hash provenance. Synthetic examples are labelled; results stay in
   component memory and can be exported as JSON.
-- **Health** separates transport, three model identities, original role/task
+- **Health** separates transport, the Digest and Orchestrator identities, original role/task
   approvals, feed/history readiness and unconnected independent telemetry. It
   also shows the controller's read-only activity attribution when supplied:
   candidate conversion, abstentions, after-cost P&L, turnover/cost drag,
@@ -328,7 +327,7 @@ header is present on JSON, long-poll and SSE authentication responses.
 | `GET /api/v1/alerts?cursor=&limit=` | Stable derived alert rows with original evidence and `next`. |
 | `GET /api/v1/series?kind=receipt-minute-bar&instrument=&from=&to=&limit=` | Bounded receipt-derived minute bars with classified coverage gaps (`no_trade`/`unobserved`), store/session-start clocks and `watermark_ms`. |
 | `GET /api/v1/series?kind=account-equity&from=&to=&limit=` | Bounded recorded portfolio checkpoints with cash, equity and mark basis. |
-| `GET /api/v1/runs` | Newest-day-first transcript index with `cursor`, `limit` (1–100, default 50), `role`, `identity` (`digest`, `decide` or `orchestrator`), `date`, `trigger`, `outcome`, `instrument` and `failed=1`. |
+| `GET /api/v1/runs` | Newest-day-first transcript index with `cursor`, `limit` (1–100, default 50), `role`, `identity` (`all`, `digest` or `orchestrator`; any other value is `400 run_identity_invalid`), `date`, `trigger`, `outcome`, `instrument` and `failed=1`. |
 | `GET /api/v1/runs/{id}` | Transcript detail with `legacy`, `running` and `events`; large fields carry lazy `blob` pointers. |
 | `GET /api/v1/runs/{id}/blobs/{name}?offset=&len=` | Bounded redacted byte slice with `X-Blob-Size`; only recorded pointers and numbered request/response artifacts are allowed. |
 | `GET /api/v1/prompts/{sha}` | Content-addressed, redacted `text/plain` prompt after SHA-256 validation. |
@@ -338,9 +337,9 @@ Finished transcripts and prompts use private immutable caching; unfinished
 transcripts, the list and meta revalidate with ETags. Private responses vary by
 `Authorization`. Snapshot and financial projections stay `no-store`/`private,
 no-cache`. `price_batch` frames carry their own `batch_seq` and no `id:` line;
-`Last-Event-ID` continues to address only the model-event ring. Untouched legacy
-paths (`/api/model-*`, `/api/backtest`, `/legacy/`, `/assets/dashboard.*`) stay
-404. The workspace reads the split v1 projections. Offline replay is
+`Last-Event-ID` continues to address only the model-event ring. The older
+`/api/model-*`, `/api/backtest`, `/legacy/` and `/assets/dashboard.*` paths
+return 404. The workspace reads the split v1 projections. Offline replay is
 `GET /api/v1/backtest/example` and `POST /api/v1/backtest`; it still refuses
 while a session can trade.
 
@@ -390,10 +389,11 @@ conflict handling and dry-run/apply commands.
 
 ## Orchestrator run view
 
-The Models view groups the live Digest and Orchestrator identities. Archived
-Decide runs retain their original archive label and are never merged into owner
-usage. Operations, strategy and scorer names describe original trigger tasks,
-not additional live decision peers. Credentials and allowances stay independent.
+The Models view groups the live Digest and Orchestrator identities. The
+Orchestrator identity covers supervisor, orchestrator and scorer runs; scorer
+names a trigger task, not an additional decision peer. Archived `decide` runs
+keep their original archive label, appear only under the `role` filter and are
+never merged into owner usage. Credentials and allowances stay independent.
 
 The left column lists runs. Each entry shows a trigger badge, start time in IST,
 duration in milliseconds, outcome and total tokens. The list filters by trigger
@@ -521,8 +521,7 @@ eligibility and conflict handling.
 explicit paper/live status, account alias, broker roles and dashboard limits. It
 uses ETags and `Cache-Control: private, no-cache`. V1 queries have a fixed 2 KiB
 wire bound, strict UTF-8 percent decoding, and reject duplicate/unknown keys.
-V1 errors include `v:1`; unknown v1 paths return 404. Legacy endpoints and assets
-retain their existing routing/authentication behavior.
+V1 errors include `v:1`; unknown v1 paths return 404.
 
 `GET /api/v1/runs` lists daily indexes newest day first with opaque `cursor`,
 `limit` (1–100; default 50), `role`, `date`, `trigger`, `outcome`, `instrument`

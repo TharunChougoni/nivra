@@ -10,11 +10,11 @@ Issues and leave handoff detail in Git history.
 - **Paper only.** No live orders or live activation without a separate, explicit
   live mandate from the repository owner. A tag, install or passing build never
   authorizes a session.
-- Models select paper actions/sizes/holding periods. Under the reviewed
-  `decision_owner` policy, Luna compiles factual digests and the persistent
-  orchestrator owns decisions; legacy policies remain readable for reviewed
-  migration and archive access. Deterministic code owns validation, credentials,
-  cash/fees, fills and protection. The reviewed model-led paper policy has no
+- Models select paper actions/sizes/holding periods. Luna compiles factual
+  digests and the persistent orchestrator owns decisions. Planner configs use
+  the owner-only shape; older usage journals and transcripts remain readable as
+  archive evidence. Deterministic code owns validation, credentials, cash/fees,
+  fills and protection. The reviewed model-led paper policy has no
   added trading risk caps. No eligible evidence means no model call; no silent
   fallback.
 - Keep broker, account, instrument and session identities explicit. Never retry
@@ -69,8 +69,9 @@ NIVRA_REQUIRE_SCORER_SANDBOX=1 cargo test --workspace --locked  # ~15-20s, no re
 target/debug/nivra-tools test-budget && target/debug/nivra-tools check-release
 ```
 
-`test-budget` must print `400/400`; replace or merge an existing test instead of
-raising it.
+`test-budget` must report a count at most 400; the limit is a ceiling, not a
+target. Replace or merge existing tests when the limit is reached. Never add
+filler tests or raise the limit to land a change.
 
 - Skip a separate `cargo build --workspace`. `--all-targets` covers it, and a
   plain build after the tests rebuilds tokio and nivra-cli because the dev

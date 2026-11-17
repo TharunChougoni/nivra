@@ -459,9 +459,9 @@ failure fails closed before another scan-trigger model enqueue. Trusted explicit
 imports remain available for other archived evidence.
 
 The runtime producer also appends exact frozen model-input scan manifests/chunks,
-verified digest/gate artifact references, actual Grok decision references, attributed
-fills and changing position snapshots. Luna wait outcomes remain handoffs rather
-than fictitious Grok decisions. Identical already-recorded facts are verified;
+verified digest artifact references, owner decision references, attributed fills
+and changing position snapshots. Historical handoff and gate artifacts retain
+their original evidence kinds when read from an archive. Identical already-recorded facts are verified;
 conflicting IDs fail closed without overwriting evidence. A post-execution ledger
 failure preserves the committed financial fill and prevents subsequent model work.
 Older or carried evidence without the required lineage is explicitly unknown.
@@ -678,7 +678,7 @@ key as the deterministic tie-break. Unscored or rejected prospects are omitted,
 then the existing presentation/shortlist limits apply. The resulting prospects
 feed the same scanner candidates, trigger and depth-shortlist paths as the default
 ranking. They do **not** create orders, bypass validation or risk controls, or
-replace Grok's decision. `LIVE_ENABLED` remains false; this is paper ranking only.
+replace the owner's decision. `LIVE_ENABLED` remains false; this is paper ranking only.
 
 Every live path falls back to the default ranking and logs
 `strategy_selection_fallback` with a stable reason/detail when the selector

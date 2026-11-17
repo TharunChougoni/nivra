@@ -69,7 +69,7 @@ fn vectors() -> Vectors {
     ))
     .unwrap();
     assert_eq!(vectors.schema_version, 1);
-    assert_eq!(vectors.reference, "python-nivra");
+    assert_eq!(vectors.reference, "python-sadr");
     assert_eq!(vectors.reference_decimal_precision, 28);
     assert_eq!(vectors.reference_domain_sha256.len(), 64);
     assert!(

@@ -1,6 +1,6 @@
 //! One-time, off-hours move of an installed `ind-sadr` paper host to the
-//! `nivra` layout. Dry run by default; `--apply` converges to the same end state
-//! however often it runs.
+//! `nivra` layout. Dry run by default; ambiguous retained artifacts require
+//! operator review before another apply.
 //!
 //! Only locations the new binary hard-codes move: the deploy directory, the
 //! updater state directory, the release pointer and the units. The book binding
@@ -15,20 +15,19 @@ use chrono::{DateTime, FixedOffset};
 use fs2::FileExt;
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     fs,
     io::Write,
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::ExitCode,
 };
 
 type R<T> = std::result::Result<T, &'static str>;
 
-/// Kept directories the configs, units and persisted bindings name.
 const CONFIG_DIR: &str = ".config/ind-sadr";
 const DATA_DIR: &str = "ind-sadr-data";
 const RESEARCH_STAGE: &str = "/var/lib/ind-sadr-research";
-/// Home-relative locations the new binary hard-codes; renamed on one filesystem.
 const RENAMES: [(&str, &str); 2] = [
     ("ind-sadr-deploy", "nivra-deploy"),
     (".local/state/ind-sadr", ".local/state/nivra"),
@@ -36,7 +35,6 @@ const RENAMES: [(&str, &str); 2] = [
 const OLD_CURRENT: &str = "ind-sadr-rust-current";
 const BACKUP_SUFFIX: &str = "pre-nivra";
 const NEXT_SUFFIX: &str = "nivra-next";
-/// Interrupted updater transactions need their own reviewed recovery first.
 const UPDATER_REVIEW: [&str; 3] = [
     "pending.json",
     "pending-review.json",
@@ -73,7 +71,6 @@ enum Kind {
 
 enum Step {
     Install(PathBuf),
-    /// Backup the original beside it, then switch in the validated bytes.
     Rewrite {
         path: PathBuf,
         before: Vec<u8>,
@@ -116,11 +113,11 @@ struct Plan {
     steps: Vec<Step>,
     release: StagedRelease,
     paper: Config,
+    inputs: BTreeMap<PathBuf, Vec<u8>>,
     book: Value,
     next: &'static str,
 }
 
-/// Every string leaf under a renamed root moves with it; nothing else changes.
 fn repath(value: &mut Value, home: &Path, at: &str, added: &mut Vec<String>) {
     match value {
         Value::String(text) => {
@@ -150,7 +147,6 @@ fn repath(value: &mut Value, home: &Path, at: &str, added: &mut Vec<String>) {
     }
 }
 
-/// Remove `path` (`*` matches every key at that level), recording what went.
 fn drop_key(value: &mut Value, path: &[&str], at: &str, removed: &mut Vec<String>) {
     let Some(map) = value.as_object_mut() else {
         return;
@@ -182,7 +178,6 @@ fn drop_key(value: &mut Value, path: &[&str], at: &str, removed: &mut Vec<String
     }
 }
 
-/// Keys this branch removed from the config types (`.audit` U4/U5 rewrite list).
 fn removed_keys(kind: Kind) -> &'static [&'static [&'static str]] {
     match kind {
         Kind::Paper => &[&["allow_legacy_model_led_default"]],
@@ -215,8 +210,6 @@ fn removed_keys(kind: Kind) -> &'static [&'static [&'static str]] {
     }
 }
 
-/// Pin a default the old binary derived from `~/.config/ind-sadr` or
-/// `~/ind-sadr-data`, so the renamed binary's new default never applies.
 fn pin(
     map: &mut serde_json::Map<String, Value>,
     key: &str,
@@ -260,13 +253,27 @@ fn read(path: &Path) -> R<Vec<u8>> {
     fs::read(path).map_err(|_| "host_migrate_config_unreadable")
 }
 
+fn read_input(path: &Path, inputs: &mut BTreeMap<PathBuf, Vec<u8>>) -> R<Vec<u8>> {
+    if let Some(bytes) = inputs.get(path) {
+        return Ok(bytes.clone());
+    }
+    let bytes = read(path)?;
+    inputs.insert(path.to_owned(), bytes.clone());
+    Ok(bytes)
+}
+
 fn parse(bytes: &[u8]) -> R<Value> {
     serde_json::from_slice(bytes).map_err(|_| "host_migrate_config_invalid")
 }
 
-/// The rewritten bytes for one config, or `None` when it is already migrated.
-fn rewrite(home: &Path, path: &Path, kind: Kind, fresh: Option<Value>) -> R<Option<Step>> {
-    let before = read(path)?;
+fn rewrite(
+    home: &Path,
+    path: &Path,
+    kind: Kind,
+    fresh: Option<Value>,
+    inputs: &mut BTreeMap<PathBuf, Vec<u8>>,
+) -> R<Option<Step>> {
+    let before = read_input(path, inputs)?;
     let original = parse(&before)?;
     let mut value = fresh.unwrap_or_else(|| original.clone());
     let (mut removed, mut added) = (Vec::new(), Vec::new());
@@ -300,8 +307,12 @@ fn rewrite(home: &Path, path: &Path, kind: Kind, fresh: Option<Value>) -> R<Opti
     after.push(b'\n');
     validate(kind, path, &after)?;
     let backup = sibling(path, BACKUP_SUFFIX);
-    if fs::symlink_metadata(&backup).is_ok() && fs::read(&backup).ok().as_ref() != Some(&before) {
+    if fs::symlink_metadata(&backup).is_ok() && !private_matches(&backup, &before, 0o600) {
         return Err("host_migrate_backup_conflict");
+    }
+    let next = sibling(path, NEXT_SUFFIX);
+    if fs::symlink_metadata(&next).is_ok() && !private_matches(&next, &after, 0o600) {
+        return Err("host_migrate_next_conflict");
     }
     Ok(Some(Step::Rewrite {
         path: path.to_owned(),
@@ -323,7 +334,6 @@ fn string_at<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key).and_then(Value::as_str)
 }
 
-/// Every `model_config` file the planner names, deduplicated in order.
 fn model_configs(value: &Value, out: &mut Vec<PathBuf>) {
     match value {
         Value::Object(map) => {
@@ -342,7 +352,6 @@ fn model_configs(value: &Value, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// `%h`-relative form of an absolute path for a unit file.
 fn unit_path(home: &Path, path: &Path) -> String {
     match path.strip_prefix(home) {
         Ok(rest) => format!("%h/{}", rest.display()),
@@ -350,7 +359,6 @@ fn unit_path(home: &Path, path: &Path) -> String {
     }
 }
 
-/// Packaged units with the kept config/data/research paths substituted.
 fn render(home: &Path, paper: &Path, updater: &Path, template: &str) -> R<Vec<u8>> {
     let text = template
         .replace("%h/.config/nivra/rust-paper.json", &unit_path(home, paper))
@@ -364,7 +372,6 @@ fn render(home: &Path, paper: &Path, updater: &Path, template: &str) -> R<Vec<u8
     Ok(text.into_bytes())
 }
 
-/// An existing lock file held by another process refuses; an absent one is free.
 fn lock_free(path: &Path) -> R<()> {
     let Ok(file) = fs::OpenOptions::new().write(true).open(path) else {
         return Ok(());
@@ -374,8 +381,6 @@ fn lock_free(path: &Path) -> R<()> {
     Ok(())
 }
 
-/// Held for the whole apply so no controller, operator command or updater
-/// starts while directories and configs change.
 fn hold(path: &Path) -> R<fs::File> {
     let file = fs::OpenOptions::new()
         .write(true)
@@ -390,7 +395,6 @@ fn hold(path: &Path) -> R<fs::File> {
     Ok(file)
 }
 
-/// Controller (sessions root, live session) and updater (deploy, state) lock files.
 fn lock_paths(home: &Path, paper: &Config, live: &Config) -> R<Vec<PathBuf>> {
     let root = paper
         .sessions_root
@@ -422,23 +426,36 @@ fn book_facts(live: &Config) -> R<(Value, &'static str)> {
     if anchor["binding"] != binding {
         return Err("host_migrate_book_binding_mismatch");
     }
-    let body = super::open_book_immutable(&live.directory.join("paper.sqlite"))
-        .ok()
-        .and_then(|db| {
-            db.query_row("SELECT body FROM state WHERE id=1", [], |r| {
-                r.get::<_, String>(0)
-            })
-            .ok()
+    let path = live.directory.join("paper.sqlite");
+    let metadata =
+        fs::symlink_metadata(&path).map_err(|_| "host_migrate_book_identity_mismatch")?;
+    if !metadata.is_file()
+        || anchor["device"] != metadata.dev()
+        || anchor["inode"] != metadata.ino()
+    {
+        return Err("host_migrate_book_identity_mismatch");
+    }
+    let state = super::open_book_immutable(&path).ok().and_then(|db| {
+        db.query_row("SELECT binding,body FROM state WHERE id=1", [], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })
-        .and_then(|body| serde_json::from_str::<nivra_core::execution::Portfolio>(&body).ok());
+        .ok()
+    });
+    let body = match state {
+        Some((bound, _)) if bound != binding => {
+            return Err("host_migrate_book_binding_mismatch");
+        }
+        Some((_, body)) => serde_json::from_str::<nivra_core::execution::Portfolio>(&body).ok(),
+        None => None,
+    };
     let Some(p) = body else {
         return Ok((
             json!({"session":live.session.to_string(),"binding":"matches","state":"unreadable"}),
             "inspect_book_readiness",
         ));
     };
-    let next = if p.halted {
-        "planner_recover_required"
+    let next = if p.stopped || p.halted {
+        "preserve_stopped_or_halted_book"
     } else if p.closed {
         "start_service_successor_binds_new_policy"
     } else {
@@ -457,14 +474,18 @@ fn plan(home: &Path, stage: &Path) -> R<Plan> {
         return Err("host_migrate_release_version_mismatch");
     }
     let config = home.join(CONFIG_DIR);
+    let mut inputs = BTreeMap::new();
     let updater_path = config.join("updater.json");
-    let updater = parse(&read(&updater_path)?)?;
+    let updater = parse(&read_input(&updater_path, &mut inputs)?)?;
     let paper_path = PathBuf::from(
         string_at(&updater, "paper_config").ok_or("host_migrate_updater_paper_config_missing")?,
     );
-    // A staged second updater config must name the same paper config.
-    if let Ok(bytes) = read(&config.join("updater-nivra.json"))
-        && string_at(&parse(&bytes)?, "paper_config") != paper_path.to_str()
+    let staged_updater = config.join("updater-nivra.json");
+    if fs::symlink_metadata(&staged_updater).is_ok()
+        && string_at(
+            &parse(&read_input(&staged_updater, &mut inputs)?)?,
+            "paper_config",
+        ) != paper_path.to_str()
     {
         return Err("host_migrate_updater_configs_disagree");
     }
@@ -474,10 +495,10 @@ fn plan(home: &Path, stage: &Path) -> R<Plan> {
     }
 
     let mut rewrites = Vec::new();
-    let paper_step = rewrite(home, &paper_path, Kind::Paper, None)?;
+    let paper_step = rewrite(home, &paper_path, Kind::Paper, None, &mut inputs)?;
     let paper_bytes = match &paper_step {
         Some(Step::Rewrite { after, .. }) => after.clone(),
-        _ => read(&paper_path)?,
+        _ => read_input(&paper_path, &mut inputs)?,
     };
     rewrites.extend(paper_step);
     let paper: Config =
@@ -486,34 +507,50 @@ fn plan(home: &Path, stage: &Path) -> R<Plan> {
         .planner_config
         .clone()
         .ok_or("host_migrate_planner_config_required")?;
-    let planner_value = parse(&read(&planner_path)?)?;
-    rewrites.extend(rewrite(home, &planner_path, Kind::Planner, None)?);
+    let planner_value = parse(&read_input(&planner_path, &mut inputs)?)?;
+    rewrites.extend(rewrite(
+        home,
+        &planner_path,
+        Kind::Planner,
+        None,
+        &mut inputs,
+    )?);
     if let Some(profile) = string_at(&planner_value, "experiment_profile") {
-        rewrites.extend(rewrite(home, Path::new(profile), Kind::Profile, None)?);
+        rewrites.extend(rewrite(
+            home,
+            Path::new(profile),
+            Kind::Profile,
+            None,
+            &mut inputs,
+        )?);
     }
     let mut models = Vec::new();
     model_configs(&planner_value, &mut models);
     for model in models {
-        let kind = if parse(&read(&model)?)?.get("api_key_file").is_some() {
+        let kind = if parse(&read_input(&model, &mut inputs)?)?
+            .get("api_key_file")
+            .is_some()
+        {
             Kind::Fallback
         } else {
             Kind::Model
         };
-        rewrites.extend(rewrite(home, &model, kind, None)?);
+        rewrites.extend(rewrite(home, &model, kind, None, &mut inputs)?);
     }
-    rewrites.extend(rewrite(home, &updater_path, Kind::Updater, Some(fresh))?);
+    rewrites.extend(rewrite(
+        home,
+        &updater_path,
+        Kind::Updater,
+        Some(fresh),
+        &mut inputs,
+    )?);
 
     let live = rollover::current(&paper).map_err(|_| "host_migrate_session_unavailable")?;
     let (book, next) = book_facts(&live)?;
     for path in lock_paths(home, &paper, &live)? {
         lock_free(&path)?;
     }
-    let (old_state, new_state) = RENAMES[1];
-    for dir in [home.join(old_state), home.join(new_state)] {
-        if UPDATER_REVIEW.iter().any(|f| dir.join(f).exists()) {
-            return Err("host_migrate_update_transaction_requires_review");
-        }
-    }
+    no_update_transaction(home)?;
 
     let mut steps = Vec::new();
     let releases = home.join("nivra-releases");
@@ -560,40 +597,89 @@ fn plan(home: &Path, stage: &Path) -> R<Plan> {
     for (name, template) in UNITS {
         let path = units.join(name);
         let bytes = render(home, &paper_path, &updater_path, template)?;
-        match fs::read(&path) {
-            Ok(existing) if existing == bytes => {}
-            Ok(_) => return Err("host_migrate_unit_conflict"),
-            Err(_) => steps.push(Step::Unit { path, bytes }),
+        if fs::symlink_metadata(&path).is_ok() {
+            if !private_matches(&path, &bytes, 0o644) {
+                return Err("host_migrate_unit_conflict");
+            }
+        } else {
+            steps.push(Step::Unit { path, bytes });
         }
     }
-    // Config switches come last: until then every original is untouched.
     steps.extend(rewrites);
     Ok(Plan {
         steps,
         release,
         paper,
+        inputs,
         book,
         next,
     })
 }
 
 fn write_private(path: &Path, bytes: &[u8], mode: u32, create_new: bool) -> R<()> {
-    let mut options = fs::OpenOptions::new();
-    options
-        .write(true)
-        .mode(mode)
-        .custom_flags(libc::O_NOFOLLOW);
-    if create_new {
-        options.create_new(true);
-    } else {
-        options.create(true).truncate(true);
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    if !create_new && fs::symlink_metadata(path).is_ok() {
+        return if private_matches(path, bytes, mode) {
+            Ok(())
+        } else {
+            Err("host_migrate_next_conflict")
+        };
     }
-    let mut file = options
-        .open(path)
-        .map_err(|_| "host_migrate_write_failed")?;
+    let mut pending = None;
+    for _ in 0..128 {
+        let staged = sibling(
+            path,
+            &format!(
+                "pending.{}.{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ),
+        );
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&staged)
+        {
+            Ok(file) => {
+                pending = Some((staged, file));
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => return Err("host_migrate_write_failed"),
+        }
+    }
+    let (pending, mut file) = pending.ok_or("host_migrate_write_failed")?;
     file.write_all(bytes)
+        .and_then(|_| file.set_permissions(fs::Permissions::from_mode(mode)))
         .and_then(|_| file.sync_all())
-        .map_err(|_| "host_migrate_write_failed")
+        .map_err(|_| "host_migrate_write_failed")?;
+    sync_parent(&pending)?;
+    update::publish_noreplace(&pending, path).map_err(|_| "host_migrate_write_failed")
+}
+
+fn private_matches(path: &Path, bytes: &[u8], mode: u32) -> bool {
+    let Ok(owner) = fs::metadata("/proc/self") else {
+        return false;
+    };
+    fs::symlink_metadata(path).is_ok_and(|meta| {
+        meta.is_file()
+            && meta.nlink() == 1
+            && meta.uid() == owner.uid()
+            && meta.mode() & 0o7777 == mode
+    }) && update::read(path, 262_144).is_ok_and(|existing| existing == bytes)
+}
+
+fn no_update_transaction(home: &Path) -> R<()> {
+    let (old_state, new_state) = RENAMES[1];
+    for dir in [home.join(old_state), home.join(new_state)] {
+        if UPDATER_REVIEW.iter().any(|f| dir.join(f).exists()) {
+            return Err("host_migrate_update_transaction_requires_review");
+        }
+    }
+    Ok(())
 }
 
 fn sync_parent(path: &Path) -> R<()> {
@@ -609,7 +695,50 @@ fn apply(home: &Path, plan: &Plan) -> R<()> {
         .filter(|path| path.parent().is_some_and(Path::exists))
         .map(|path| hold(path))
         .collect::<R<Vec<_>>>()?;
-    // Stage every config change before any original moves.
+    let current = rollover::current(&plan.paper).map_err(|_| "host_migrate_session_unavailable")?;
+    if current.session != live.session || current.directory != live.directory {
+        return Err("host_migrate_session_changed");
+    }
+    let (book, next) = book_facts(&current)?;
+    if book != plan.book || next != plan.next {
+        return Err("host_migrate_book_state_changed");
+    }
+    no_update_transaction(home)?;
+    let staged_updater = home.join(CONFIG_DIR).join("updater-nivra.json");
+    if fs::symlink_metadata(&staged_updater).is_ok() != plan.inputs.contains_key(&staged_updater) {
+        return Err("host_migrate_config_changed");
+    }
+    for (path, before) in &plan.inputs {
+        if read(path).as_ref() != Ok(before) {
+            return Err("host_migrate_config_changed");
+        }
+    }
+    for step in &plan.steps {
+        if let Step::Rewrite {
+            path,
+            before,
+            after,
+            ..
+        } = step
+        {
+            for (path, bytes, conflict) in [
+                (
+                    sibling(path, BACKUP_SUFFIX),
+                    before,
+                    "host_migrate_backup_conflict",
+                ),
+                (
+                    sibling(path, NEXT_SUFFIX),
+                    after,
+                    "host_migrate_next_conflict",
+                ),
+            ] {
+                if fs::symlink_metadata(&path).is_ok() && !private_matches(&path, bytes, 0o600) {
+                    return Err(conflict);
+                }
+            }
+        }
+    }
     for step in &plan.steps {
         if let Step::Rewrite {
             path,
@@ -619,10 +748,19 @@ fn apply(home: &Path, plan: &Plan) -> R<()> {
         } = step
         {
             let backup = sibling(path, BACKUP_SUFFIX);
-            if fs::symlink_metadata(&backup).is_err() {
-                write_private(&backup, before, 0o600, true)?;
+            if !private_matches(&backup, before, 0o600)
+                && let Err(error) = write_private(&backup, before, 0o600, true)
+                && !private_matches(&backup, before, 0o600)
+            {
+                return Err(error);
             }
-            write_private(&sibling(path, NEXT_SUFFIX), after, 0o600, false)?;
+            let next = sibling(path, NEXT_SUFFIX);
+            if let Err(error) = write_private(&next, after, 0o600, false)
+                && !private_matches(&next, after, 0o600)
+            {
+                return Err(error);
+            }
+            sync_parent(path)?;
         }
     }
     for step in &plan.steps {
@@ -662,11 +800,11 @@ fn apply(home: &Path, plan: &Plan) -> R<()> {
     Ok(())
 }
 
-/// Plan (and with `apply`, perform) the migration at `now`.
 pub(crate) fn run(
     home: &Path,
     stage: &Path,
     apply_changes: bool,
+    during_market_hours: bool,
     now: DateTime<FixedOffset>,
 ) -> R<Value> {
     if !home.is_absolute() {
@@ -683,7 +821,8 @@ pub(crate) fn run(
         return Err("host_migrate_run_as_home_owner");
     }
     let ist = now.with_timezone(&FixedOffset::east_opt(19800).expect("IST"));
-    if update::market_open(ist) {
+    let market_open = update::market_open(ist);
+    if market_open && !during_market_hours {
         return Err("host_migrate_activation_blackout");
     }
     let plan = plan(home, stage)?;
@@ -699,6 +838,7 @@ pub(crate) fn run(
         "status": status,
         "paper_only": true,
         "live_enabled": super::LIVE_ENABLED,
+        "during_market_hours": market_open,
         "release": plan.release.tag(),
         "steps": plan.steps.iter().map(Step::report).collect::<Vec<_>>(),
         "kept": [home.join(DATA_DIR), home.join(CONFIG_DIR), home.join(OLD_CURRENT), home.join("ind-sadr-rust-releases")],
@@ -707,7 +847,12 @@ pub(crate) fn run(
     }))
 }
 
-pub(crate) fn entry(home: Option<&Path>, release: &Path, apply_changes: bool) -> ExitCode {
+pub(crate) fn entry(
+    home: Option<&Path>,
+    release: &Path,
+    apply_changes: bool,
+    during_market_hours: bool,
+) -> ExitCode {
     let home = home
         .map(Path::to_path_buf)
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
@@ -718,6 +863,7 @@ pub(crate) fn entry(home: Option<&Path>, release: &Path, apply_changes: bool) ->
                 &home,
                 release,
                 apply_changes,
+                during_market_hours,
                 DateTime::from_timestamp_millis(super::millis())
                     .expect("system clock range")
                     .fixed_offset(),

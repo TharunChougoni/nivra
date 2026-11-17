@@ -5,13 +5,11 @@ long-premium Nifty weekly options. The objective is to maximise profit; there is
 no profitability claim. Futures, stock options, naked short options and live
 orders remain out of scope.
 
-The reviewed `decision_owner` policy is the current supported path: one
-persistent orchestrator owns paper action, size and holding decisions. Luna
+One persistent orchestrator owns paper action, size and holding decisions. Luna
 compiles current factual digests without selecting actions or vetoing owner
-evaluation. Legacy Luna/Grok handoff policies remain decodable for archive and
-reviewed migration, but cannot schedule independent runtime decisions. Its
-cadence and evidence eligibility are described in [the model harness](MODEL_HARNESS.md);
-adoption uses the explicit [policy migration](OPERATIONS.md#reviewing-the-decision-owner-migration).
+evaluation. Planner configs use the owner-only shape. Cadence and evidence
+eligibility are described in [the model harness](MODEL_HARNESS.md). Policy changes
+use the reviewed [config-apply flow](OPERATIONS.md#reviewing-a-planner-policy-change).
 
 Deterministic code validates every intent and commits simulated fills. No fixed
 position-count, exposure, entry-count, daily-loss or drawdown caps apply to the
@@ -105,8 +103,7 @@ qualification remain unverified.
 Operational allowances and deadlines protect resources and are configured
 separately from trading risk. An allowance is not a target to consume.
 
-The archived momentum strategy, tightening reviewer, fixed exits and
-deterministic 15:15 flatten are not a fallback. See
+No deterministic strategy substitutes for a failed or unavailable model. See
 [replay](PAPER_REPLAY.md) for the offline flow.
 
 ## Strategy laboratory

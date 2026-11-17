@@ -6,16 +6,15 @@ provider response alone never establishes a fill.
 
 | Role | Exact model / transport | Tools and output |
 | --- | --- | --- |
-| Digest | Configured `digest` profile (normally `gpt-6-luna` / `openai_codex`) | Current factual evidence, coverage, gaps and provenance; no trade or handoff veto |
+| Digest | Configured `digest` profile (normally `gpt-6-luna` / `openai_codex`) | Current factual evidence, coverage, gaps and provenance; no trade decision or veto |
 | Orchestrator | Reviewed configured model/transport profile | Persistent paper action, size, holding and exit decisions; research and registered workers |
 
 Standing prompts combine the host objective with `data_owner.md` for Luna and
 `orchestrator.md` for the owner, subject to explicit reviewed prompt overrides.
 Evidence, search and prior output are lower-trust content. The objective retains
 the paper account, fees, overnight holdings and no added trading risk caps.
-Legacy `data.md` / `decision.md`, role fields and original usage names remain
-readable for legacy identity and migration; independent Decide inference and
-its handoff gates are excluded from the current runtime path.
+Older usage journals with `decide-` records still decode, so original usage
+evidence stays valid.
 
 ## Fresh evidence and owner decisions
 
@@ -28,9 +27,6 @@ execution rechecks the original financial receipt, identity, cash and fees.
 No usable evidence means no model call. Material held-position work retains
 precedence over cadence; unchanged facts coalesce without inventing evidence.
 
-Legacy handoff-gate settings and artifacts remain decodable and hash-compatible
-for original sessions. Their algorithms are retained only in legacy regression
-fixtures; they no longer schedule an independent model or gate owner decisions.
 The `planner-harness-v3` audit label and older projection records remain readable.
 
 The default operator prompt path is a complete `prompts/` directory beside the
@@ -39,8 +35,8 @@ own SHA-256 asset; the updater retains both verified files in the immutable
 release directory and never writes the planner's policy inputs. For an existing
 book, an operator reviews and copies the prompt files beside the planner JSON,
 then applies them with the existing suspend and reviewed `config-apply` flow.
-For fresh installations, use the current Rust `setup` workflow, not the retired
-shell bootstrap. Existing prompt directories remain operator-owned policy inputs.
+For fresh installations, use the Rust `setup` workflow. Existing prompt
+directories remain operator-owned policy inputs.
 Content hashes bind these files into sealed policy; path-only relocation
 preserves the hash. An absent directory keeps embedded defaults for compatibility; a present
 but incomplete, unreadable, empty, oversized or invalid directory refuses
@@ -50,16 +46,15 @@ then audited resume; default files never silently swap during a turn. See
 [operations](OPERATIONS.md#default-prompt-files).
 
 An optional `planner.experiment_profile` file can replace prompt text and tighten
-handoff, tool and role tunables without a release. It is excluded from the
-trading-policy hash. The controller reloads it only when no digest or decide is in
+tool and role tunables without a release. It is excluded from the
+trading-policy hash. The controller reloads it only when no digest is in
 flight. An invalid profile keeps the previous one, logs
 `experiment_profile_rejected`, and does not halt. A valid change writes
 `experiment_profile_applied` and alerts once. Check a file with
 `nivra planner profile-check`.
 
 Luna returns factual held-position observations, coverage and gaps using the
-owner digest schema. Legacy opinion-bearing `positions_review` records are
-archive evidence only; the persistent owner makes hold, trim and exit decisions.
+owner digest schema. The persistent owner makes hold, trim and exit decisions.
 
 `planner.exit_policy` is frozen trading policy. `target` and `time` default to
 `review`: crossing them raises `held_exit_review` and does not sell. `stop`
@@ -87,7 +82,8 @@ writes never count as changes.
 Supervisor state (`model/supervisor-state.json`) is read and written in one
 locked load-modify-save section, preserving counters across worker/controller updates. An unreadable or corrupt
 state file is refused (the supervisor records `model/supervisor-error.json` and
-skips) rather than silently starting a fresh session. Legacy decide counters remain readable without scheduling independent model work. Empty output, a
+skips) rather than silently starting a fresh session. State files written by
+older releases still load; their removed counter fields are ignored. Empty output, a
 failed provider call or a failed instruction-store write is a failed run: it
 increments the failure streak, writes `model/supervisor-failure.json` and emits
 the `supervisor_failure` alert. The recorded reason keeps the bounded underlying
@@ -138,46 +134,45 @@ current-session context-exhaustion backoff that the code actually enforces, not 
 general failure backoff, guessed next-retry time or progress estimate. This
 projection starts no model call, probe, network request, queue or journal.
 
-### Decision-owner migration policy
+### Owner policy and ledger authority
 
-The persistent orchestrator is the only decision owner; the planner config has
-no `decision_owner`, `decide` or `handoff_gate` key. An enabled policy requires
-an enabled orchestrator with an enabled supervisor trigger, an enabled digest
-and enabled events; a missing prerequisite is refused at load with its specific
-`decision_owner_*` code. The policy is reviewable without applying
-it via `nivra planner config-check --planner FILE --session DATE`, which reports
-the policy hash and refuses a missing prerequisite. It never writes a policy.
+The persistent orchestrator is the only decision owner. The planner config has
+no `decision_owner`, `decide` or `handoff_gate` key, and `deny_unknown_fields`
+refuses a file that still carries one. An enabled policy requires an enabled
+orchestrator with an enabled supervisor trigger and model, an enabled digest and
+enabled events. A missing prerequisite refuses at load with its specific code:
+`decision_owner_supervisor_required`, `decision_owner_supervisor_model_required`,
+`decision_owner_digest_required` or `decision_owner_events_required`. To review a
+policy without applying it, run
+`nivra planner config-check --planner FILE --session DATE`. It reports the
+policy hash, refuses a missing prerequisite and never writes a policy.
 
-The decision-owner policy provides the digest-to-orchestrator path.
-Installing a release does not migrate a legacy policy or qualify host operation.
-Eligible
-digest events are factual inputs only: this path marks Luna handoff false and
-does not call the independent decide role. Event settlement writes the deferred
-digest attempt and a durable SQLite queue entry in one transaction; the queue
-pins the original attempt bytes by digest/hash. A persistent supervisor
-decision turn binds that digest to portfolio, policy/profile, model and session
-revisions. Plan-head activation and its SQLite receipt share one transaction,
-and recovery can reconstruct the session result from that receipt. The decision
-turn carries its own bounded execution deadline instead of inheriting the digest
-attempt's deadline. Fixture buy, hold, exit-revision and sell plans hydrate from
-the activated owner plan head and use the existing fresh-quote, cash, fee and
-protection paths unchanged.
+Installing a release does not rewrite a planner config or qualify host
+operation. Eligible digest events are factual inputs only. Event settlement
+writes the deferred digest attempt and a durable SQLite queue entry in one
+transaction; the queue pins the original attempt bytes by digest and hash. A
+persistent supervisor decision turn binds that digest to the portfolio,
+policy, profile, model and session revisions. Plan-head activation and its
+SQLite receipt share one transaction, and recovery can reconstruct the session
+result from that receipt. The decision turn carries its own bounded execution
+deadline instead of inheriting the digest attempt's deadline. Fixture buy,
+hold, exit-revision and sell plans hydrate from the activated owner plan head
+and use the existing fresh-quote, cash, fee and protection paths unchanged.
 
-The A2 owner compiler replaces the owner digest *content* without changing
-the durable queue: the owner prompt compiles coverage/gaps, changed prospects,
-active and candidate rankings with provenance, completed-bar and relative-return
-context, spread/depth, holdings/cash/fees, recent actions and registered
+The A2 owner compiler builds the owner digest content on top of the durable
+queue. The owner prompt compiles coverage and gaps, changed prospects, active
+and candidate rankings with provenance, completed-bar and relative-return
+context, spread and depth, holdings, cash, fees, recent actions and registered
 experiment results. The harness validates this owner-only schema, bounds every
 row and text field, allowlists instrument keys against the bundle, requires one
-holding per held key with matching units, sanitizes top-level and nested evidence
-IDs, and rejects fabricated handoff/thesis fields. Invalid or duplicate advisory
-ranking rows are dropped with a static warning instead of discarding the whole
-factual digest; every hard bound, allowlist and authority check remains. Owner
-eligibility means
-validated current usable evidence: a held book or fresh discovery evidence.
-`complete:false` is reserved for the host deadline fallback and never becomes
-work. An empty or unusable feed starts no digest call. The legacy `data.md`
-schema, handoff gate and decide path remain unchanged for non-owner policies.
+holding per held key with matching units, sanitizes top-level and nested
+evidence IDs, and rejects fabricated thesis fields. Invalid or duplicate
+advisory ranking rows are dropped with a static warning instead of discarding
+the whole factual digest; every hard bound, allowlist and authority check
+remains. Owner eligibility means validated current usable evidence: a held book
+or fresh discovery evidence. `complete:false` is reserved for the host deadline
+fallback and never becomes work. An empty or unusable feed starts no digest
+call.
 
 With `discovery.digest_cadence_ms` (default 60 s, range 1–3600 s), `reserve`
 admits a `recheck` event with reason `digest_cadence` only after the configured
@@ -189,38 +184,32 @@ digest never supersedes pending material work, and an ineligible digest never
 supersedes any pending work. A digest run deadline records an incomplete fallback
 but creates no owner work and no decision.
 
-The policy-level runtime gate admits a valid two-role policy, but the controller
-requires durable ledger authority initialized by that exact policy. A legacy
-authority is refused at startup with `decision_owner_migration_required`; host
-protection continues and no legacy decision path is silently substituted.
-Reviewed migration writes the owner policy to a new planner config, checks it
-with `planner config-check` and leaves the original config byte-identical. Point
-the paper config at the new file and run the normal
-`config-apply --confirm-paper-review`, then `resume`.
-Rollback is the same reviewed transition using the predecessor planner file.
-Starting with a policy whose config hash differs from the durable authority is
-refused rather than rewriting the authority implicitly. A halted legacy book
-cannot run `config-apply` and stays archive-only. A stopped non-halted book uses
+The controller requires durable ledger authority initialized by the exact
+current policy. If the policy's config hash differs from the durable authority,
+startup refuses with `decision_owner_migration_required` instead of rewriting the
+authority; host protection continues. To change the policy, write the new
+planner config while stopped, check it with `planner config-check`, then run
+`config-apply --confirm-paper-review` and `resume`. Rollback is the same
+reviewed transition using the predecessor planner file. A halted book cannot run
+`config-apply` and stays archive-only. A stopped book that is not halted uses
 `config-apply`.
+
 Every new authority writes its orchestrator owner marker in the same
 transaction. A missing, malformed, foreign-owner (including a stored `legacy`
 owner) or stale marker refuses as `planner_authority_owner_missing`,
-`planner_authority_owner_invalid` or `planner_authority_owner_mismatch`; no
-command reconstructs it, and such a book stays archive-only.
-Startup preserves the original active head and any stronger sticky
-data/news/configuration block; a pending claim is marked interrupted without
-replacing that block or clearing the head. Every recovery mode shares one typed block gate: data/news blocks
-need the ordinary input proof, a configuration block is resolved by the exact
-policy rebind, and protection-only or closed recovery retains a data/news block
-because no new decision can execute. Production recovery never
-infers the legacy Decide path; legacy configs remain readable for archive and
-migration review but `planner-recover` refuses them with
-`planner_recover_events_disabled`. A restart that finds a
-running decision turn without a committed receipt refuses the work as
-`owner_decision_interrupted` and records the session result; it never resends an
-ambiguous model request. A committed plan is projected from its receipt without a
-second model call. Target-host migration and operating acceptance remain open in
-A1.
+`planner_authority_owner_invalid` or `planner_authority_owner_mismatch`. No
+command reconstructs it, and such a book stays archive-only. Startup preserves
+the original active head and any stronger sticky data, news or configuration
+block; a pending claim is marked interrupted without replacing that block or
+clearing the head. Every recovery mode shares one typed block gate. Data and
+news blocks need the ordinary input proof, a configuration block is resolved by
+the exact policy rebind, and protection-only or closed recovery keeps a data or
+news block because no new decision can execute. `planner-recover` refuses a
+policy without enabled events as `planner_recover_events_disabled`. A restart
+that finds a running decision turn without a committed receipt refuses the work
+as `owner_decision_interrupted` and records the session result; it never resends
+an ambiguous model request. A committed plan is projected from its receipt
+without a second model call.
 
 ### Orchestrator model selection
 
@@ -287,8 +276,7 @@ aside also writes `aside-start.json` so `queued` and `running` remain distinct.
 `model/directives.ndjson` store with target `owner`, an authorization scope of
 `review_only` or `decision_context`, an exact expected session and instruction
 revision, and a bounded expiry. The decision owner sees it through the existing
-active-directive envelope — the legacy `decide` turn or the two-role owner turn
-— as context. It is never a tool, order, financial write or execution
+active-directive envelope of its decision turn as context. It is never a tool, order, financial write or execution
 authority; the execution path does not read this store. A changed session or
 revision is a durable `refused` receipt and writes no directive. Cancelling an
 applied instruction appends its supersede record.
@@ -331,9 +319,8 @@ than replaced.
 
 A reviewed `owner_tasks.review` policy adds one sealed post-close owner review.
 The field is optional: absence keeps existing policy bytes and behavior, and the
-legacy post-close scorer is never silently enabled or disabled. When enabled,
-the policy must keep the orchestrator decision owner, keep legacy post-close
-roles disabled, and enable the same supervisor trigger. The review turn uses
+post-close scorer trigger is never silently enabled or disabled. When enabled,
+the policy must enable the same supervisor trigger. The review turn uses
 that admitted supervisor role, model, persistent session and daily usage budget.
 It has no trading, market, workspace, web or research tools. The host seals the
 closed report and current book, sends the bounded sealed evidence inline with
@@ -472,8 +459,7 @@ action reconstructs the missing result without another model call; neither
 artifact nor action is an explicit `owner_research_interrupted` terminal state
 and is never replayed. A recovered artifact result is
 `recovered_research_receipt`. Research results live only in the lane log and
-never touch trading supervisor state, its failure counters, applied hashes or
-reviewed-decides cursor. A changed or unverifiable source refuses with
+never touch trading supervisor state, its failure counters or applied hashes. A changed or unverifiable source refuses with
 `owner_research_source_changed`; a changed pinned workspace file refuses with
 `owner_research_workspace_changed` (and the other bounded
 `owner_research_workspace_*` codes). The typed `ResearchOutputV1` is bounded,
@@ -734,12 +720,12 @@ No tool grants orders, credential access, service control or strategy promotion.
 ## Opt-in intraday decision evidence
 
 The planner's optional `decision_evidence` object enables the read-only
-`get_intraday_context({"instrument_keys":[...]})` tool for digest and owner turns, plus
-role-specific uncertainty instructions. The complete defaults are in the
+`get_intraday_context({"instrument_keys":[...]})` tool for digest turns. The
+complete defaults are in the
 [configuration fragment](../packaging/rust/decision-evidence.fragment.json).
-Omitting the object preserves legacy tool definitions, prompts and policy bytes.
-The settings and both compiled instruction hashes enter the reviewed policy;
-installing the binary alone does not enable this change on an existing book.
+Omitting the object keeps the tool definitions and policy bytes unchanged. The
+settings enter the reviewed policy; installing the binary alone does not enable
+this change on an existing book.
 
 The event controller freezes context from its existing scanner and minute price
 store only after an eligible event is reserved. It makes no additional provider
@@ -769,12 +755,10 @@ stale optional fields are withheld. Proxy parameters are returned explicitly.
 admission and never presented as a new executable quote; `get_market_snapshot`
 and the unchanged two-second execution gate retain that responsibility.
 
-The new digest instructions preserve Luna's handoff-only authority. The decide
-instructions compare expected net profit from acting with waiting, distinguish
-missing optional history/news from missing required execution evidence, and allow
-uncertain technical setups. Models still choose actions, sizes and holding periods;
-there is no trade quota, required catalyst, fabricated probability, lower fee
-assumption or new trading risk cap. An empty action list remains valid.
+The tool gives Luna facts only. The owner still chooses actions, sizes and
+holding periods; there is no trade quota, required catalyst, fabricated
+probability, lower fee assumption or new trading risk cap. An empty action list
+remains valid.
 
 ### Plan binding and execution refusal (A1 groundwork)
 
@@ -789,9 +773,8 @@ Execution revalidates these before the first action: a changed
 portfolio records `portfolio_changed`, a changed or unresolvable policy
 `policy_changed`, and a changed profile `profile_changed` in `planner_action`
 and performs no fill. The plan remains archived; a new decision supersedes it.
-Plans without these fields keep the legacy compatible path, so archived plans
-remain readable and executable. The persistent orchestrator produces these
-plans.
+Archived plans without these optional bindings remain readable. Runtime
+admission still requires orchestrator ownership and current durable authority.
 
 ## What model observations establish
 
@@ -1090,16 +1073,15 @@ operation, not profitable decisions or complete/independently certified data.
 Enabled roles require explicit positive `daily_call_budget`. No compiled 1000-call
 ceiling remains. `budget_unit:"event"` shares one logical allowance across that
 role's tool continuations, retaining each actual immutable request/result and all
-failed/legacy charges. Request accounting remains the compatible default.
+failed and archived charges. Request accounting remains the compatible default.
 
 `max_turns` and `max_read_tools` are configurable positive role settings;
 omissions keep 12 turns and 16 reads.
 The scorer trigger uses its own configured role allowance in the shared usage
 namespace and is reserved once per session.
 Registered experiments remain bounded to four per invocation. Digest run cap is
-120 seconds, decide 600 seconds, review 30 minutes; individual requests are capped
-by their role validation and remaining invocation/event time (up to 150 seconds).
-Omitted decide run budget is 450 seconds. See
+120 seconds and review 30 minutes; individual requests are capped by their role
+validation and remaining invocation/event time (up to 150 seconds). See
 [GitHub Issues](https://github.com/TharunChougoni/nivra/issues) for remaining
 operating qualification; settings are not provider quota guarantees.
 
@@ -1206,9 +1188,9 @@ archives inputs/hashes, instruction hash, actual rounds, tool/citation output an
 validation. `model/usage/` retains reservations/results. SQLite per-action rows
 commit with paper fills; JSON status/execution projections cannot revive a plan.
 
-The separate post-close `operations` and `strategy` review lane is retired. A
-planner config that still carries `post_close` or an `orchestrator.triggers`
-entry named `operations` or `strategy` is refused at load. The owner's session
+The planner config has no `post_close` block and no `operations` or `strategy`
+entry under `orchestrator.triggers`; a config that still carries one is refused
+at load. The owner's session
 review (`owner_tasks.review`) seals the closed report with fixed evidence bounds
 (128 session fills, 24 rows per planner table, 48 journal ticks).
 
@@ -1245,7 +1227,7 @@ original book's allowance. Operational qualification is tracked in
 
 Digest citations may name supplied sections, allowlisted instruments, or call IDs and
 `evidence_id` values returned by that invocation’s completed tools. Unknown IDs are
-dropped with a count-only warning; valid digest/handoff content is preserved. A
+dropped with a count-only warning; valid digest content is preserved. A
 digest that cites more than 12 known IDs keeps the first 12 and logs
 `digest_citation_warning reason=excess_evidence_ids_truncated`; excess citations
 are advisory and do not invalidate the digest.
@@ -1272,16 +1254,10 @@ Digest rejection diagnostics distinguish `harness_digest_json_invalid`
 and `harness_digest_bounds_invalid` (empty summary or exceeded digest bounds).
 These static reasons retain the existing `planner_invalid_plan_no_entries`
 status without exposing model-controlled Serde error text. Valid wait digests
-remain valid through repair; repair does not authorize a decide or relax schema,
+remain valid through repair; repair does not authorize a decision or relax schema,
 field bounds or duplicate-key rejection. These are validation invariants, with no
 new runtime tunables. Genuine provider repair and a clean full session still
 require operating evidence.
-
-Decide may include `candidate_reasons` entries with instrument keys and concise
-model reasons, including passes and missing evidence. Accepted plans retain these
-entries in the existing attempt journal and audit artifact; old outputs without
-the field remain valid. Reasons are model claims, not independently verified
-market evidence, and missing entries remain unknown.
 
 Digest bound failures emit a fixed field-level category without model text, while
 the existing failure status and fail-closed behavior remain unchanged.
@@ -1299,22 +1275,17 @@ is diagnosable from the session archive rather than only the journal.
 
 ### Owner-only runtime admission
 
-New in-memory planner defaults serialize explicit `orchestrator` ownership;
-omitted ownership in an existing JSON config (including an old empty policy
-object) still decodes as legacy, preserving its exact policy identity. An enabled legacy planner refuses
-runtime admission with `decision_owner_migration_required`. Write a reviewed
-owner planner config while stopped, check it with `planner config-check`, then
-run reviewed config apply and audited resume. No config is silently rewritten and original Decide usage stays
-separate.
+A planner config without the owner prerequisites refuses at load, and a policy
+that differs from the book's durable authority refuses at startup with
+`decision_owner_migration_required`. Write the new owner planner config while
+stopped, check it with `planner config-check`, then run reviewed `config-apply`
+and audited resume. No config is silently rewritten.
 
-Independent Decide inference, digest handoff/veto gates and the advisory
-supervisor-to-Decide route are excluded from the current runtime path. The old handoff
-algorithms remain in test-only legacy regression fixtures. Compatibility role
-fields and reservation names remain decodable for original journal validation.
-Live dashboard/API identities are Digest and Orchestrator; archived `role=decide`
-rows retain their original label and can still be inspected read-only. The
-current-market preview now compiles a factual digest only and never produces an
-independent decision. No book is migrated or session started by installing a build.
+Older usage journals keep their `decide-` reservation names, and they still
+decode for original journal validation. Live dashboard and API identities are
+Digest and Orchestrator. The current-market preview compiles a factual digest
+only and never produces a decision. Installing a build migrates no book and
+starts no session.
 
 ### Configured model admission
 
@@ -1324,8 +1295,7 @@ operator-selectable named profiles. Role admission uses configured bindings rath
 model-ID pairs. Real backend calls match role, exact model ID, transport,
 application credential path and curated-model flag before reserving usage. The
 owner must match the currently active selection; a pending switch is not admitted
-until the existing idle-turn promotion boundary. Legacy review-role blocks
-remain named profiles for explicit nontrading diagnostics.
+until the existing idle-turn promotion boundary.
 
 OpenAI Codex transport profiles cannot carry the xAI native `web_search` or
 `x_search` tool flags. Incompatible switches refuse before changing the active
@@ -1342,9 +1312,9 @@ Registered owner-task versions and terminal outcomes are ingested into the
 append-only experiment ledger and exposed read-only in the current-session
 Library. Unknown strategy ABI, parameters, regime and holding horizon remain
 unknown. A successful analysis is insufficient evidence, and Library ingestion
-never qualifies or activates a candidate. Automatic promotion from selector
-cooldown/fallback remains deferred under the two-role mandate; existing
-configured scanner selection and its execution validation are unchanged.
+never qualifies or activates a candidate. There is no automatic promotion from
+selector cooldown or fallback; configured scanner selection and its execution
+validation are unchanged.
 
 Compaction and handoff are single-request lifecycle turns: their request uses
 `orchestrator.model.run_timeout_ms` when set, otherwise `timeout_ms`, bounded by

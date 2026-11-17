@@ -3,72 +3,36 @@
 Paper only. The live-order path remains disabled. Model allowances are operational
 settings, not position, loss, exposure or holding-period caps.
 
-> This guide covers the legacy Luna-to-Grok replay/archive flow retained for
-> offline replay and historical compatibility. The current runtime uses the
-> reviewed decision-owner policy: Luna compiles a factual digest and one
-> persistent orchestrator owns paper decisions. See the
-> [model harness](MODEL_HARNESS.md#decision-owner-migration-policy).
-
 ## Continuous flow
 
 ```mermaid
 flowchart LR
-  S[Fresh scanner observations] --> L[Luna review with dated history]
-  L -->|continue or wait| S
-  L -->|decide with identified prospects| G[Grok decision and read-only tools]
-  G --> E[Validate cash, fees, holdings and fresh quotes]
+  S[Fresh scanner observations] --> L[Luna factual digest]
+  L --> Q[Durable owner queue]
+  Q --> O[Persistent orchestrator decision]
+  O --> E[Validate cash, fees, holdings and fresh quotes]
   E --> P[Paper fill or reasoned abstention]
   P --> S
 ```
 
 Each changed scanner batch records an event. A configured cooldown coalesces work;
-it does not force trades. Every admitted discovery cycle calls Luna afresh, with
-the preceding Luna review, latest accepted Grok decision, current cash/positions,
-timestamped prospects and full dated historical features. A successful morning
-digest is not reused for subsequent discovery cycles.
+it does not force trades. Each eligible discovery cycle calls Luna afresh with
+current evidence and dated history. Luna returns factual coverage, gaps and a
+bounded brief. The persistent orchestrator owns buy, sell, hold and abstain
+decisions. Luna has no handoff field or decision veto.
 
-Luna adds this handoff to its usual digest JSON:
+The controller commits the validated digest and its durable owner work together.
+The owner binds each decision to the current portfolio, policy, model and session
+revisions. Deterministic execution rechecks the original quote receipt and the
+two-second fill gate before any fill. See the
+[model harness](MODEL_HARNESS.md#owner-policy-and-ledger-authority) for the
+owner schema, prerequisites and authority checks.
 
-```json
-{"handoff":{"decision":"continue","instrument_keys":[],"reason":"Wait for new evidence"}}
-```
-
-`continue` and `wait` finish an advisory review and wait for another scanner
-observation; they are recorded as `deferred`, not failed or a Grok decision.
-`decide` must identify allowlisted prospects and passes the new digest/evidence
-to Grok. There is no fixed number of Luna reviews before this handoff. Luna has
-read-only historical-feature and quote tools; Grok owns buy/sell/hold/abstain.
-Each accepted Grok result reaches an execution observation before admission of
-a successor. Quote receipt times and the two-second fill gate remain unchanged.
-
-Example planner fields, merged with existing role/credential settings:
-
-```json
-{
-  "require_digest": true,
-  "context": {"mode": "tools_only"},
-  "tools": {"scanner_limit": 40, "ranking_limit": 50, "history_limit": 5,
-            "max_instrument_keys": 20},
-  "discovery": {"max_scan_age_ms": 180000, "max_prospects": 10000,
-                "scan_batch_size": 200, "scan_interval_ms": 8000},
-  "digest": {"daily_call_budget": 5000, "budget_unit": "event",
-             "max_turns": 64, "max_read_tools": 256, "timeout_ms": 120000},
-  "events": {"cooldown_ms": 10000, "decision_timeout_ms": 900000}
-}
-```
-
-`tools_only` is the default and sends Luna only a trigger envelope; Grok receives
-only the trigger and Luna's validated digest/handoff. Use
-`"context":{"mode":"projection","universe_rows":150}` with
-`full_universe_features:true` only for the v2 rollback message shape.
-
-Under a reviewed owner policy, `discovery.digest_cadence_ms` (default 60000,
-allowed 1000–3600000) admits a factual digest after that gap since the last
-admitted digest. A due material or held-position event takes precedence. An
-eligible cadence digest whose canonical facts signature is unchanged does not
-wake the orchestrator, while a material event always does; an ineligible digest
-never supersedes pending work. The owner schema and prompt are described in
-[model harness](MODEL_HARNESS.md#decision-owner-migration-policy).
+`discovery.digest_cadence_ms` (default 60000, allowed 1000–3600000) admits a factual
+digest after that gap since the last admitted digest. A due material or
+held-position event takes precedence. An eligible cadence digest whose canonical
+facts signature is unchanged does not wake the orchestrator, while a material
+event does. An ineligible digest never supersedes pending work.
 
 Settings are validated at load. Daily allowances have no compiled 1000-call
 ceiling. Tool turns sharing an event consume one logical role allowance; every
@@ -85,10 +49,11 @@ estimate or executable quote. The unknown first sample time is explicit.
 ## Full-day offline test
 
 Replay constructs no provider client, reads no credential and starts no service.
-It uses explicit recorded/scripted model responses and the runtime scanner
-projection, Luna handoff, harness, event journal, plan validation, paper fills,
-protection and fee engine under a virtual clock. Every run requires a new private
-output directory with an explicitly identified simulation book. It never copies
+It uses explicit recorded or scripted digest responses and the runtime scanner
+projection, factual digest harness, event journal, protection and fee engine under
+a virtual clock. The offline driver settles digests as deferred owner work; it
+does not run the persistent orchestrator or create owner plans. Every run requires
+a new private output directory with an explicitly identified simulation book. It never copies
 or resets an original session's usage authority.
 
 ```sh
@@ -101,9 +66,9 @@ nivra paper-replay \
   --output /tmp/paper-day-result
 ```
 
-The labelled synthetic 09:15–15:30 demo has 376 quote events, 375 Luna reviews,
-two Luna-selected Grok handoffs and a buy/sell pair. These are protocol results,
-not measured model intelligence or profitability. `report.json` includes fills,
+The labelled synthetic 09:15–15:30 demo has 376 quote events and 375 deferred
+factual digests, with no owner calls or fills. These are protocol results, not
+measured model intelligence or profitability. `report.json` includes fills,
 fees, capital reconciliation, request/allowance counts and coverage. A timeout
 fixture verifies no fill and no book halt.
 
@@ -143,8 +108,8 @@ The fills file is `{"version":1,"capital":"...","costs":{...},"fills":[...]}`
 using the shared fill object. If both the file and the paper manifest include
 `paper_costs`, they must match.
 
-The transcript is an array of `{"role":"digest"|"decide","latency_ms":integer,
-"output":JSON-or-string}`. Each reply must match the next requested role. Model
+The transcript is an array of `{"role":"digest","latency_ms":integer,
+"output":JSON-or-string}`. Each reply must match the factual owner-digest schema. Model
 latency consumes virtual time; protection continues on intervening observations.
 Missing/exhausted responses are reported, never replaced by a fallback strategy.
 

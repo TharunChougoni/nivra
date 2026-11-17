@@ -10,9 +10,10 @@ Use fakes, fixture transports and injectable clocks. Heavy checks run on a
 development host, one at a time; see [build performance](BUILD_PERFORMANCE.md)
 for the fast local gate and memory guidance.
 
-The current local gate also checks **17** frozen golden files
-(`nivra-tools golden-check`) and **91** dashboard tests. These are current gate
-facts, not permanent performance claims.
+The local gate also checks **2** frozen golden files
+(`nivra-tools golden-check`) and the dashboard suite. `nivra-tools test-budget`
+reports the current Rust count and the ceiling separately. A lower count passes;
+do not add tests to reach the ceiling.
 
 ## Parallel isolation
 
@@ -33,8 +34,8 @@ regression fixture retains a cloned description while reacquiring ownership.
 The React workspace tests in `web/v2/src/` cover financial unknowns, original
 chart clocks/gaps, receipt-series gaps and tick-count/volume separation,
 price-batch sequence resets and gap flags, watermark reconciliation,
-extrema-preserving downsampling, stale cache fallback, three identities, hash
-routing, authentication, late-response lock privacy, eight-section navigation
+extrema-preserving downsampling, stale cache fallback, Digest and Orchestrator
+identities, hash routing, authentication, late-response lock privacy, eight-section navigation
 and archive selection. jsdom, the Node runner and `tsc --noEmit` need no
 browser, credentials or real sockets.
 Use Node 24 and the pinned lockfile:
@@ -55,20 +56,19 @@ Manual browser fixtures qualify layout/interaction only, not market acceptance.
 
 | Area | Behaviour and source |
 | --- | --- |
-| Finance/execution | `nivra-core/tests`, `nivra-store/tests/writer.rs`: exact costs/rounding, cash/held units, tick/lot identity, atomic fills and ≤2-second original receipts |
-| Recovery/storage | Store controller/binding/legacy tests and runtime contracts: fencing, crash boundaries, stopped/halted persistence, dated pointers and carry seals |
+| Finance/execution | `nivra-core/tests`, runtime execution contracts: exact costs/rounding, cash/held units, tick/lot identity, atomic fills and ≤2-second original receipts |
+| Recovery/storage | Store journals and runtime controller/binding contracts: fencing, crash boundaries, stopped/halted persistence, dated pointers and carry seals |
 | Models/planner | Existing planner/harness contracts: strict JSON/tools, full evidence, event allowance accounting, failed charges, missing/replaced namespaces, cancellation and plan supersession |
-| Continuous discovery | Planner/replay scenarios: fresh Luna loop, continue/wait/decide, invalid handoff keys, Grok feedback, liberal budgets and dated config hashes |
+| Continuous discovery | Planner/replay scenarios: fresh factual digests, durable owner work, invalid evidence refusal, configured allowances and dated config hashes |
 | Failure/recovery | Event no-trade on timeout; durable halt reason survives stop; reviewed flat-book recovery, unrelated halt refusal, no ambiguous replay/refund |
 | Grants | Model fixtures: exact identity/origin, fenced refresh, expired/mismatched refusal, live-catalog admission |
 | Data/history | Parser/download/preparation fixtures: source times, malformed rows, immutable receipts, missing bars, original shared quota and partial coverage |
 | Dashboard | Runtime web/history tests: bearer/Host/method/origin checks, bounded inputs, redaction, identity/hash failures and no trading controls |
 | Delivery | Updater/preflight tests: immutable tags/checksums, HOLD/blackout/book admission, failed health rollback and interrupted transaction |
 | Research | `nivra-research` contracts: registration hashes, leases, malicious output, cancellation/uncertain-worker recovery; no unsandboxed fallback |
-| Full-day replay | Virtual 09:15–15:30 scripted flow, paper buy/sell, fees/cash reconciliation, timeout no-halt, future receipt refusal, original inputs unchanged |
+| Full-day replay | Virtual 09:15–15:30 digest flow, no owner inference or fills, cash reconciliation, timeout no-halt, future receipt refusal, original inputs unchanged |
 
-Legacy fixed-profile tests verify historical compatibility, not current model-led
-risk policy. Frozen golden vectors remain for finance/market boundaries; do not
+Frozen golden vectors remain for finance/market boundaries; do not
 refresh them to hide a changed result.
 
 ## Run and interpret
