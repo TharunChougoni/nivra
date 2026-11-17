@@ -1,0 +1,6 @@
+{
+  "tag": "v0.10.1",
+  "source_commit": "30eea31ae331f3879056633d37c844265bbd7d85",
+  "target": "x86_64-unknown-linux-musl",
+  "sha256": "d0703acfd171748449e407b10cb1af5537d5db83c09064168dfe458e7857c5c4"
+}
