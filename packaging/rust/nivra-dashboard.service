@@ -1,0 +1,18 @@
+[Unit]
+Description=Nivra research-only Rust dashboard
+After=network-online.target
+[Service]
+Type=simple
+ExecStart=%h/nivra-current/nivra dashboard --token-file %h/.config/nivra/rust-dashboard.token
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+MemoryMax=64M
+MemorySwapMax=0
+TasksMax=4
+[Install]
+WantedBy=default.target

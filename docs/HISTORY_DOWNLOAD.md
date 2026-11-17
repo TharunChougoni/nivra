@@ -7,7 +7,7 @@ universe. Unfinished work is tracked in
 [GitHub Issues](https://github.com/TharunChougoni/nivra/issues).
 
 ```sh
-sadr-rs history-download --config PAPER_CONFIG --output HISTORY_DIR \
+nivra history-download --config PAPER_CONFIG --output HISTORY_DIR \
   --start 2025-10-17 --end 2026-10-16 --interval days
 ```
 
@@ -20,7 +20,7 @@ a corrupt raw receipt still refuses. Ordinary downloads retain their existing
 replay-shard export behavior.
 
 For the running config's exact required daily sessions, use
-`sadr-rs history-backfill --config PAPER_CONFIG`. This explicit manual command
+`nivra history-backfill --config PAPER_CONFIG`. This explicit manual command
 uses receipts-only acquisition, the frozen validated universe, reviewed calendar
 and configured history root. It coalesces missing trading-session spans instead
 of spending requests on weekend-only holes. It preserves the same shared quota,
@@ -87,7 +87,7 @@ For bounded descriptive research, the registered runtime can prepare immutable
 shards without touching originals:
 
 ```sh
-sadr-analysis --prepare-daily-history SOURCE_HISTORY NEW_PRIVATE_DIRECTORY
+nivra-analysis --prepare-daily-history SOURCE_HISTORY NEW_PRIVATE_DIRECTORY
 ```
 
 It validates receipt hashes/times/duplicates and produces pinned daily datasets

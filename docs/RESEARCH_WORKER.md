@@ -5,7 +5,7 @@ resource limits. Models can select aliases; they cannot register code, supply
 shell/paths/limits, access credentials or promote a strategy. A measured result
 is not scientific acceptance.
 
-`research-enqueue` queues only; the separate non-root `sadr-research-worker` claims
+`research-enqueue` queues only; the separate non-root `nivra-research-worker` claims
 jobs. The model harness can also run an already registered analysis through the
 same original queue/runner. `research-accept` evaluates retained evidence, not trade
 activation. Use command `--help` for explicit arguments.
@@ -73,7 +73,7 @@ decision; the controller does not restart that blocked task to make room.
 
 ## Registered analysis
 
-`sadr-analysis` supports reviewed `shared_core_backtest_v1` inputs (exact manifest
+`nivra-analysis` supports reviewed `shared_core_backtest_v1` inputs (exact manifest
 and quote events) and `daily_history_summary_v1` inputs (receipt-bound daily bars).
 The latter gives descriptive unadjusted historical statistics, not executable
 fills or certified profit. Runtime/engine changes never silently rewrite older
@@ -88,7 +88,7 @@ Open work and qualification are tracked in
 ## Re-registering a stale runtime
 
 A registration pins all three input files by path and SHA-256. When a release
-directory is pruned, a `runtime_file` that pointed at its `sadr-analysis` becomes
+directory is pruned, a `runtime_file` that pointed at its `nivra-analysis` becomes
 unreadable even though the code and dataset files still exist. The harness now
 reports that as `research_runtime_unreadable` (separate from
 `research_code_unreadable` and `research_input_unreadable`), and preflight and
@@ -96,15 +96,15 @@ readiness check every registered file before a post-close review call.
 
 Re-register outside a session, as a reviewed configuration change:
 
-1. Choose a retained release or stable host path containing `sadr-analysis`; do
+1. Choose a retained release or stable host path containing `nivra-analysis`; do
    not point at a mutable or soon-pruned directory.
 2. Compute its SHA-256 and update only the reviewed planner config's
    `research_tools.registrations` entry `runtime_file` and `runtime_sha256`.
    Keep the original config for rollback and use the normal reviewed
    `config-apply`/restart procedure; never edit a sealed book or a running
    session's state.
-3. Run `sadr-rs preflight --config PAPER_CONFIG` (must print `preflight_ok`) and
-   `sadr-rs readiness --config PAPER_CONFIG` (inspect `research.status: "ready"`).
+3. Run `nivra preflight --config PAPER_CONFIG` (must print `preflight_ok`) and
+   `nivra readiness --config PAPER_CONFIG` (inspect `research.status: "ready"`).
    Do not start or resume a session merely to test the registration.
 4. The current `shared_core_backtest` / `synthetic_no_quotes_fixture` entry is a
    fixture dataset. A successful registered run measures that fixture, not a real

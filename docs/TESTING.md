@@ -3,7 +3,7 @@
 Keep the suite lean and behavioral. Prefer scenarios inside existing contracts
 over duplicate micro-tests; fixed historical test counts are not a quality gate.
 The suite has a hard budget of **400 Rust `#[test]` functions** (including
-ignored measurements), enforced by `sadr-tools test-budget` in the local gate.
+ignored measurements), enforced by `nivra-tools test-budget` in the local gate.
 Merge or remove tests before adding one; do not raise the limit to land a test.
 Tests never open sockets, use credentials or perform real provider/model calls.
 Use fakes, fixture transports and injectable clocks. Heavy checks run on a
@@ -11,7 +11,7 @@ development host, one at a time; see [build performance](BUILD_PERFORMANCE.md)
 for the fast local gate and memory guidance.
 
 The current local gate also checks **17** frozen golden files
-(`sadr-tools golden-check`) and **91** dashboard tests. These are current gate
+(`nivra-tools golden-check`) and **91** dashboard tests. These are current gate
 facts, not permanent performance claims.
 
 ## Parallel isolation
@@ -19,7 +19,7 @@ facts, not permanent performance claims.
 Every Rust fixture owns a unique `tempfile::tempdir()` (or an explicitly unique
 per-process path); never use a fixed `/tmp` or `/var/tmp` name, a process-global
 environment change or a shared lock file as test coordination. Advisory locks in
-fixture paths use `sadr_cli::lock::AdvisoryLock`: it unlocks
+fixture paths use `nivra_cli::lock::AdvisoryLock`: it unlocks
 explicitly before closing, so a child forked by an unrelated test cannot keep
 the lock held after the owner drops it. A test that needs contention holds its
 own guard and then proves the lock is released, including while a cloned
@@ -40,9 +40,9 @@ browser, credentials or real sockets.
 Use Node 24 and the pinned lockfile:
 
 ```sh
-npm ci --prefix rust/sadr-cli/src/runtime/web/v2
-npm run build --prefix rust/sadr-cli/src/runtime/web/v2
-npm test --prefix rust/sadr-cli/src/runtime/web/v2
+npm ci --prefix rust/nivra-cli/src/runtime/web/v2
+npm run build --prefix rust/nivra-cli/src/runtime/web/v2
+npm test --prefix rust/nivra-cli/src/runtime/web/v2
 ```
 
 The command typechecks, runs the suite and verifies the committed bundle matches
@@ -55,7 +55,7 @@ Manual browser fixtures qualify layout/interaction only, not market acceptance.
 
 | Area | Behaviour and source |
 | --- | --- |
-| Finance/execution | `sadr-core/tests`, `sadr-store/tests/writer.rs`: exact costs/rounding, cash/held units, tick/lot identity, atomic fills and ≤2-second original receipts |
+| Finance/execution | `nivra-core/tests`, `nivra-store/tests/writer.rs`: exact costs/rounding, cash/held units, tick/lot identity, atomic fills and ≤2-second original receipts |
 | Recovery/storage | Store controller/binding/legacy tests and runtime contracts: fencing, crash boundaries, stopped/halted persistence, dated pointers and carry seals |
 | Models/planner | Existing planner/harness contracts: strict JSON/tools, full evidence, event allowance accounting, failed charges, missing/replaced namespaces, cancellation and plan supersession |
 | Continuous discovery | Planner/replay scenarios: fresh Luna loop, continue/wait/decide, invalid handoff keys, Grok feedback, liberal budgets and dated config hashes |
@@ -64,7 +64,7 @@ Manual browser fixtures qualify layout/interaction only, not market acceptance.
 | Data/history | Parser/download/preparation fixtures: source times, malformed rows, immutable receipts, missing bars, original shared quota and partial coverage |
 | Dashboard | Runtime web/history tests: bearer/Host/method/origin checks, bounded inputs, redaction, identity/hash failures and no trading controls |
 | Delivery | Updater/preflight tests: immutable tags/checksums, HOLD/blackout/book admission, failed health rollback and interrupted transaction |
-| Research | `sadr-research` contracts: registration hashes, leases, malicious output, cancellation/uncertain-worker recovery; no unsandboxed fallback |
+| Research | `nivra-research` contracts: registration hashes, leases, malicious output, cancellation/uncertain-worker recovery; no unsandboxed fallback |
 | Full-day replay | Virtual 09:15–15:30 scripted flow, paper buy/sell, fees/cash reconciliation, timeout no-halt, future receipt refusal, original inputs unchanged |
 
 Legacy fixed-profile tests verify historical compatibility, not current model-led

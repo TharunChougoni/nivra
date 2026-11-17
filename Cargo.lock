@@ -862,6 +862,102 @@ dependencies = [
 ]
 
 [[package]]
+name = "nivra-cli"
+version = "0.9.33"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "csv",
+ "flate2",
+ "fs2",
+ "libc",
+ "nivra-core",
+ "nivra-research",
+ "nivra-sandbox",
+ "nivra-store",
+ "prost",
+ "rusqlite",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "signal-hook",
+ "tempfile",
+ "tokio",
+ "tungstenite",
+ "ureq",
+]
+
+[[package]]
+name = "nivra-core"
+version = "0.9.33"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "url",
+]
+
+[[package]]
+name = "nivra-research"
+version = "0.9.33"
+dependencies = [
+ "libc",
+ "nivra-store",
+ "rig-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "nivra-sandbox"
+version = "0.9.33"
+dependencies = [
+ "chrono",
+ "libc",
+ "nivra-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+]
+
+[[package]]
+name = "nivra-store"
+version = "0.9.33"
+dependencies = [
+ "chrono",
+ "libc",
+ "nivra-core",
+ "rusqlite",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+]
+
+[[package]]
+name = "nivra-tools"
+version = "0.9.33"
+dependencies = [
+ "chrono",
+ "clap",
+ "libc",
+ "nivra-core",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1231,102 +1327,6 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
-
-[[package]]
-name = "sadr-cli"
-version = "0.9.33"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "clap",
- "csv",
- "flate2",
- "fs2",
- "libc",
- "prost",
- "rusqlite",
- "rustix",
- "sadr-core",
- "sadr-research",
- "sadr-sandbox",
- "sadr-store",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "signal-hook",
- "tempfile",
- "tokio",
- "tungstenite",
- "ureq",
-]
-
-[[package]]
-name = "sadr-core"
-version = "0.9.33"
-dependencies = [
- "chrono",
- "chrono-tz",
- "rust_decimal",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "url",
-]
-
-[[package]]
-name = "sadr-research"
-version = "0.9.33"
-dependencies = [
- "libc",
- "rig-core",
- "rusqlite",
- "sadr-store",
- "serde",
- "serde_json",
- "sha2 0.11.0",
-]
-
-[[package]]
-name = "sadr-sandbox"
-version = "0.9.33"
-dependencies = [
- "chrono",
- "libc",
- "rusqlite",
- "sadr-core",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
-]
-
-[[package]]
-name = "sadr-store"
-version = "0.9.33"
-dependencies = [
- "chrono",
- "libc",
- "rusqlite",
- "rustix",
- "sadr-core",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
-]
-
-[[package]]
-name = "sadr-tools"
-version = "0.9.33"
-dependencies = [
- "chrono",
- "clap",
- "libc",
- "sadr-core",
- "serde",
- "serde_json",
- "sha2 0.11.0",
-]
 
 [[package]]
 name = "schemars"

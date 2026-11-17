@@ -12,8 +12,8 @@ const tag = 'v0.9.4';
 const sourceCommit = 'a'.repeat(40);
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 function makeFiles() {
-  const main = Buffer.from('static musl sadr-rs fixture');
-  const analysis = Buffer.from('static musl sadr-analysis fixture');
+  const main = Buffer.from('static musl nivra fixture');
+  const analysis = Buffer.from('static musl nivra-analysis fixture');
   const prompts = Buffer.from(JSON.stringify({ 'data.md': 'default prompt fixture' }));
   return new Map([
     [RELEASE_ASSETS[0], main],
@@ -77,7 +77,7 @@ test('release retry appends missing names and byte-checks every existing asset',
 });
 
 test('complete release plans no uploads and prints nothing', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'sadr-release-recovery-'));
+  const directory = mkdtempSync(join(tmpdir(), 'nivra-release-recovery-'));
   const assetsDir = join(directory, 'assets');
   const existingDir = join(directory, 'existing');
   mkdirSync(assetsDir);

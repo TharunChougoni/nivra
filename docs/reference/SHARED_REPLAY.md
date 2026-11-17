@@ -1,12 +1,12 @@
 # Shared quote replay
 
-`sadr-core::historical` streams explicit quote events through the shared paper
-execution/fee engine. `sadr-rs` owns data collection, original journals and ledger
+`nivra-core::historical` streams explicit quote events through the shared paper
+execution/fee engine. `nivra` owns data collection, original journals and ledger
 commit; neither models nor network calls belong inside the financial engine.
 
 ```sh
-target/debug/sadr-tools replay-fingerprint
-target/debug/sadr-tools replay --manifest FILE --events FILE
+target/debug/nivra-tools replay-fingerprint
+target/debug/nivra-tools replay --manifest FILE --events FILE
 ```
 
 Manifest: session/warmup, policy, development/training split, virtual historical

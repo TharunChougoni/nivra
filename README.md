@@ -87,8 +87,8 @@ only to reproduce release artifacts.
 git clone https://github.com/TharunChougoni/nivra.git
 cd nivra
 cargo build --workspace --all-targets --locked
-target/debug/sadr-rs --help
-target/debug/sadr-rs self-check
+target/debug/nivra --help
+target/debug/nivra self-check
 ```
 
 These commands are offline checks and do not start a paper session. Signed
@@ -124,17 +124,17 @@ research worker and strategy-sandbox references.
 
 | Crate | Responsibility |
 | --- | --- |
-| `sadr-core` | Decimal finance, fees, instruments/calendar, quotes, paper execution and replay |
-| `sadr-store` | SQLite ledger, durable control/read journals, writer bindings |
-| `sadr-cli` | Paper controller, scanner, model harness, history, dashboard, recovery and updater |
-| `sadr-research` | Registered jobs, leases, sandbox worker and result contracts |
-| `sadr-sandbox` | CLI-free scorer/replay containment API |
-| `sadr-tools` | Release assembly/checks, streaming replay and repository checks |
+| `nivra-core` | Decimal finance, fees, instruments/calendar, quotes, paper execution and replay |
+| `nivra-store` | SQLite ledger, durable control/read journals, writer bindings |
+| `nivra-cli` | Paper controller, scanner, model harness, history, dashboard, recovery and updater |
+| `nivra-research` | Registered jobs, leases, sandbox worker and result contracts |
+| `nivra-sandbox` | CLI-free scorer/replay containment API |
+| `nivra-tools` | Release assembly/checks, streaming replay and repository checks |
 
-Start reading at `rust/sadr-cli/src/main.rs`,
-`rust/sadr-cli/src/runtime/wide/controller.rs`,
-`rust/sadr-core/src/execution.rs` and `rust/sadr-core/src/finance.rs`. The
-dashboard source is under `rust/sadr-cli/src/runtime/web/v2/src/`.
+Start reading at `rust/nivra-cli/src/main.rs`,
+`rust/nivra-cli/src/runtime/wide/controller.rs`,
+`rust/nivra-core/src/execution.rs` and `rust/nivra-core/src/finance.rs`. The
+dashboard source is under `rust/nivra-cli/src/runtime/web/v2/src/`.
 
 ## Current gate
 

@@ -1,0 +1,10 @@
+[Unit]
+Description=Nivra verified PAPER release updater
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+ExecStart=%h/nivra-current/nivra update --config %h/.config/nivra/updater.json
+UMask=0077
+NoNewPrivileges=true
+TimeoutStartSec=10min

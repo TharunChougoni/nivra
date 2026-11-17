@@ -117,7 +117,7 @@ pipeline tools. Its proposals and approval records never activate a session.
 
 ## Offline market regimes
 
-`sadr_core::regime` provides a deterministic classifier, without runtime
+`nivra_core::regime` provides a deterministic classifier, without runtime
 wiring. `compute_inputs` accepts aligned eligible-instrument prior-close/open/
 current price slices and one-minute proxy median returns. It excludes invalid
 price triples and minute returns, reports retained counts, computes median session

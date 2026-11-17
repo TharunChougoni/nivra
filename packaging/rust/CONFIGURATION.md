@@ -17,7 +17,7 @@ of the original account as an archive. It is not a migration or an updater retry
 Use the current Rust command:
 
 ```sh
-sadr-rs setup --paper ORIGINAL_PAPER_CONFIG \
+nivra setup --paper ORIGINAL_PAPER_CONFIG \
   --digest-model-config APP_DIGEST_MODEL_CONFIG \
   --owner-model-config APP_OWNER_MODEL_CONFIG \
   --config-directory NEW_CONFIG_DIRECTORY \
@@ -80,7 +80,7 @@ approvals to make readiness pass.
    is reviewed. No automatic fallback exists. No price/cost estimate is invented
    for a model whose pricing evidence is absent.
 5. Validate the completed planner offline with
-   `sadr-rs planner config-check --planner NEW_PLANNER --session SESSION`.
+   `nivra planner config-check --planner NEW_PLANNER --session SESSION`.
    Review original authority, self-check and preflight separately before
    applying. These templates neither apply policy nor start, resume, unhalt,
    reset usage or roll over a book.

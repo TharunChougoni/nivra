@@ -135,12 +135,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release --locked --target x86_64-unknown-linux-musl -p sadr-cli --bin sadr-rs --bin sadr-analysis
-          target/x86_64-unknown-linux-musl/release/sadr-rs self-check --expected-version "$RELEASE_TAG"
-          chmod +x "$RUNNER_TEMP/release-tools/sadr-tools"
-          "$RUNNER_TEMP/release-tools/sadr-tools" release-artifact --tag "$RELEASE_TAG" --binary target/x86_64-unknown-linux-musl/release/sadr-rs --output "$RUNNER_TEMP/release-dist"
-          install -m755 target/x86_64-unknown-linux-musl/release/sadr-analysis "$RUNNER_TEMP/release-dist/sadr-analysis-x86_64-unknown-linux-musl"
-          (cd "$RUNNER_TEMP/release-dist" && sha256sum sadr-analysis-x86_64-unknown-linux-musl > sadr-analysis-x86_64-unknown-linux-musl.sha256)
+          cargo build --release --locked --target x86_64-unknown-linux-musl -p nivra-cli --bin nivra --bin nivra-analysis
+          target/x86_64-unknown-linux-musl/release/nivra self-check --expected-version "$RELEASE_TAG"
+          chmod +x "$RUNNER_TEMP/release-tools/nivra-tools"
+          "$RUNNER_TEMP/release-tools/nivra-tools" release-artifact --tag "$RELEASE_TAG" --binary target/x86_64-unknown-linux-musl/release/nivra --output "$RUNNER_TEMP/release-dist"
+          install -m755 target/x86_64-unknown-linux-musl/release/nivra-analysis "$RUNNER_TEMP/release-dist/nivra-analysis-x86_64-unknown-linux-musl"
+          (cd "$RUNNER_TEMP/release-dist" && sha256sum nivra-analysis-x86_64-unknown-linux-musl > nivra-analysis-x86_64-unknown-linux-musl.sha256)
       - name: Publish deploy-key-readable immutable asset ref
         if: steps.publication.outputs.resume_assets != 'true'
         shell: bash
@@ -154,7 +154,7 @@ jobs:
           test ! -e "$index"
           export GIT_INDEX_FILE="$index"
           git read-tree --empty
-          for file in sadr-rs-x86_64-unknown-linux-musl sadr-rs-x86_64-unknown-linux-musl.sha256 release.json default-prompts.json default-prompts.sha256 sadr-analysis-x86_64-unknown-linux-musl sadr-analysis-x86_64-unknown-linux-musl.sha256; do
+          for file in nivra-x86_64-unknown-linux-musl nivra-x86_64-unknown-linux-musl.sha256 release.json default-prompts.json default-prompts.sha256 nivra-analysis-x86_64-unknown-linux-musl nivra-analysis-x86_64-unknown-linux-musl.sha256; do
             blob=$(git hash-object -w "$RUNNER_TEMP/release-dist/$file")
             git update-index --add --cacheinfo "100644,$blob,$file"
           done
@@ -185,18 +185,18 @@ jobs:
           mkdir -m 700 "$out"
           if git cat-file -e "refs/assets/$RELEASE_TAG:default-prompts.sha256" 2>/dev/null; then
             expected=$(printf '%s\n' \
-              sadr-rs-x86_64-unknown-linux-musl \
-              sadr-rs-x86_64-unknown-linux-musl.sha256 \
+              nivra-x86_64-unknown-linux-musl \
+              nivra-x86_64-unknown-linux-musl.sha256 \
               release.json default-prompts.json default-prompts.sha256 \
-              sadr-analysis-x86_64-unknown-linux-musl \
-              sadr-analysis-x86_64-unknown-linux-musl.sha256 | sort)
+              nivra-analysis-x86_64-unknown-linux-musl \
+              nivra-analysis-x86_64-unknown-linux-musl.sha256 | sort)
           else
             expected=$(printf '%s\n' \
-              sadr-rs-x86_64-unknown-linux-musl \
-              sadr-rs-x86_64-unknown-linux-musl.sha256 \
+              nivra-x86_64-unknown-linux-musl \
+              nivra-x86_64-unknown-linux-musl.sha256 \
               release.json \
-              sadr-analysis-x86_64-unknown-linux-musl \
-              sadr-analysis-x86_64-unknown-linux-musl.sha256 | sort)
+              nivra-analysis-x86_64-unknown-linux-musl \
+              nivra-analysis-x86_64-unknown-linux-musl.sha256 | sort)
           fi
           actual=$(git ls-tree -r --name-only "refs/assets/$RELEASE_TAG" | sort)
           test "$actual" = "$expected"
@@ -207,8 +207,8 @@ jobs:
             --tag "$RELEASE_TAG" \
             --source-commit "$(git rev-parse HEAD)" \
             --directory "$out"
-          chmod 755 "$out/sadr-rs-x86_64-unknown-linux-musl"
-          "$out/sadr-rs-x86_64-unknown-linux-musl" self-check --expected-version "$RELEASE_TAG"
+          chmod 755 "$out/nivra-x86_64-unknown-linux-musl"
+          "$out/nivra-x86_64-unknown-linux-musl" self-check --expected-version "$RELEASE_TAG"
 
       - name: Create release or append only verified missing attachments
         env:
@@ -217,22 +217,22 @@ jobs:
         run: |
           set -euo pipefail
           files=(
-            sadr-rs-x86_64-unknown-linux-musl
-            sadr-rs-x86_64-unknown-linux-musl.sha256
+            nivra-x86_64-unknown-linux-musl
+            nivra-x86_64-unknown-linux-musl.sha256
             release.json
             default-prompts.json
             default-prompts.sha256
-            sadr-analysis-x86_64-unknown-linux-musl
-            sadr-analysis-x86_64-unknown-linux-musl.sha256
+            nivra-analysis-x86_64-unknown-linux-musl
+            nivra-analysis-x86_64-unknown-linux-musl.sha256
           )
           assets_dir="$RUNNER_TEMP/verified-release-assets"
           if test ! -f "$assets_dir/default-prompts.json"; then
             files=(
-              sadr-rs-x86_64-unknown-linux-musl
-              sadr-rs-x86_64-unknown-linux-musl.sha256
+              nivra-x86_64-unknown-linux-musl
+              nivra-x86_64-unknown-linux-musl.sha256
               release.json
-              sadr-analysis-x86_64-unknown-linux-musl
-              sadr-analysis-x86_64-unknown-linux-musl.sha256
+              nivra-analysis-x86_64-unknown-linux-musl
+              nivra-analysis-x86_64-unknown-linux-musl.sha256
             )
           fi
           releases=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name')

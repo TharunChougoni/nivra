@@ -4,13 +4,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const RELEASE_ASSETS = [
-  'sadr-rs-x86_64-unknown-linux-musl',
-  'sadr-rs-x86_64-unknown-linux-musl.sha256',
+  'nivra-x86_64-unknown-linux-musl',
+  'nivra-x86_64-unknown-linux-musl.sha256',
   'release.json',
   'default-prompts.json',
   'default-prompts.sha256',
-  'sadr-analysis-x86_64-unknown-linux-musl',
-  'sadr-analysis-x86_64-unknown-linux-musl.sha256',
+  'nivra-analysis-x86_64-unknown-linux-musl',
+  'nivra-analysis-x86_64-unknown-linux-musl.sha256',
 ];
 const LEGACY_RELEASE_ASSETS = RELEASE_ASSETS.filter(name => !name.startsWith('default-prompts.'));
 

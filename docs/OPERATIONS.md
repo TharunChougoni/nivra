@@ -7,14 +7,14 @@ Commands below use placeholders or the conventional installation layout.
 
 ## Services and files
 
-Installed units and state paths retain the internal `ind-sadr` prefix for
+Installed units and state paths retain the internal `nivra` prefix for
 upgrade compatibility; Nivra is the public project name.
 
 | Item | Purpose |
 | --- | --- |
-| `ind-sadr-rust-paper.service` | `sadr-rs paper --config PAPER_CONFIG` |
-| `ind-sadr-rust-update.timer` / `.service` | Guarded update check every 30 minutes |
-| `ind-sadr-rs-dashboard.service` | Optional research-only dashboard (Backtest lab) using the installed `sadr-rs` |
+| `nivra-paper.service` | `nivra paper --config PAPER_CONFIG` |
+| `nivra-update.timer` / `.service` | Guarded update check every 30 minutes |
+| `nivra-dashboard.service` | Optional research-only dashboard (Backtest lab) using the installed `nivra` |
 | `PAPER_CONFIG` | Account/capital, original book/read journal, source/history/planner paths |
 | `SESSIONS_ROOT/current.json` | Application-owned committed dated-book pointer |
 | `<session>/paper.sqlite` | Original ledger, control and planner/review journals |
@@ -48,7 +48,7 @@ unit/drop-in that overrides the packaged profile. Check rather than trusting the
 packaged file:
 
 ```sh
-systemctl --user show ind-sadr-rust-paper.service \
+systemctl --user show nivra-paper.service \
   --property=MemoryHigh,MemoryMax,MemorySwapMax,TasksMax,LimitNOFILE
 ```
 
@@ -176,8 +176,8 @@ an already-validated rollover without starting the service. Preview first, then
 advance explicitly:
 
 ```sh
-sadr-rs rollover --config PAPER_CONFIG --now 2026-10-28T09:00:00+05:30 --dry-run
-sadr-rs rollover --config PAPER_CONFIG --now 2026-10-28T09:00:00+05:30 --advance --confirm-paper-review
+nivra rollover --config PAPER_CONFIG --now 2026-10-28T09:00:00+05:30 --dry-run
+nivra rollover --config PAPER_CONFIG --now 2026-10-28T09:00:00+05:30 --advance --confirm-paper-review
 ```
 
 `--now` is mandatory; the command never samples the wall clock. `--advance`
@@ -213,7 +213,7 @@ the reviewed `--accept-halted-carry` evidence first.
 ## Preflight and readiness
 
 For an explicit manual catch-up of the current config's required daily history,
-run `sadr-rs history-backfill --config PAPER_CONFIG`. It uses the original shared
+run `nivra history-backfill --config PAPER_CONFIG`. It uses the original shared
 quota and configured history root, validates/reuses raw receipts, and coalesces
 missing reviewed trading sessions. Old descriptive replay manifests are preserved
 and are not rebuilt by operational acquisition. Automatic pre-open preparation
@@ -222,10 +222,10 @@ unavailable observations remain gaps; inspect readiness after the pass. See
 [historical candles](HISTORY_DOWNLOAD.md).
 
 ```sh
-sadr-rs self-check --expected-version vX.Y.Z
-sadr-rs preflight --config PAPER_CONFIG
-sadr-rs readiness --config PAPER_CONFIG
-sadr-rs rollover --config PAPER_CONFIG --now RFC3339_TIME --dry-run
+nivra self-check --expected-version vX.Y.Z
+nivra preflight --config PAPER_CONFIG
+nivra readiness --config PAPER_CONFIG
+nivra rollover --config PAPER_CONFIG --now RFC3339_TIME --dry-run
 ```
 
 Self-check accepts a version with or without `v` and prints the failed check.
@@ -255,7 +255,7 @@ missing or unreadable file fails preflight with its own code
 with `status` and per-artifact reasons, so a stale runtime path is visible before
 the post-close review call. A blocked research registration does not change the
 model-readiness exit code. Re-register a stale runtime outside a session against
-a retained release's `sadr-analysis` binary as described in the
+a retained release's `nivra-analysis` binary as described in the
 [research worker](RESEARCH_WORKER.md#re-registering-a-stale-runtime), then rerun
 preflight and readiness.
 
@@ -286,11 +286,11 @@ projection reports `configured`, not `ready`, while candidate compute is
 configured but runtime-unverified; a missing known prerequisite reports
 `blocked`. It never advertises a weaker process-group fallback. The stage root must be private (0700), outside `/tmp`/`/var/tmp`
 because the unit uses `PrivateTmp=yes`, and outside a forbidden home/root
-component. Candidate units are `sadr-candidate-<lease>.service`; the controller
+component. Candidate units are `nivra-candidate-<lease>.service`; the controller
 stops only that original unit and releases the lease only after the typed
 unit/cgroup proof. A retained `candidate_recovery_required` lease is never
 replayed or reset; inspect the original unit and result receipts before any
-reviewed recovery. The hidden `sadr-rs candidate-supervise` command is not an
+reviewed recovery. The hidden `nivra candidate-supervise` command is not an
 operator workflow and accepts only the staged launch manifest; it claims a
 one-run marker before reading source, so a unit restart refuses instead of
 executing the payload twice. The reviewed `max_result_bytes` cap is recorded in
@@ -406,17 +406,17 @@ previous config; it detects missing pairs/cycles. Point only the ordinary paper
 config at the new file after review, and compare resolved policies:
 
 ```sh
-sadr-rs planner config-check --planner NEW_PLANNER --session 2026-10-22
-sadr-rs planner config-check --planner NEW_PLANNER --session 2026-10-23
+nivra planner config-check --planner NEW_PLANNER --session 2026-10-22
+nivra planner config-check --planner NEW_PLANNER --session 2026-10-23
 ```
 
 For a reviewed **current flat, non-halted, open book**, stop the controller, edit
 only ordinary planner config, then:
 
 ```sh
-sadr-rs config-apply --confirm-paper-review --config PAPER_CONFIG
-sadr-rs resume --confirm-paper-review --config PAPER_CONFIG
-systemctl --user start ind-sadr-rust-paper.service
+nivra config-apply --confirm-paper-review --config PAPER_CONFIG
+nivra resume --confirm-paper-review --config PAPER_CONFIG
+systemctl --user start nivra-paper.service
 ```
 
 `config-apply` takes controller/book locks, validates and records old/new policy
@@ -617,9 +617,9 @@ for files written before that status existed, whose reason is exactly
 `history_attempt_interrupted_no_replay`:
 
 ```sh
-systemctl --user stop ind-sadr-rust-paper.service
-sadr-rs history-recover --config PAPER_CONFIG --confirm-paper-review
-systemctl --user start ind-sadr-rust-paper.service
+systemctl --user stop nivra-paper.service
+nivra history-recover --config PAPER_CONFIG --confirm-paper-review
+systemctl --user start nivra-paper.service
 ```
 
 `--now RFC3339` is optional and defaults to the wall clock. The command validates
@@ -701,10 +701,10 @@ shutdown behaviour before maintenance: older releases may mutate a closed book.
 Never use a general restart to clear stop/halt state.
 
 ```sh
-systemctl --user stop ind-sadr-rust-paper.service
-sadr-rs planner-recover --config PAPER_CONFIG --confirm-paper-review
-sadr-rs resume --config PAPER_CONFIG --confirm-paper-review
-systemctl --user start ind-sadr-rust-paper.service
+systemctl --user stop nivra-paper.service
+nivra planner-recover --config PAPER_CONFIG --confirm-paper-review
+nivra resume --config PAPER_CONFIG --confirm-paper-review
+systemctl --user start nivra-paper.service
 ```
 
 Use this sequence for an eligible **flat open paper planner incident**. Recovery
@@ -896,9 +896,9 @@ A **halted model-led book with open positions** enters reviewed protection-only
 mode instead of abandoning the book:
 
 ```sh
-systemctl --user stop ind-sadr-rust-paper.service
-sadr-rs planner-recover --config PAPER_CONFIG --protection-only --confirm-paper-review
-systemctl --user start ind-sadr-rust-paper.service
+systemctl --user stop nivra-paper.service
+nivra planner-recover --config PAPER_CONFIG --protection-only --confirm-paper-review
+systemctl --user start nivra-paper.service
 ```
 
 Protection-only recovery rebinds the planner authority to the corrected config,
@@ -923,12 +923,12 @@ with the reviewed halted-carry acceptance instead. Run it after the source close
 and before 09:15 IST on the next trading date, with the controller stopped:
 
 ```sh
-systemctl --user stop ind-sadr-rust-paper.service
-sadr-rs rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --dry-run
-sadr-rs rollover --config PAPER_CONFIG --accept-halted-carry --confirm-paper-review
-sadr-rs rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --dry-run
-sadr-rs rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --advance --confirm-paper-review
-systemctl --user start ind-sadr-rust-paper.service
+systemctl --user stop nivra-paper.service
+nivra rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --dry-run
+nivra rollover --config PAPER_CONFIG --accept-halted-carry --confirm-paper-review
+nivra rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --dry-run
+nivra rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --advance --confirm-paper-review
+systemctl --user start nivra-paper.service
 ```
 
 The first preview shows the blocked book (`rollover_blocked`, `halted: true`,
@@ -960,10 +960,10 @@ When the carried position is flat, stop the service and clear only the halt with
 the reviewed recovery, then resume:
 
 ```sh
-systemctl --user stop ind-sadr-rust-paper.service
-sadr-rs planner-recover --config PAPER_CONFIG --confirm-paper-review
-sadr-rs resume --config PAPER_CONFIG --confirm-paper-review
-systemctl --user start ind-sadr-rust-paper.service
+systemctl --user stop nivra-paper.service
+nivra planner-recover --config PAPER_CONFIG --confirm-paper-review
+nivra resume --config PAPER_CONFIG --confirm-paper-review
+systemctl --user start nivra-paper.service
 ```
 
 That recovery refuses while any carried position remains, requires the recorded
@@ -1028,7 +1028,7 @@ exist until the lifecycle turn completes.
 For an old reconciled closed/flat/non-halted stopped book lacking its review seal:
 
 ```sh
-sadr-rs rollover --config PAPER_CONFIG --acknowledge-closed-book --confirm-paper-review
+nivra rollover --config PAPER_CONFIG --acknowledge-closed-book --confirm-paper-review
 ```
 
 This binds the original report/state and writes only acknowledgment evidence. It
@@ -1041,11 +1041,11 @@ release containing this recovery, run the following on the next trading date,
 before 09:15 IST (the clock arguments sample the actual command time):
 
 ```sh
-systemctl --user stop ind-sadr-rust-paper.service
-sadr-rs rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --dry-run
-sadr-rs rollover --config PAPER_CONFIG --accept-stopped-carry --confirm-paper-review
-sadr-rs rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --dry-run
-sadr-rs rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --advance --confirm-paper-review
+systemctl --user stop nivra-paper.service
+nivra rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --dry-run
+nivra rollover --config PAPER_CONFIG --accept-stopped-carry --confirm-paper-review
+nivra rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --dry-run
+nivra rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --advance --confirm-paper-review
 ```
 
 The first preview shows the blocked carried book. Acceptance creates a private,
@@ -1155,9 +1155,9 @@ rejected at load when the name, exact model ID, absolute credential path or
 admission list is invalid. Then inspect and request the switch:
 
 ```sh
-sadr-rs agent model show --config PAPER_CONFIG --json
-sadr-rs agent model set --config PAPER_CONFIG --model PROFILE_NAME --json
-sadr-rs agent model show --config PAPER_CONFIG --json
+nivra agent model show --config PAPER_CONFIG --json
+nivra agent model set --config PAPER_CONFIG --model PROFILE_NAME --json
+nivra agent model show --config PAPER_CONFIG --json
 ```
 
 For a config-driven request, keep the runtime selection in a separate JSON file:
@@ -1169,7 +1169,7 @@ For a config-driven request, keep the runtime selection in a separate JSON file:
 Reload that file with the same optional revision and request-ID guards as `set`:
 
 ```sh
-sadr-rs agent model reload --config PAPER_CONFIG --selection-config SELECTION_CONFIG --json
+nivra agent model reload --config PAPER_CONFIG --selection-config SELECTION_CONFIG --json
 ```
 
 The selection file names a reviewed profile; it cannot add a model binding or
@@ -1192,7 +1192,7 @@ the next session, use `model select` below. See the
 
 ### Selecting a role model from the CLI
 
-`sadr-rs model select` changes the model one planner role uses, without a hand
+`nivra model select` changes the model one planner role uses, without a hand
 edit or a manual migration. It only chooses between bindings the reviewed
 planner policy already declares: the target must be an admitted profile in
 `orchestrator.model_profiles`/`admitted_models`, or the role's configured
@@ -1202,7 +1202,7 @@ stay in the planner config.
 Preview first; `--dry-run` writes no planner, paper-config, book or audit state:
 
 ```sh
-sadr-rs model select --config PAPER_CONFIG --role orchestrator --profile PROFILE_NAME --dry-run --json
+nivra model select --config PAPER_CONFIG --role orchestrator --profile PROFILE_NAME --dry-run --json
 ```
 
 The preview reports the planner-config diff (only the role's `model_id`,
@@ -1215,7 +1215,7 @@ unavailable grant or catalog is reported as `unavailable` with its reason.
 Apply it with the same reviewed confirmation as `config-apply`:
 
 ```sh
-sadr-rs model select --config PAPER_CONFIG --role orchestrator --profile PROFILE_NAME --confirm-paper-review --json
+nivra model select --config PAPER_CONFIG --role orchestrator --profile PROFILE_NAME --confirm-paper-review --json
 ```
 
 The command writes a new planner file beside the live one (same `prompts/`
@@ -1240,7 +1240,7 @@ Refusals, all with a printed reason code:
 - `model_select_session_open`: a paper session is running or its controller lock
   is held. Wait for the session to close; the change applies to the next session.
 - `model_select_grant_required`: the target transport has no authenticated grant.
-  Run `sadr-rs model login` for that transport, then retry.
+  Run `nivra model login` for that transport, then retry.
 - `model_select_model_config_invalid`: the target credential config is missing,
   invalid or declares another transport.
 - `model_select_profile_unknown` / `model_select_model_not_declared`: the profile
@@ -1330,7 +1330,7 @@ Probe the configured key and model with one minimal request (it never starts a
 paper session or touches a journal):
 
 ```sh
-sadr-rs model probe-fallback --config /absolute/path/mistral-fallback.json --model deepseek-v4-1-flash-1017 --reasoning-effort max
+nivra model probe-fallback --config /absolute/path/mistral-fallback.json --model deepseek-v4-1-flash-1017 --reasoning-effort max
 ```
 
 The JSON report includes the HTTP status, transport, requested/received model,
@@ -1354,7 +1354,7 @@ without the removed `decision_owner`, `decide` and `handoff_gate` keys to a new
 file and validate it offline:
 
 ```sh
-sadr-rs planner config-check --planner NEW_PLANNER.json --session SESSION
+nivra planner config-check --planner NEW_PLANNER.json --session SESSION
 ```
 
 The check refuses any missing owner prerequisite and writes nothing. Point the
@@ -1377,15 +1377,15 @@ Every command accepts `--config PAPER_CONFIG --json`; findings are JSON, never
 an order, fill or application acknowledgement.
 
 ```sh
-sadr-rs agent status --config PAPER_CONFIG --json
-sadr-rs agent ask --config PAPER_CONFIG --question 'Why was the entry skipped?' \
+nivra agent status --config PAPER_CONFIG --json
+nivra agent ask --config PAPER_CONFIG --question 'Why was the entry skipped?' \
   --request-id ask-1 --idempotency-key ask-key-1 --json
-sadr-rs agent result --config PAPER_CONFIG --request-id REQUEST_ID --json
-sadr-rs agent instruct --config PAPER_CONFIG \
+nivra agent result --config PAPER_CONFIG --request-id REQUEST_ID --json
+nivra agent instruct --config PAPER_CONFIG \
   --expect-session 2026-11-04 --expect-revision 0 \
   --scope decision_context --text 'Prefer cash when the quote is stale.' \
   --request-id instruct-1 --idempotency-key instruct-key-1 --json
-sadr-rs agent cancel --config PAPER_CONFIG --request-id REQUEST_ID --json
+nivra agent cancel --config PAPER_CONFIG --request-id REQUEST_ID --json
 ```
 
 `status` reads the resolved session, paper-book flags, controller state, model
@@ -1439,7 +1439,7 @@ renewal command or scheduled auto-renew. Optional leftover keys
 `direct_oauth_approval_file` and `approval_auto_renew` are accepted in existing
 config for parse compatibility and ignored at runtime.
 
-`sadr-rs model login|list|status|probe` remain the grant and catalog tools, and
+`nivra model login|list|status|probe` remain the grant and catalog tools, and
 `model select` is the reviewed role-model switch. A model ID must appear in the
 live catalog; `grok-4.7-build-fast` is still refused.
 Catalog presence is not entitlement, billing or tool-quality proof. Credential
@@ -1484,9 +1484,9 @@ Git, in the git-ignored private host inventory described in
 [AGENTS.md](../AGENTS.md). Preview/install:
 
 ```sh
-sadr-rs update --check --config UPDATER_CONFIG
-sadr-rs update --dry-run --config UPDATER_CONFIG
-systemctl --user start ind-sadr-rust-update.service
+nivra update --check --config UPDATER_CONFIG
+nivra update --dry-run --config UPDATER_CONFIG
+systemctl --user start nivra-update.service
 ```
 
 `--check` lists only; dry-run fetches/verifies but never activates. Both write status.
@@ -1496,14 +1496,14 @@ Run as the service/home owner, using the installed binary and absolute updater
 configuration path (replace `UPDATER_CONFIG`):
 
 ```sh
-sadr-rs update --tag vX.Y.Z --config UPDATER_CONFIG
+nivra update --tag vX.Y.Z --config UPDATER_CONFIG
 ```
 
 Operator-stopped deploy (inside the blackout or with carried holdings): stop the paper
 service, then
 
 ```
-sadr-rs update --tag vX.Y.Z --operator-stopped --confirm-paper-review --config UPDATER_CONFIG
+nivra update --tag vX.Y.Z --operator-stopped --confirm-paper-review --config UPDATER_CONFIG
 ```
 
 It requires an inactive service and a book with no pending orders that is either
@@ -1517,10 +1517,10 @@ books keep their holdings), `resume --confirm-paper-review`, readiness, and star
 the service:
 
 ```sh
-sadr-rs config-apply --confirm-paper-review --config PAPER_CONFIG
-sadr-rs resume --confirm-paper-review --config PAPER_CONFIG
-sadr-rs readiness --config PAPER_CONFIG
-systemctl --user start ind-sadr-rust-paper.service
+nivra config-apply --confirm-paper-review --config PAPER_CONFIG
+nivra resume --confirm-paper-review --config PAPER_CONFIG
+nivra readiness --config PAPER_CONFIG
+systemctl --user start nivra-paper.service
 ```
 
 Run these only for the reviewed stopped book; a failed check requires inspection.
@@ -1588,7 +1588,7 @@ candidate, restore the previous pointer if it was swapped, restart and probe the
 previous release, then finalise `pending.json` as the release's
 `failed-update.json` receipt with bounded recovery evidence. If the previous
 release cannot be restored or restarted, the updater writes
-`~/.local/state/ind-sadr/update-recovery.json` (`kind`, `cause`, timestamp and
+`~/.local/state/nivra/update-recovery.json` (`kind`, `cause`, timestamp and
 pointer/restart verdicts) and emits a critical `updater_failure` alert naming
 `update_rollback_restart_failed` or `update_rollback_pointer_restore_failed`;
 it never returns success. `failed-update.json` blocks retry of that release.
@@ -1602,7 +1602,7 @@ the updater keeps `pending.json` untouched, writes a bounded
 `interrupted_update_*_requires_review` reason for operator inspection.
 Previews (`--check`/`--dry-run`) report these conditions without moving evidence.
 Preserve pending/recovery files, all releases, previous pointer and original
-journals. Status is in `~/.local/state/ind-sadr/update.json`; Git failure details
+journals. Status is in `~/.local/state/nivra/update.json`; Git failure details
 are in the adjacent `git-diagnostic.json` with secrets redacted.
 
 Before writing transaction state, stopping the controller or flipping the pointer,
@@ -1616,7 +1616,7 @@ activation, explicit rollback and the `--operator-stopped` path. It never repair
 or rewrites reviewed config.
 
 Candidate and rollback preflight output is discarded except for a bounded reason
-code and timestamp in `~/.local/state/ind-sadr/preflight-failure.json`; never
+code and timestamp in `~/.local/state/nivra/preflight-failure.json`; never
 config bytes, paths, tokens or account data. A failed candidate preflight is
 retried by the timer, and the record appears in `update.json`, the CLI status
 line (`updater_preflight_failed: version=… reason=… phase=… since=…`), the
@@ -1649,7 +1649,7 @@ published tag from the preserved release manifest/history, then run the same
 command with that tag, for example:
 
 ```sh
-sadr-rs update --tag vX.Y.Z --config UPDATER_CONFIG
+nivra update --tag vX.Y.Z --config UPDATER_CONFIG
 ```
 
 Rollback runs all the same checks and guards. If blocked by holdings, halt,
@@ -1673,13 +1673,13 @@ bearer authentication. There are no trading control endpoints. Avoid a competing
 standalone server on the same port. See [dashboard](DASHBOARD.md).
 
 The paper worker's embedded dashboard is canonical. Enable the standalone
-`ind-sadr-rs-dashboard.service` only when the research-only Backtest lab is
+`nivra-dashboard.service` only when the research-only Backtest lab is
 needed while the paper worker is stopped. Its unit uses
-the installed `sadr-rs`, the same release pointer as paper and updater;
+the installed `nivra`, the same release pointer as paper and updater;
 do not run both dashboard servers on port 8771. Host unit enablement and symlink
 targets still need verification.
 
-Rotate the dashboard token using `sadr-rs dashboard-token rotate [--config PAPER_CONFIG] [--token TOKEN]`.
+Rotate the dashboard token using `nivra dashboard-token rotate [--config PAPER_CONFIG] [--token TOKEN]`.
 When `--token` is omitted, 32 bytes of secure random hex entropy are generated.
 Missing parent directories are created without following symlinks; existing path
 components must not be symlinks. Existing token files must be regular, owned by
@@ -1705,13 +1705,13 @@ evidence stays unknown.
 
 An optional authenticated tunnel uses the exact `dashboard_public_host` hostname
 (no scheme/path) and proxies to loopback. Enable it only through the operator's
-reviewed tunnel. The standalone `sadr-rs dashboard` reads the same key from its
+reviewed tunnel. The standalone `nivra dashboard` reads the same key from its
 optional `--model-config`; without that config only loopback is admitted. Exact
 Host/origin and authentication checks still apply. Tunnel reachability is not
 trading health.
 
 Optional `alert_webhook_file` points to private HTTPS receiver settings; absence
-disables delivery. `sadr-rs alert --test --config PAPER_CONFIG` sends an actual
+disables delivery. `nivra alert --test --config PAPER_CONFIG` sends an actual
 notification, so use only for an authorised destination. Events include halt/stop,
 restart loop, rollover blocked, stale feed, start/end, model fallback and updater
 failure. A clean
@@ -1721,7 +1721,7 @@ when an operator also stops it; closed-book notices remain informational. Persis
 dedupe/admission bounds attempts; `suppressed_count` is per dedupe key since that
 key's last successful delivery, so unrelated event types do not inflate it. With a
 valid configured receiver, the controller's background alert events enter a private
-SQLite outbox before the sender is woken; `sadr-rs alert --test` remains synchronous.
+SQLite outbox before the sender is woken; `nivra alert --test` remains synchronous.
 At most 64 messages wait in the outbox; transport failures, 429s and server
 errors remain queued with bounded backoff and resume after process
 restart. Other 4xx responses are terminal under the existing delivery policy. A
@@ -1809,12 +1809,12 @@ strict Clippy, `cargo test --workspace`, `check-release`).
 1. Run `sudo apt-get install -y musl-tools` and `rustup target add x86_64-unknown-linux-musl`.
 2. Push the annotated tag `vX.Y.Z`, then check out that tag with a clean tree.
 3. Run `git rev-parse HEAD` and confirm it is the annotated tag's source commit.
-4. Run `target/debug/sadr-tools check-release`; the full gate above already built
+4. Run `target/debug/nivra-tools check-release`; the full gate above already built
    this binary with the same feature set.
-5. Run `cargo build --release --locked --offline --target x86_64-unknown-linux-musl -p sadr-cli`.
-6. Run `target/x86_64-unknown-linux-musl/release/sadr-rs self-check --expected-version vX.Y.Z`.
-7. Run `target/debug/sadr-tools release-artifact --tag vX.Y.Z --binary target/x86_64-unknown-linux-musl/release/sadr-rs --output dist`.
-8. Install `sadr-analysis` as `dist/sadr-analysis-x86_64-unknown-linux-musl` and write its `.sha256`.
+5. Run `cargo build --release --locked --offline --target x86_64-unknown-linux-musl -p nivra-cli`.
+6. Run `target/x86_64-unknown-linux-musl/release/nivra self-check --expected-version vX.Y.Z`.
+7. Run `target/debug/nivra-tools release-artifact --tag vX.Y.Z --binary target/x86_64-unknown-linux-musl/release/nivra --output dist`.
+8. Install `nivra-analysis` as `dist/nivra-analysis-x86_64-unknown-linux-musl` and write its `.sha256`.
 9. Publish the seven files locally as the tree of `refs/release-assets/vX.Y.Z`;
    do not also dispatch the GitHub workflow for that tag. The empty-ref check and
    `--force-with-lease` make a duplicate publish fail without replacing assets:
@@ -1826,11 +1826,11 @@ strict Clippy, `cargo test --workspace`, `check-release`).
    rm "$index"
    export GIT_INDEX_FILE="$index"
    git read-tree --empty
-   for file in sadr-rs-x86_64-unknown-linux-musl \
-       sadr-rs-x86_64-unknown-linux-musl.sha256 release.json \
+   for file in nivra-x86_64-unknown-linux-musl \
+       nivra-x86_64-unknown-linux-musl.sha256 release.json \
        default-prompts.json default-prompts.sha256 \
-       sadr-analysis-x86_64-unknown-linux-musl \
-       sadr-analysis-x86_64-unknown-linux-musl.sha256; do
+       nivra-analysis-x86_64-unknown-linux-musl \
+       nivra-analysis-x86_64-unknown-linux-musl.sha256; do
      blob=$(git hash-object -w "dist/$file")
      git update-index --add --cacheinfo "100644,$blob,$file"
    done
@@ -1850,7 +1850,7 @@ strict Clippy, `cargo test --workspace`, `check-release`).
 Each tag gets one publisher. The empty-ref check makes a duplicate publish fail
 without replacing assets. Manually built and GitHub-built binaries are not
 bit-identical. The updater verifies against the published `.sha256`, so either
-artifact installs through `sadr-rs update --tag` unchanged.
+artifact installs through `nivra update --tag` unchanged.
 
 Scanner screens and optional streaming settings are documented in
 [Upstox V3 market feed](UPSTOX_MARKET_FEED.md). Enabling the feed requires a reviewed
@@ -1923,8 +1923,8 @@ after persisting post-close; it never activates a session. Manual preview is
 the default:
 
 ```sh
-sadr-rs retention --config /private/session-config.json --dry-run
-sadr-rs retention --config /private/session-config.json --apply
+nivra retention --config /private/session-config.json --dry-run
+nivra retention --config /private/session-config.json --apply
 ```
 
 Only dated sibling sessions older than the configured age are eligible. They

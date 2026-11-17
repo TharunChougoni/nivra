@@ -8,8 +8,8 @@ output. Node is not a runtime dependency of the paper controller. After client
 source/dependency changes:
 
 ```sh
-npm ci --prefix rust/sadr-cli/src/runtime/web/v2
-npm run build --prefix rust/sadr-cli/src/runtime/web/v2
+npm ci --prefix rust/nivra-cli/src/runtime/web/v2
+npm run build --prefix rust/nivra-cli/src/runtime/web/v2
 ```
 
 Commit the v2 source, lockfile and generated `bundle/` together. The bundle
@@ -24,15 +24,15 @@ optional for isolated fixtures, never a paper/live session.
 cargo fmt --all --check
 cargo build --workspace --all-targets --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings -D clippy::all
-SADR_REQUIRE_SCORER_SANDBOX=1 cargo test --workspace --locked
-target/debug/sadr-tools test-budget
-target/debug/sadr-tools check-release
-target/debug/sadr-tools golden-check
-npm test --prefix rust/sadr-cli/src/runtime/web/v2
+NIVRA_REQUIRE_SCORER_SANDBOX=1 cargo test --workspace --locked
+target/debug/nivra-tools test-budget
+target/debug/nivra-tools check-release
+target/debug/nivra-tools golden-check
+npm test --prefix rust/nivra-cli/src/runtime/web/v2
 ```
 
 Build every target once with `--all-targets`, then run the tools binary directly;
-`cargo run -p sadr-tools` rebuilds shared dependencies and is not part of the
+`cargo run -p nivra-tools` rebuilds shared dependencies and is not part of the
 gate. Do not hardcode `CARGO_BUILD_JOBS=2` on a normal development host. See
 [build performance](BUILD_PERFORMANCE.md) for portable settings and for
 memory-constrained or different setups. Run one heavy build at a time.
@@ -117,12 +117,12 @@ authorize a paper or live session.
 
 | Command | Purpose |
 | --- | --- |
-| `sadr-tools check-release` | Changelog/version and Markdown link check |
-| `sadr-tools release-artifact` | Assemble the release assets on a development host |
-| `sadr-tools golden-check` | Verify frozen fixture bytes |
-| `sadr-tools replay` / `replay-fingerprint` | Offline shared replay ([shared replay](reference/SHARED_REPLAY.md)) |
-| `sadr-tools watch-progress` | Summarize roadmap link and recent commits |
-| `sadr-rs self-check --expected-version vX.Y.Z` | Quick offline binary check |
-| `sadr-rs setup --help` | Explicit fresh current-policy paper preparation; never activates |
-| `sadr-rs backtest` | Offline bounded quote backtest |
-| `sadr-rs history-download` | Resumable read-only candle evidence ([usage](HISTORY_DOWNLOAD.md)) |
+| `nivra-tools check-release` | Changelog/version and Markdown link check |
+| `nivra-tools release-artifact` | Assemble the release assets on a development host |
+| `nivra-tools golden-check` | Verify frozen fixture bytes |
+| `nivra-tools replay` / `replay-fingerprint` | Offline shared replay ([shared replay](reference/SHARED_REPLAY.md)) |
+| `nivra-tools watch-progress` | Summarize roadmap link and recent commits |
+| `nivra self-check --expected-version vX.Y.Z` | Quick offline binary check |
+| `nivra setup --help` | Explicit fresh current-policy paper preparation; never activates |
+| `nivra backtest` | Offline bounded quote backtest |
+| `nivra history-download` | Resumable read-only candle evidence ([usage](HISTORY_DOWNLOAD.md)) |

@@ -7,7 +7,7 @@ their scanner behaviour when strategy settings are absent or disabled.
 
 ## Executable action-tape replay
 
-`sadr-rs strategy-lab replay-actions --source entries.json --parameters parameters.json
+`nivra strategy-lab replay-actions --source entries.json --parameters parameters.json
 --manifest capture-manifest.json --events capture-events.jsonl --output new-report.json`
 simulates an explicit schedule independently of the trading book. The source is an
 ordered JSON array of `{at_ms, key, units, max_price}` entries: integer whole-share
@@ -37,13 +37,13 @@ fills a missing horizon gap. Existing report files are never replaced.
 This is an executable simulation of the declared schedule, rather than a ranking
 return. It does not establish when the author selected that schedule, prospective
 no-lookahead authorship, independent holdout, walk-forward or multiple-testing
-qualification. Binding the report into `sadr-rs experiment-lifecycle` records that
+qualification. Binding the report into `nivra experiment-lifecycle` records that
 scientific path separately; a replay report alone remains `insufficient_evidence`
 and cannot promote or activate a strategy.
 
 ## Experiment lifecycle
 
-`sadr-rs experiment-lifecycle --book <paper-book> --request request.json --output new-receipt.json`
+`nivra experiment-lifecycle --book <paper-book> --request request.json --output new-receipt.json`
 records an immutable strategy specification and explicit transitions. The request
 names one action: `admit`, `ingest_workspace`, `record_abi`, `record_replay`,
 `open_shadow`, `mature`, `evaluate`, `select_paper`, `retire` or `show`.
@@ -204,7 +204,7 @@ Execution errors, timeouts and invalid output are failed ticks without fallback.
 Example CLI shape (use operator-created, non-secret files):
 
 ```sh
-sadr-rs strategy-scorer scores --config limits.json --source scorer.py \
+nivra strategy-scorer scores --config limits.json --source scorer.py \
   --language python --input snapshot.json --scorer-id candidate --version 1 \
   --run trial-1 --observed-ms 1000 --database results.sqlite
 ```
@@ -246,10 +246,10 @@ establish fills, fees or trading profitability.
 ## Recorded-data replay and results
 
 ```sh
-sadr-rs strategy-lab init --database results.sqlite
-sadr-rs strategy-lab export-features --manifest manifest.json --events events.jsonl \
+nivra strategy-lab init --database results.sqlite
+nivra strategy-lab export-features --manifest manifest.json --events events.jsonl \
   --output features.json
-sadr-rs strategy-lab replay --spec spec.json --input features.json \
+nivra strategy-lab replay --spec spec.json --input features.json \
   --run replay-1 --database results.sqlite --config replay.json
 ```
 
@@ -383,7 +383,7 @@ rejects further results rather than silently extending the allowance.
 A local transcript exercises the same shared-budget gateway without a provider:
 
 ```sh
-sadr-rs strategy-lab tools --config lab.json --database results.sqlite \
+nivra strategy-lab tools --config lab.json --database results.sqlite \
   --run research-1 --requests requests.json --session archived-session \
   --recorded features.json --replay-config replay.json
 ```
@@ -416,8 +416,8 @@ retained evidence, including missing marks and declared cost assumptions.
 Model tools cannot qualify or approve. Explicit operator commands are:
 
 ```sh
-sadr-rs strategy-lab qualify --database results.sqlite --input qualification.json
-sadr-rs strategy-lab approve --database results.sqlite --proposal candidate-1 \
+nivra strategy-lab qualify --database results.sqlite --input qualification.json
+nivra strategy-lab approve --database results.sqlite --proposal candidate-1 \
   --approval-ref owner-review-reference --between-sessions --config lab.json
 ```
 
@@ -477,7 +477,7 @@ complete serialized runtime projection against a test-only legacy oracle.
 
 ## Python file sandbox (offline library)
 
-`sadr-sandbox` is a CLI-free, Python-only API for replay/evaluation. It does not
+`nivra-sandbox` is a CLI-free, Python-only API for replay/evaluation. It does not
 change the older Tier 2 commands above; runtime selection is owned by the
 config-gated discovery path below. `score(config, scorer_path, features)` accepts
 a JSON object keyed by instrument and returns a subset of those keys with finite
@@ -551,7 +551,7 @@ no-socket fixture rule; no providers or credentials are involved.
 
 ## Offline strategy source library
 
-`sadr_sandbox::library::Library` stores source files and evaluation results in a
+`nivra_sandbox::library::Library` stores source files and evaluation results in a
 separate SQLite file, never the trading book or existing approval/results ledger.
 It has opt-in shadow diagnostics and config-gated live paper ranking (see below). `open(path)` uses default `LibraryLimits`;
 `open_with_limits(path, limits)` accepts a serde config object with
@@ -574,7 +574,7 @@ and `max_drawdown`. `results(sha, run_kind, regime)` returns insertion order wit
 optional exact filters (`None` means no filter, including null regimes).
 
 `record_regime_result(RegimeResult)` separately appends exact strategy id/version,
-canonical `sadr_core::regime::Regime::label()`, replay/shadow/paper source, positive
+canonical `nivra_core::regime::Regime::label()`, replay/shadow/paper source, positive
 sample count, the same metrics object and recording timestamp. The existing
 `max_metrics_bytes` limit also applies. `regime_performance()` groups by strategy
 id/version, regime and source: it sums samples, trades and net P&L, weights
@@ -591,7 +591,7 @@ There is no update/delete API, strategy activation, model call or promotion.
 
 ## Offline evidence selector
 
-`sadr_sandbox::selector::select` is a pure function over library results, regime,
+`nivra_sandbox::selector::select` is a pure function over library results, regime,
 health and caller-owned state. It never activates a strategy. IDs are strategy
 hashes, with `default` reserved for fallback. Only exact regime matches count;
 malformed metrics are ignored. Distinct dates count as sessions; expectancy is
@@ -819,7 +819,7 @@ descending score and ascending key for ties. Ranks/size must be positive and
 exit rank must be at least enter rank. These are shadow diagnostics, not
 performance or operating evidence.
 
-The offline `sadr_cli::orchestrator::Orchestrator` API inspects
+The offline `nivra_cli::orchestrator::Orchestrator` API inspects
 strategy files and an optional existing source library using a read-only opener.
 `OrchestratorConfig` uses serde defaults: the existing policy roots
 (`strategies`, `proposals`, `orchestrator_notes`), no library path, and default
@@ -856,9 +856,9 @@ not an atomic transaction; failed artifacts remain available for inspection.
 The offline CLI group requires an explicit workspace root:
 
 ```sh
-sadr-rs orchestrator --workspace /tmp/lab view
-sadr-rs orchestrator --workspace /tmp/lab --config offline.json replay --spec spec.json --snapshots snapshots.json --out proposals/replay.json
-sadr-rs orchestrator --workspace /tmp/lab note --path orchestrator_notes/review.txt --text 'Reviewed offline replay'
+nivra orchestrator --workspace /tmp/lab view
+nivra orchestrator --workspace /tmp/lab --config offline.json replay --spec spec.json --snapshots snapshots.json --out proposals/replay.json
+nivra orchestrator --workspace /tmp/lab note --path orchestrator_notes/review.txt --text 'Reviewed offline replay'
 ```
 
 `view` prints pipeline JSON including proposals. `replay` prints the report and
@@ -892,7 +892,7 @@ redacted diagnostic and return nonzero.
 ## Offline scorer comparison
 
 ```sh
-sadr-rs scorer-compare --snapshots features.json \
+nivra scorer-compare --snapshots features.json \
   --candidate strategies/cost_aware_momentum.py \
   --params strategies/cost_aware_momentum.params.json \
   --paper-costs paper-costs.json \

@@ -14,11 +14,11 @@ For a separate research-only workspace (Backtest lab and verification, no
 controller state), use an existing private token file:
 
 ```sh
-sadr-rs dashboard --token-file /private/dashboard-token [--model-config PAPER_CONFIG]
+nivra dashboard --token-file /private/dashboard-token [--model-config PAPER_CONFIG]
 ```
 
 Do not compete with the worker's listener. Open the loopback URL and enter the
-token in the UI. Rotate the token file with `sadr-rs dashboard-token rotate [--config PAPER_CONFIG] [--token TOKEN]`,
+token in the UI. Rotate the token file with `nivra dashboard-token rotate [--config PAPER_CONFIG] [--token TOKEN]`,
 which generates 32 bytes of secure random hex entropy (or writes the provided token) with mode 0600;
 a service restart is required. Static login/assets contain no account data; all data/status/model
 streams/examples require bearer auth. Exact loopback/configured Funnel Hosts,
@@ -53,7 +53,7 @@ installation's explicitly reported data and order broker identities; missing
 order broker identity stays `Not reported`. These are display fields and do not
 establish live readiness. On mobile the sidebar becomes a focus-managed
 Radix dialog. Typography uses the system stack; surfaces are neutral charcoal
-with restrained blue accents and no green palette. The original split ind/sadr
+with restrained blue accents and no green palette. The original split nivra
 wordmark and standalone arrow are retained.
 
 - **Overview** combines account figures, a price/equity chart workspace,
@@ -125,9 +125,9 @@ controller serves the committed static bundle; it does not run npm, Vite or a
 Node service. After any frontend change, run from the repository root:
 
 ```sh
-npm ci --prefix rust/sadr-cli/src/runtime/web/v2
-npm run build --prefix rust/sadr-cli/src/runtime/web/v2
-npm test --prefix rust/sadr-cli/src/runtime/web/v2
+npm ci --prefix rust/nivra-cli/src/runtime/web/v2
+npm run build --prefix rust/nivra-cli/src/runtime/web/v2
+npm test --prefix rust/nivra-cli/src/runtime/web/v2
 ```
 
 `npm test` runs the strict TypeScript check, the Node test files and
@@ -450,7 +450,7 @@ The paper-worker view refuses compute; only the research-only dashboard admits i
 At most ten reports are stored in the browser without silent eviction; export
 preserves a convenience copy, not an authoritative experiment record.
 
-Use `sadr-rs backtest-fingerprint` / `sadr-rs backtest --manifest FILE --events FILE`
+Use `nivra backtest-fingerprint` / `nivra backtest --manifest FILE --events FILE`
 for matching CLI replay, or [full-day paper replay](PAPER_REPLAY.md) for the
 scanner/Luna/Grok loop. [Shared replay](reference/SHARED_REPLAY.md) explains formats.
 
