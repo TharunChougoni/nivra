@@ -33,8 +33,8 @@ reexports the existing `Wake` and `Inputs` paths.
    historical features; observations are not executable fill authority.
 4. Luna compiles a factual digest from eligible evidence. The durable owner queue
    feeds one persistent orchestrator that selects paper action, size, holding
-   period and exit; Luna has no handoff veto. Legacy policies decode for reviewed
-   migration and archive access, but cannot schedule independent Decide calls.
+   period and exit. Luna provides facts without a decision veto. Older usage
+   journals and transcripts retain their original archive identities.
 5. Deterministic execution rechecks identity, held units, available cash, fees and
    the original ≤2-second quote receipt under the financial lock. Accepting a plan
    does not create a fill. Outcome/holdings feed the next fresh Luna review.

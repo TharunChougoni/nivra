@@ -41,7 +41,7 @@ fn vectors() -> Vectors {
     let vectors: Vectors =
         serde_json::from_str(include_str!("../../../fixtures/rust/market_vectors.json")).unwrap();
     assert_eq!(vectors.schema_version, 1);
-    assert_eq!(vectors.reference, "python-nivra");
+    assert_eq!(vectors.reference, "python-sadr");
     assert_eq!(vectors.reference_domain_sha256.len(), 64);
     assert!(vectors.synthetic);
     vectors

@@ -221,6 +221,10 @@ enum Command {
         release: PathBuf,
         #[arg(long)]
         apply: bool,
+        /// Allow the migration inside the weekday 09:00–15:45 IST activation window.
+        /// The paper service must already be stopped; other refusals still apply.
+        #[arg(long)]
+        during_market_hours: bool,
     },
     /// Hidden fixed candidate helper. Runs only inside an owned systemd unit.
     #[command(hide = true)]
@@ -615,7 +619,8 @@ fn main() -> ExitCode {
             home,
             release,
             apply,
-        } => runtime::host_migrate::entry(home.as_deref(), &release, apply),
+            during_market_hours,
+        } => runtime::host_migrate::entry(home.as_deref(), &release, apply, during_market_hours),
         Command::Update {
             config,
             check,

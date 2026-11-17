@@ -12,7 +12,7 @@ activation. Use command `--help` for explicit arguments.
 
 ## Decision-owner tasks
 
-With the reviewed `decision_owner` policy and registered research configured,
+With registered research configured,
 actual owner decision turns have four scoped tools:
 
 | Tool | Arguments | Result |

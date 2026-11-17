@@ -67,7 +67,7 @@ Review the complete set together:
 | --- | --- |
 | Paper config | Explicit broker, account, session, original read-journal and sessions/history/source paths; continuing account cash comes from its original ledger, never a replacement journal |
 | Costs and instruments | Complete `paper_costs` (see packaged fragment), verified cash instrument identities/tick units, calendar and provider metadata; no derivative execution |
-| Planner | Owner-only policy (no `decision_owner`, `decide` or `handoff_gate` key); factual Digest enabled; events and supervisor enabled; Operations/Strategy/post-close disabled by the two-role migration |
+| Planner | Owner-only policy (no `decision_owner`, `decide`, `handoff_gate` or `post_close` key); factual Digest enabled; events and supervisor enabled |
 | Models | Digest `gpt-6-luna`; reviewed owner profile for `grok-4.7` or `gpt-6.1-sol`, with exact model/transport/application credential binding and explicit admission; catalog presence does not establish entitlement |
 | Prompts | Complete revision-matched `prompts/` beside the planner JSON; reviewed prompt bytes participate in authority; see [model harness](MODEL_HARNESS.md) |
 | Credentials | Application-owned private grants and a live-catalog model ID; never reuse another application's authentication or put credentials in templates/history |
@@ -86,9 +86,6 @@ Before any separately authorized paper start, validate the original authority,
 self-check and preflight under the reviewed configuration. Preserve stopped or
 halted state; a failed check is evidence to retain, not permission to restart.
 
-Legacy configuration decoding is retained for archive interpretation and reviewed
-migration only; enabled independent legacy planning is refused at runtime.
-Older updater delivery compatibility remains separate from active planner policy.
 Use the [current setup templates](../packaging/rust/CONFIGURATION.md) for the
 complete input set and compatibility inventory. Target-host preparation and
 qualification remain separate.
@@ -101,8 +98,8 @@ It prepares the current owner policy in unused private config/state directories,
 preserves original evidence and shared quotas, and does not activate a session.
 Keep the old installation archived and the new paper service stopped after
 installation. Future updates use the canonical updater and stable new config;
-do not replay setup, reset a journal, or restore independent legacy planning to
-work around `decision_owner_migration_required`.
+do not replay setup or reset a journal to work around
+`decision_owner_migration_required`.
 
 Supply explicit account/broker/session identities, positive capital, original
 read-journal binding, source credentials, sessions/history directories and planner
@@ -117,7 +114,7 @@ its committed current pointer under a root-wide writer lock.
 | Before 09:15 | Commit the next eligible session; missed preparation does not create a late replacement |
 | 09:15–15:30 | Protect holdings, rotate scans, compile factual Luna digests and run persistent orchestrator decisions; independently validate paper fills |
 | Close | Seal/report actual cash, fees and unresolved/carried holdings; no forced 15:15 liquidation for model-led holdings |
-| After close, before 18:00 | Seal financial reporting; Operations/Strategy/post-close remain disabled in the current two-role baseline |
+| After close, before 18:00 | Seal financial reporting; the optional owner review and scorer trigger run only when configured |
 
 An open operator-stopped book is expected protection: startup diagnostics,
 stop alerts and `/api/v1/health` book / summary state classify it as
@@ -255,7 +252,7 @@ missing or unreadable file fails preflight with its own code
 `research_input_unreadable`); a changed file reports
 `research_registered_bytes_changed`. Readiness adds a path-free `research` object
 with `status` and per-artifact reasons, so a stale runtime path is visible before
-the post-close review call. A blocked research registration does not change the
+the owner's next research call. A blocked research registration does not change the
 model-readiness exit code. Re-register a stale runtime outside a session against
 a retained release's `nivra-analysis` binary as described in the
 [research worker](RESEARCH_WORKER.md#re-registering-a-stale-runtime), then rerun
@@ -373,7 +370,7 @@ The paper config points to ordinary planner JSON. Explicit enabled roles need
 exact model IDs, application model configs and positive daily budgets. Set
 `model_led:true` and `require_digest:true` for the current model-led flow.
 `planner.context.mode` defaults to `tools_only`: Luna receives only a trigger
-envelope and Grok receives only the trigger and Luna's validated digest/handoff.
+envelope and the orchestrator receives only the trigger and Luna's validated digest.
 Set `"context":{"mode":"projection",...}` only to reproduce the v2 rollback
 message; projection still requires `full_universe_features:true`. Deployed
 configs may retain `context` and `full_universe_features`; tools-only validates
@@ -431,7 +428,7 @@ conversion additionally needs a pristine flat book. An initialised namespace
 cannot move. Never hand-edit a sealed policy or rely on an arbitrary restart to
 adopt trading-policy changes.
 
-The original session namespace is bootstrapped/pinned during authorised controller
+The original session namespace is created and pinned during authorised controller
 initialisation before model work. `usage_namespace` is a validated 1–64 character
 name under `model/`; omitted means `usage`. Never mkdir/copy/reset pins or receipts
 to repair readiness. Failed provider/transport/interrupted model attempts remain
@@ -516,7 +513,7 @@ current fresh scanner snapshot in the existing bwrap/seccomp sandbox, and ranks
 the existing scanner prospects by descending finite score with instrument-key
 tie-break. Unscored prospects are omitted before the normal shortlist limits.
 This only changes the paper scanner shortlist used for candidates, triggers and
-depth polling; orders, validation, risk controls and Grok's decision are
+depth polling; orders, validation, risk controls and the owner's decision are
 unchanged. `LIVE_ENABLED` remains false.
 
 Live ranking fails closed to the default ranking on unknown regime, stale data,
@@ -539,7 +536,8 @@ never be used to enable live trading.
 ## Event and history behaviour
 
 Discovery adds scanner-refresh events; configured cooldown coalesces work rather
-than forcing inference. Luna chooses whether a new Grok decision is warranted.
+than forcing inference. Luna compiles facts; validated eligible evidence creates
+durable work for the persistent orchestrator.
 Optional deterministic price/volume/gap/proximity/fill/news detectors retain their
 own configured thresholds, with no enabled signal defaults. News requires an
 explicit bounded dated/cited archive, not automatic collection.
@@ -558,7 +556,7 @@ allowlisted model validation codes (for example `model_stream_incomplete`,
 `output_validation` in `failure.json`, with the numeric HTTP status when present.
 `planner_output_cap` bounds the serialized provider envelope (`output`, `model`,
 `usage`, including encrypted reasoning) at `output_cap × 64` bytes (512 KiB for
-the paper decide `output_cap` of 8192). Empty output still fails.
+an `output_cap` of 8192). Empty output still fails.
 Non-timeout planner block status stays `planner_provider_failed`; timeouts keep
 their existing status. Raw provider bodies, headers, credentials, account context
 and model text are never retained; unknown errors fall back to the generic status.
@@ -716,14 +714,12 @@ halt. Eligible pending claims receive audited failed/no-replay disposition.
 Unrelated risk halts, missing/cross-book authority and non-flat open books refuse
 with a failed-check reason. Recovery leaves the book stopped and preserves charges.
 Apply reviewed config before resume if required; recovery itself makes no call/fill.
-Under the decision-owner policy, recovery checks the enabled orchestrator supervisor
-role rather than the disabled legacy Decide role. The same reviewed eligibility
-checks apply to flat recovery and protection-only recovery. Recovery does not
-migrate legacy authority or enable independent Decide inference.
+Recovery checks the enabled orchestrator supervisor role. The same reviewed
+eligibility checks apply to flat recovery and protection-only recovery.
 
 Owner review artifacts written by this build are versioned canonical JSON
 (`ReviewCompletedV1`). Older binaries reject them; this build still reads the
-frozen legacy `Completed` shape. A failed review whose observed wall stepped
+frozen older `Completed` shape. A failed review whose observed wall stepped
 behind its start is terminalized once with clock-anomaly evidence, and the old
 fully-bound failed `owner_review_clock_invalid` artifact is recovered in place
 without rewriting bytes or replaying the model. Unknown or corrupt review
@@ -750,11 +746,9 @@ predates the marker refuses as `planner_authority_owner_missing` and stays
 archive-only; nothing reconstructs a marker. Do not hand-create or edit the
 marker table.
 
-Production recovery never infers the legacy Decide path. Legacy planner configs
-remain readable for archives, but `planner-recover` refuses them with
+`planner-recover` refuses a policy without enabled events with
 `planner_recover_events_disabled`, and `config-apply` refuses a halted book. A
-halted legacy book stays archive-only. The legacy recovery mechanics retained in
-tests exercise archive and refusal behavior only.
+halted book that recovery cannot clear stays archive-only.
 
 A present table with a missing row also refuses as
 `planner_authority_owner_missing`. A malformed receipt or one naming another
@@ -778,13 +772,12 @@ second call, and a changed original `report.json` refuses as
 review remains valid evidence after the binary prompt changes; only a new
 review call must match the current prompt and policy. A failed review keeps its
 artifact and specific code; an interrupted review is never replayed. Review
-does not replace the legacy post-close scorer, which remains disabled unless
+does not replace the post-close scorer trigger, which remains disabled unless
 separately configured.
 
 A reviewed `owner_tasks.research` policy adds one bounded owner research turn
 over terminal verified evidence. It is optional and absent by default; when
-absent, old policy bytes, templates, tool frames and the legacy post-close path
-are unchanged. The dashboard `owner_research` projection and the operational
+absent, old policy bytes, templates and tool frames are unchanged. The dashboard `owner_research` projection and the operational
 health `research` block are read-only and report `disabled`, `awaiting_evidence`,
 `pending`, `deferred`, `expired`, `parked`, `due` or `invalid` with a static
 reason; `parked` and `deferred` carry the research lane's own cap, book or
@@ -1007,7 +1000,7 @@ Malformed or identity-invalid quote data (`planner_data_failed_no_replay`), news
 configuration and interrupted-attempt blocks remain sticky and require explicit
 review and `planner-recover`.
 
-Under the `decision_owner` policy only sticky blocks refuse an owner decision.
+Only sticky blocks refuse an owner decision.
 A recoverable digest failure (provider, budget, deadline, invalid plan) is one
 bad attempt: it keeps its own reason on the attempt, appears as
 `last_digest_failure` in the planner status, and does not stop the orchestrator
@@ -1089,7 +1082,7 @@ instructions. The book remains stopped; a restart is never a resume.
 
 Planner authority changes on a closed sealed book apply to the next session.
 
-Legacy migrations (`prior_config`) admit only exact documented original
+A `prior_config` transition admits only exact documented original
 bindings. Keep original configs
 and predecessor seals; do not generalise compatibility flags to new successors.
 
@@ -1098,17 +1091,16 @@ and predecessor seals; do not generalise compatibility flags to new successors.
 Use `model login/list/status/probe/select --help` for the application's independent
 login, exact-model diagnostic and reviewed role-model switch. Probes consume requests; status is read-only. Luna
 uses its own OpenAI grant, all Grok roles can share one refreshed xAI model config.
-The legacy credential-config `enabled` field is not planner role enablement.
+The model config's `enabled` field is ignored; it is not planner role enablement.
 Production uses Luna's factual digest and one persistent orchestrator, with
-independent credentials and original charge identities. Existing configs with no
-owner policy preserve their legacy hash for migration and archive access; they
-cannot run independent Decide calls in this build. Current readiness and the
-dashboard expose Digest and Orchestrator only. Original Decide reservations
-remain separate evidence and are never refunded or merged.
+independent credentials and original charge identities. Readiness and the
+dashboard expose Digest and Orchestrator only. Original `decide-` reservations in
+older usage journals remain separate evidence and are never refunded or merged.
 
-Stop the paper controller and back up reviewed configs. Write the owner policy
-to a new planner file and check it with `planner config-check`, which refuses a
-missing digest, supervisor trigger or events block and an enabled Decide block.
+To change the planner policy, stop the paper controller and back up reviewed
+configs. Write the owner policy to a new planner file and check it with
+`planner config-check`, which refuses a missing digest, supervisor trigger or
+events block.
 Install the exact revision's prompt files and bind application-owned credentials.
 Confirm the digest and owner grants, run self-check and preflight, then reviewed
 `config-apply --confirm-paper-review` and audited `resume` before an authorized
@@ -1349,11 +1341,10 @@ binary is installed; the updater's rollback preflight must still parse the old
 config. The normal [release transition](#releases-and-updates) and reviewed
 `config-apply` path apply; there is no bypass.
 
-### Reviewing the decision-owner migration
+### Reviewing a planner policy change
 
-The owner policy is reviewed without applying it. Write the planner config
-without the removed `decision_owner`, `decide` and `handoff_gate` keys to a new
-file and validate it offline:
+Review a planner policy without applying it. Write the new planner config to a
+new file and validate it offline:
 
 ```sh
 nivra planner config-check --planner NEW_PLANNER.json --session SESSION
@@ -1364,11 +1355,12 @@ paper config's `planner_config` at the new file, run
 `config-apply --confirm-paper-review`, then `resume`. Rollback uses the
 predecessor planner file and the same reviewed transition.
 
-A two-role policy whose durable authority was initialized under a different
-policy is refused at controller startup with `decision_owner_migration_required`
-(or `decision_owner_legacy_plan_requires_migration` for a legacy active plan);
-host protection continues until a reviewed `config-apply` rebinds it. See the
-[model harness](MODEL_HARNESS.md#decision-owner-migration-policy).
+A policy that differs from the one that initialized the durable authority is
+refused at controller startup with `decision_owner_migration_required`. An
+active plan written without the orchestrator owner refuses with
+`decision_owner_legacy_plan_requires_migration`. Host protection continues until
+a reviewed `config-apply` rebinds the policy. See the
+[model harness](MODEL_HARNESS.md#owner-policy-and-ledger-authority).
 
 ### Personal-agent status and requests
 
@@ -1406,8 +1398,7 @@ decision owner. It requires the exact session and instruction revision reported
 by `status`. A stale session or revision creates a durable `refused` receipt and
 writes no directive. Successful instructions use only the `review_only` or
 `decision_context` authorization scope and are delivered to the decision owner
-(the legacy `decide` envelope or the two-role owner turn) on a later controller
-turn, never as an order or an execution authority. Request ids, idempotency
+on a later controller turn, never as an order or an execution authority. Request ids, idempotency
 keys, expiry and receipts live under `model/agent-requests.json`; repeating the
 same idempotency key returns the same receipt, and the per-session instruction
 revision stays monotonic when old receipts are pruned. Instructions live in the
@@ -1511,12 +1502,17 @@ nivra update --tag vX.Y.Z --operator-stopped --confirm-paper-review --config UPD
 It requires an inactive service and a book with no pending orders that is either
 operator-stopped and non-halted, or closed and flat (a closed flat book may still
 carry a planner halt). It smokes the new binary and leaves the service stopped.
-For a closed flat halted book, install first and then run the new release's own
-`planner-recover --confirm-paper-review`; do not rebind authority with a candidate
-binary before the swap, because an older installed release will re-halt on that
-authority. Then run `config-apply --confirm-paper-review` (model-led carried
-books keep their holdings), `resume --confirm-paper-review`, readiness, and start
-the service:
+Preserve any existing stop or halt. Deployment does not authorize recovery or
+continuation. With a separate recovery mandate for a closed flat halted book,
+install first and follow [closed-book recovery](#stop-recovery-and-closed-incidents)
+using the new release. Do not rebind authority with a candidate binary before
+the swap, because an older installed release will re-halt on that authority.
+A closed book refuses both `config-apply` and `resume`. A separately authorized
+successor session binds the reviewed policy during rollover.
+
+For an open, non-halted book with an explicit paper continuation mandate, apply
+the reviewed config, resume, check readiness, and start the service. Model-led
+carried books keep their holdings:
 
 ```sh
 nivra config-apply --confirm-paper-review --config PAPER_CONFIG
@@ -1570,7 +1566,7 @@ The updater verifies annotated tag, source commit, target and SHA-256, then runs
 binary version, self-check and deployed-config preflight checks. It detects the
 installed release from the current symlink target and binary, including installs
 without VERSION/SOURCE_COMMIT files. Release directories are owner-only 0700,
-binaries 0755 and metadata 0600, matching bootstrap installation.
+binaries 0755 and metadata 0600.
 
 The updater stops the service, atomically flips current, repeats preflight,
 restarts and checks unit/authenticated status. A stop failure, a swap/activation
@@ -1663,13 +1659,18 @@ under the `ind-sadr-rust-*` units, and its updater cannot fetch the renamed
 `nivra-x86_64-unknown-linux-musl` asset. The renamed updater looks for
 `~/nivra-current/nivra`, `~/nivra-deploy` and `~/.local/state/nivra` and accepts
 only the `github-nivra:` remote. `nivra host-migrate` moves such a host once,
-off-hours, with the controller stopped. It is a dry run unless `--apply` is
-given. It never starts, stops, enables or resumes a unit or a book, and never
+with the controller stopped, normally off-hours. It is a dry run unless
+`--apply` is given. It never starts, stops, enables or resumes a unit or a book, and never
 reads or prints a credential.
 
 ```sh
-nivra host-migrate --release STAGE [--home HOME] [--apply]
+nivra host-migrate --release STAGE [--home HOME] [--during-market-hours] [--apply]
 ```
+
+To migrate inside the weekday 09:00–15:45 IST activation window, pass
+`--during-market-hours`. Stop the paper service first: a held controller lock
+still refuses, and every other refusal below still applies. The JSON report
+carries `"during_market_hours": true` when the command ran inside the window.
 
 **What moves and what stays.**
 
@@ -1710,10 +1711,13 @@ first.
 
 | Refusal | Condition |
 | --- | --- |
-| `host_migrate_activation_blackout` | Weekday 09:00–15:45:59 IST (the updater's clock window; holidays are not exempt) |
+| `host_migrate_activation_blackout` | Weekday 09:00–15:45:59 IST (the updater's clock window; holidays are not exempt), unless `--during-market-hours` is given |
 | `host_migrate_lock_held` | Another process holds the sessions-root or live-session `controller.lock`, `updater.lock` or the deploy `.lock` |
 | `host_migrate_update_transaction_requires_review` | `pending.json`, `pending-review.json` or `update-recovery.json` is present |
 | `host_migrate_book_binding_mismatch` | The rewritten paper config would not reproduce the live book's binding |
+| `host_migrate_book_identity_mismatch` | The live SQLite file does not match its retained device and inode identity |
+| `host_migrate_config_changed` | A config input or the staged updater's presence changed after planning |
+| `host_migrate_session_changed` / `host_migrate_book_state_changed` | The current session or book facts changed before apply acquired its locks |
 | `host_migrate_release_version_mismatch` | The staged release is not the running binary's own version |
 | `host_migrate_*_config_invalid` | A rewritten config does not parse with the new types |
 | `host_migrate_*_conflict` | A target path already exists with different content |
@@ -1755,13 +1759,22 @@ units run next, and only then is each staged file renamed over its original. The
 command holds the controller and updater locks throughout. It prints one JSON
 report with the steps, the removed and added key names, the kept roots, the
 book's binding check and `operator_next`. It prints no config values. A rerun
-after success reports `already_migrated` and changes nothing; rerunning after an
-interrupted apply completes it.
+after a complete migration reports `already_migrated` and changes nothing. An
+interrupted apply can leave staged configs, backups, links or moved directories.
+A rerun refuses conflicting or incomplete state. Preserve the partial artifacts
+and review them before continuing; do not delete them or assume a rerun completes
+the migration.
+
+Keep the old services stopped and their timer disabled until migration finishes.
+Locks follow renamed directories and cannot prevent an old binary from
+recreating the old paths.
 
 **Runbook.** The owner runs every step on the host; nothing here runs
 automatically.
 
-1. Choose an off-hours window after the close. Check the book with the
+1. Choose an off-hours window after the close. To migrate during market hours
+   instead, add `--during-market-hours` to both `host-migrate` commands in step
+   4; the steps are otherwise the same. Check the book with the
    installed binary and confirm that no research sandbox units are running,
    because the renamed binary names them `nivra-rw-*`/`nivra-candidate-*` and
    would not see `sadr-*` ones:
@@ -1819,25 +1832,29 @@ automatically.
    systemctl --user cat nivra-paper.service
    ```
 
-6. Apply the policy change that `operator_next` names. The planner policy hash
-   changes because `decide` and `decision_owner` are gone.
-   - `start_service_successor_binds_new_policy`: the book is closed, which is the
-     normal off-hours state. `config-apply` refuses a closed book
-     (`config_apply_book_closed`) and none is needed. The next rollover
-     initializes the successor book's planner authority from the rewritten
-     policy. Start `nivra-paper.service` the way the old service was started.
-   - `config_apply_then_resume`: the book is open. Run
-     `~/nivra-current/nivra config-apply --confirm-paper-review --config ~/.config/ind-sadr/rust-paper.json`,
+6. Inspect `operator_next` and the original book state. Migration preserves stop
+   and halt flags. Authorization to migrate the installation does not authorize
+   a resume, recovery, unhalt or new session.
+   - `preserve_stopped_or_halted_book`: leave the book stopped or halted. Do not
+     run `resume` or `planner-recover`. A separate owner mandate must review the
+     original incident and authorize any later state transition.
+   - `start_service_successor_binds_new_policy`: the book is closed.
+     `config-apply` refuses a closed book (`config_apply_book_closed`), and none
+     is needed. When separately authorized, the next normal rollover initializes
+     the successor's planner authority from the rewritten policy. Never resume
+     the closed book.
+   - `config_apply_then_resume`: the book is open and was not operator-stopped
+     or halted. The planner policy hash changes because `decide` and
+     `decision_owner` are gone. With an explicit paper continuation mandate,
+     run `~/nivra-current/nivra config-apply --confirm-paper-review --config ~/.config/ind-sadr/rust-paper.json`,
      then `resume --confirm-paper-review`, then `readiness`, then start
      `nivra-paper.service`. If `agent model show` reports an active non-default
-     profile, it was recorded under the old policy hash and refuses with
-     `model_selection_policy_changed` until the owner requests it again with
-     `agent model set`.
-   - `planner_recover_required`: follow
-     [Stop, recovery and closed incidents](#stop-recovery-and-closed-incidents)
-     before anything else.
-   - `inspect_book_readiness`: the book state could not be read without touching
-     its WAL; inspect it with `readiness` before starting.
+     profile, it retains the old policy hash and refuses with
+     `model_selection_policy_changed` until the owner requests the profile again
+     with `agent model set`.
+   - `inspect_book_readiness`: the book state could not be read, including when
+     a WAL or shared-memory file prevents immutable inspection. Inspect it with
+     `readiness` and preserve its state until reviewed.
 
    Keep `nivra-paper.service` disabled at boot, as the old service was.
 
@@ -1892,9 +1909,9 @@ components must not be symlinks. Existing token files must be regular, owned by
 the service user, and single-link. Rotation sets mode `0600` (`-rw-------`)
 before writing the new token. Service restart is required to load it.
 
-The workspace is `/`. Legacy `/legacy/` and `/api/model-*` paths are not served.
-The updater probes `/api/v1/health`; no legacy `/api/status` alias is served.
-`/v2/` is not served.
+The workspace is served at `/` and the API under `/api/v1/`. The updater probes
+`/api/v1/health`. The older `/v2/`, `/legacy/`, `/api/model-*` and `/api/status`
+paths are not served.
 Its static shell and vendored modules load before login, but every `/api/v1/*`
 read still needs the bearer token. **Lock** clears the token, ETag cache and page
 state. The workspace holds one SSE stream while live (or one held long-poll per
@@ -1904,8 +1921,8 @@ transcript once on `run_ended`. Live events are hints only and carry
 `execution_authority:false`; they never imply an order, fill or validation fact.
 The workspace remains read-only and exposes no controls.
 
-The Orchestrator tab lists digest and orchestrator runs alongside operations, strategy
-and scorer runs, with their individual model identities and outcomes. System
+The Orchestrator tab lists digest, orchestrator and scorer runs with their
+individual model identities and outcomes. System
 health lists each configured role's own status and grant expiry; missing
 evidence stays unknown.
 
@@ -2069,8 +2086,8 @@ from serialized configuration so existing sealed configuration hashes remain sta
 
 | Configuration file / key | Default | Valid range |
 | --- | --- | --- |
-| Planner: `digest.max_analysis_tools`, `decide.max_analysis_tools` (also each post-close role) | 4 | 0–64 calls per invocation; 0 disables analysis calls |
-| Planner: `max_handoff_instruments` | 20 | 1–20 keys per Luna handoff or snapshot/feature tool request |
+| Planner: `digest.max_analysis_tools` | 4 | 0–64 calls per invocation; 0 disables analysis calls |
+| Planner: `max_handoff_instruments` | 20 | 1–20 keys per snapshot or feature tool request |
 | Runtime: `history_download.quota_wait_max_attempts` | 1800 | 0–1800 retries after the initial shared-quota reservation attempt |
 | Runtime: `history_download.quota_wait_poll_ms` | 1000 | 1–60000 ms between denied reservations |
 | Runtime: `history_download.reserve_half_hour_reads` | 300 | 0–1499 shared reads held back from history requests in each rolling 30-minute window; other reads may use them |
@@ -2177,8 +2194,7 @@ embedded defaults preserve their existing policy bytes. Once present, missing,
 empty, unreadable, oversized or invalid UTF-8 files refuse configuration loading.
 There is no partial-directory fallback.
 
-The owner policy selects `data_owner.md` and `orchestrator.md`; legacy books
-retain `data.md` and `supervisor.md`. Explicit orchestrator system prompts and
+The owner policy selects `data_owner.md` and `orchestrator.md`. Explicit orchestrator system prompts and
 experiment profile overrides retain their precedence. Default file contents are
 part of the sealed trading-policy hash; their location is not. Edit these files
 only with the existing suspend → `config-apply --confirm-paper-review` → audited
@@ -2187,16 +2203,19 @@ a changed file requires reviewed apply before further model work. Keep a backup
 of the previously reviewed files for rollback. Installing files or applying a
 config does not authorize starting a session.
 
-### Owner-only planner migration
+### Owner-only planner policy
 
 The persistent orchestrator is the only decision owner. Planner JSON that still
 carries `decision_owner`, `decide` or `handoff_gate` refuses with
 `planner_config_invalid`, and a book bound to an older policy hash refuses with
-`decision_owner_migration_required`. On a stopped book, write the owner policy
-to a new planner config, check it with `planner config-check`, review its exact
-prompt and credential bindings, then use `config-apply --confirm-paper-review`
-and audited resume. The authority checks preserve original journals and separate
-role charges. Installing a build does not migrate a book.
+`decision_owner_migration_required`. To change the policy, write it to a new
+planner config, check it with `planner config-check`, and review its exact prompt
+and credential bindings. On an open, non-halted book, use
+`config-apply --confirm-paper-review`. Preserve an existing operator stop unless
+the owner separately authorizes continuation. A halted book needs separate
+reviewed recovery, and a closed book refuses both config apply and resume.
+The authority checks preserve original journals and separate
+role charges. Installing a build does not change a book's policy.
 Rollback means restoring the reviewed predecessor config and compatible binary
 through the documented updater guards; never edit seals or replay pending work.
 The current-market `planner live-preview` compiles only a factual digest; use

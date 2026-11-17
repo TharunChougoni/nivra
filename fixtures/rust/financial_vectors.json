@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "reference": "python-nivra",
+  "reference": "python-sadr",
   "synthetic": true,
   "reference_domain_sha256": "77fb5231a242cbce0ac5ac2301cfd37435376d978a77f42497c28b571a0229c6",
   "reference_decimal_precision": 28,

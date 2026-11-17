@@ -85,6 +85,17 @@ pub(crate) fn sync(path: &Path) -> Result<()> {
         .and_then(|f| f.sync_all())
         .map_err(|_| "update_sync_failed")
 }
+pub(crate) fn publish_noreplace(pending: &Path, path: &Path) -> Result<()> {
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        pending,
+        rustix::fs::CWD,
+        path,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(|_| "immutable_artifact_exists")?;
+    sync(path.parent().ok_or("update_parent")?)
+}
 pub(crate) fn secure_directory(path: &Path) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
     let metadata = path
@@ -157,6 +168,56 @@ pub(crate) fn release_metadata(dir: &Path, m: &Manifest) -> Result<()> {
         .map_err(|_| "update_permissions_failed")?;
     sync(dir)
 }
+fn release_complete(dir: &Path, m: &Manifest, manifest_bytes: &[u8]) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let owner = fs::metadata("/proc/self")
+        .map_err(|_| "update_owner_unavailable")?
+        .uid();
+    let meta = dir
+        .symlink_metadata()
+        .map_err(|_| "update_directory_unavailable")?;
+    if !meta.is_dir() || meta.uid() != owner {
+        return Err("release_directory_owner_mismatch");
+    }
+    for entry in fs::read_dir(dir).map_err(|_| "update_directory_unavailable")? {
+        let entry = entry.map_err(|_| "update_directory_unavailable")?;
+        let meta = entry
+            .path()
+            .symlink_metadata()
+            .map_err(|_| "update_file_unavailable")?;
+        if !meta.is_file()
+            || meta.uid() != owner
+            || meta.nlink() != 1
+            || (entry.file_name() == "nivra" && meta.mode() & 0o100 == 0)
+        {
+            return Err("release_regular_owned_files_required");
+        }
+    }
+    if read(&dir.join("release.json"), 16384)? != manifest_bytes
+        || digest(&read(&dir.join("nivra"), 64 * 1024 * 1024)?) != m.sha256
+    {
+        return Err("installed_artifact_mismatch");
+    }
+    for (name, expected) in [("VERSION", &m.tag), ("SOURCE_COMMIT", &m.source_commit)] {
+        let bytes = read(&dir.join(name), 16384)?;
+        if std::str::from_utf8(&bytes)
+            .map_err(|_| "installed_metadata_mismatch")?
+            .trim()
+            != expected
+        {
+            return Err("installed_metadata_mismatch");
+        }
+    }
+    let checksums = read(&dir.join("SHA256SUMS"), 16384)?;
+    if !std::str::from_utf8(&checksums)
+        .map_err(|_| "installed_metadata_mismatch")?
+        .lines()
+        .any(|line| line == format!("{}  nivra", m.sha256))
+    {
+        return Err("installed_metadata_mismatch");
+    }
+    Ok(())
+}
 /// Write a verified release into its immutable `RELEASES/<tag>-<commit>`
 /// directory, or prove an existing one holds exactly these bytes.
 pub(crate) fn stage_release(
@@ -167,31 +228,57 @@ pub(crate) fn stage_release(
 ) -> Result<PathBuf> {
     let stage = releases.join(format!("{}-{}", m.tag, m.source_commit));
     if exists(&stage) {
-        if read(&stage.join("release.json"), 16384)? != manifest_bytes
-            || digest(&read(&stage.join("nivra"), 64 * 1024 * 1024)?) != m.sha256
-        {
-            return Err("installed_artifact_mismatch");
-        }
+        release_complete(&stage, m, manifest_bytes)?;
+        sync(releases)?;
         return Ok(stage);
     }
-    fs::create_dir(&stage).map_err(|_| "update_stage_failed")?;
-    fs::set_permissions(&stage, fs::Permissions::from_mode(0o700))
-        .map_err(|_| "update_permissions_failed")?;
+    use std::os::unix::fs::DirBuilderExt;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let mut pending = None;
+    for _ in 0..128 {
+        let path = releases.join(format!(
+            ".{}.pending.{}.{}",
+            stage
+                .file_name()
+                .ok_or("update_stage_failed")?
+                .to_string_lossy(),
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        match fs::DirBuilder::new().mode(0o700).create(&path) {
+            Ok(()) => {
+                pending = Some(path);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => return Err("update_stage_failed"),
+        }
+    }
+    let pending = pending.ok_or("update_stage_failed")?;
     for (name, data, exec) in [
         ("nivra", binary, true),
         ("release.json", manifest_bytes, false),
         ("SOURCE_COMMIT", m.source_commit.as_bytes(), false),
         ("VERSION", m.tag.as_bytes(), false),
     ] {
-        write_new(&stage.join(name), data, exec)?;
+        write_new(&pending.join(name), data, exec)?;
     }
     write_new(
-        &stage.join("SHA256SUMS"),
+        &pending.join("SHA256SUMS"),
         format!("{}  nivra\n", m.sha256).as_bytes(),
         false,
     )?;
-    sync(&stage)?;
+    release_complete(&pending, m, manifest_bytes)?;
+    sync(&pending)?;
     sync(releases)?;
+    if let Err(error) = publish_noreplace(&pending, &stage) {
+        if !exists(&pending) || !exists(&stage) {
+            return Err(error);
+        }
+        release_complete(&stage, m, manifest_bytes)?;
+        sync(releases)?;
+    }
     Ok(stage)
 }
 /// A release the operator fetched from `refs/release-assets/<tag>` by hand,
@@ -243,10 +330,7 @@ impl StagedRelease {
     }
     /// True when `dir` already holds exactly this release.
     pub(crate) fn installed_at(&self, dir: &Path) -> bool {
-        exists(dir)
-            && read(&dir.join("release.json"), 16384).is_ok_and(|b| b == self.manifest_bytes)
-            && read(&dir.join("nivra"), 64 * 1024 * 1024)
-                .is_ok_and(|b| digest(&b) == self.manifest.sha256)
+        release_complete(dir, &self.manifest, &self.manifest_bytes).is_ok()
     }
 }
 pub(crate) fn installed_manifest(dir: &Path) -> Result<Option<Manifest>> {

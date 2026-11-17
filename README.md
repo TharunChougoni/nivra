@@ -91,8 +91,8 @@ target/debug/nivra --help
 target/debug/nivra self-check
 ```
 
-These commands are offline checks and do not start a paper session. Signed
-guarded releases are published from this repository when explicitly requested;
+These commands are offline checks and do not start a paper session. Guarded
+releases are published from this repository when explicitly requested;
 installing one never authorizes a session. The retired `ind-sadr` repository is
 no longer a deployment source — an installed host moves once through the
 [reviewed host migration](docs/OPERATIONS.md#one-time-host-migration).
@@ -142,9 +142,9 @@ The local gate is formatting, an all-targets build, strict Clippy, the Rust test
 suite, release-link checks and the dashboard tests. Current facts, not permanent
 performance claims:
 
-- **400** Rust tests (hard budget).
-- **17** frozen golden files.
-- **91** dashboard tests.
+- At most **400** Rust test functions, including ignored tests.
+- **2** frozen golden files.
+- Dashboard behavior, type and source/bundle hash checks.
 
 See [Testing](docs/TESTING.md) and [Development](docs/DEVELOPMENT.md) for
 commands. CI runs the Rust and dashboard checks; a tagged commit can build the
