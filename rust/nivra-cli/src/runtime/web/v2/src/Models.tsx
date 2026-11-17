@@ -276,7 +276,13 @@ export function Transcript({ id, onBack }: { id: string; onBack: () => void }) {
               ? "Cost unknown"
               : amount(end.cost_estimate_inr)}
           </span>
-          <Status value={detail?.running ? "running" : end?.outcome} />
+          <Status
+            value={
+              detail?.running
+                ? "running"
+                : end?.outcome || (detail ? "interrupted" : undefined)
+            }
+          />
         </div>
       </header>
       <Notice error>{error}</Notice>
@@ -707,11 +713,16 @@ export default function Models({ selectedRun }: { selectedRun?: string }) {
               }
             >
               <option value="">All outcomes</option>
-              {["accepted", "abstain", "failure", "running", "stopped"].map(
-                (v) => (
-                  <option key={v}>{v}</option>
-                ),
-              )}
+              {[
+                "accepted",
+                "abstain",
+                "failure",
+                "running",
+                "stopped",
+                "interrupted",
+              ].map((v) => (
+                <option key={v}>{v}</option>
+              ))}
             </select>
             <input
               aria-label="Run trigger"

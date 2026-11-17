@@ -1,8 +1,9 @@
 # Subscription transports and grants
 
 The runtime uses application-owned grants only, never another application's auth
-cache. No API-key/paid fallback, inferred alias or automatic origin failover.
-Login/list/status do not start trading. Genuine inference consumes reservations.
+cache. No unconfigured API-key/paid fallback, inferred alias or automatic origin
+failover. Login/list/status do not start trading. Genuine inference consumes
+reservations.
 
 | Transport | Fixed inference origin | Current use |
 | --- | --- | --- |
@@ -14,6 +15,17 @@ The proxy adds `X-XAI-Token-Auth`, configured `x-grok-client-version` and exact
 `x-grok-model-override`; direct OAuth never inherits them. All requests use the
 application User-Agent. Proxy client version is operator-configured dotted numeric
 metadata, not automatically the Cargo version. There is no automatic model rewrite.
+
+## Explicit limit fallback
+
+The reviewed explicit limit fallback
+([Operations](OPERATIONS.md#explicit-limit-fallback)) is the only fallback and is
+not part of a subscription transport: it is policy-configured, uses its own
+application-owned key, switches at most one call for the explicit reason codes,
+and never rewrites a role's transport, model or origin. A 401/403 at the catalog
+or inference request and an opaque HTTP 200 response-validation rejection are
+eligible; timeouts, HTTP 5xx, cancellation, malformed output from a real
+response and local refusals are not.
 
 ## Commands and grant ownership
 

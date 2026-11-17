@@ -714,3 +714,225 @@ fn captures_failed_tools_and_backend_failure_with_terminal_events() {
         && v["error"] == "harness_tool_output_cap"));
     assert_eq!(captured.last().unwrap()["outcome"], "accepted");
 }
+
+/// A provider outage fails before any provider turn. The fixture reports the
+/// same bounded stage a real catalog/auth failure does, so the archive path
+/// exercises the pre-provider branch.
+struct PreProviderFailure {
+    stage: &'static str,
+    calls: usize,
+}
+impl Backend for PreProviderFailure {
+    fn call(&mut self, _: &ModelRole, _: &str) -> Result<String> {
+        self.calls += 1;
+        Err("model_http_401".into())
+    }
+    fn provenance(&self) -> Value {
+        json!({"stage": self.stage, "http_status": 401})
+    }
+}
+fn harness_archives(c: &Config) -> Vec<PathBuf> {
+    let mut archives: Vec<_> = fs::read_dir(c.directory.join("model"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_dir()
+                && path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("harness-"))
+        })
+        .collect();
+    archives.sort();
+    archives
+}
+fn failure_record(archive: &Path) -> Value {
+    serde_json::from_slice(&fs::read(archive.join("failure.json")).unwrap()).unwrap()
+}
+#[test]
+fn repeated_pre_provider_failures_keep_the_session_model_directory_bounded() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = super::super::tests::config(&dir.path().join("sessions/2026-11-17"));
+    // A multi-megabyte request is what the outage retried every few seconds.
+    let prompt = "digest envelope ".repeat(90_000);
+    assert!(prompt.len() < 2_000_000);
+    for attempt in 0..8 {
+        let mut backend = PreProviderFailure {
+            stage: "catalog",
+            calls: 0,
+        };
+        assert!(
+            run(
+                &c,
+                &PlannerConfig::default(),
+                "digest",
+                &role(),
+                &format!("{prompt}{attempt}"),
+                &json!({}),
+                &mut backend,
+                &planner::preview_guard(),
+            )
+            .is_err()
+        );
+        assert_eq!(backend.calls, 1);
+    }
+    let archives = harness_archives(&c);
+    assert_eq!(archives.len(), 8);
+    let mut representatives = Vec::new();
+    let mut repeated = Vec::new();
+    let mut persisted_request_bytes = 0u64;
+    for archive in &archives {
+        let failure = failure_record(archive);
+        assert_eq!(failure["pre_provider"], true, "{}", archive.display());
+        assert_eq!(failure["provider_stage"], "catalog");
+        assert_eq!(failure["reason"], "model_http_401");
+        assert_eq!(failure["provider_reason"], "model_http_401");
+        assert_eq!(failure["http_status"], 401);
+        assert_eq!(failure["request_sha256"].as_str().unwrap().len(), 64);
+        assert!(failure["request_bytes"].as_u64().unwrap() > 1_000_000);
+        assert_eq!(failure["request_receipt"], "turn-00-request-receipt.json");
+        let receipt = archive.join("turn-00-request-receipt.json");
+        let receipt_bytes = fs::metadata(&receipt).unwrap().len();
+        assert!(receipt_bytes <= super::failure_window::REQUEST_RECEIPT_MAX_BYTES as u64);
+        persisted_request_bytes += receipt_bytes;
+        if archive.join("turn-00-request.json").is_file() {
+            assert_eq!(failure["request_archive"], "turn-00-request.json");
+            assert!(failure["representative_request"].is_null());
+            persisted_request_bytes += fs::metadata(archive.join("turn-00-request.json"))
+                .unwrap()
+                .len();
+            representatives.push(archive.clone());
+        } else {
+            assert!(failure["request_archive"].is_null());
+            repeated.push(archive.clone());
+        }
+    }
+    assert_eq!(representatives.len(), 1);
+    assert_eq!(repeated.len(), 7);
+    let representative = representatives[0]
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    for archive in &repeated {
+        let failure = failure_record(archive);
+        assert_eq!(failure["representative_request"]["run"], representative);
+        assert_eq!(
+            failure["representative_request"]["blob"],
+            "turn-00-request.json"
+        );
+        assert!(failure["failure_window_count"].as_u64().unwrap() >= 2);
+    }
+    let representative_bytes = fs::metadata(representatives[0].join("turn-00-request.json"))
+        .unwrap()
+        .len();
+    assert!(
+        persisted_request_bytes < representative_bytes + 64 * 1024,
+        "persisted {persisted_request_bytes} request bytes for 8 pre-provider failures \
+         (one representative is {representative_bytes})"
+    );
+    // The archived transcript stays readable: the first failure links its full
+    // request, repeated failures link the bounded receipt.
+    for archive in &archives {
+        let events =
+            super::super::transcript::read(&archive.join("transcript.ndjson"), 1_000_000).unwrap();
+        let input = events
+            .iter()
+            .find(|event| event["kind"] == "input")
+            .unwrap();
+        let blob = if archive == &representatives[0] {
+            "turn-00-request.json#/request/input"
+        } else {
+            "turn-00-request-receipt.json"
+        };
+        assert_eq!(input["blob"], blob);
+        let ended = events.last().unwrap();
+        assert_eq!(ended["kind"], "run_ended");
+        assert_eq!(ended["outcome"], "failure");
+        assert_eq!(ended["reason"], "model_http_401");
+    }
+    // The dashboard run list keeps every failure visible.
+    let source = c.directory.join("model/live-stream.json");
+    let page = super::super::transcript::list_runs(
+        &source,
+        &super::super::transcript::RunFilter {
+            limit: 100,
+            ..Default::default()
+        },
+        &c.dashboard,
+    )
+    .unwrap();
+    let rows = page.body["runs"].as_array().unwrap();
+    assert_eq!(rows.len(), 8);
+    for row in rows {
+        assert_eq!(row["role"], "digest");
+        assert_eq!(row["model"], json!(role().model_id));
+        assert!(row["started_ms"].as_i64().is_some());
+        assert_eq!(row["outcome"], "failure");
+    }
+    let detail = super::super::model_history::run_detail_with_settings(
+        &source,
+        repeated[0].file_name().unwrap().to_str().unwrap(),
+        &c.dashboard,
+    )
+    .unwrap();
+    assert_eq!(detail["run"]["role"], "digest");
+    assert_eq!(detail["run"]["model"], json!(role().model_id));
+    assert_eq!(detail["run"]["outcome"], "failure");
+    assert_eq!(detail["run"]["reason"], "model_http_401");
+    // A provider turn ends the window: the next outage keeps its own first
+    // failure evidence instead of linking to a stale representative request.
+    let mut recovered = Script(VecDeque::from([Ok(final_response())]));
+    run(
+        &c,
+        &PlannerConfig::default(),
+        "digest",
+        &role(),
+        "Recovered digest",
+        &json!({}),
+        &mut recovered,
+        &planner::preview_guard(),
+    )
+    .unwrap();
+    let mut backend = PreProviderFailure {
+        stage: "catalog",
+        calls: 0,
+    };
+    assert!(
+        run(
+            &c,
+            &PlannerConfig::default(),
+            "digest",
+            &role(),
+            "Second outage",
+            &json!({}),
+            &mut backend,
+            &planner::preview_guard(),
+        )
+        .is_err()
+    );
+    let representatives: Vec<_> = harness_archives(&c)
+        .into_iter()
+        .filter(|archive| {
+            archive.join("turn-00-request.json").is_file()
+                && serde_json::from_slice::<Value>(
+                    &fs::read(archive.join("failure.json")).unwrap_or_default(),
+                )
+                .is_ok_and(|failure| failure["pre_provider"] == true)
+        })
+        .collect();
+    assert_eq!(representatives.len(), 2);
+    let second = representatives
+        .iter()
+        .max_by_key(|archive| {
+            fs::metadata(archive.join("run.json"))
+                .unwrap()
+                .modified()
+                .unwrap()
+        })
+        .unwrap();
+    let failure = failure_record(second);
+    assert_eq!(failure["request_archive"], "turn-00-request.json");
+    assert!(failure["representative_request"].is_null());
+}

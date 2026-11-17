@@ -11,6 +11,10 @@ mod tools;
 pub(crate) use tools::*;
 mod bundle;
 use bundle::*;
+mod failure_window;
+pub(crate) use failure_window::{
+    PlannerInput, close as close_failure_window, pre_provider_stage, retain_planner_input,
+};
 pub(crate) mod research;
 pub(crate) use research::{
     LaunchBook, OwnerResearchRuntime, ResearchLaunch, ResearchSettings,
@@ -659,6 +663,8 @@ pub(super) fn run_collect(
     let mut transcript_instruments = BTreeSet::new();
     let mut stopped = false;
     let mut rejected_digest = false;
+    // Bounded evidence for a failure that never reached the provider (#23).
+    let mut pre_provider_evidence: Option<Value> = None;
     let mut stream_binding = None;
     let result = (|| -> Result<String> {
         let binding = book_binding(c)?;
@@ -756,22 +762,13 @@ pub(super) fn run_collect(
                     json!({"sha":prompt_sha,"bytes":instructions.len(),"path":path}),
                 );
             }
-            if turn == 0 {
-                let content_bytes: usize = frame
-                    .input
-                    .iter()
-                    .filter_map(|item| item["content"].as_str())
-                    .map(str::len)
-                    .sum();
-                capture_event(
-                    &mut capture,
-                    "input",
-                    json!({"turn":0,"bytes":serde_json::to_vec(&frame.input)?.len(),"summary":{"input_items":frame.input.len(),"content_bytes":content_bytes},"blob":"turn-00-request.json#/request/input"}),
-                );
-            }
             let request = serde_json::to_string(&frame)?;
             let stream_id = digest(request.as_bytes());
-            request_archive.write(&archive, turn, &frame, &request, &prompt_sha)?;
+            // Turn deltas are small and append-only: keep the historical pre-call
+            // write so a crash during the call still leaves the appended input.
+            if turn > 0 {
+                request_archive.write(&archive, turn, &frame, &request, &prompt_sha)?;
+            }
             let mut turn_role = role.clone();
             // Lifecycle turns have no tool round trips. Their single request
             // may consume the configured whole-run allowance (large summaries).
@@ -793,12 +790,77 @@ pub(super) fn run_collect(
                 c, cfg, name, usage_name, &turn_role, &request, backend, guard,
             );
             let call_ended = now();
+            let provider = backend.provenance();
+            // The first request of a run is archived only after the provider
+            // result is known. A failure before any provider turn persists a
+            // bounded receipt and at most one representative request per failure
+            // window instead of the full request on every retry (#23).
+            if turn == 0 {
+                let pre_provider = if called.is_err() {
+                    failure_window::pre_provider_stage(&provider)
+                } else {
+                    None
+                };
+                let input_blob = match pre_provider {
+                    Some(stage) => {
+                        let reason = called
+                            .as_ref()
+                            .err()
+                            .map(|error| tool_failure_reason(error.as_ref()))
+                            .unwrap_or_else(|| "provider_failure_redacted".into());
+                        let retained = failure_window::retain(
+                            failure_window::PreProviderRequest {
+                                model: &c.directory.join("model"),
+                                archive: &archive,
+                                run: run_id,
+                                turn,
+                                frame: &frame,
+                                request: &request,
+                                instructions_sha: &prompt_sha,
+                                signature: failure_window::FailureSignature {
+                                    kind: "harness_request",
+                                    role: name,
+                                    model: &role.model_id,
+                                    reason: &reason,
+                                    stage,
+                                },
+                                now: now(),
+                            },
+                            || request_archive.write(&archive, turn, &frame, &request, &prompt_sha),
+                        );
+                        pre_provider_evidence = Some(retained.evidence);
+                        retained.blob
+                    }
+                    None => {
+                        // A provider turn ends any open pre-provider failure
+                        // window so the next outage keeps its own first evidence.
+                        failure_window::close(
+                            &c.directory.join("model"),
+                            name,
+                            &role.model_id,
+                            now(),
+                        );
+                        request_archive.write(&archive, turn, &frame, &request, &prompt_sha)?;
+                        Some("turn-00-request.json#/request/input".to_owned())
+                    }
+                };
+                let content_bytes: usize = frame
+                    .input
+                    .iter()
+                    .filter_map(|item| item["content"].as_str())
+                    .map(str::len)
+                    .sum();
+                capture_event(
+                    &mut capture,
+                    "input",
+                    json!({"turn":0,"bytes":serde_json::to_vec(&frame.input)?.len(),"summary":{"input_items":frame.input.len(),"content_bytes":content_bytes},"blob":input_blob}),
+                );
+            }
             let raw = match called {
                 Ok(raw) => raw,
                 Err(error) => {
                     // A failed response can still report its token counts; retain
                     // them instead of recording an unexplained all-null usage (#224).
-                    let provider = backend.provenance();
                     capture_usage(
                         &mut capture,
                         turn,
@@ -807,6 +869,25 @@ pub(super) fn run_collect(
                         &json!({"input_tokens":provider["tokens_in"],"output_tokens":provider["tokens_out"]}),
                         &mut token_totals,
                     );
+                    if turn > 0
+                        && let Some(stage) = failure_window::pre_provider_stage(&provider)
+                    {
+                        let delta = format!("turn-{turn:02}-request-delta.json");
+                        let reason = tool_failure_reason(error.as_ref());
+                        pre_provider_evidence = failure_window::RequestEvidence {
+                            request: &request,
+                            frame: &frame,
+                            instructions_sha: &prompt_sha,
+                            reason: &reason,
+                            stage,
+                            request_archive: Some(&delta),
+                            representative: None,
+                            representative_run: None,
+                            window_count: 0,
+                        }
+                        .value()
+                        .ok();
+                    }
                     if error.to_string() == "planner_cancelled_no_replay" && name == "digest" {
                         stopped = true;
                         return stopped_result(name);
@@ -1252,7 +1333,6 @@ pub(super) fn run_collect(
     let mut provider_evidence = Value::Null;
     let result = (|| -> Result<String> {
         metadata["completed_ms"] = json!(millis());
-        rollover::atomic(&archive.join("run.json"), &metadata)?;
         match &result {
             Ok(raw) => {
                 let output: Value = serde_json::from_str(raw).unwrap_or_else(|_| json!(raw));
@@ -1270,6 +1350,15 @@ pub(super) fn run_collect(
                         .expect("failure record is an object")
                         .extend(fields.clone());
                 }
+                if let Some(Value::Object(fields)) = &pre_provider_evidence {
+                    failure
+                        .as_object_mut()
+                        .expect("failure record is an object")
+                        .extend(fields.clone());
+                    metadata["pre_provider"] = json!(true);
+                    metadata["request_receipt"] = failure["request_receipt"].clone();
+                    metadata["representative_request"] = failure["representative_request"].clone();
+                }
                 if rejected_digest {
                     failure["rejected_digest"] = json!("rejected-digest.json");
                 }
@@ -1277,6 +1366,7 @@ pub(super) fn run_collect(
                 rollover::atomic(&archive.join("failure.json"), &failure)?;
             }
         }
+        rollover::atomic(&archive.join("run.json"), &metadata)?;
         result
     })();
     let ended_elapsed = clock.elapsed_ms().saturating_sub(budget_start);

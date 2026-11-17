@@ -1,5 +1,33 @@
 # Source snapshot
 
+## 0.10.2 — 2026-11-17
+
+Keep the dashboard, the reviewed fallback and the host migration honest after
+the 2026-11-17 outage.
+
+Dashboard: an archived transcript without a terminal event reports `interrupted`
+instead of `Running` (only a current-session run inside its role's bounded
+allowance stays running); controller startup renders a retrying loading state
+instead of "Unavailable v1 evidence"; and the order authority is reported
+explicitly as `paper` in paper mode, never implying a live broker.
+
+Fallback: the reviewed explicit limit fallback now also covers entitlement/auth
+failures at the catalog or inference stage and opaque HTTP 200
+response-validation rejections, with stage-bounded static reason codes. Timeouts,
+5xx, cancellation, malformed output from a real response, grant-refresh auth
+failures and local refusals still never switch. Readiness publishes the eligible
+reason codes.
+
+Model artifacts: a failure before any provider turn keeps a bounded receipt and
+at most one representative request and audit input per failure window instead of
+the full multi-megabyte bundle on every retry. The first failure evidence is
+preserved and linked; nothing is deleted. This removes the outage write load that
+could exceed the controller's stop timeout.
+
+Host migration: `host-migrate` rewrites every planner in the `previous_config`
+chain (bounded to 32 entries with cycle detection), so a dated planner schedule
+passes `preflight` after migration instead of refusing on a legacy predecessor.
+
 ## 0.10.1 — 2026-11-17
 
 Fix the transcript index test to inspect the supervisor archive named by its

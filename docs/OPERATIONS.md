@@ -242,8 +242,9 @@ Older snapshots without `models` may use top-level `model_status`.
 Future refresh/unestablished usage may be UNKNOWN;
 authenticated status alone does not establish session coverage. Readiness also
 reports each configured role's optional limit fallback (`fallback`) with a
-static status and reason; a blocked fallback does not change the primary role's
-status or the model-readiness exit code.
+static status, reason and an `eligibility` array of the reason codes it may
+switch for; a blocked fallback does not change the primary role's status or the
+model-readiness exit code.
 
 Preflight and readiness also read every `research_tools.registrations` file from the
 resolved planner config and compare its bytes with the registered SHA-256. A
@@ -1273,9 +1274,9 @@ roster; `model status` remains the grant-state check.
 ### Explicit limit fallback
 
 A reviewed role may configure one explicit fallback for a single call whose
-primary provider returns a usage, rate or quota limit. It is never a silent
-fallback and never replaces the primary for another failure. It applies to
-`digest.fallback` and `orchestrator.model.fallback`; omit it to keep existing
+primary fails with one of the reviewed eligibility classes below. It is never a
+silent fallback and never replaces the primary for another failure. It applies
+to `digest.fallback` and `orchestrator.model.fallback`; omit it to keep existing
 policy bytes and hashes unchanged.
 
 ```json
@@ -1306,19 +1307,29 @@ reads and trims it and never prints it. A group/world-readable key, a symlink, a
 foreign owner or a transport mismatch blocks fallback readiness without changing
 the primary role's status.
 
-Only HTTP 429 after the bounded retries, or a provider error carrying
-`usage_limit_reached`, `rate_limit_exceeded` or `insufficient_quota`, may switch
-that one call to the fallback. Expired grants, authentication failures,
-timeouts, invalid output, cancelled turns, ambiguous paper actions and other
-errors never switch. The fallback has no separate call budget; the call keeps
-the role's existing reservation and accounting. The request uses Mistral chat
-completions with a system role, `max_tokens`, no `store` and no tool-action
-replay; the reply is translated back to the same harness envelope. Each switch
-is recorded in transport evidence (`fallback` with from/to model, transport,
-reason, primary status/stage and outcome), logged, and alerted as
-`model_fallback` at most once per 30 minutes per role. Readiness reports each
-role's `fallback` status and reason. No key, grant, token or auth cache enters
-the evidence, alert or report.
+Exactly these primary failures may switch that one call to the fallback, each
+with its explicit reason code:
+
+| Reason | Primary failure |
+| --- | --- |
+| `usage_limit_reached` | HTTP 429 after the bounded retries, or a provider error carrying `usage_limit_reached` |
+| `rate_limited` | HTTP 429, `rate_limit_exceeded` or a rate-limit provider error |
+| `quota_exceeded` | A provider error carrying `insufficient_quota` or quota |
+| `entitlement_auth_failed` | HTTP 401/403 from the catalog or inference request (provider stage `catalog`, `inference` or `http_response`), for example an expired subscription or a revoked grant |
+| `response_validation_rejected` | An opaque HTTP 200 whose body is a provider error object or stream failure at response validation (`model_http_200`), for example a provider that rejects the supervisor prompt |
+
+Timeouts, HTTP 5xx, cancelled turns, malformed or incomplete output from a real
+response, ambiguous paper actions, a grant-refresh auth failure (provider stage
+`grant_owner`) and local refusals never switch. The fallback has no separate
+call budget; the call keeps the role's existing reservation and accounting. The
+request uses Mistral chat completions with a system role, `max_tokens`, no
+`store` and no tool-action replay; the reply is translated back to the same
+harness envelope. Each switch is recorded in transport evidence (`fallback`
+with from/to model, transport, reason, primary status/stage and outcome),
+logged, and alerted as `model_fallback` at most once per 30 minutes per role.
+Readiness reports each role's `fallback` status, reason and `eligibility`
+reason codes. No key, grant, token or auth cache enters the evidence, alert or
+report.
 
 Probe the configured key and model with one minimal request (it never starts a
 paper session or touches a journal):
@@ -1719,17 +1730,21 @@ first.
 | `host_migrate_config_changed` | A config input or the staged updater's presence changed after planning |
 | `host_migrate_session_changed` / `host_migrate_book_state_changed` | The current session or book facts changed before apply acquired its locks |
 | `host_migrate_release_version_mismatch` | The staged release is not the running binary's own version |
+| `host_migrate_planner_chain_cycle` | A planner's `previous_config` chain revisits a file |
+| `host_migrate_planner_chain_too_deep` | The `previous_config` chain is longer than the resolver's 32-entry bound |
 | `host_migrate_*_config_invalid` | A rewritten config does not parse with the new types |
 | `host_migrate_*_conflict` | A target path already exists with different content |
 
 It reads `~/.config/ind-sadr/updater.json`, the paper config it names, that
-config's planner, the planner's experiment profile and every `model_config` the
-planner names. It then rewrites:
+config's planner and every planner in its `previous_config` chain, the active
+planner's experiment profile and every `model_config` it names. It then
+rewrites:
 
 - Paper config: drops `allow_legacy_model_led_default`. It writes `sessions_root`
   explicitly as `~/ind-sadr-data/sessions` when the key is absent, because the
   default moved to `~/nivra-data/sessions`.
-- Planner: drops `decision_owner`, `decide`, `handoff_gate`, `post_close`,
+- Planner and every planner in its `previous_config` chain: drops
+  `decision_owner`, `decide`, `handoff_gate`, `post_close`,
   `orchestrator.triggers.operations|strategy`, the trigger keys
   `after_decide`, `luna_no_decide_streak`, `minimum_turn_ms` and
   `max_failed_tools`, the same two limits on `digest` and `orchestrator.model`,
@@ -1751,6 +1766,13 @@ planner names. It then rewrites:
   are left as an unused archive; the new updater no longer parses that block.
 - Any string under a renamed root (`~/ind-sadr-deploy`, `~/.local/state/ind-sadr`)
   moves with it.
+
+Every planner in a dated `previous_config` chain is rewritten, backed up and
+validated the same way. `preflight` resolves the planner for the paper config's
+`session`, and that session can predate the active planner's `effective_from`,
+so a legacy-shaped predecessor would still refuse after migration. The chain is
+bounded to 32 entries with cycle detection; a cycle or an over-deep chain
+refuses. Rewriting a predecessor does not change the active policy hash.
 
 Each rewritten file is validated with the new types first. The original stays
 beside it as `FILE.pre-nivra` (0600) and the new bytes are staged as
@@ -1817,7 +1839,8 @@ automatically.
    ```
 
    The report must show `"binding": "matches"`. Keep the applied report; its
-   `rewrite_config` steps list the files rollback restores.
+   `rewrite_config` steps list the files rollback restores, including every
+   planner in a `previous_config` chain.
 
 5. Verify the installed release with its own binary. `update --check` proves the
    installed tag and commit against the published annotated tag and prints
@@ -1831,6 +1854,18 @@ automatically.
    systemctl --user daemon-reload
    systemctl --user cat nivra-paper.service
    ```
+
+   A dated planner schedule needs one extra check. `preflight` resolves the
+   planner for the paper config's `session`; when that session predates the
+   active planner's `effective_from`, resolution follows `previous_config`.
+   Migration rewrites and validates every planner in that chain, so `preflight`
+   must pass without manual edits. A host migrated by 0.10.1, which rewrote only
+   the named planner, can still fail with `preflight_planner_config_invalid`.
+   Recover manually: copy the predecessor to `FILE.pre-nivra` (0600), drop its
+   `decision_owner`, `decide` and the other removed planner keys listed above,
+   validate with `~/nivra-current/nivra planner config-check --planner
+   PREVIOUS_PLANNER --session BOOK_SESSION`, then rerun `preflight`. The active
+   policy hash is unaffected by that predecessor.
 
 6. Inspect `operator_next` and the original book state. Migration preserves stop
    and halt flags. Authorization to migrate the installation does not authorize

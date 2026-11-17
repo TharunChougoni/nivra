@@ -105,6 +105,16 @@ fn json_reply(head: &str, body: serde_json::Value) -> Response {
     reply.etag = Some(etag);
     reply
 }
+/// Order authority is explicit: paper mode executes against the deterministic
+/// paper ledger, so it is reported as `paper`. A live order path is not
+/// implemented here and stays unknown instead of implying a live broker (#24).
+fn order_authority(live: bool) -> serde_json::Value {
+    if live {
+        serde_json::Value::Null
+    } else {
+        serde_json::json!("paper")
+    }
+}
 fn envelope(view: &serde_json::Value) -> serde_json::Value {
     let live = LIVE_ENABLED || view["live_enabled"].as_bool().unwrap_or(false);
     let account = view["account"].as_str().unwrap_or("");
@@ -115,7 +125,7 @@ fn envelope(view: &serde_json::Value) -> serde_json::Value {
         "paper_only":view["paper_only"].as_bool().unwrap_or(!live),
         "live_enabled":live,
         "account":account,
-        "broker":{"data":"upstox","orders":null},
+        "broker":{"data":"upstox","orders":order_authority(live)},
         "session":session,
         "binding":format!("upstox|{account}|{session}"),
         "as_of_ms":view["as_of_ms"],

@@ -180,7 +180,10 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
     let body: serde_json::Value = serde_json::from_slice(&first.body).unwrap();
     assert_eq!(body["mode"], "paper");
     assert_eq!(body["account"], "fixture-alias");
-    assert_eq!(body["broker"]["orders"], serde_json::Value::Null);
+    // The paper ledger is the explicit order authority (#24); it is never a
+    // missing value while the controller is in paper mode.
+    assert_eq!(body["broker"]["data"], "upstox");
+    assert_eq!(body["broker"]["orders"], "paper");
     assert_eq!(body["limits"]["sse_max_streams"], 3);
     assert!(!String::from_utf8_lossy(&first.body).contains("must-not-be-served"));
     let sessions_reply = send(&request("").replace("/api/v1/meta", "/api/v1/sessions"));
@@ -222,6 +225,10 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
     view.lock().unwrap()["live_enabled"] = serde_json::json!(true);
     let live: serde_json::Value = serde_json::from_slice(&send(&request("")).body).unwrap();
     assert_eq!(live["mode"], "live");
+    // A live order path is not implemented: it stays unknown rather than
+    // implying a live broker or execution authority.
+    assert_eq!(live["broker"]["orders"], serde_json::Value::Null);
+    assert_eq!(live["live_enabled"], true);
     view.lock().unwrap()["account"] = serde_json::json!({"token":"must-not-be-served"});
     let invalid_alias: serde_json::Value =
         serde_json::from_slice(&send(&request("")).body).unwrap();

@@ -678,3 +678,150 @@ fn refuses_blackout_held_lock_open_update_and_binding_change() {
 
     assert_eq!(snapshot(&h.root), before, "refusals write nothing");
 }
+
+/// A dated planner schedule whose predecessor is legacy-shaped, with the paper
+/// config's session before `effective_from`: the observed migration failure.
+fn dated_chain(h: &Home, previous_shortlist: usize, active_shortlist: usize) -> (PathBuf, PathBuf) {
+    let config = h.home.join(CONFIG_DIR);
+    let active = config.join("planner.json");
+    let previous = config.join("planner-previous.json");
+    let mut legacy = parse(&fs::read(&active).unwrap()).unwrap();
+    legacy["shortlist_n"] = json!(previous_shortlist);
+    write_json(&previous, &legacy);
+    let mut value = legacy.clone();
+    value["shortlist_n"] = json!(active_shortlist);
+    value["effective_from"] = json!("2026-11-16");
+    value["previous_config"] = json!(previous);
+    write_json(&active, &value);
+    (active, previous)
+}
+
+#[test]
+fn migrates_the_previous_config_planner_chain_and_refuses_bad_chains() {
+    let h = fixture();
+    let config = h.home.join(CONFIG_DIR);
+    let (active, previous) = dated_chain(&h, 111, 222);
+    let book_session: chrono::NaiveDate = parse(&fs::read(&h.paper).unwrap()).unwrap()["session"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let effective: chrono::NaiveDate = "2026-11-16".parse().unwrap();
+    assert!(book_session < effective);
+    // The active policy hash, computed from the migrated active shape alone.
+    let mut expected = parse(&fs::read(&active).unwrap()).unwrap();
+    for key in removed_keys(Kind::Planner) {
+        drop_key(&mut expected, key, "", &mut Vec::new());
+    }
+    let expected_path = config.join("planner-policy-expected.json");
+    write_json(&expected_path, &expected);
+    // The observed bug: migration rewrites only the active planner, and
+    // preflight resolves the book session through the legacy predecessor.
+    assert!(
+        planner::PlannerConfig::load_for_session(&expected_path, book_session).is_err(),
+        "legacy predecessor must refuse before migration"
+    );
+    let active_policy =
+        planner::policy_bytes(&planner::PlannerConfig::load(&expected_path).unwrap()).unwrap();
+    let legacy_previous = fs::read(&previous).unwrap();
+
+    let before = snapshot(&h.root);
+    let preview = run(&h.home, &h.stage, false, false, evening()).unwrap();
+    assert_eq!(preview["status"], "dry_run");
+    assert_eq!(snapshot(&h.root), before, "dry run writes nothing");
+    let planned = preview["steps"].to_string();
+    for path in [&active, &previous] {
+        assert!(
+            planned.contains(&format!("\"path\":\"{}\"", path.display())),
+            "chain planner {} is in the report",
+            path.display()
+        );
+    }
+
+    let applied = run(&h.home, &h.stage, true, false, evening()).unwrap();
+    assert_eq!(applied["status"], "applied");
+    // Preflight's resolution step: the book session uses the rewritten predecessor.
+    let predecessor = planner::PlannerConfig::load_for_session(&active, book_session).unwrap();
+    assert_eq!(predecessor.shortlist_n, 111);
+    let current = planner::PlannerConfig::load_for_session(&active, effective).unwrap();
+    assert_eq!(current.shortlist_n, 222);
+    // The predecessor is preserved as evidence and validated under the new types.
+    assert_eq!(
+        fs::read(sibling(&previous, BACKUP_SUFFIX)).unwrap(),
+        legacy_previous
+    );
+    let rewritten = parse(&fs::read(&previous).unwrap()).unwrap();
+    assert!(rewritten.get("decision_owner").is_none());
+    assert!(rewritten.get("decide").is_none());
+    planner::PlannerConfig::load(&previous).unwrap();
+    // The active policy hash is unchanged by the predecessor entry.
+    assert_eq!(
+        planner::policy_bytes(&planner::PlannerConfig::load(&active).unwrap()).unwrap(),
+        active_policy
+    );
+    assert_eq!(
+        planner::policy_bytes(&current).unwrap(),
+        active_policy,
+        "resolving the active planner does not depend on the predecessor"
+    );
+    assert_eq!(
+        parse(&fs::read(&active).unwrap()).unwrap()["previous_config"],
+        json!(previous)
+    );
+    let migrated = snapshot(&h.root);
+    let again = run(&h.home, &h.stage, true, false, evening()).unwrap();
+    assert_eq!(again["status"], "already_migrated");
+    assert_eq!(snapshot(&h.root), migrated, "rerun is a no-op");
+
+    // A cycle in the predecessor chain refuses before writing.
+    let h = fixture();
+    let (_, previous) = dated_chain(&h, 111, 222);
+    let mut value = parse(&fs::read(&previous).unwrap()).unwrap();
+    value["effective_from"] = json!("2026-10-01");
+    value["previous_config"] = json!(previous);
+    write_json(&previous, &value);
+    let before = snapshot(&h.root);
+    assert_eq!(
+        plan(&h.home, &h.stage).err(),
+        Some("host_migrate_planner_chain_cycle")
+    );
+    assert_eq!(snapshot(&h.root), before, "cycle refusal writes nothing");
+
+    // A chain deeper than the resolver bound refuses with an explicit reason.
+    let h = fixture();
+    let config = h.home.join(CONFIG_DIR);
+    let (active, previous) = dated_chain(&h, 111, 222);
+    let base = {
+        let mut value = parse(&fs::read(&active).unwrap()).unwrap();
+        let map = value.as_object_mut().unwrap();
+        map.remove("effective_from");
+        map.remove("previous_config");
+        for key in removed_keys(Kind::Planner) {
+            drop_key(&mut value, key, "", &mut Vec::new());
+        }
+        value
+    };
+    let mut path = config.join("planner-chain-30.json");
+    write_json(&path, &base);
+    for i in (0..30).rev() {
+        let next = config.join(format!("planner-chain-{i}.json"));
+        let mut value = base.clone();
+        value["effective_from"] = json!("2026-11-16");
+        value["previous_config"] = json!(path);
+        write_json(&next, &value);
+        path = next;
+    }
+    let mut value = parse(&fs::read(&previous).unwrap()).unwrap();
+    for key in removed_keys(Kind::Planner) {
+        drop_key(&mut value, key, "", &mut Vec::new());
+    }
+    value["effective_from"] = json!("2026-11-16");
+    value["previous_config"] = json!(path);
+    write_json(&previous, &value);
+    let before = snapshot(&h.root);
+    assert_eq!(
+        plan(&h.home, &h.stage).err(),
+        Some("host_migrate_planner_chain_too_deep")
+    );
+    assert_eq!(snapshot(&h.root), before, "too-deep refusal writes nothing");
+}

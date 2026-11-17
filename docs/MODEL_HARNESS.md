@@ -94,8 +94,11 @@ HTTP failures retain only their bounded status code (for example
 HTTP 429 retries honor a valid `Retry-After` value or use bounded exponential
 backoff, with at most three retries inside the original call deadline. A
 malformed or incomplete response body gets one bounded retry inside the same
-deadline; schema, authority, credential and deadline failures are never retried,
-and no failure triggers a model fallback. Supervisor
+deadline; schema, authority, credential and deadline failures are never retried.
+No failure triggers a silent fallback; only the reviewed
+[explicit limit fallback](OPERATIONS.md#explicit-limit-fallback) may switch one
+eligible call, with stage-bounded eligibility and no alias or foreign-cache
+substitute. Supervisor
 turn failures retry only on the next eligible wake; unknown provider text is still replaced.
 Dropped or stale `model/supervisor-wake.json` requests are logged.
 
@@ -1181,11 +1184,18 @@ as `scorer_trigger status=<...> reason=<...>` and in the dashboard
 Each role's absolute `model_config` names an application-owned grant/approval.
 All Grok roles can share the same xAI config and fenced refresh owner; Luna uses
 its own OpenAI config. Exact response IDs, account/origin/expiry and subscription
-approval checks apply. No alias, foreign cache or paid/provider fallback.
+approval checks apply. No alias or foreign credential cache is accepted, and no
+fallback is silent: only the reviewed
+[explicit limit fallback](OPERATIONS.md#explicit-limit-fallback) may switch one
+eligible call, with stage-bounded reason codes.
 
 The original book owns events, attempts and active plans. `model/<decision-id>/`
 archives inputs/hashes, instruction hash, actual rounds, tool/citation output and
-validation. `model/usage/` retains reservations/results. SQLite per-action rows
+validation. The full audit `input.json` is written once the provider result is
+known; a failure before any provider turn keeps a bounded `input-receipt.json`
+and at most one representative input per failure window instead of the
+multi-megabyte bundle on every retry. `model/usage/` retains
+reservations/results. SQLite per-action rows
 commit with paper fills; JSON status/execution projections cannot revive a plan.
 
 The planner config has no `post_close` block and no `operations` or `strategy`
@@ -1241,6 +1251,23 @@ retain `run.json`, `output.json` or `failure.json` for run identity, trigger,
 timing and terminal outcome. Old runs show unavailable metadata explicitly;
 legacy durations use retained archive write times where possible. This view does
 not start models or change any book, journal or sealed evidence.
+
+A provider failure that happens before any provider turn (for example a
+`catalog`, `grant_owner`, `application_config` or `tool_definitions` failure) is
+archived as a bounded failure record, not as a full request per retry. The
+record keeps the reason, stage, HTTP status when present, request and prompt
+sizes, and the request, tool and instruction hashes; the run keeps its
+`transcript.ndjson`, `run.json` and `failure.json`, so it stays visible in the
+run list with role, model, start, outcome and reason. The first failure of a
+failure window (same archive kind/role/model/reason/stage, one hour) also
+retains one representative full request and later retries link to it; a provider
+turn closes the window so a new outage keeps its own first evidence. The
+transcript input event links the representative request or the bounded
+`turn-NN-request-receipt.json`. The planner audit directory follows the same
+rule with its own window: the full `input.json` is the representative, later
+retries keep `input-receipt.json` with the input hash, size and stage, and the
+audit `failure.json` links the representative. No original journal, book or
+failed artifact is deleted.
 
 ## Strategy laboratory
 

@@ -1,4 +1,4 @@
-//! Limit fallback (#245) contract: which failures switch, the exact chat
+//! Limit fallback (#245, #21) contract: which failures switch, the exact chat
 //! request, the reply envelope and readiness. No sockets are opened.
 use super::*;
 use crate::runtime::planner::{FallbackProfile, ModelRole};
@@ -6,35 +6,94 @@ use nivra_cli::native_transport::FallbackTransport;
 use std::os::unix::fs::PermissionsExt;
 
 pub(super) fn fallback_contract() {
-    // Only provider usage, rate and quota limits switch; never credentials,
-    // timeouts, invalid output, server errors or local refusals.
-    for (error, expected) in [
+    // Only the reviewed eligibility classes switch one call; the primary's
+    // transport evidence bounds the auth and opaque-200 classes by stage.
+    // Timeouts, 5xx, cancellation, malformed output from a real response, a
+    // grant-refresh auth failure and local refusals never switch.
+    for (error, stage, expected) in [
+        // Provider limits (#245).
         (
             "model_http_429 usage_limit_reached The usage limit has been reached",
+            "http_response",
             Some("usage_limit_reached"),
         ),
-        ("model_http_429", Some("rate_limited")),
+        ("model_http_429", "http_response", Some("rate_limited")),
         (
             "model_http_200 rate_limit_exceeded Rate limit reached",
+            "response_validation",
             Some("rate_limited"),
         ),
-        ("model_http_403 insufficient_quota", Some("quota_exceeded")),
-        ("model_http_401 invalid_api_key", None),
-        ("model_http_500 server_error", None),
-        ("model_timeout", None),
-        ("grant_unavailable", None),
-        ("planner_budget_exhausted rate_limit", None),
-        ("model_response_incomplete", None),
+        (
+            "model_http_403 insufficient_quota",
+            "http_response",
+            Some("quota_exceeded"),
+        ),
+        // #21: an expired subscription or revoked grant at catalog/inference.
+        (
+            "model_http_401 invalid_api_key",
+            "catalog",
+            Some("entitlement_auth_failed"),
+        ),
+        (
+            "model_http_403 permission_denied Missing scope",
+            "catalog",
+            Some("entitlement_auth_failed"),
+        ),
+        (
+            "model_http_401",
+            "inference",
+            Some("entitlement_auth_failed"),
+        ),
+        (
+            "model_http_401",
+            "http_response",
+            Some("entitlement_auth_failed"),
+        ),
+        // #21: an opaque HTTP 200 provider rejection at response validation.
+        (
+            "model_http_200 provider rejected the supervisor prompt",
+            "response_validation",
+            Some("response_validation_rejected"),
+        ),
+        // The same codes outside their bounded stage never switch.
+        ("model_http_401 invalid_api_key", "grant_owner", None),
+        ("model_http_401", "transport", None),
+        ("model_http_200 provider rejected", "http_response", None),
+        ("model_http_200", "output_validation", None),
+        // 5xx, timeouts, cancellation, malformed output and local refusals.
+        ("model_http_500 server_error", "http_response", None),
+        ("model_http_501 not_implemented", "http_response", None),
+        ("model_http_503 unavailable", "http_response", None),
+        ("model_http_400 bad_request", "http_response", None),
+        ("model_http_404 not_found", "catalog", None),
+        ("model_timeout", "transport", None),
+        ("planner_call_timeout", "transport", None),
+        ("planner_cancelled_no_replay", "response_validation", None),
+        ("model_response_incomplete", "response_validation", None),
+        ("model_response_invalid", "response_validation", None),
+        ("model_stream_incomplete", "response_validation", None),
+        ("grant_unavailable", "grant_owner", None),
+        ("planner_budget_exhausted rate_limit", "inference", None),
     ] {
-        assert_eq!(limit_reason(error), expected, "{error}");
+        assert_eq!(
+            fallback_reason(error, &json!({"stage":stage})),
+            expected,
+            "{error} at {stage}"
+        );
     }
+    // A missing stage never widens eligibility: both bounded classes need it.
+    assert_eq!(fallback_reason("model_http_401", &json!({})), None);
+    assert_eq!(fallback_reason("model_http_200", &json!(null)), None);
     // The real codex 429 body keeps its type in the bounded error text.
     let codex = http_error(
         429,
         br#"{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"plus","resets_in_seconds":4000}}"#,
         &[],
     );
-    assert_eq!(limit_reason(&codex), Some("usage_limit_reached"));
+    assert_eq!(
+        fallback_reason(&codex, &json!({"stage":"http_response"})),
+        Some("usage_limit_reached")
+    );
 
     let profile = FallbackProfile {
         model_id: "deepseek-v4-1-flash-1017".into(),
@@ -220,7 +279,22 @@ pub(super) fn fallback_contract() {
         ready["origin"],
         "https://api.mistral.ai/v1/chat/completions"
     );
+    assert_eq!(ready["eligibility"], json!(FALLBACK_REASONS));
     assert!(!ready.to_string().contains("fixture-mistral-key"));
+    // The fallback call's own transport evidence is secret-free: a zero
+    // remaining budget refuses before any network call, after the key was read.
+    let frame = json!({"role":"supervisor","input":[{"role":"user","content":"Decide."}],
+        "tools":[],"final_answer_only":true,"review_only":true});
+    let mut provenance = json!({});
+    assert_eq!(
+        fallback_response(&configured, &role, &frame.to_string(), 0, &mut provenance).unwrap_err(),
+        "model_timeout"
+    );
+    assert_eq!(provenance["stage"], "application_config");
+    let evidence = provenance.to_string();
+    for secret in ["fixture-mistral-key", "account", "token", "grant"] {
+        assert!(!evidence.contains(secret), "{secret}");
+    }
     std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o640)).unwrap();
     assert_eq!(
         fallback_readiness(&configured)["reason"],
@@ -235,4 +309,45 @@ pub(super) fn fallback_contract() {
         fallback_readiness(&configured)["reason"],
         "fallback_config_invalid"
     );
+}
+
+#[test]
+fn fallback_eligibility_reason_codes_are_static_and_secret_free() {
+    // The reviewed set is exactly these static operator-visible codes; it is
+    // what evidence, logs, alerts and readiness may publish.
+    assert_eq!(
+        FALLBACK_REASONS,
+        [
+            "usage_limit_reached",
+            "rate_limited",
+            "quota_exceeded",
+            "entitlement_auth_failed",
+            "response_validation_rejected",
+        ]
+    );
+    assert!(FALLBACK_REASONS.iter().all(|code| {
+        code.bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+    }));
+    // A primary error carrying a synthetic credential yields only a static
+    // code: provider text never becomes the reason in evidence or the alert.
+    let secret = "sk-secret-0123456789abcdef";
+    for (error, stage) in [
+        (
+            format!("model_http_401 invalid_api_key {secret}"),
+            "catalog",
+        ),
+        (
+            format!("model_http_200 rejected {secret}"),
+            "response_validation",
+        ),
+        (
+            format!("model_http_429 usage_limit_reached {secret}"),
+            "http_response",
+        ),
+    ] {
+        let reason = fallback_reason(&error, &json!({"stage":stage})).unwrap();
+        assert!(FALLBACK_REASONS.contains(&reason));
+        assert!(!reason.contains(secret) && !reason.contains("sk-"));
+    }
 }

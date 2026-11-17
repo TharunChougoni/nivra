@@ -441,7 +441,7 @@ function fetchFixture(
         mode: "paper",
         paper_only: true,
         account: "private-fixture",
-        broker: { data: "fixture-upstox", orders: null },
+        broker: { data: "fixture-upstox", orders: "paper" },
       });
     if (path === "/api/v1/runs") return json({ runs: [], next: null });
     if (path.startsWith("/api/v1/scanner"))
@@ -703,10 +703,10 @@ test("client renders eight sections, two identities, archived books and private 
             .querySelector(".broker-banner")
             ?.textContent?.includes("fixture-upstox"),
         );
-        assert.ok(
-          document
-            .querySelector(".broker-banner")
-            ?.textContent?.includes("Not reported"),
+        // The paper ledger is the explicit order authority, not "Not reported".
+        assert.match(
+          document.querySelector(".broker-banner")?.textContent || "",
+          /Orders\s+paper/,
         );
       }
     }
@@ -1020,6 +1020,126 @@ test("operational panel keeps the published capture and separates operational ev
     );
     assert.equal(capturedText(), before);
     assert.ok(document.body.textContent?.includes("5,000"));
+  } finally {
+    app.stop();
+    root.unmount();
+    dom.window.close();
+  }
+});
+
+test("controller starting renders a retrying loading state instead of unavailable evidence", async () => {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "http://localhost/",
+    pretendToBeVisual: true,
+  });
+  for (const key of [
+    "window",
+    "document",
+    "Node",
+    "HTMLElement",
+    "Element",
+    "Event",
+    "CustomEvent",
+    "MutationObserver",
+    "getComputedStyle",
+    "location",
+    "localStorage",
+    "NodeFilter",
+  ])
+    Object.defineProperty(globalThis, key, {
+      value:
+        key === "getComputedStyle"
+          ? dom.window.getComputedStyle.bind(dom.window)
+          : dom.window[key],
+      configurable: true,
+      writable: true,
+    });
+  globalThis.addEventListener = dom.window.addEventListener.bind(dom.window);
+  globalThis.removeEventListener = dom.window.removeEventListener.bind(
+    dom.window,
+  );
+  const { App, Context } = await loadApp();
+  const { createRoot } = await import("react-dom/client");
+  const requests: string[] = [];
+  let mode: "starting" | "ready" | "unavailable" = "starting";
+  let summaryReads = 0;
+  const unavailable = (reason: string) => ({
+    ...envelope,
+    unavailable: true,
+    reason,
+  });
+  const fetch = fetchFixture({
+    "/api/v1/summary": () => {
+      if (mode === "starting" && ++summaryReads > 1) mode = "ready";
+      return json(
+        mode === "starting"
+          ? {
+              ...summary,
+              status: "starting",
+              state: { ...summary.state, phase: "starting" },
+            }
+          : summary,
+      );
+    },
+    "/api/v1/portfolio": () =>
+      json(
+        mode === "ready" ? portfolio : unavailable("portfolio_not_reported"),
+      ),
+    "/api/v1/fills": () =>
+      json(
+        mode === "ready"
+          ? splits["/api/v1/fills"]
+          : unavailable("fills_not_reported"),
+      ),
+    "/api/v1/scanner": () =>
+      json(mode === "ready" ? scanner : unavailable("scanner_not_reported")),
+  });
+  const app = createController(dom.window, {
+    connect: false,
+    fetch: async (url) => {
+      requests.push(String(url));
+      return fetch(url);
+    },
+  });
+  const root = createRoot(document.getElementById("root")!);
+  root.render(
+    <Context.Provider value={app}>
+      <App />
+    </Context.Provider>,
+  );
+  const waitFor = async (fn: () => unknown) => {
+    for (let i = 0; i < 400; i++) {
+      if (fn()) return;
+      await pause();
+    }
+    throw Error("UI timed out");
+  };
+  try {
+    await app.authenticate("fixture-only");
+    // Startup is a loading state, never "missing evidence".
+    await waitFor(() =>
+      document.body.textContent?.includes("Controller starting"),
+    );
+    assert.equal(
+      document.body.textContent?.includes("Unavailable v1 evidence"),
+      false,
+    );
+    // The page retries by itself and renders the evidence once it is published.
+    await waitFor(() => document.body.textContent?.includes("4,900"));
+    assert.equal(
+      document.body.textContent?.includes("Controller starting"),
+      false,
+    );
+    assert.equal(app.getSnapshot().snapshotState, "ready");
+    assert.ok(requests.filter((url) => url === "/api/v1/summary").length >= 2);
+    // A running controller whose source is genuinely unavailable keeps the
+    // explicit unavailable notice.
+    mode = "unavailable";
+    await app.refresh();
+    await waitFor(() =>
+      document.body.textContent?.includes("Unavailable v1 evidence"),
+    );
+    assert.ok(document.body.textContent?.includes("portfolio_not_reported"));
   } finally {
     app.stop();
     root.unmount();

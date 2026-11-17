@@ -428,11 +428,19 @@ export function createController(
       const scanner =
         patch.scannerState === "ready" ? (patch.scanner ?? null) : null;
       const observed = observe(summary, portfolio, scanner);
+      // A controller in its startup phase has not published the v1 view yet;
+      // that is a loading state, not unavailable evidence (#20).
+      const starting =
+        summary.status === "starting" || summary.state?.phase === "starting";
       const loaded: Partial<WorkspaceState> = {
         ...patch,
         summary,
         received: Date.now(),
-        snapshotState: issues.length ? "unavailable" : "ready",
+        snapshotState: starting
+          ? "loading"
+          : issues.length
+            ? "unavailable"
+            : "ready",
         issues,
         error: "",
         ...observed,

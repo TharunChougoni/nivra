@@ -15,7 +15,7 @@ use chrono::{DateTime, FixedOffset};
 use fs2::FileExt;
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::Write,
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -35,6 +35,10 @@ const RENAMES: [(&str, &str); 2] = [
 const OLD_CURRENT: &str = "ind-sadr-rust-current";
 const BACKUP_SUFFIX: &str = "pre-nivra";
 const NEXT_SUFFIX: &str = "nivra-next";
+/// Mirrors the resolver bound in `PlannerConfig::load_for_session`: a chain
+/// deeper than this cannot be resolved for every session, so migration refuses
+/// instead of leaving an unreachable legacy entry.
+const PLANNER_CHAIN_MAX: usize = 32;
 const UPDATER_REVIEW: [&str; 3] = [
     "pending.json",
     "pending-review.json",
@@ -352,6 +356,34 @@ fn model_configs(value: &Value, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Rewrite the planner the paper config names and every predecessor in its
+/// `previous_config` chain. `preflight` resolves the planner for the paper
+/// config's session, which can predate the active planner's `effective_from`;
+/// leaving a predecessor legacy-shaped would still refuse after migration.
+fn planner_chain(
+    home: &Path,
+    planner: &Path,
+    inputs: &mut BTreeMap<PathBuf, Vec<u8>>,
+) -> R<Vec<Step>> {
+    let mut steps = Vec::new();
+    let mut visited = BTreeSet::new();
+    let mut path = planner.to_owned();
+    for _ in 0..PLANNER_CHAIN_MAX {
+        if !visited.insert(path.clone()) {
+            return Err("host_migrate_planner_chain_cycle");
+        }
+        // Follow the path as written: planning must read the file that exists
+        // now, before apply performs the directory renames.
+        let value = parse(&read_input(&path, inputs)?)?;
+        steps.extend(rewrite(home, &path, Kind::Planner, None, inputs)?);
+        match string_at(&value, "previous_config") {
+            Some(next) => path = PathBuf::from(next),
+            None => return Ok(steps),
+        }
+    }
+    Err("host_migrate_planner_chain_too_deep")
+}
+
 fn unit_path(home: &Path, path: &Path) -> String {
     match path.strip_prefix(home) {
         Ok(rest) => format!("%h/{}", rest.display()),
@@ -508,13 +540,7 @@ fn plan(home: &Path, stage: &Path) -> R<Plan> {
         .clone()
         .ok_or("host_migrate_planner_config_required")?;
     let planner_value = parse(&read_input(&planner_path, &mut inputs)?)?;
-    rewrites.extend(rewrite(
-        home,
-        &planner_path,
-        Kind::Planner,
-        None,
-        &mut inputs,
-    )?);
+    rewrites.extend(planner_chain(home, &planner_path, &mut inputs)?);
     if let Some(profile) = string_at(&planner_value, "experiment_profile") {
         rewrites.extend(rewrite(
             home,

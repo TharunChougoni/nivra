@@ -687,7 +687,7 @@ impl Backend for Subscription<'_> {
             self.2,
         );
         let result = match (primary, role.fallback.as_ref()) {
-            (Err(error), Some(fallback)) => match crate::model::limit_reason(&error) {
+            (Err(error), Some(fallback)) => match crate::model::fallback_reason(&error, &self.1) {
                 Some(reason) => {
                     let remaining = role
                         .timeout_ms
@@ -738,10 +738,13 @@ impl Backend for Subscription<'_> {
 /// switch is still logged and recorded in the call's transport evidence.
 const FALLBACK_ALERT_INTERVAL: Duration = Duration::from_secs(1800);
 
-/// Retry one call on the role's reviewed fallback after a primary usage, rate
-/// or quota limit (#245). The switch is logged with its reason, recorded in the
-/// transport evidence (so the usage journal and dashboard show it) and alerted
-/// at most once per interval per role. Any other primary failure never gets here.
+/// Retry one call on the role's reviewed fallback after a primary failure in
+/// one of the reviewed eligibility classes (#245, #21): provider limits, an
+/// entitlement/auth failure at catalog or inference, or an opaque HTTP 200
+/// response-validation rejection. The switch is logged with its reason,
+/// recorded in the transport evidence (so the usage journal and dashboard show
+/// it) and alerted at most once per interval per role. Any other primary
+/// failure never gets here.
 fn limit_fallback(
     role: &ModelRole,
     fallback: &FallbackProfile,

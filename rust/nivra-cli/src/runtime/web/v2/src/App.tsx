@@ -172,6 +172,17 @@ export default function App() {
   }, [state.meta]);
   const title = NAV.find(([id]) => id === route.name)?.[1] || "Page not found";
   const live = state.meta?.live_enabled === true || state.meta?.mode === "live";
+  // During controller startup the v1 view is not published yet: health and
+  // summary report `starting` while every projection is still `*_not_reported`.
+  // That is a loading state, not missing evidence, so retry until it publishes.
+  const starting =
+    state.summary?.status === "starting" ||
+    state.summary?.state?.phase === "starting";
+  useEffect(() => {
+    if (!starting) return;
+    const timer = setInterval(() => void app.refresh(), 1000);
+    return () => clearInterval(timer);
+  }, [starting, app]);
   useEffect(() => {
     document.title = (live ? "LIVE · " : "Nivra · ") + title;
     let icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
@@ -339,15 +350,22 @@ export default function App() {
             </div>
           </div>
           <Notice error>{state.error}</Notice>
-          {state.snapshotState === "unavailable" && (
+          {starting ? (
             <Notice>
-              Unavailable v1 evidence:{" "}
-              {state.issues
-                .map((issue) => `${issue.source} (${issue.reason})`)
-                .join(" · ") || "unknown source"}
-              . Missing values stay unknown; no zero, healthy or complete state
-              is inferred.
+              Controller starting: the v1 evidence view is not published yet.
+              Missing values stay unknown; this page retries automatically.
             </Notice>
+          ) : (
+            state.snapshotState === "unavailable" && (
+              <Notice>
+                Unavailable v1 evidence:{" "}
+                {state.issues
+                  .map((issue) => `${issue.source} (${issue.reason})`)
+                  .join(" · ") || "unknown source"}
+                . Missing values stay unknown; no zero, healthy or complete
+                state is inferred.
+              </Notice>
+            )
           )}
           {Page ? (
             <Page key={route.name} selectedRun={route.run} />

@@ -1,9 +1,13 @@
-//! Explicit limit fallback (#245). One planner call whose primary failed with
-//! a usage, rate or quota limit is retried once on the role's configured
+//! Explicit limit fallback (#245, #21). One planner call whose primary failed
+//! with a reviewed eligibility class is retried once on the role's configured
 //! fallback: an OpenAI-compatible chat completions provider (Mistral). The
-//! Responses-shaped harness frame is translated to chat messages and the reply
-//! back to the same `{output, model, usage}` envelope, so the harness, tool
-//! validation, usage journal and paper boundaries are unchanged.
+//! eligible classes are the provider limits, an entitlement/auth failure at
+//! catalog or inference, and an opaque HTTP 200 response-validation rejection;
+//! timeouts, 5xx, cancellation, malformed output from a real response and
+//! local refusals never switch. The Responses-shaped harness frame is
+//! translated to chat messages and the reply back to the same
+//! `{output, model, usage}` envelope, so the harness, tool validation, usage
+//! journal and paper boundaries are unchanged.
 use super::*;
 use crate::runtime::planner::{FallbackProfile, ModelRole};
 use nivra_cli::native_transport::FallbackTransport;
@@ -38,10 +42,36 @@ fn fallback_key(profile: &FallbackProfile) -> Result<String> {
         .map_err(|_| "fallback_key_unavailable".into())
 }
 
-/// The bounded limit class of a primary failure, or `None` when the failure
-/// is anything else (credentials, timeouts, invalid output, local refusals).
-/// Only these provider limits may switch a call to the fallback.
-pub(crate) fn limit_reason(error: &str) -> Option<&'static str> {
+/// Every reason code that may switch one call, in operator-facing order.
+/// Readiness publishes this set so the reviewed policy is visible without
+/// reading the source; each switch records exactly one of these static codes
+/// in evidence, logs and the alert, never provider text.
+pub(crate) const FALLBACK_REASONS: [&str; 5] = [
+    "usage_limit_reached",
+    "rate_limited",
+    "quota_exceeded",
+    "entitlement_auth_failed",
+    "response_validation_rejected",
+];
+
+/// The bounded class of a primary failure that may switch one call to the
+/// reviewed fallback (#245, #21), or `None` when the failure is anything else.
+/// `primary` is the primary call's transport evidence and bounds the two
+/// provider-shape classes by stage:
+///
+/// - `usage_limit_reached`, `rate_limited`, `quota_exceeded`: HTTP 429 after
+///   the bounded retries or a provider limit error.
+/// - `entitlement_auth_failed`: HTTP 401/403 from the catalog or inference
+///   request (provider stage `catalog`, `inference` or `http_response`), for
+///   example an expired subscription or a revoked grant.
+/// - `response_validation_rejected`: an opaque HTTP 200 whose body is a
+///   provider error object or stream failure at response validation
+///   (`model_http_200`), for example a provider that rejects the supervisor
+///   prompt.
+///
+/// Timeouts, HTTP 5xx, cancellation, malformed output from a real response, a
+/// grant-refresh auth failure (`grant_owner`) and local refusals never switch.
+pub(crate) fn fallback_reason(error: &str, primary: &Value) -> Option<&'static str> {
     let code = error.split_whitespace().next()?;
     if !code.starts_with("model_http_") {
         return None;
@@ -56,20 +86,32 @@ pub(crate) fn limit_reason(error: &str) -> Option<&'static str> {
         || lower.contains("rate limit")
     {
         Some("rate_limited")
+    } else if matches!(code, "model_http_401" | "model_http_403")
+        && matches!(
+            primary["stage"].as_str(),
+            Some("catalog" | "inference" | "http_response")
+        )
+    {
+        Some("entitlement_auth_failed")
+    } else if code == "model_http_200" && primary["stage"] == "response_validation" {
+        Some("response_validation_rejected")
     } else {
         None
     }
 }
 
 /// Fallback readiness without a provider call: configured, credential config
-/// parses, transport matches and the private key file is readable.
+/// parses, transport matches and the private key file is readable. The
+/// reviewed eligibility reason codes are published so an operator can see
+/// which primary failures the fallback covers.
 pub(crate) fn fallback_readiness(profile: &FallbackProfile) -> Value {
     let status = match fallback_key(profile) {
         Ok(_) => json!({"status":"ready","reason":Value::Null}),
         Err(reason) => json!({"status":"blocked","reason":reason}),
     };
     let mut report = json!({"configured":true,"model":profile.model_id,"transport":profile.transport,
-        "origin":profile.transport.chat_url(),"budget":"none","admission":"reviewed_policy_fallback"});
+        "origin":profile.transport.chat_url(),"budget":"none","admission":"reviewed_policy_fallback",
+        "eligibility":FALLBACK_REASONS});
     report["status"] = status["status"].clone();
     report["reason"] = status["reason"].clone();
     report

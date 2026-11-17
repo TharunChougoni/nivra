@@ -219,7 +219,9 @@ pub(in crate::runtime) fn produce_clocked(
         input["as_of_ms"] = json!(claim.started_ms);
         input["predecessor"] = json!(claim.predecessor);
     }
-    let hash = digest(&serde_json::to_vec(&input)?);
+    let input_encoded = serde_json::to_vec(&input)?;
+    let hash = digest(&input_encoded);
+    let input_bytes = input_encoded.len() as u64;
     if !cfg.enabled || cfg.model_led == Some(false) {
         return Err("model_plan_unavailable_no_trades".into());
     }
@@ -241,10 +243,6 @@ pub(in crate::runtime) fn produce_clocked(
     let audit = c.directory.join("model").join(&decision_id);
     fs::create_dir_all(c.directory.join("model"))?;
     fs::create_dir(&audit)?;
-    rollover::atomic(
-        &audit.join("input.json"),
-        &json!({"input":input,"input_hash":hash,"prompt_version":PROMPT_VERSION,"provider":cfg.provider,"digest":digest_role}),
-    )?;
     let start = std::time::Instant::now();
     let digest_attribution = std::cell::RefCell::new(Value::Null);
     let strategy_attribution = super::super::discovery::attribution(&input["discovery"]);
@@ -412,18 +410,69 @@ pub(in crate::runtime) fn produce_clocked(
         let evidence = backend.provenance();
         (result, evidence)
     };
+    // The full audit input is archived only after the provider result is known.
+    // A failure before any provider turn keeps a bounded receipt and at most one
+    // representative input per failure window instead of the multi-megabyte
+    // bundle on every retry (#23).
+    let write_input = || -> Result<()> {
+        rollover::atomic(
+            &audit.join("input.json"),
+            &json!({"input":input,"input_hash":hash,"prompt_version":PROMPT_VERSION,"provider":cfg.provider,"digest":digest_role}),
+        )
+    };
+    let mut pre_provider_evidence = Value::Null;
+    let pre_provider = raw_result
+        .as_ref()
+        .err()
+        .and_then(|_| super::super::harness::pre_provider_stage(&provider_evidence));
+    if let Some(stage) = pre_provider {
+        let error = raw_result.as_ref().expect_err("pre-provider error");
+        let text = error.to_string();
+        let failure_reason = provider_failure(&text)
+            .map(|detail| detail.reason)
+            .unwrap_or_else(|| reason(error.as_ref()).to_owned());
+        pre_provider_evidence = super::super::harness::retain_planner_input(
+            super::super::harness::PlannerInput {
+                model: &c.directory.join("model"),
+                archive: &audit,
+                run: &decision_id,
+                role: "digest",
+                model_id: &digest_role.model_id,
+                reason: &failure_reason,
+                stage,
+                input_hash: &hash,
+                input_bytes,
+                now: millis(),
+            },
+            write_input,
+        );
+    } else {
+        // A provider turn ends any open pre-provider failure window so a later
+        // outage keeps its own first failure evidence.
+        super::super::harness::close_failure_window(
+            &c.directory.join("model"),
+            "digest",
+            &digest_role.model_id,
+            millis(),
+        );
+        write_input()?;
+    }
     let raw = match raw_result {
         Ok(raw) => raw,
         Err(e) => {
-            rollover::atomic(
-                &audit.join("failure.json"),
-                &failure_record_with_provider(
-                    reason(e.as_ref()),
-                    e.as_ref(),
-                    start.elapsed().as_millis(),
-                    &provider_evidence,
-                ),
-            )?;
+            let mut failure = failure_record_with_provider(
+                reason(e.as_ref()),
+                e.as_ref(),
+                start.elapsed().as_millis(),
+                &provider_evidence,
+            );
+            if let Value::Object(fields) = pre_provider_evidence {
+                failure
+                    .as_object_mut()
+                    .expect("failure record is an object")
+                    .extend(fields);
+            }
+            rollover::atomic(&audit.join("failure.json"), &failure)?;
             return Err(e);
         }
     };

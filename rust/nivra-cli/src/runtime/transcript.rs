@@ -671,7 +671,48 @@ pub struct RunPage {
 }
 #[cfg(test)]
 thread_local! { static RUN_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
-fn run_row(path: &Path, id: &str, settings: &DashboardSettings) -> Result<(Value, bool)> {
+/// Longest run allowance by role (docs/MODEL_HARNESS.md "Budgets"): the digest
+/// run cap is 120 s, supervisor/scorer/review turns are bounded at 30 min, and
+/// the research lane may be granted up to six hours. A transcript without a
+/// terminal event can only still be executing inside its role's allowance.
+const DIGEST_RUN_WINDOW_MS: i64 = 120_000;
+const RUN_WINDOW_MS: i64 = 30 * 60 * 1000;
+const RESEARCH_RUN_WINDOW_MS: i64 = 6 * 60 * 60 * 1000;
+fn run_window_ms(role: Option<&str>, trigger: Option<&str>) -> i64 {
+    match role {
+        Some("digest") => DIGEST_RUN_WINDOW_MS,
+        Some("supervisor") if trigger == Some("research") => RESEARCH_RUN_WINDOW_MS,
+        _ => RUN_WINDOW_MS,
+    }
+}
+/// A run without `run_ended` is only running while it belongs to the current
+/// session and its start lies inside the role's bounded allowance. Archived
+/// sessions and older transcripts are interrupted display evidence, never a
+/// live claim.
+pub(crate) fn run_is_running(
+    started_ms: Option<i64>,
+    ended: bool,
+    current_session: bool,
+    role: Option<&str>,
+    trigger: Option<&str>,
+    now_ms: i64,
+) -> bool {
+    if ended || !current_session {
+        return false;
+    }
+    let Some(started) = started_ms else {
+        return false;
+    };
+    let window = run_window_ms(role, trigger);
+    started <= now_ms.saturating_add(window) && now_ms.saturating_sub(started) <= window
+}
+fn run_row(
+    path: &Path,
+    id: &str,
+    settings: &DashboardSettings,
+    current_session: bool,
+    now_ms: i64,
+) -> Result<(Value, bool)> {
     #[cfg(test)]
     RUN_READS.with(|reads| reads.set(reads.get() + 1));
     if path.join("transcript.ndjson").is_file() {
@@ -685,6 +726,14 @@ fn run_row(path: &Path, id: &str, settings: &DashboardSettings) -> Result<(Value
         let first = events.first().ok_or("run_transcript_empty")?;
         let last = events.iter().rev().find(|v| v["kind"] == "run_ended");
         let ended = last.cloned().unwrap_or(Value::Null);
+        let running = run_is_running(
+            first["at_ms"].as_i64(),
+            last.is_some(),
+            current_session,
+            first["role"].as_str(),
+            first["trigger"]["kind"].as_str(),
+            now_ms,
+        );
         let instruments: std::collections::BTreeSet<_> = events
             .iter()
             .flat_map(|v| v["instruments"].as_array().into_iter().flatten())
@@ -701,8 +750,8 @@ fn run_row(path: &Path, id: &str, settings: &DashboardSettings) -> Result<(Value
             })
             .count();
         return Ok((
-            json!({"v":1,"run":id,"role":first["role"],"model":first["model"],"trigger_kind":first["trigger"]["kind"],"started_ms":first["at_ms"],"duration_ms":ended["duration_ms"],"outcome":last.map(|v|v["outcome"].clone()).unwrap_or(json!("running")),"tokens_in":ended["tokens_in"],"tokens_out":ended["tokens_out"],"cost_estimate_inr":ended["cost_estimate_inr"],"tool_calls":if last.is_some(){ended["tool_calls"].clone()}else if partial{Value::Null}else{json!(calls)},"tool_failures":if last.is_some(){ended["tool_failures"].clone()}else if partial{Value::Null}else{json!(failures)},"instruments":instruments,"bytes":null,"mode":first["mode"],"legacy":false,"running":last.is_none()}),
-            last.is_none(),
+            json!({"v":1,"run":id,"role":first["role"],"model":first["model"],"trigger_kind":first["trigger"]["kind"],"started_ms":first["at_ms"],"duration_ms":ended["duration_ms"],"outcome":last.map(|v|v["outcome"].clone()).unwrap_or_else(||json!(if running{"running"}else{"interrupted"})),"tokens_in":ended["tokens_in"],"tokens_out":ended["tokens_out"],"cost_estimate_inr":ended["cost_estimate_inr"],"tool_calls":if last.is_some(){ended["tool_calls"].clone()}else if partial{Value::Null}else{json!(calls)},"tool_failures":if last.is_some(){ended["tool_failures"].clone()}else if partial{Value::Null}else{json!(failures)},"instruments":instruments,"bytes":null,"mode":first["mode"],"legacy":false,"running":running}),
+            running,
         ));
     }
     let mut row = super::model_history::summary_row(path, id, settings);
@@ -868,6 +917,9 @@ pub fn list_runs(
     let cursor = filter.cursor.as_deref().map(cursor_decode).transpose()?;
     let mut models = super::model_history::model_dirs(source).ok_or("runs_unavailable")?;
     models.sort_by(|a, b| b.cmp(a));
+    // The live file's own session is the only one whose runs can still execute.
+    let current_model = source.parent();
+    let now_ms = super::millis();
     let mut rows = Vec::new();
     let mut running = Vec::new();
     let mut stamps = Vec::new();
@@ -930,7 +982,13 @@ pub fn list_runs(
             if !id.starts_with("harness-") && !path.join("input.json").is_file() {
                 continue;
             }
-            let (row, is_running) = run_row(&path, id, settings)?;
+            let (row, is_running) = run_row(
+                &path,
+                id,
+                settings,
+                current_model == Some(model.as_path()),
+                now_ms,
+            )?;
             let position = (date.clone(), usize::MAX - ordinal, ListRow::Other(row));
             if is_running {
                 running.push(position);
@@ -1044,7 +1102,7 @@ mod list_tests {
         .unwrap();
         let running = root.join("2026-10-28/model/harness-digest-9999-running");
         std::fs::create_dir(&running).unwrap();
-        let clock = || 9999;
+        let clock = || super::super::millis();
         drop(Transcript::start(&running,"harness-digest-9999-running",&DashboardSettings::default(),json!({"role":"digest","model":"fixture-model","trigger":{"kind":"timer"},"mode":"paper"}),&clock).unwrap());
         let source = root.join("2026-10-28/model/live-stream.json");
         let settings = DashboardSettings::default();
@@ -1196,6 +1254,62 @@ mod list_tests {
             first.etag,
             list_runs(&source, &filter, &settings).unwrap().etag
         );
+    }
+    #[test]
+    fn archived_and_expired_transcripts_report_interrupted_without_running_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sessions");
+        let current = root.join("2026-10-28/model");
+        std::fs::create_dir_all(&current).unwrap();
+        let source = current.join("live-stream.json");
+        let settings = DashboardSettings::default();
+        let now = super::super::millis();
+        let start = |path: &Path, id: &str, at_ms: i64| {
+            std::fs::create_dir_all(path).unwrap();
+            let clock = || at_ms;
+            let started = json!({"role":"digest","model":"fixture-model","trigger":{"kind":"timer"},"mode":"paper"});
+            drop(Transcript::start(path, id, &settings, started, &clock).unwrap());
+        };
+        // An archived session's run can never still be executing (#19).
+        start(
+            &root.join("2026-10-26/model/harness-digest-100-archived"),
+            "harness-digest-100-archived",
+            now - 2 * 86_400_000,
+        );
+        // A current-session transcript started beyond the digest allowance is
+        // interrupted even though its session is still open.
+        start(
+            &current.join("harness-digest-200-expired"),
+            "harness-digest-200-expired",
+            now - 10 * 60_000,
+        );
+        // Only the current run inside the allowance stays running, and only it
+        // is sorted ahead of the archive rows.
+        start(
+            &current.join("harness-digest-300-live"),
+            "harness-digest-300-live",
+            now - 1_000,
+        );
+        let page = list_runs(
+            &source,
+            &RunFilter {
+                limit: 100,
+                ..RunFilter::default()
+            },
+            &settings,
+        )
+        .unwrap();
+        let rows = page.body["runs"].as_array().unwrap();
+        let row = |id: &str| rows.iter().find(|row| row["run"] == id).unwrap();
+        for id in ["harness-digest-100-archived", "harness-digest-200-expired"] {
+            assert_eq!(row(id)["outcome"], "interrupted", "{id}");
+            assert_eq!(row(id)["running"], false, "{id}");
+            // The archived transcript link stays available as display evidence.
+            assert_eq!(row(id)["legacy"], false, "{id}");
+        }
+        assert_eq!(row("harness-digest-300-live")["outcome"], "running");
+        assert_eq!(row("harness-digest-300-live")["running"], true);
+        assert_eq!(rows[0]["run"], "harness-digest-300-live");
     }
     #[test]
     #[ignore = "release-mode 600-run budget measurement"]

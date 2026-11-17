@@ -314,6 +314,17 @@ pub(crate) fn run(
         return error("503 Service Unavailable", "transcript_unavailable");
     };
     let ended = events.iter().any(|v| v["kind"] == "run_ended");
+    let started = events.iter().find(|v| v["kind"] == "run_started");
+    // The same bounded window as the list projection: an archived run without a
+    // terminal event is interrupted evidence, never a live claim (#19).
+    let running = super::super::super::transcript::run_is_running(
+        started.and_then(|v| v["at_ms"].as_i64()),
+        ended,
+        source.parent() == Some(location.model.as_path()),
+        started.and_then(|v| v["role"].as_str()),
+        started.and_then(|v| v["trigger"]["kind"].as_str()),
+        millis(),
+    );
     for event in &mut events {
         for field in ["text", "args", "output", "summary"] {
             if event
@@ -337,7 +348,7 @@ pub(crate) fn run(
     private_reply(
         head,
         "application/json",
-        json!({"v":1,"run":id,"legacy":legacy,"running":!ended,"events":events})
+        json!({"v":1,"run":id,"legacy":legacy,"running":running,"events":events})
             .to_string()
             .into_bytes(),
         ended,

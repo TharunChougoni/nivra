@@ -49,7 +49,7 @@ impl Fixture {
     fn add(&self, id: &str, outcome: Option<&str>) -> PathBuf {
         let dir = self.source.parent().unwrap().join(id);
         fs::create_dir(&dir).unwrap();
-        let clock = || 100;
+        let clock = || millis();
         let mut writer = super::super::super::transcript::Transcript::start(
             &dir,
             id,
@@ -198,9 +198,11 @@ fn transcripts_distinguish_finished_running_failed_legacy_and_retained_runs() {
     fs::create_dir(&unfinished).unwrap();
     fs::write(unfinished.join("turn-00-response.json"),br#"{"output":[{"type":"message","role":"assistant","content":[{"text":"intermediate prose"}]}]}"#).unwrap();
     let partial = fixture.send("/api/v1/runs/harness-digest-25-legacy-running", "");
+    // A legacy partial archive whose start is far outside the run window is
+    // interrupted evidence, not a running claim (#19).
     assert_eq!(
         serde_json::from_slice::<Value>(&partial.body).unwrap()["running"],
-        true
+        false
     );
     assert!(!partial.cache.contains("immutable"));
     let retained = fixture.source.parent().unwrap().join("transcripts");

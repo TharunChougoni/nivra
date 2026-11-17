@@ -1637,6 +1637,7 @@ struct Slow<'a> {
     requests: Vec<Value>,
     cancel_at: Option<usize>,
     cancel: Option<&'a AtomicBool>,
+    provenance: Value,
 }
 impl Backend for Slow<'_> {
     fn call(&mut self, _: &ModelRole, prompt: &str) -> Result<String> {
@@ -1656,7 +1657,19 @@ impl Backend for Slow<'_> {
         if value["fixture_timeout"] == true {
             return Err("planner_call_timeout".into());
         }
+        if let Some(stage) = value["fixture_provider_stage"].as_str() {
+            self.provenance = json!({
+                "stage": stage,
+                "http_status": value["fixture_http_status"].as_u64().unwrap_or(401),
+            });
+        }
+        if let Some(failure) = value["fixture_failure"].as_str() {
+            return Err(failure.into());
+        }
         Ok(value.to_string())
+    }
+    fn provenance(&self) -> Value {
+        self.provenance.clone()
     }
 }
 
@@ -1934,6 +1947,7 @@ fn drive(
         requests: Vec::new(),
         cancel_at,
         cancel: Some(&flag),
+        provenance: Value::Null,
     };
     let plan = produce_with_backend(
         &c,
@@ -2634,4 +2648,163 @@ fn subscription_preserves_local_tool_preflight_failure() {
         "harness_tool_definitions_changed"
     );
     assert_eq!(record["provider_stage"], "tool_definitions");
+}
+
+/// The planner audit input is the other multi-megabyte pre-provider artifact:
+/// repeated catalog/auth failures must keep one representative bundle per
+/// failure window, not the full input on every retry (#23).
+#[test]
+fn repeated_pre_provider_failures_bound_the_planner_audit_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = dir.path().join("sessions/2026-11-17/model");
+    fs::create_dir_all(&model).unwrap();
+    let input = json!({"historical_features":[{"padding":"x".repeat(2_000_000)}]});
+    let encoded = serde_json::to_vec(&input).unwrap();
+    let input_hash = digest(&encoded);
+    let input_bytes = encoded.len() as u64;
+    assert!(input_bytes > 2_000_000);
+    let mut persisted = 0u64;
+    let mut representatives = 0;
+    let mut receipts = 0;
+    let mut first = None::<String>;
+    for attempt in 0..8 {
+        let decision_id = format!("2026-11-17-attempt-{attempt}");
+        let audit = model.join(&decision_id);
+        fs::create_dir(&audit).unwrap();
+        let evidence = super::super::harness::retain_planner_input(
+            super::super::harness::PlannerInput {
+                model: &model,
+                archive: &audit,
+                run: &decision_id,
+                role: "digest",
+                model_id: "gpt-6-luna",
+                reason: "model_http_401",
+                stage: "catalog",
+                input_hash: &input_hash,
+                input_bytes,
+                now: 1_000 + attempt,
+            },
+            || {
+                rollover::atomic(
+                    &audit.join("input.json"),
+                    &json!({"input":input,"input_hash":input_hash}),
+                )
+            },
+        );
+        assert_eq!(evidence["pre_provider"], true);
+        assert_eq!(evidence["provider_stage"], "catalog");
+        assert_eq!(evidence["reason"], "model_http_401");
+        assert_eq!(evidence["input_hash"], input_hash);
+        assert_eq!(evidence["input_bytes"], input_bytes);
+        assert_eq!(evidence["input_receipt"], "input-receipt.json");
+        persisted += fs::metadata(audit.join("input-receipt.json"))
+            .unwrap()
+            .len();
+        if audit.join("input.json").is_file() {
+            representatives += 1;
+            first.get_or_insert(decision_id.clone());
+            assert_eq!(evidence["input_archive"], "input.json");
+            assert!(evidence["representative_input"].is_null());
+            persisted += fs::metadata(audit.join("input.json")).unwrap().len();
+        } else {
+            receipts += 1;
+            assert!(evidence["input_archive"].is_null());
+            assert_eq!(
+                evidence["representative_input"]["run"],
+                first.clone().unwrap()
+            );
+            assert_eq!(evidence["representative_input"]["blob"], "input.json");
+        }
+    }
+    assert_eq!(representatives, 1);
+    assert_eq!(receipts, 7);
+    let representative = fs::metadata(model.join(first.unwrap()).join("input.json"))
+        .unwrap()
+        .len();
+    assert!(
+        persisted < representative + 64 * 1024,
+        "persisted {persisted} audit bytes for 8 pre-provider failures \
+         (one representative is {representative})"
+    );
+    // A provider turn ends the window; the next outage keeps its own first
+    // representative input instead of linking to stale evidence.
+    super::super::harness::close_failure_window(&model, "digest", "gpt-6-luna", 2_000);
+    let audit = model.join("2026-11-17-recovered");
+    fs::create_dir(&audit).unwrap();
+    let evidence = super::super::harness::retain_planner_input(
+        super::super::harness::PlannerInput {
+            model: &model,
+            archive: &audit,
+            run: "2026-11-17-recovered",
+            role: "digest",
+            model_id: "gpt-6-luna",
+            reason: "model_http_401",
+            stage: "catalog",
+            input_hash: &input_hash,
+            input_bytes,
+            now: 2_001,
+        },
+        || {
+            rollover::atomic(
+                &audit.join("input.json"),
+                &json!({"input":input,"input_hash":input_hash}),
+            )
+        },
+    );
+    assert_eq!(evidence["input_archive"], "input.json");
+    assert!(audit.join("input.json").is_file());
+}
+
+/// A pre-provider failure detected by the planner keeps a bounded audit
+/// receipt, the failure evidence and the first representative input.
+#[test]
+fn pre_provider_failure_keeps_a_bounded_planner_audit_receipt() {
+    let mut cfg = paper_cfg();
+    cfg.digest = ModelRole {
+        enabled: true,
+        model_id: "gpt-6-luna".into(),
+        transport: nivra_cli::native_transport::Transport::OpenaiCodex,
+        daily_call_budget: 30,
+        ..Default::default()
+    };
+    cfg.discovery =
+        Some(serde_json::from_value(json!({"max_scan_age_ms":5000,"max_prospects":20})).unwrap());
+    let outcome = drive(
+        &cfg,
+        vec![json!({"fixture_failure":"model_http_401","fixture_provider_stage":"catalog"})],
+        vec![0],
+        None,
+    );
+    assert!(outcome.plan.is_err(), "{:?}", outcome.plan);
+    let model = outcome.c.directory.join("model");
+    let mut audits: Vec<_> = fs::read_dir(&model)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_dir()
+                && !path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("harness-"))
+                && path.join("failure.json").is_file()
+        })
+        .collect();
+    assert_eq!(audits.len(), 1);
+    let audit = audits.pop().unwrap();
+    let failure: Value =
+        serde_json::from_slice(&fs::read(audit.join("failure.json")).unwrap()).unwrap();
+    assert_eq!(failure["pre_provider"], true);
+    assert_eq!(failure["provider_stage"], "catalog");
+    assert_eq!(failure["reason"], "model_http_401");
+    assert_eq!(failure["input_archive"], "input.json");
+    assert_eq!(failure["input_receipt"], "input-receipt.json");
+    assert_eq!(failure["input_hash"].as_str().unwrap().len(), 64);
+    assert!(failure["input_bytes"].as_u64().unwrap() > 0);
+    assert!(audit.join("input.json").is_file());
+    let receipt: Value =
+        serde_json::from_slice(&fs::read(audit.join("input-receipt.json")).unwrap()).unwrap();
+    assert_eq!(receipt["kind"], "planner_audit_input");
+    assert_eq!(receipt["pre_provider"], true);
+    assert_eq!(receipt["reason"], "model_http_401");
+    assert_eq!(receipt["paper_only"], true);
 }
