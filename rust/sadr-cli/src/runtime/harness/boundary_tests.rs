@@ -36,7 +36,7 @@ pub(crate) fn check_boundaries() {
                 .to_string())
         }
     }
-    let data_tools = definitions("digest", &[], true).unwrap();
+    let data_tools = definitions("digest", &[]).unwrap();
     let instrument = sadr_core::execution::Instrument {
         key: "SYNTHETIC|QUOTE".into(),
         symbol: "QUOTE".into(),
@@ -154,9 +154,9 @@ pub(crate) fn check_boundaries() {
         5000
     );
     assert_eq!(data_tools.len(), 8);
-    assert!(definitions("digest", &["web_search".into()], true).is_err());
-    assert!(definitions("operations", &[], true).is_err());
-    let tools = definitions("digest", &[], true).unwrap();
+    assert!(definitions("digest", &["web_search".into()]).is_err());
+    assert!(definitions("operations", &[]).is_err());
+    let tools = definitions("digest", &[]).unwrap();
     for tool in tools.iter().filter(|t| t["type"] == "function") {
         assert_eq!(tool["strict"], true);
         assert_eq!(tool["parameters"]["additionalProperties"], false);
@@ -185,16 +185,6 @@ pub(crate) fn check_boundaries() {
             &call(
                 "read_evidence",
                 r#"{"evidence_id":"bundle","evidence_id":"fees"}"#
-            ),
-            &tools
-        )
-        .is_err()
-    );
-    assert!(
-        checked_call(
-            &call(
-                "run_registered_analysis",
-                r#"{"analysis_id":"../../shell","dataset_id":"data"}"#
             ),
             &tools
         )

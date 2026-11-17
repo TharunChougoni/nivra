@@ -659,7 +659,6 @@ Runtime timing keys are optional and retain the original millisecond defaults:
 | `idle_poll_interval_ms` | 15000 | 1–300000 |
 | `market_data_transport.http_timeout_ms` | 7000 | 1–120000 |
 | `storage.read_journal_busy_timeout_ms` | 1000 | 1–60000 |
-| `storage.registry_busy_timeout_ms` | 250 | 1–60000 |
 | `dashboard.refresh_interval_ms` | 5000 | 1–300000 |
 | `dashboard.model_feed_unavailable_grace_ms` | 5000 | Retired/ignored; 0–60000 validation retained for config compatibility |
 | `dashboard.workers` | 4 | 1–16 threads serving dashboard connections |

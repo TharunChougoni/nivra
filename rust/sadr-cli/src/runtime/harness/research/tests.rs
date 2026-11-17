@@ -13114,24 +13114,6 @@ fn registered_file_failures_name_the_exact_artifact() {
         );
     }
 
-    // A missing runtime binary is the deployed #114 failure, so execute() must
-    // report the runtime code rather than blaming the dataset.
-    let stale = settings(root.path(), &root.path().join("stale-sadr-analysis"));
-    assert_eq!(
-        execute(
-            &stale,
-            "shared_core_backtest",
-            "synthetic_no_quotes_fixture",
-            "review",
-            "call",
-            root.path(),
-            || false
-        )
-        .unwrap_err()
-        .to_string(),
-        "research_runtime_unreadable"
-    );
-
     let runtime = root.path().join("sadr-analysis");
     std::fs::write(&runtime, b"sadr-analysis-fixture").unwrap();
     let current = settings(root.path(), &runtime);

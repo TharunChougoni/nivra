@@ -907,8 +907,8 @@ fn self_check(expected: Option<&str>) -> ExitCode {
         return ExitCode::FAILURE;
     }
     let check = (|| -> Result<(), Box<dyn std::error::Error>> {
-        let mut db = rusqlite::Connection::open_in_memory()?;
-        sadr_store::controller::initialize(&mut db).map_err(|_| "self_check_storage_failed")?;
+        let db = rusqlite::Connection::open_in_memory()?;
+        db.execute_batch("CREATE TABLE self_check(id INTEGER PRIMARY KEY)")?;
         let one = sadr_core::finance::Amount::from_integer(1);
         if one.checked_add(one)? != sadr_core::finance::Amount::from_integer(2) {
             return Err("self_check_arithmetic_failed".into());

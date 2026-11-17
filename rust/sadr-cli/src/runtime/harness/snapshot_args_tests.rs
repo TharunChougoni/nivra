@@ -7,7 +7,7 @@ fn call(name: &str, args: &str) -> Value {
 
 #[test]
 fn duplicate_snapshot_keys_are_folded_and_do_not_abort_the_run() {
-    let tools = definitions("digest", &[], false).unwrap();
+    let tools = definitions("digest", &[]).unwrap();
     // 2026-10-29 paper digest: Luna sent INE614G01033 / INE398A01010 / INE727B01026 twice.
     let Tool::Features(keys) = checked_call(
         &call(

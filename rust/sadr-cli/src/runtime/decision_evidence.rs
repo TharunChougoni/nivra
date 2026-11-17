@@ -542,10 +542,10 @@ mod tests {
         let frame: harness::Frame = serde_json::from_value(backend.requests[0].clone()).unwrap();
         assert_eq!(
             frame.tools,
-            harness::configured_definitions("digest", &role.tools, false, true, 1).unwrap()
+            harness::configured_definitions("digest", &role.tools, true, 1).unwrap()
         );
         assert!(
-            !harness::definitions("digest", &[], false)
+            !harness::definitions("digest", &[])
                 .unwrap()
                 .iter()
                 .any(|t| t["name"] == "get_intraday_context")

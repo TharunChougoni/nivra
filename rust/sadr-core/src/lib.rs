@@ -1,6 +1,5 @@
 //! Offline deterministic contracts. No network, credentials or trading authority.
 
-pub mod controller;
 pub mod feature_store;
 pub mod finance;
 pub mod historical;

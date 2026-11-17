@@ -341,7 +341,6 @@ fn runtime_timing_defaults_preserve_binding_and_reject_invalid_bounds() {
     assert_eq!(c.idle_poll_interval_ms, 15_000);
     assert_eq!(c.market_data_transport.http_timeout_ms, 7_000);
     assert_eq!(c.storage.read_journal_busy_timeout_ms, 1_000);
-    assert_eq!(c.storage.registry_busy_timeout_ms, 250);
     assert_eq!(c.dashboard.refresh_interval_ms, 5_000);
     for (group, key, default, maximum) in [
         (None, "universe_prepare_retry_ms", 300_000, 86_400_000),
@@ -358,7 +357,6 @@ fn runtime_timing_defaults_preserve_binding_and_reject_invalid_bounds() {
             1_000,
             60_000,
         ),
-        (Some("storage"), "registry_busy_timeout_ms", 250, 60_000),
         (Some("dashboard"), "refresh_interval_ms", 5_000, 300_000),
     ] {
         assert!(original.get(group.unwrap_or(key)).is_none());
