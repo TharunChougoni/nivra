@@ -151,7 +151,11 @@ fn default_grant() -> PathBuf {
 }
 fn config(path: &Path) -> Result<Config> {
     let bytes = crate::read_bounded(path, 16384).map_err(|_| "model_config_unreadable")?;
-    let c: Config = serde_json::from_slice(&bytes).map_err(|_| "model_config_invalid")?;
+    parse_config(&bytes)
+}
+/// Validate model credential config bytes without reading the grant itself.
+pub(crate) fn parse_config(bytes: &[u8]) -> Result<Config> {
+    let c: Config = serde_json::from_slice(bytes).map_err(|_| "model_config_invalid")?;
     if !(1..=120000).contains(&c.timeout_ms) {
         return Err("model_timeout_invalid".into());
     }

@@ -13,6 +13,7 @@ pub(crate) mod experiment_ledger;
 mod experiment_profile;
 pub(crate) mod harness;
 pub mod history_download;
+pub(crate) mod host_migrate;
 pub mod instrument_display;
 mod lane_queue;
 mod market_feed;

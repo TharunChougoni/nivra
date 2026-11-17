@@ -54,7 +54,7 @@ Nivra is the only deployment source; never install from the retired `ind-sadr`
 repository. Releases are published from this repository when explicitly requested
 (`v0.9.26` is the first), and an installed host bound to the retired repository is
 moved once through the reviewed
-[distribution migration](OPERATIONS.md#one-time-distribution-migration). The
+[host migration](OPERATIONS.md#one-time-host-migration). The
 workflow below runs when a release is explicitly requested and its annotated
 version tag is created.
 

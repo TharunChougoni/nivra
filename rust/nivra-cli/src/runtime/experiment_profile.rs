@@ -250,6 +250,15 @@ impl PlannerConfig {
         cfg
     }
 }
+/// Schema check for a rewritten profile before it replaces the installed file.
+pub(crate) fn validate_profile(bytes: &[u8]) -> std::result::Result<(), &'static str> {
+    let profile: Profile =
+        serde_json::from_slice(bytes).map_err(|_| "experiment_profile_invalid")?;
+    if profile.version != 1 {
+        return Err("experiment_profile_version_invalid");
+    }
+    Ok(())
+}
 fn load_profile(
     path: &Path,
     max_prompt_bytes: u64,
