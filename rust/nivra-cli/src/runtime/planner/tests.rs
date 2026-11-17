@@ -2235,6 +2235,22 @@ fn provider_failures_retain_bounded_reason_and_stage_without_raw_text() {
     assert!(record.get("request_bytes").is_none());
     assert!(!record.to_string().contains("provider secret detail"));
 
+    // A pre-provider grant failure keeps its allowlisted local cause, and an
+    // opaque HTTP 200 keeps an identifier-shaped provider error code (#14).
+    // Free text in either field is dropped.
+    let grant = json!({"stage":"grant_owner","local_cause":"grant_busy_or_unavailable",
+        "provider_error_code":"context_length_exceeded"});
+    let err: Box<dyn std::error::Error> = "planner_provider_failed".into();
+    let record = failure_record_with_provider(reason(err.as_ref()), err.as_ref(), 7, &grant);
+    assert_eq!(record["provider_stage"], "grant_owner");
+    assert_eq!(record["local_cause"], "grant_busy_or_unavailable");
+    assert_eq!(record["provider_error_code"], "context_length_exceeded");
+    let free = json!({"stage":"grant_owner","local_cause":"lock held by pid 7",
+        "provider_error_code":"Your prompt was rejected"});
+    let record = failure_record_with_provider(reason(err.as_ref()), err.as_ref(), 7, &free);
+    assert!(record.get("local_cause").is_none());
+    assert!(record.get("provider_error_code").is_none());
+
     let raw = "model_http_401 bearer synthetic-secret-token {\"account\":\"synthetic\"}";
     let err: Box<dyn std::error::Error> = raw.into();
     let record = failure_record_with_provider("planner_provider_failed", err.as_ref(), 7, &stage);

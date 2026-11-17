@@ -33,8 +33,8 @@ pub(crate) use failure::failure_record;
 pub(crate) use failure::failure_record_with_provider;
 #[allow(unused_imports)] // re-exported for crate callers and tests
 pub(crate) use failure::{
-    ProviderFailure, failure_evidence, logged_reason, provider_failure, provider_failure_evidence,
-    reason,
+    ProviderFailure, failure_evidence, logged_reason, provider_error_code_ok, provider_failure,
+    provider_failure_evidence, reason,
 };
 mod usage;
 #[cfg(test)]
@@ -705,8 +705,14 @@ impl Backend for Subscription<'_> {
                 None => Err(error),
             },
             (primary, _) => primary,
+        };
+        if let Err(error) = &result
+            && let Some(cause) = error.split_whitespace().next()
+            && failure::LOCAL_FAILURE_CAUSES.contains(&cause)
+        {
+            self.1["local_cause"] = json!(cause);
         }
-        .map_err(|e| {
+        let result = result.map_err(|e| {
             provider_failure(&e)
                 .map(|detail| detail.reason)
                 .unwrap_or_else(|| "planner_provider_failed".to_owned())
@@ -769,7 +775,7 @@ fn limit_fallback(
     provenance["fallback"] = json!({"from_model":role.model_id,"from_transport":role.transport,
         "to_model":fallback.model_id,"to_transport":fallback.transport,"reason":reason,
         "primary_http_status":primary["http_status"],"primary_stage":primary["stage"],
-        "outcome":outcome});
+        "primary_error_code":primary["provider_error_code"],"outcome":outcome});
     if let Err(error) = &result {
         eprintln!(
             "model_fallback_failed role={frame_role} to={} reason={}",

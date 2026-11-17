@@ -134,6 +134,13 @@ pub struct FileOwner {
 }
 impl FileOwner {
     pub fn acquire(path: &Path) -> Result<Self, Error> {
+        Self::acquire_within(path, std::time::Duration::ZERO)
+    }
+    /// Like `acquire`, but waits up to `wait` while another owner holds the
+    /// lock. Roles sharing one grant (digest and supervisor) only hold it to
+    /// read or refresh the grant, so a short bounded wait replaces a spurious
+    /// `grant_busy_or_unavailable` failure. Invalid lock files fail at once.
+    pub fn acquire_within(path: &Path, wait: std::time::Duration) -> Result<Self, Error> {
         use std::os::unix::fs::OpenOptionsExt;
         file_path_ok(path)?;
         let mut name = path.as_os_str().to_os_string();
@@ -155,7 +162,16 @@ impl FileOwner {
         {
             return Err(Error);
         }
-        lock.try_lock().map_err(|_| Error)?;
+        let deadline = std::time::Instant::now() + wait;
+        loop {
+            match lock.try_lock() {
+                Ok(()) => break,
+                Err(fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                Err(_) => return Err(Error),
+            }
+        }
         Ok(Self {
             path: path.to_owned(),
             _lock: lock,
@@ -234,4 +250,16 @@ fn dropping_file_owner_unlocks_while_cloned_description_remains_open() {
     let next_owner = FileOwner::acquire(&grant).unwrap();
     drop(next_owner);
     drop(retained);
+
+    // A bounded wait succeeds once the holder releases, and still refuses
+    // when the holder outlives the wait.
+    let held = FileOwner::acquire(&grant).unwrap();
+    let short = std::time::Duration::from_millis(50);
+    assert!(FileOwner::acquire_within(&grant, short).is_err());
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        drop(held);
+    });
+    assert!(FileOwner::acquire_within(&grant, std::time::Duration::from_secs(5)).is_ok());
+    release.join().unwrap();
 }

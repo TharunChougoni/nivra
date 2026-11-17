@@ -78,6 +78,21 @@ const PROVIDER_STAGES: &[&str] = &[
 /// Provider-reported incomplete causes retained in bounded failure evidence.
 /// Unknown provider text is replaced by `other`; it is never echoed (#224).
 const INCOMPLETE_REASONS: &[&str] = &["max_output_tokens", "content_filter", "other"];
+/// Static local causes of a pre-provider failure. They still surface as
+/// `planner_provider_failed`; the cause is kept so a failure record names
+/// grant contention or an unusable grant without reading transcripts.
+pub(crate) const LOCAL_FAILURE_CAUSES: &[&str] = &[
+    "grant_busy_or_unavailable",
+    "grant_unavailable",
+    "grant_unreadable",
+    "grant_invalid",
+    "grant_login_required",
+    "grant_expired",
+    "grant_expired_during_refresh",
+    "grant_refresh_required_or_expiry_unverified",
+    "grant_store_failed",
+    "planner_role_transport_config_mismatch",
+];
 /// Measured request/token sizes retained with a provider failure (#224).
 const PROVIDER_SIZE_FIELDS: &[&str] = &[
     "request_bytes",
@@ -108,6 +123,15 @@ pub(crate) fn failure_evidence(status: &str, error: &str, provider: &Value) -> V
     }
     provider_failure_evidence(error, provider)
 }
+/// A provider error `code`/`type` identifier (for example
+/// `context_length_exceeded`): lowercase ASCII, digits, `_`, `.` or `-`, at
+/// most 64 bytes. Anything shaped like free text is dropped, never echoed.
+pub(crate) fn provider_error_code_ok(code: &str) -> bool {
+    (1..=64).contains(&code.len())
+        && code
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-".contains(&b))
+}
 /// Bounded provider fields shared by planner audit and harness failure records.
 /// Only allowlisted codes, stages and a numeric HTTP status pass through.
 pub(crate) fn provider_failure_evidence(error: &str, provider: &Value) -> Value {
@@ -133,6 +157,16 @@ pub(crate) fn provider_failure_evidence(error: &str, provider: &Value) -> Value 
         && INCOMPLETE_REASONS.contains(&reason)
     {
         evidence.insert("incomplete_reason".into(), json!(reason));
+    }
+    if let Some(cause) = provider.get("local_cause").and_then(Value::as_str)
+        && LOCAL_FAILURE_CAUSES.contains(&cause)
+    {
+        evidence.insert("local_cause".into(), json!(cause));
+    }
+    if let Some(code) = provider.get("provider_error_code").and_then(Value::as_str)
+        && provider_error_code_ok(code)
+    {
+        evidence.insert("provider_error_code".into(), json!(code));
     }
     for key in PROVIDER_SIZE_FIELDS {
         if let Some(value) = provider.get(*key).and_then(Value::as_u64) {

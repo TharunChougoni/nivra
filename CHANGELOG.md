@@ -1,5 +1,20 @@
 # Source snapshot
 
+## 0.10.3 — 2026-11-17
+
+Stop supervisor runs failing on grant contention. Luna digests and the persistent
+orchestrator share one grant file and run concurrently, but the grant lock was
+non-blocking and held for the whole provider call, so whichever role arrived
+second failed at `grant_owner` with `grant_busy_or_unavailable`. Supervisor runs
+died mid-way after already spending fallback turns. The lock now guards only the
+grant read or refresh, waits within the role deadline, and is released before the
+provider call. Contention still never switches to the fallback.
+
+Failure records keep an allowlisted `local_cause` for pre-provider grant failures,
+and an opaque HTTP 200 rejection keeps the provider's identifier-shaped error code
+(`provider_error_code`; `primary_error_code` in fallback evidence) so #14 can be
+diagnosed without provider text.
+
 ## 0.10.2 — 2026-11-17
 
 Keep the dashboard, the reviewed fallback and the host migration honest after

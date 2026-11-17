@@ -77,6 +77,26 @@ pub(crate) fn record_usage(response: &Value, evidence: &mut Value) {
 pub(crate) fn subscription_response(status: u16, bytes: &[u8], token: &str) -> Result<Value> {
     subscription_response_with_evidence(status, bytes, token, &mut Value::Null)
 }
+/// Keep the provider's error `code` (else `type`) when it is a bounded
+/// identifier, so an opaque HTTP 200 rejection (#14) names its class in
+/// evidence. Messages and any free text are never kept.
+fn record_provider_error_code(error: &Value, evidence: &mut Value) {
+    if !evidence.is_object() {
+        return;
+    }
+    let candidates = [
+        &error["error"]["code"],
+        &error["error"]["type"],
+        &error["code"],
+    ];
+    if let Some(code) = candidates
+        .into_iter()
+        .filter_map(Value::as_str)
+        .find(|code| crate::runtime::planner::provider_error_code_ok(code))
+    {
+        evidence["provider_error_code"] = json!(code);
+    }
+}
 /// Same decoder, retaining bounded incomplete-response evidence in `provenance`
 /// for the planner failure record (#224).
 pub(crate) fn subscription_response_with_evidence(
@@ -93,6 +113,7 @@ pub(crate) fn subscription_response_with_evidence(
     if text.trim_start().starts_with('{') {
         let value: Value = native::decode(bytes).map_err(|_| "model_response_invalid")?;
         if value.get("error").is_some_and(|v| !v.is_null()) {
+            record_provider_error_code(&value, evidence);
             return Err(http_error(status, bytes, &[token]));
         }
         if value.get("status").is_some_and(|s| s != "completed") {
@@ -123,6 +144,7 @@ pub(crate) fn subscription_response_with_evidence(
                 } else {
                     &event
                 };
+                record_provider_error_code(error, evidence);
                 return Err(http_error(
                     status,
                     &serde_json::to_vec(error).map_err(|_| "model_stream_invalid")?,
@@ -348,9 +370,19 @@ pub(crate) fn planner_response_with_alerts(
     c.timeout_ms = role.timeout_ms;
     c.deadline = Some(Instant::now() + Duration::from_millis(role.timeout_ms));
     provenance["stage"] = json!("grant_owner");
-    let owner = nivra_store::native_grant::FileOwner::acquire(&c.grant_file)
-        .map_err(|_| "grant_busy_or_unavailable")?;
-    let g = grant(&c, &owner)?;
+    // Digest and supervisor share one grant file and run concurrently. The
+    // lock only guards reading or refreshing the grant: wait for it within the
+    // role deadline and release it before the provider call, so one role's
+    // inference never fails the other at `grant_owner`.
+    let g = {
+        let wait = c
+            .deadline
+            .and_then(|deadline| deadline.checked_duration_since(Instant::now()))
+            .unwrap_or_default();
+        let owner = nivra_store::native_grant::FileOwner::acquire_within(&c.grant_file, wait)
+            .map_err(|_| "grant_busy_or_unavailable")?;
+        grant(&c, &owner)?
+    };
     let token = g["access_token"].as_str().ok_or("grant_invalid")?;
     provenance["stage"] = json!("catalog");
     let ids = catalog(&c, token)?;
