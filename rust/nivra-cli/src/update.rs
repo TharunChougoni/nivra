@@ -32,9 +32,10 @@ pub(crate) struct Manifest {
     target: String,
     sha256: String,
 }
-/// SSH host aliases accepted as release transport. `github-ind-sadr` is the
-/// retired distribution binding; `github-nivra` is canonical from 0.9.26 on.
-const REMOTE_ALIASES: [&str; 2] = ["github-ind-sadr:", "github-nivra:"];
+/// The only SSH host alias accepted as release transport. The host migration
+/// (`nivra host-migrate`) is the one path that rebinds a retired remote.
+const REMOTE_ALIAS: &str = "github-nivra:";
+pub(crate) const CANONICAL_REMOTE: &str = "github-nivra:TharunChougoni/nivra.git";
 #[derive(Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 struct Config {
@@ -44,10 +45,16 @@ struct Config {
     paper_config: PathBuf,
 }
 fn valid_remote(remote: &str) -> bool {
-    REMOTE_ALIASES
-        .iter()
-        .any(|prefix| remote.starts_with(prefix))
-        && !remote.contains(char::is_whitespace)
+    remote.starts_with(REMOTE_ALIAS) && !remote.contains(char::is_whitespace)
+}
+/// Parse updater config bytes exactly as `update` does before any fetch.
+pub(crate) fn validate_config(bytes: &[u8]) -> Result<()> {
+    let config: Config =
+        serde_json::from_slice(bytes).map_err(|_| "invalid_update_configuration")?;
+    if !valid_remote(&config.remote) {
+        return Err("update_ssh_alias_required");
+    }
+    Ok(())
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Version(u32, u32, u32);
@@ -184,7 +191,8 @@ fn hash(s: &str, n: usize) -> bool {
         && s.bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-fn market_open(now: chrono::DateTime<chrono::FixedOffset>) -> bool {
+/// Weekday 09:00–15:45:59 IST activation blackout.
+pub(crate) fn market_open(now: chrono::DateTime<chrono::FixedOffset>) -> bool {
     now.weekday().number_from_monday() <= 5
         && (9 * 3600..=15 * 3600 + 45 * 60 + 59).contains(&now.num_seconds_from_midnight())
 }

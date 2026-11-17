@@ -477,7 +477,12 @@ impl PlannerConfig {
     }
     pub fn load(path: &Path) -> Result<Self> {
         let raw = crate::read_bounded(path, 65536).map_err(|_| "planner_config_unreadable")?;
-        let value = nivra_core::native::decode(&raw).map_err(|_| "planner_config_invalid")?;
+        Self::parse(&raw, path.parent().ok_or("planner_config_path_invalid")?)
+    }
+    /// Validate planner bytes as if they were stored in `directory`, whose
+    /// `prompts/` sibling supplies the default prompt files.
+    pub(crate) fn parse(raw: &[u8], directory: &Path) -> Result<Self> {
+        let value = nivra_core::native::decode(raw).map_err(|_| "planner_config_invalid")?;
         let mut c: Self = serde_json::from_value(value).map_err(|_| "planner_config_invalid")?;
         c.validate_handoff_limit()?;
         if let Some(settings) = &c.decision_evidence {
@@ -498,10 +503,7 @@ impl PlannerConfig {
             return Err("planner_prompt_max_bytes_invalid".into());
         }
         c.file_prompts = super::experiment_profile::PromptSet::load_directory(
-            &path
-                .parent()
-                .ok_or("planner_config_path_invalid")?
-                .join("prompts"),
+            &directory.join("prompts"),
             c.prompt_max_bytes,
         )
         .map_err(|reason| format!("planner_default_{reason}"))?;

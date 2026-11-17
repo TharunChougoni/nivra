@@ -475,7 +475,7 @@ fn update_decision_verifies_and_defers_then_activates_or_rolls_back() {
     );
     assert!(host.restarts.is_empty() && host.stops == 0);
     assert!(valid_remote("github-nivra:TharunChougoni/nivra.git"));
-    assert!(valid_remote("github-ind-sadr:TharunChougoni/ind-sadr.git"));
+    assert!(!valid_remote("github-ind-sadr:TharunChougoni/nivra.git"));
     assert!(!valid_remote("https://github.com/TharunChougoni/nivra.git"));
     assert!(!valid_remote("github-nivra:Tharun Chougoni/nivra.git"));
     // A tag whose CI assets are not yet published: the timer defers cleanly.
@@ -538,7 +538,7 @@ fn update_decision_verifies_and_defers_then_activates_or_rolls_back() {
     assert!(!h.join(".local/state/nivra/pending.json").exists());
     // Stable cwd and removed checkout overrides are properties of every Git command.
     let command = git_command(
-        &["ls-remote", "--tags", "github-ind-sadr:repo"],
+        &["ls-remote", "--tags", "github-nivra:repo"],
         Path::new("/private/stable-state"),
     );
     assert_eq!(

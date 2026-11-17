@@ -12,15 +12,18 @@ use nivra_cli::native_transport::FallbackTransport;
 /// `model_config`. It names a private key file; it never holds the key.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct FallbackConfig {
+pub(crate) struct FallbackConfig {
     transport: FallbackTransport,
     api_key_file: PathBuf,
 }
 
 fn fallback_config(path: &Path) -> Result<FallbackConfig> {
     let bytes = crate::read_bounded(path, 16384).map_err(|_| "fallback_config_unreadable")?;
-    let c: FallbackConfig =
-        serde_json::from_slice(&bytes).map_err(|_| "fallback_config_invalid")?;
+    parse_fallback_config(&bytes)
+}
+
+pub(crate) fn parse_fallback_config(bytes: &[u8]) -> Result<FallbackConfig> {
+    let c: FallbackConfig = serde_json::from_slice(bytes).map_err(|_| "fallback_config_invalid")?;
     nivra_store::native_grant::file_path_ok(&c.api_key_file)
         .map_err(|_| "fallback_key_path_invalid")?;
     Ok(c)

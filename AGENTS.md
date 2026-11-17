@@ -106,7 +106,7 @@ has no separate package or test gate. The committed bundle needs no Node runtime
 A push to `main` does not deploy. Releases are published from this repository
 only; `v0.9.26` is the first. The retired `ind-sadr` repository is not a deployment
 source, and an installed host moves once through the reviewed
-[distribution migration](docs/OPERATIONS.md#one-time-distribution-migration).
+[host migration](docs/OPERATIONS.md#one-time-host-migration).
 When a release is explicitly requested, the version in `Cargo.toml`, the
 changelog heading and the annotated tag `vX.Y.Z` must match on the exact commit.
 Never move a published tag; ship fixes as the next patch. See

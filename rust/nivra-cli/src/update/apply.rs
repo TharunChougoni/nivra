@@ -157,6 +157,98 @@ pub(crate) fn release_metadata(dir: &Path, m: &Manifest) -> Result<()> {
         .map_err(|_| "update_permissions_failed")?;
     sync(dir)
 }
+/// Write a verified release into its immutable `RELEASES/<tag>-<commit>`
+/// directory, or prove an existing one holds exactly these bytes.
+pub(crate) fn stage_release(
+    releases: &Path,
+    m: &Manifest,
+    manifest_bytes: &[u8],
+    binary: &[u8],
+) -> Result<PathBuf> {
+    let stage = releases.join(format!("{}-{}", m.tag, m.source_commit));
+    if exists(&stage) {
+        if read(&stage.join("release.json"), 16384)? != manifest_bytes
+            || digest(&read(&stage.join("nivra"), 64 * 1024 * 1024)?) != m.sha256
+        {
+            return Err("installed_artifact_mismatch");
+        }
+        return Ok(stage);
+    }
+    fs::create_dir(&stage).map_err(|_| "update_stage_failed")?;
+    fs::set_permissions(&stage, fs::Permissions::from_mode(0o700))
+        .map_err(|_| "update_permissions_failed")?;
+    for (name, data, exec) in [
+        ("nivra", binary, true),
+        ("release.json", manifest_bytes, false),
+        ("SOURCE_COMMIT", m.source_commit.as_bytes(), false),
+        ("VERSION", m.tag.as_bytes(), false),
+    ] {
+        write_new(&stage.join(name), data, exec)?;
+    }
+    write_new(
+        &stage.join("SHA256SUMS"),
+        format!("{}  nivra\n", m.sha256).as_bytes(),
+        false,
+    )?;
+    sync(&stage)?;
+    sync(releases)?;
+    Ok(stage)
+}
+/// A release the operator fetched from `refs/release-assets/<tag>` by hand,
+/// verified with the updater's own manifest and checksum rules. Only the
+/// one-time host migration installs from a local directory.
+pub(crate) struct StagedRelease {
+    manifest: Manifest,
+    manifest_bytes: Vec<u8>,
+    binary: Vec<u8>,
+}
+impl StagedRelease {
+    pub(crate) fn read(stage: &Path) -> Result<Self> {
+        let manifest_bytes = read(&stage.join("release.json"), 16384)?;
+        let manifest: Manifest =
+            serde_json::from_slice(&manifest_bytes).map_err(|_| "invalid_release_manifest")?;
+        Version::parse(&manifest.tag)?;
+        if !hash(&manifest.source_commit, 40)
+            || manifest.target != TARGET
+            || !hash(&manifest.sha256, 64)
+        {
+            return Err("release_identity_mismatch");
+        }
+        let checksum = read(&stage.join(format!("{ASSET}.sha256")), 256)?;
+        let binary = read(&stage.join(ASSET), 64 * 1024 * 1024)?;
+        if checksum != format!("{}  {ASSET}\n", manifest.sha256).as_bytes()
+            || digest(&binary) != manifest.sha256
+        {
+            return Err("release_checksum_mismatch");
+        }
+        Ok(Self {
+            manifest,
+            manifest_bytes,
+            binary,
+        })
+    }
+    pub(crate) fn tag(&self) -> &str {
+        &self.manifest.tag
+    }
+    pub(crate) fn directory(&self, releases: &Path) -> PathBuf {
+        releases.join(format!(
+            "{}-{}",
+            self.manifest.tag, self.manifest.source_commit
+        ))
+    }
+    pub(crate) fn install(&self, releases: &Path) -> Result<PathBuf> {
+        let stage = stage_release(releases, &self.manifest, &self.manifest_bytes, &self.binary)?;
+        release_metadata(&stage, &self.manifest)?;
+        Ok(stage)
+    }
+    /// True when `dir` already holds exactly this release.
+    pub(crate) fn installed_at(&self, dir: &Path) -> bool {
+        exists(dir)
+            && read(&dir.join("release.json"), 16384).is_ok_and(|b| b == self.manifest_bytes)
+            && read(&dir.join("nivra"), 64 * 1024 * 1024)
+                .is_ok_and(|b| digest(&b) == self.manifest.sha256)
+    }
+}
 pub(crate) fn installed_manifest(dir: &Path) -> Result<Option<Manifest>> {
     if !exists(&dir.join("release.json")) {
         return Ok(None);
@@ -703,31 +795,7 @@ pub(crate) fn apply_selected(
             Admission::Deferred(reason) => reason,
         });
     }
-    let stage = releases.join(format!("{tag}-{commit}"));
-    if !exists(&stage) {
-        fs::create_dir(&stage).map_err(|_| "update_stage_failed")?;
-        fs::set_permissions(&stage, fs::Permissions::from_mode(0o700))
-            .map_err(|_| "update_permissions_failed")?;
-        for (name, data, exec) in [
-            ("nivra", binary.as_slice(), true),
-            ("release.json", manifest_bytes.as_slice(), false),
-            ("SOURCE_COMMIT", commit.as_bytes(), false),
-            ("VERSION", tag.as_bytes(), false),
-        ] {
-            write_new(&stage.join(name), data, exec)?;
-        }
-        write_new(
-            &stage.join("SHA256SUMS"),
-            format!("{}  nivra\n", m.sha256).as_bytes(),
-            false,
-        )?;
-        sync(&stage)?;
-        sync(&releases)?;
-    } else if read(&stage.join("release.json"), 16384)? != manifest_bytes
-        || digest(&read(&stage.join("nivra"), 64 * 1024 * 1024)?) != m.sha256
-    {
-        return Err("installed_artifact_mismatch");
-    }
+    let stage = stage_release(&releases, &m, &manifest_bytes, &binary)?;
     if let Some((bundle, checksum)) = prompt_bundle.as_ref() {
         retain_prompt_bundle(&stage, bundle, checksum)?;
     }

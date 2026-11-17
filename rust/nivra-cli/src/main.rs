@@ -210,6 +210,18 @@ enum Command {
         #[arg(long, requires = "operator_stopped")]
         confirm_paper_review: bool,
     },
+    /// One-time off-hours move of an installed ind-sadr paper host to the nivra
+    /// layout. Dry run by default; never starts, stops or resumes anything.
+    HostMigrate {
+        /// Home directory to migrate; defaults to $HOME.
+        #[arg(long)]
+        home: Option<PathBuf>,
+        /// Directory holding this release's verified `release.json`, binary and checksum.
+        #[arg(long)]
+        release: PathBuf,
+        #[arg(long)]
+        apply: bool,
+    },
     /// Hidden fixed candidate helper. Runs only inside an owned systemd unit.
     #[command(hide = true)]
     CandidateSupervise { launch: PathBuf },
@@ -599,6 +611,11 @@ fn main() -> ExitCode {
                 .map_err(|_| ()),
             "Protection diagnostics unavailable",
         ),
+        Command::HostMigrate {
+            home,
+            release,
+            apply,
+        } => runtime::host_migrate::entry(home.as_deref(), &release, apply),
         Command::Update {
             config,
             check,

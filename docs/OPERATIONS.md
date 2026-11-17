@@ -7,8 +7,10 @@ Commands below use placeholders or the conventional installation layout.
 
 ## Services and files
 
-Installed units and state paths retain the internal `nivra` prefix for
-upgrade compatibility; Nivra is the public project name.
+Units, the release pointer, the deploy directory and updater state use the
+`nivra` names below. A host moved by the [host migration](#one-time-host-migration)
+keeps its `~/ind-sadr-data` and `~/.config/ind-sadr` directories, because the book
+binding hashes paths inside them.
 
 | Item | Purpose |
 | --- | --- |
@@ -1464,12 +1466,12 @@ Nivra is the only deployment source. Releases are published from
 owner; the first is `v0.9.26`. The predecessor `ind-sadr` repository is retired:
 its release assets are no longer installed, and new work, tags and deployment
 instructions live here. An installed host bound to the retired repository is moved
-once through the reviewed distribution migration below.
+once through the reviewed [host migration](#one-time-host-migration).
 
 Updater config selects the configured Git remote and absolute `paper_config` path.
 It never reads keys itself or needs a GitHub token. Remote transport is a
-deploy-key SSH host alias: `github-nivra:` is canonical, and `github-ind-sadr:` is
-accepted only to read a retained legacy binding while a host is being migrated
+deploy-key SSH host alias, and only `github-nivra:` is accepted; the host
+migration is the one path that rewrites a retired `github-ind-sadr:` remote
 ([example config](../packaging/rust/updater.example.json)):
 
 ```json
@@ -1525,17 +1527,6 @@ systemctl --user start nivra-paper.service
 
 Run these only for the reviewed stopped book; a failed check requires inspection.
 Deployment alone never resumes the book.
-
-### One-time distribution migration
-
-A host installed by a retired distribution keeps that release's identity, so the
-updater refuses it with `installed_release_identity_mismatch` instead of
-silently installing a foreign release. The updater no longer carries a built-in
-distribution rebind: the `--migrate-distribution` flag and the
-`distribution_migration` updater config block were removed, and an updater
-config that still has the block fails to parse. Remove the block before
-installing this release. A reviewed host migration procedure replaces the
-rebind; until it is documented, keep such a host on its installed release.
 
 `--tag vX.Y.Z` also accepts the same tag without its leading `v`. The diagnostic
 `--sha <commit>` selector accepts only an unambiguous commit of a published
@@ -1664,6 +1655,221 @@ review and extract prompt files beside the planner JSON, then use suspend and
 reviewed `config-apply`; the updater never edits these policy inputs. Custom
 writable paths require preflight. Resume only an eligible reviewed stopped open
 book, never a closed book.
+
+### One-time host migration
+
+A host installed before the rename runs `sadr-rs` from `~/ind-sadr-rust-current`
+under the `ind-sadr-rust-*` units, and its updater cannot fetch the renamed
+`nivra-x86_64-unknown-linux-musl` asset. The renamed updater looks for
+`~/nivra-current/nivra`, `~/nivra-deploy` and `~/.local/state/nivra` and accepts
+only the `github-nivra:` remote. `nivra host-migrate` moves such a host once,
+off-hours, with the controller stopped. It is a dry run unless `--apply` is
+given. It never starts, stops, enables or resumes a unit or a book, and never
+reads or prints a credential.
+
+```sh
+nivra host-migrate --release STAGE [--home HOME] [--apply]
+```
+
+**What moves and what stays.**
+
+| Location | Migration | Reason |
+| --- | --- | --- |
+| `~/ind-sadr-deploy` | Renamed to `~/nivra-deploy`; a `HOLD` file carries over | The updater hard-codes the deploy lock and hold |
+| `~/.local/state/ind-sadr` | Renamed to `~/.local/state/nivra` | Hard-coded updater state, alert outbox and evidence |
+| `~/nivra-releases/<tag>-<commit>/` | Created from the staged release | Updater release root |
+| `~/nivra-current`, `~/nivra-previous` | Created; they point at the new release and at the old current release | Updater pointers |
+| `~/.config/systemd/user/nivra-paper.service`, `nivra-update.service`, `nivra-update.timer`, `nivra-alert@.service` | Rendered from `packaging/rust` with the kept paths below | The old `ind-sadr-*` units stay installed for rollback |
+| `~/ind-sadr-data` | Kept | The book binding hashes the session directory path |
+| `~/.config/ind-sadr` | Kept; reviewed configs are rewritten in place | The book binding hashes `token_file` and `dashboard_token_file`; grants and model-selection receipts name files here |
+| `~/ind-sadr-history`, `~/ind-sadr-backups`, `~/ind-sadr-diagnostics`, `~/ind-sadr-monitor` | Kept | Not hard-coded by the binary; history may hold the bound read journal |
+| `~/ind-sadr-rust-releases`, `~/ind-sadr-rust-current`, `~/ind-sadr-rust-previous` | Kept | Prior releases and the rollback pointer of the old units |
+| `/var/lib/ind-sadr-research` | Kept | Root-owned research stage that the paper unit may write |
+
+**Why data and config keep their names.** A paper book's identity is the
+SHA-256 of the serialized paper config (`book_binding` in
+`runtime/mod.rs`). The serialized fields include `directory`, `token_file`,
+`dashboard_token_file` and `read_journal` as absolute path text, plus the read
+journal's device and inode; `sessions_root`, `planner_config`,
+`alert_webhook_file`, `prior_config` and `history_directory` are not serialized.
+A dated successor's `directory` is `sessions_root/<date>`. `book-identity.json`
+stores the `paper.sqlite` device, inode and this binding, and the same binding is
+repeated by the ledger `state` row, the planner authority, the usage pin
+`model/usage-identity.json`, `model/model-selection.json` and the scorer
+admission. A same-filesystem rename keeps inodes but changes the path text, so the
+live book would refuse with `original_paper_book_changed`, and so would every
+predecessor the next rollover verifies. There is no reviewed rebind, and a fresh
+book would be a replacement journal. A compatibility symlink does not help either:
+token reads refuse a symlinked ancestor. Paths that bind nothing need no move:
+grant files record version, client, grant ID and account hash but no path;
+prompts are hashed by content; history receipts bind data and engine hashes.
+Renaming the data or config directories later needs a reviewed rebind feature
+first.
+
+**What the command checks and rewrites.** Before writing anything it refuses:
+
+| Refusal | Condition |
+| --- | --- |
+| `host_migrate_activation_blackout` | Weekday 09:00–15:45:59 IST (the updater's clock window; holidays are not exempt) |
+| `host_migrate_lock_held` | Another process holds the sessions-root or live-session `controller.lock`, `updater.lock` or the deploy `.lock` |
+| `host_migrate_update_transaction_requires_review` | `pending.json`, `pending-review.json` or `update-recovery.json` is present |
+| `host_migrate_book_binding_mismatch` | The rewritten paper config would not reproduce the live book's binding |
+| `host_migrate_release_version_mismatch` | The staged release is not the running binary's own version |
+| `host_migrate_*_config_invalid` | A rewritten config does not parse with the new types |
+| `host_migrate_*_conflict` | A target path already exists with different content |
+
+It reads `~/.config/ind-sadr/updater.json`, the paper config it names, that
+config's planner, the planner's experiment profile and every `model_config` the
+planner names. It then rewrites:
+
+- Paper config: drops `allow_legacy_model_led_default`. It writes `sessions_root`
+  explicitly as `~/ind-sadr-data/sessions` when the key is absent, because the
+  default moved to `~/nivra-data/sessions`.
+- Planner: drops `decision_owner`, `decide`, `handoff_gate`, `post_close`,
+  `orchestrator.triggers.operations|strategy`, the trigger keys
+  `after_decide`, `luna_no_decide_streak`, `minimum_turn_ms` and
+  `max_failed_tools`, the same two limits on `digest` and `orchestrator.model`,
+  and the `orchestrator.trigger_prompts` keys `post_decide` and
+  `luna_no_decide_streak`.
+- Experiment profile: drops `handoff_gate`, `prompts.decide`,
+  `prompts.decision_evidence`, `prompts.decision_evidence_digest` and
+  `roles.decide`.
+- Model configs: writes `grant_file` explicitly as
+  `~/.config/ind-sadr/xai-grant` when a non-Codex config omits it, because the
+  default moved to `~/.config/nivra/xai-grant`. Fallback configs are only
+  validated.
+- Paper, model and updater configs: write `alert_webhook_file` explicitly when it
+  is absent and `~/.config/ind-sadr/alert-webhook.json` exists, because the
+  default destination moved.
+- `updater.json`: written fresh with `remote`
+  `github-nivra:TharunChougoni/nivra.git`, the same `paper_config` and the same
+  alert file. `updater-nivra.json` and its staged `distribution_migration` block
+  are left as an unused archive; the new updater no longer parses that block.
+- Any string under a renamed root (`~/ind-sadr-deploy`, `~/.local/state/ind-sadr`)
+  moves with it.
+
+Each rewritten file is validated with the new types first. The original stays
+beside it as `FILE.pre-nivra` (0600) and the new bytes are staged as
+`FILE.nivra-next` (0600). The release install, directory renames, links and
+units run next, and only then is each staged file renamed over its original. The
+command holds the controller and updater locks throughout. It prints one JSON
+report with the steps, the removed and added key names, the kept roots, the
+book's binding check and `operator_next`. It prints no config values. A rerun
+after success reports `already_migrated` and changes nothing; rerunning after an
+interrupted apply completes it.
+
+**Runbook.** The owner runs every step on the host; nothing here runs
+automatically.
+
+1. Choose an off-hours window after the close. Check the book with the
+   installed binary and confirm that no research sandbox units are running,
+   because the renamed binary names them `nivra-rw-*`/`nivra-candidate-*` and
+   would not see `sadr-*` ones:
+
+   ```sh
+   ~/ind-sadr-rust-current/sadr-rs readiness --config ~/.config/ind-sadr/rust-paper.json
+   systemctl --user list-units 'sadr-*'
+   ```
+
+2. Stop the old updater and the controller, and confirm they are inactive:
+
+   ```sh
+   systemctl --user disable --now ind-sadr-rust-update.timer
+   systemctl --user stop ind-sadr-rust-update.service ind-sadr-rust-paper.service
+   systemctl --user is-active ind-sadr-rust-paper.service ind-sadr-rust-update.service
+   ```
+
+3. Fetch the release assets with the existing deploy-key alias into a private
+   staging directory, and verify the checksum and the tag's commit:
+
+   ```sh
+   TAG=vX.Y.Z
+   STAGE=$(mktemp -d ~/nivra-stage.XXXXXX)
+   git init --bare -q "$STAGE/git"
+   git --git-dir "$STAGE/git" fetch -q github-nivra:TharunChougoni/nivra.git \
+     "refs/release-assets/$TAG:refs/assets/$TAG" "refs/tags/$TAG:refs/tags/$TAG"
+   for f in release.json nivra-x86_64-unknown-linux-musl nivra-x86_64-unknown-linux-musl.sha256; do
+     git --git-dir "$STAGE/git" show "refs/assets/$TAG:$f" > "$STAGE/$f"
+   done
+   (cd "$STAGE" && sha256sum -c nivra-x86_64-unknown-linux-musl.sha256)
+   git --git-dir "$STAGE/git" rev-parse "$TAG^{commit}"   # equals source_commit in release.json
+   chmod 0700 "$STAGE/nivra-x86_64-unknown-linux-musl"
+   ```
+
+4. Preview, review the report, then apply:
+
+   ```sh
+   "$STAGE/nivra-x86_64-unknown-linux-musl" host-migrate --release "$STAGE"
+   "$STAGE/nivra-x86_64-unknown-linux-musl" host-migrate --release "$STAGE" --apply
+   ```
+
+   The report must show `"binding": "matches"`. Keep the applied report; its
+   `rewrite_config` steps list the files rollback restores.
+
+5. Verify the installed release with its own binary. `update --check` proves the
+   installed tag and commit against the published annotated tag and prints
+   `already_current`, or `available` when a newer tag exists:
+
+   ```sh
+   ~/nivra-current/nivra self-check --expected-version "$TAG"
+   ~/nivra-current/nivra planner config-check --planner ~/.config/ind-sadr/planner.json --session NEXT_SESSION
+   ~/nivra-current/nivra preflight --config ~/.config/ind-sadr/rust-paper.json
+   ~/nivra-current/nivra update --check --config ~/.config/ind-sadr/updater.json
+   systemctl --user daemon-reload
+   systemctl --user cat nivra-paper.service
+   ```
+
+6. Apply the policy change that `operator_next` names. The planner policy hash
+   changes because `decide` and `decision_owner` are gone.
+   - `start_service_successor_binds_new_policy`: the book is closed, which is the
+     normal off-hours state. `config-apply` refuses a closed book
+     (`config_apply_book_closed`) and none is needed. The next rollover
+     initializes the successor book's planner authority from the rewritten
+     policy. Start `nivra-paper.service` the way the old service was started.
+   - `config_apply_then_resume`: the book is open. Run
+     `~/nivra-current/nivra config-apply --confirm-paper-review --config ~/.config/ind-sadr/rust-paper.json`,
+     then `resume --confirm-paper-review`, then `readiness`, then start
+     `nivra-paper.service`. If `agent model show` reports an active non-default
+     profile, it was recorded under the old policy hash and refuses with
+     `model_selection_policy_changed` until the owner requests it again with
+     `agent model set`.
+   - `planner_recover_required`: follow
+     [Stop, recovery and closed incidents](#stop-recovery-and-closed-incidents)
+     before anything else.
+   - `inspect_book_readiness`: the book state could not be read without touching
+     its WAL; inspect it with `readiness` before starting.
+
+   Keep `nivra-paper.service` disabled at boot, as the old service was.
+
+7. Re-enable updates and remove the staging copy:
+
+   ```sh
+   systemctl --user enable --now nivra-update.timer
+   rm -rf "$STAGE"
+   ```
+
+**Rollback.** Before the renamed controller has written to a book, rollback is
+exact. Stop the new units, restore every file the applied report rewrote, move the
+two directories back, remove the new links and units, and start the old units:
+
+```sh
+systemctl --user disable --now nivra-update.timer
+systemctl --user stop nivra-update.service nivra-paper.service
+for f in FILES_FROM_THE_REPORT; do mv "$f.pre-nivra" "$f"; done
+mv ~/nivra-deploy ~/ind-sadr-deploy
+mv ~/.local/state/nivra ~/.local/state/ind-sadr
+rm ~/nivra-current ~/nivra-previous
+rm ~/.config/systemd/user/nivra-paper.service ~/.config/systemd/user/nivra-update.service \
+  ~/.config/systemd/user/nivra-update.timer ~/.config/systemd/user/nivra-alert@.service
+systemctl --user daemon-reload
+systemctl --user enable --now ind-sadr-rust-update.timer
+```
+
+Then start `ind-sadr-rust-paper.service` as before. Keep `~/nivra-releases` as
+evidence. After the renamed controller has run a rollover, `config-apply` or
+`resume`, the book's planner authority is bound to the new policy hash and the old
+binary with the restored planner refuses it. Fix forward from that point instead
+of rolling back.
 
 ## Dashboard and alerts
 
