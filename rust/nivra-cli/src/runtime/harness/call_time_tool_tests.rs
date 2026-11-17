@@ -101,6 +101,10 @@ fn schemas_use_configured_limits_and_digest_has_no_search() {
             web: true,
             web_search: true,
             web_news: true,
+            research_request: true,
+            quote_capture: true,
+            candidate_observation: true,
+            candidate_parent_ref: true,
             ..Default::default()
         },
     )
@@ -338,6 +342,16 @@ fn schemas_use_configured_limits_and_digest_has_no_search() {
             "{name} must accept null defaults"
         );
     }
+    // The strict research request sends `refs: null` instead of omitting it.
+    assert!(
+        checked_call_with(
+            &call("request_research", json!({"question":"q","refs":null})),
+            &owner,
+            &settings
+        )
+        .is_ok(),
+        "request_research must accept null refs"
+    );
     assert!(
         configured_definitions_with("digest", &["web_search".into()], false, &settings).is_err()
     );

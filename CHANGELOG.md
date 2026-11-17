@@ -1,5 +1,15 @@
 # Source snapshot
 
+## 0.10.4 — 2026-11-17
+
+Fix #14. The orchestrator's `request_research` tool was declared strict but did
+not require its `refs` property. Strict function schemas must require every
+property, so the provider rejected every decision turn that advertised the tool
+as an opaque HTTP 200 at response validation, while compaction and session-open
+turns, which send no tools, were accepted. `refs` is now required and nullable,
+and a null `refs` queues the question with no references. The strict-schema test
+now covers every owner tool, including the research request and quote capture.
+
 ## 0.10.3 — 2026-11-17
 
 Stop supervisor runs failing on grant contention. Luna digests and the persistent

@@ -476,9 +476,12 @@ pub(crate) fn call_tool_definitions(
             "Queue one bounded question for the separate research lane (script authoring, backtests, replays). It returns a request id immediately and never waits: the answer arrives as research_updates in a later decision turn. Advisory paper research only; it never places, sizes or authorizes a trade.",
             json!({
                 "question":{"type":"string","minLength":1,"maxLength":1000},
-                "refs":{"type":"array","items":{"type":"string","maxLength":160},"maxItems":8}
+                "refs":{"type":["array","null"],"items":{"type":"string","maxLength":160},"maxItems":8}
             }),
-            json!(["question"]),
+            // Strict schemas must require every property; `refs` is nullable
+            // instead of optional. An optional strict property made the
+            // provider reject every decision turn as an opaque HTTP 200 (#14).
+            json!(["question", "refs"]),
         ));
     }
     if owner.quote_capture {
@@ -628,8 +631,14 @@ pub(super) enum Tool {
 #[serde(deny_unknown_fields)]
 pub(super) struct ResearchRequestArgs {
     pub(super) question: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub(super) refs: Vec<String>,
+}
+
+fn null_as_empty<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Vec<String>, D::Error> {
+    Ok(Option::<Vec<String>>::deserialize(d)?.unwrap_or_default())
 }
 
 pub(super) enum OwnerResearchOperation {
