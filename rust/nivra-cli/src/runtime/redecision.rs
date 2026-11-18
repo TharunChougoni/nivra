@@ -858,8 +858,29 @@ pub(crate) fn reviewed_stopped_block(db: &Connection, c: &Config) -> Result<Revi
         _ => Err("planner_recover_stopped_block_not_eligible".into()),
     }
 }
+/// Who retires an interrupted claim. Both settle it failed/no-replay with its
+/// charges preserved; the journal records which lifecycle step did it.
+#[derive(Clone, Copy)]
+enum Retirement {
+    OperatorReview,
+    ServiceShutdown,
+}
+impl Retirement {
+    fn status(self) -> &'static str {
+        match self {
+            Self::OperatorReview => "operator_review_interrupted_no_replay",
+            Self::ServiceShutdown => "service_shutdown_interrupted_no_replay",
+        }
+    }
+    fn event(self) -> &'static str {
+        match self {
+            Self::OperatorReview => "operator_pending_planner_attempt_retained",
+            Self::ServiceShutdown => "service_shutdown_planner_attempt_retired",
+        }
+    }
+}
 /// An attempt left pending by a stopped controller is retired, never replayed; charges stay.
-fn retire_interrupted(db: &Connection, c: &Config, claim: Claim) -> Result<()> {
+fn retire_interrupted(db: &Connection, c: &Config, claim: Claim, by: Retirement) -> Result<()> {
     planner::require_usage(c)?;
     let body: String = db.query_row(
         "SELECT body FROM planner_attempt_log WHERE id=? AND state IN ('reserved','interrupted')",
@@ -882,12 +903,46 @@ fn retire_interrupted(db: &Connection, c: &Config, claim: Claim) -> Result<()> {
     ) {
         return Err("planner_recover_event_binding_mismatch".into());
     }
-    db.execute("UPDATE planner_attempt_log SET state='failed',result=? WHERE id=?", rusqlite::params![json!({"status":"operator_review_interrupted_no_replay","original_claim":claim,"charges_preserved":true}).to_string(),claim.id])?;
+    db.execute(
+        "UPDATE planner_attempt_log SET state='failed',result=? WHERE id=?",
+        rusqlite::params![
+            json!({"status":by.status(),"original_claim":claim,"charges_preserved":true})
+                .to_string(),
+            claim.id
+        ],
+    )?;
     db.execute(
         "UPDATE planner_event_log SET state='failed' WHERE id=?",
         [&claim.event_id],
     )?;
-    db.execute("INSERT INTO ticks(at,receipt,body,event) VALUES(?,NULL,?,'operator_pending_planner_attempt_retained')", rusqlite::params![millis(),json!({"attempt_id":claim.id,"no_replay":true,"charges_preserved":true}).to_string()])?;
+    db.execute(
+        "INSERT INTO ticks(at,receipt,body,event) VALUES(?,NULL,?,?)",
+        rusqlite::params![
+            millis(),
+            json!({"attempt_id":claim.id,"no_replay":true,"charges_preserved":true}).to_string(),
+            by.event()
+        ],
+    )?;
+    Ok(())
+}
+/// A service stop retires the exact claim whose worker it cancelled, so the
+/// restarted controller continues the session without a sticky
+/// interrupted-attempt block. Any other block stays as it was.
+pub(crate) fn retire_for_service_shutdown(
+    db: &mut Connection,
+    c: &Config,
+    claim: &Claim,
+) -> Result<()> {
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let mut state = load(&tx)?.ok_or("planner_event_state_missing")?;
+    check(&state, c)?;
+    if state.pending.as_ref() != Some(claim) || claim.binding != state.binding {
+        return Err("planner_attempt_not_pending".into());
+    }
+    retire_interrupted(&tx, c, claim.clone(), Retirement::ServiceShutdown)?;
+    state.pending = None;
+    save(&tx, &state)?;
+    tx.commit()?;
     Ok(())
 }
 /// Called inside the operator recovery transaction; history and charges remain intact.
@@ -906,7 +961,7 @@ pub(crate) fn recover(
     }
     let mut receipt = authority_owner(db, &state)?.ok_or("planner_authority_owner_missing")?;
     if let Some(claim) = state.pending.take() {
-        retire_interrupted(db, c, claim)?;
+        retire_interrupted(db, c, claim, Retirement::OperatorReview)?;
     }
     let (current_hash, current_prompts, current_without_prompt) = config_identity(cfg)?;
     db.execute("INSERT INTO ticks(at,receipt,body,event) VALUES(?,NULL,?,'operator_planner_authority_rebound')",
@@ -960,7 +1015,7 @@ pub(crate) fn apply_config(
     authority_owner(db, &state)?;
     // config-apply holds the controller lock, so a pending claim was interrupted.
     if let Some(claim) = state.pending.take() {
-        retire_interrupted(db, c, claim)?;
+        retire_interrupted(db, c, claim, Retirement::OperatorReview)?;
     }
     // The stop artifact only records that an in-flight attempt was abandoned; with the
     // attempt retired above, the explicit operator apply clears it. Other blocks stay.

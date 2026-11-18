@@ -7,7 +7,7 @@ use nivra_core::book_phase::BookPhase;
 use nivra_core::execution::Portfolio;
 use serde_json::{Value, json};
 
-fn root(c: &Config) -> Result<PathBuf> {
+pub(super) fn root(c: &Config) -> Result<PathBuf> {
     match &c.sessions_root {
         Some(p) if p.is_absolute() => Ok(p.clone()),
         Some(_) => Err(Fail::new("sessions_root_must_be_absolute").into()),

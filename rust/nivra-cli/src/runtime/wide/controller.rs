@@ -29,7 +29,7 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
 
 enum Flow {
     Continue,
-    /// An operator stop was observed in the pass sampled at `at`.
+    /// A stop signal was observed in the pass sampled at `at`.
     Stopped {
         at: i64,
     },
@@ -563,38 +563,31 @@ impl<'a> Controller<'a> {
         }
     }
 
-    /// Cancel workers, settle any owner attempt and journal the operator stop.
+    /// Cancel workers, then settle the book for an operator or service stop.
     fn stop(mut self, now: i64) -> Result<()> {
-        let c = &self.config;
+        let intent = shutdown::intent(&self.config, now);
         if let Some(worker) = self.history_worker.take() {
             worker.cancel();
         }
         drop(self.supervisor_worker.take());
         drop(self.aside_worker.take());
         self.research_lane.stop();
-        if let Some(worker) = self.event_worker.take() {
+        let in_flight = self.event_worker.take().map(|worker| {
             worker
                 .cancel
                 .store(true, std::sync::atomic::Ordering::Release);
-            if redecision::block(&mut self.db, c, "operator_stopped_no_replay").is_err() {
-                self.p.halted = true;
-            }
-        }
-        mark_operator_stopped(&mut self.p);
-        persist(
+            worker.claim.clone()
+        });
+        let details = shutdown::settle(
             &mut self.db,
-            c,
-            &self.p,
+            &self.config,
+            &mut self.p,
+            &intent,
+            in_flight.as_ref(),
             now,
-            None,
-            None,
-            "operator_stopped",
         )?;
-        self.alerts.emit(
-                Event::Stop,
-                c.session,
-                serde_json::json!({"closed":self.p.closed,"open_unresolved":self.p.positions.len(),"operator_stopped":true,"halted":self.p.halted}),
-            );
+        eprintln!("controller_shutdown kind={}", intent.kind.as_str());
+        self.alerts.emit(Event::Stop, self.config.session, details);
         self.alerts.finish();
         Ok(())
     }

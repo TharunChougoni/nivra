@@ -123,9 +123,12 @@ stop alerts and `/api/v1/health` book / summary state classify it as
 never clears the stop. Halted or incomplete/unknown stop evidence remains an
 operator-review condition, separate from updater preflight or rollback failure.
 
-A service restart preserves the same dated book, stop/halt flags and original
-attempts. A normal model-led account carries actual cash/holdings across verified
-successors. Closed books are never resumed. No replacement intraday book, quota
+A service stop or restart (`systemctl --user restart`, the updater's stop, a host
+shutdown or a crash) continues the same dated book when the controller returns.
+Only an explicit [`nivra stop`](#operator-stop-and-service-restart) makes the next
+stop an operator stop that needs a reviewed `resume`. Stop/halt flags and original
+attempts are preserved. A normal model-led account carries actual cash/holdings
+across verified successors. Closed books are never resumed. No replacement intraday book, quota
 reset or automatic unhalt is a recovery procedure.
 
 ### Late session start
@@ -718,12 +721,54 @@ market-data clients, including history and model snapshot reads.
 
 ## Stop, recovery and closed incidents
 
+### Operator stop and service restart
+
+The controller decides once, when SIGTERM or SIGINT arrives, which kind of stop
+it is:
+
+| Shutdown | Trigger | Book after restart |
+| --- | --- | --- |
+| Service | Any stop without a fresh operator request: `systemctl --user stop` or `restart`, the updater, a host shutdown | Same dated session continues automatically; not stopped |
+| Operator | `nivra stop` request consumed on the next stop signal | `stopped=true`; only a reviewed `resume` restarts trading |
+
+To stop the book for review, request the operator stop first, then stop the
+service:
+
+```sh
+nivra stop --config PAPER_CONFIG --confirm-paper-review
+systemctl --user stop nivra-paper.service
+```
+
+With the controller running, `nivra stop` writes the private (0600)
+`stop-request.json` next to `current.json` under the sessions root. It is bound
+to the account and the active session and is valid for ten minutes. The command
+never signals systemd; it prints the `systemctl` step. On the next stop signal
+the controller consumes the request and behaves exactly as an operator stop:
+workers are cancelled, an in-flight planner attempt is blocked
+`operator_stopped_no_replay`, the book is marked `operator_stopped` and the Stop
+alert reports `operator_stopped:true`. A stale, foreign-session or malformed
+request is ignored. Every request file is moved into `stop-requests/` under the
+sessions root as evidence, never deleted. With no controller running,
+`nivra stop` takes both controller locks and stops the active open book directly;
+a closed book refuses with `stop_session_closed`.
+
+A service stop cancels workers and retires an in-flight planner attempt as
+failed `service_shutdown_interrupted_no_replay` with its charges preserved. It is
+never replayed and leaves no sticky block. The book is not stopped. The tick
+`service_shutdown` records the planner disposition and any ignored request, and
+the Stop alert reports `operator_stopped:false`. If the retirement cannot be
+proven exact, the claim stays pending behind the reviewed
+`attempt_interrupted_no_replay` block and the tick says so. Halted books stay
+halted and operator-stopped books stay stopped across any restart; nothing
+unhalts, resumes or replays automatically.
+
 Stop and inspect before recovery. A halt's durable reason survives operator stop;
 closed-book stop must preserve the sealed financial state. Review older binary
 shutdown behaviour before maintenance: older releases may mutate a closed book.
 Never use a general restart to clear stop/halt state.
 
 ```sh
+nivra stop --config PAPER_CONFIG --confirm-paper-review
 systemctl --user stop nivra-paper.service
 nivra planner-recover --config PAPER_CONFIG --confirm-paper-review
 nivra resume --config PAPER_CONFIG --confirm-paper-review
@@ -979,6 +1024,7 @@ When the carried position is flat, stop the service and clear only the halt with
 the reviewed recovery, then resume:
 
 ```sh
+nivra stop --config PAPER_CONFIG --confirm-paper-review
 systemctl --user stop nivra-paper.service
 nivra planner-recover --config PAPER_CONFIG --confirm-paper-review
 nivra resume --config PAPER_CONFIG --confirm-paper-review
@@ -1101,9 +1147,9 @@ Run readiness for the successor and follow the separately authorized paper-servi
 startup procedure. Acceptance and advance themselves never start the service.
 
 Review output now separates the account fact `model_led` from `carry_admitted`;
-older `model_led_account` verdicts remain readable. A restart of a stopped, still-open
-book logs `stopped_open_session_restart_requires_review` with explicit resume
-instructions. The book remains stopped; a restart is never a resume.
+older `model_led_account` verdicts remain readable. A restart of an operator-stopped,
+still-open book logs `stopped_open_session_restart_requires_review` with explicit
+resume instructions. The book remains stopped; a restart is never a resume.
 
 Planner authority changes on a closed sealed book apply to the next session.
 

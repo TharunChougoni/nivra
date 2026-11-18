@@ -612,6 +612,23 @@ pub fn resume_entry(path: &Path, confirm: bool) -> ExitCode {
         }
     }
 }
+pub fn stop_entry(path: &Path, confirm: bool) -> ExitCode {
+    let result = (|| -> Result<serde_json::Value> {
+        let bytes = crate::read_bounded(path, 16384).map_err(|_| "config_unreadable")?;
+        let c: Config = serde_json::from_slice(&bytes).map_err(|_| "config_invalid")?;
+        wide::stop(&c, confirm, millis())
+    })();
+    match result {
+        Ok(v) => {
+            println!("{v}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("stop_refused: {}", failure_code(error.as_ref()));
+            ExitCode::FAILURE
+        }
+    }
+}
 fn resume_run(path: &Path, confirm: bool) -> Result<()> {
     let bytes = fs::read(path).map_err(|_| Fail::new("config_unreadable"))?;
     let c: Config = serde_json::from_slice(&bytes).map_err(|_| Fail::new("config_invalid"))?;

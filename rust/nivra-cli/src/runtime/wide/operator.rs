@@ -417,3 +417,69 @@ pub(in crate::runtime) fn resume(c: &Config, confirm: bool) -> Result<()> {
     );
     Ok(())
 }
+
+/// Explicit operator stop. While a controller holds the sessions-root lock this
+/// records a private request bound to the active account and session; the
+/// controller consumes it on the next SIGTERM and stops the book. With no
+/// controller running it stops the active book directly under both locks.
+/// It never signals systemd itself.
+pub(in crate::runtime) fn stop(c: &Config, confirm: bool, now: i64) -> Result<serde_json::Value> {
+    if !confirm {
+        return Err(Fail::new("stop_confirm_paper_review_required").into());
+    }
+    c.validate()?;
+    let active = match Active::open(c, Fail::new("stop_live_enabled")) {
+        Ok(active) => active,
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::WouldBlock) =>
+        {
+            let current = rollover::current(c)?;
+            let request = shutdown::write_request(&current, now)?;
+            return Ok(serde_json::json!({
+                "paper_only":true,
+                "live_enabled":LIVE_ENABLED,
+                "controller_running":true,
+                "stop_requested":true,
+                "account":request.account,
+                "session":request.session,
+                "requested_at_ms":request.requested_at_ms,
+                "expires_at_ms":request.requested_at_ms + shutdown::STOP_REQUEST_TTL_MS,
+                "next_step":"systemctl --user stop nivra-paper.service",
+            }));
+        }
+        Err(error) => return Err(error),
+    };
+    let c = &active.c;
+    if !active.book_present() {
+        return Err(Fail::new("stop_book_missing").into());
+    }
+    let lock = active
+        .lock_file()
+        .map_err(|_| Fail::new("stop_controller_busy"))?;
+    let _lock = hold(lock, Fail::new("stop_controller_busy"))?;
+    let (mut db, mut p) = active.load()?;
+    if p.closed {
+        return Err(Fail::new("stop_session_closed").into());
+    }
+    let already = p.stopped;
+    if !already {
+        let intent = shutdown::Intent {
+            kind: shutdown::ShutdownKind::Operator,
+            request: serde_json::json!({"status":"direct","controller_running":false}),
+        };
+        shutdown::settle(&mut db, c, &mut p, &intent, None, now)?;
+    }
+    Ok(serde_json::json!({
+        "paper_only":true,
+        "live_enabled":LIVE_ENABLED,
+        "controller_running":false,
+        "session":c.session,
+        "stopped":true,
+        "already_stopped":already,
+        "halted":p.halted,
+        "audit_event":"operator_stopped",
+        "next_step":"nivra resume --config PAPER_CONFIG --confirm-paper-review",
+    }))
+}

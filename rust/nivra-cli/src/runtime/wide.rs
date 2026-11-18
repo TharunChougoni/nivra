@@ -11,12 +11,13 @@ mod controller;
 pub(super) use controller::run;
 mod operator;
 pub(super) use operator::{
-    config_apply, config_apply_with, planner_recover, planner_recover_protection_only, resume,
+    config_apply, config_apply_with, planner_recover, planner_recover_protection_only, resume, stop,
 };
 #[cfg(test)]
 use operator::{planner_recover_checked, resume_preflight};
 mod projection;
 mod shadow;
+mod shutdown;
 use projection::{execution_projection, usage_projection};
 use shadow::{ShadowScorer, ShadowSelection};
 #[cfg(test)]

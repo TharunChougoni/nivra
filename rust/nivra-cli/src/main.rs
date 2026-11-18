@@ -378,6 +378,15 @@ enum Command {
         #[arg(long)]
         confirm_paper_review: bool,
     },
+    /// Request an operator stop of the active paper book. Without it, a service
+    /// stop or restart continues the same session; with it, resume is required.
+    Stop {
+        #[arg(long)]
+        config: PathBuf,
+        /// Required. Confirms the operator wants the book stopped until resume.
+        #[arg(long)]
+        confirm_paper_review: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -736,6 +745,10 @@ fn main() -> ExitCode {
             config,
             confirm_paper_review,
         } => runtime::resume_entry(&config, confirm_paper_review),
+        Command::Stop {
+            config,
+            confirm_paper_review,
+        } => runtime::stop_entry(&config, confirm_paper_review),
         Command::DashboardToken { command } => match command {
             DashboardTokenCommand::Rotate { config, token } => {
                 runtime::dashboard_token_rotate_entry(&config, token.as_deref())
