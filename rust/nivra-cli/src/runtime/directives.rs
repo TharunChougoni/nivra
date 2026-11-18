@@ -5,10 +5,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
-    fs::{self, OpenOptions},
-    io::Write,
+    fs,
     path::{Path, PathBuf},
 };
+#[cfg(test)]
+use std::{fs::OpenOptions, io::Write};
 
 pub(crate) const STORE: &str = "model/directives.ndjson";
 /// The one decision owner's explicitly requested operator context.
@@ -110,6 +111,9 @@ enum Record {
     Acknowledged { id: String, at_ms: i64, by: String },
 }
 
+/// The model-authored directive write path is retired: pi lanes never issue
+/// directives. The historical supervisor replay tests still exercise it.
+#[cfg(test)]
 fn forbidden(value: &Value) -> bool {
     const ORDER: &[&str] = &["side", "units", "rupees", "max_price", "url", "urls"];
     match value {
@@ -125,6 +129,8 @@ fn forbidden(value: &Value) -> bool {
     }
 }
 
+/// Historical directive validation for the retired supervisor write path.
+#[cfg(test)]
 pub(crate) fn validate(
     raw: &Value,
     allowlist: &[String],
@@ -186,6 +192,8 @@ pub(crate) fn validate(
     })
 }
 
+/// Historical supervisor directive parsing, exercised only by the replay tests.
+#[cfg(test)]
 pub(crate) fn parse_output(
     raw: &str,
     allowlist: &[String],
@@ -222,6 +230,8 @@ fn path(root: &Path) -> PathBuf {
     root.join(STORE)
 }
 
+/// Historical directive journal writer; pi lanes never write directives.
+#[cfg(test)]
 fn append(root: &Path, record: &Record) -> std::io::Result<()> {
     let path = path(root);
     if let Some(parent) = path.parent() {
@@ -236,6 +246,7 @@ fn append(root: &Path, record: &Record) -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn supersede(root: &Path, id: &str, at_ms: i64) -> std::io::Result<()> {
     append(
         root,
@@ -246,19 +257,7 @@ pub(crate) fn supersede(root: &Path, id: &str, at_ms: i64) -> std::io::Result<()
     )
 }
 
-/// Record an operator-request expiry explicitly. An expired directive is also
-/// excluded by `active` from its own timestamp, so this is a receipt, not a
-/// second delivery rule.
-pub(crate) fn expire(root: &Path, id: &str, at_ms: i64) -> std::io::Result<()> {
-    append(
-        root,
-        &Record::Expired {
-            id: id.to_owned(),
-            at_ms,
-        },
-    )
-}
-
+#[cfg(test)]
 pub(crate) fn issue(root: &Path, directive: &Directive) -> std::io::Result<()> {
     append(
         root,
@@ -270,6 +269,7 @@ pub(crate) fn issue(root: &Path, directive: &Directive) -> std::io::Result<()> {
 
 /// Idempotent issue for a resumed session turn: a directive id already present
 /// is not appended twice, so a replay can finish the remaining work (#141).
+#[cfg(test)]
 pub(crate) fn issue_once(root: &Path, directive: &Directive) -> std::io::Result<()> {
     if let Ok(raw) = fs::read_to_string(path(root))
         && raw.lines().any(|line| {

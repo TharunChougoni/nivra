@@ -1,6 +1,7 @@
 //! Digest turn production, bounded reuse, trigger envelopes and durable results.
 use super::*;
 
+#[cfg(test)]
 pub(crate) fn produce(
     c: &Config,
     cfg: &PlannerConfig,
@@ -10,6 +11,7 @@ pub(crate) fn produce(
 ) -> Result<Value> {
     produce_for(c, cfg, p, instruments, preview, None, None)
 }
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)] // Exact durable claim and cancellation accompany the immutable input snapshot.
 pub(crate) fn produce_for(
     c: &Config,
@@ -29,7 +31,6 @@ pub(crate) fn produce_for(
         claim,
         cancel,
         &millis,
-        None,
         None,
     )
 }
@@ -55,7 +56,6 @@ pub(crate) fn produce_with_backend(
         cancel,
         clock,
         Some(backend),
-        None,
     )
 }
 /// The only market-facing content a `tools_only` model receives: when, why and
@@ -121,7 +121,6 @@ pub(in crate::runtime) fn produce_clocked(
     cancel: Option<&std::sync::atomic::AtomicBool>,
     clock: &dyn Fn() -> i64,
     injected: Option<&mut dyn Backend>,
-    market_context: Option<&super::super::decision_evidence::Snapshot>,
 ) -> Result<Value> {
     let mut guard = CallGuard {
         cancel,
@@ -361,17 +360,7 @@ pub(in crate::runtime) fn produce_clocked(
         let evidence = backend.provenance();
         (result, evidence)
     } else {
-        let path = cfg
-            .model_config
-            .as_deref()
-            .or(digest_role.model_config.as_deref())
-            .ok_or("planner_model_config_required")?;
-        let mut backend = Subscription::new(path)
-            .with_alerts(c.alert_webhook_file.as_deref())
-            .with_context(market_context);
-        let result = ask(&mut backend);
-        let evidence = backend.provenance();
-        (result, evidence)
+        return Err("historical_model_reply_required".into());
     };
     // The full audit input is archived only after the provider result is known.
     // A failure before any provider turn keeps a bounded receipt and at most one
@@ -555,7 +544,7 @@ pub(in crate::runtime) fn call_time_input(
     if let Some(settings) = &cfg.discovery {
         input["discovery"] = super::super::discovery::snapshot(c, instruments, settings, clock())?;
     }
-    input["paper_mandate"] = json!({"paper_only":true,"capital":c.allocation()?,"objective":super::super::harness::objective_for(cfg),"risk_caps":"none","overnight_holds_allowed":true,"operator_context":cfg.operator_context,"initialization":"validated_universe_then_history_then_digest_then_orchestrator_then_fresh_quote_execution"});
+    input["paper_mandate"] = json!({"paper_only":true,"capital":c.allocation()?,"objective":super::super::harness::objective_for(cfg),"risk_caps":"none","overnight_holds_allowed":true,"operator_context":cfg.operator_context,"initialization":if cfg.uses_pi_paper() {"validated_universe_then_history_then_pi_decision_then_fresh_quote_execution"} else {"validated_universe_then_history_then_digest_then_orchestrator_then_fresh_quote_execution"}});
     input["paper_mandate"]["products"] = if c.nifty_options.enabled {
         json!(["cash_equity", "nifty_option_long"])
     } else {

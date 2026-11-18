@@ -2833,7 +2833,6 @@ fn pending_model_recovery_preserves_charges_and_busy_is_not_a_halt() {
     );
     assert!(!p.halted);
     drop(busy);
-    let mut worker = None;
     let mut settings = Some(cfg.clone());
     let mut settings_fallback = None;
     let mut settings_reason = None;
@@ -2842,7 +2841,6 @@ fn pending_model_recovery_preserves_charges_and_busy_is_not_a_halt() {
         &mut db,
         &c,
         &mut p,
-        &mut worker,
         &mut settings,
         &mut settings_fallback,
         &mut settings_reason,
@@ -3122,7 +3120,6 @@ fn live_config_mismatch_suspends_planner_without_halting_the_book() {
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
-    let mut worker = None;
     let mut current = Some(cfg.clone());
     let mut current_fallback = None;
     let mut current_reason = None;
@@ -3131,7 +3128,6 @@ fn live_config_mismatch_suspends_planner_without_halting_the_book() {
         &mut db,
         &c,
         &mut p,
-        &mut worker,
         &mut current,
         &mut current_fallback,
         &mut current_reason,
@@ -3170,7 +3166,7 @@ fn live_config_mismatch_suspends_planner_without_halting_the_book() {
     .unwrap();
     drop(db);
 
-    // A command that repoints the policy in memory (as `model select` does)
+    // Repointing the policy in memory
     // has that exact policy applied by the reviewed transition.
     let mut switched = cfg.clone();
     switched.shortlist_n += 1;
@@ -4889,7 +4885,6 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
             db.execute_batch("DROP TABLE planner_action;").unwrap();
         }
         if fault == "observer" {
-            let mut worker = None;
             let mut settings = Some(cfg.clone());
             let mut settings_fallback = None;
             let mut settings_reason = None;
@@ -4898,7 +4893,6 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
                 &mut db,
                 &c,
                 &mut p,
-                &mut worker,
                 &mut settings,
                 &mut settings_fallback,
                 &mut settings_reason,

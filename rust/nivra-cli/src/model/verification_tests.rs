@@ -1,6 +1,6 @@
 use super::*;
 #[test]
-fn provider_diagnostics_and_probe_are_bounded_and_redacted() {
+fn provider_diagnostics_are_bounded_and_redacted() {
     // SSE wire volume can exceed 1 MB while its single terminal snapshot
     // stays small. Delta traffic remains observable, not authority.
     use nivra_cli::native_transport::read_response_body;
@@ -453,9 +453,6 @@ fn provider_diagnostics_and_probe_are_bounded_and_redacted() {
     );
     assert!(check_http(201, b"", secret).is_ok());
     assert!(!safe_text("hello\u{1b}[31m world", secret, 80).contains('\u{1b}'));
-    use clap::ValueEnum;
-    assert!(Tool::from_str("x_search", false).is_ok());
-    assert!(Tool::from_str("web_search", false).is_ok());
     use nivra_cli::native_transport::context_headers;
     let context = "d01fb75e-9238-4b1a-88a4-11e2ca85c50e";
     assert!(
@@ -480,98 +477,14 @@ fn provider_diagnostics_and_probe_are_bounded_and_redacted() {
     ] {
         assert!(context_headers(Transport::DirectOauth, Some(invalid)).is_err());
     }
-    let plain = probe_body("fixture-model", Tool::None);
-    assert_eq!(plain["input"][0]["content"], "Reply with OK.");
-    assert_eq!(plain["stream"], true);
-    assert_eq!(plain["max_output_tokens"], 64);
-    assert!(plain.get("tools").is_none());
-    let mut hermes = probe_body_with_shape("grok-4.7", Tool::None, ProbeShape::HermesText);
-    assert_eq!(hermes["model"], "grok-4.7");
-    assert_eq!(hermes["max_output_tokens"], 64);
-    assert!(hermes.get("tools").is_none());
-    assert_eq!(hermes["instructions"], "You are a helpful assistant.");
-    assert_eq!(hermes["input"][0]["type"], "message");
-    hermes.as_object_mut().unwrap().remove("instructions");
-    hermes["input"][0].as_object_mut().unwrap().remove("type");
-    assert_eq!(hermes, probe_body("grok-4.7", Tool::None));
-
-    for (tool, name) in [(Tool::XSearch, "x_search"), (Tool::WebSearch, "web_search")] {
-        assert_eq!(
-            probe_body("fixture-model", tool)["tools"],
-            json!([{"type":name}])
-        );
-    }
-    let mut response = json!({"model":"provider-echo","output":[{"type":"message","content":[{"type":"output_text","text":format!("OK {secret} {}", "界 ".repeat(100))}]}]});
-    let report = probe_report(200, &serde_json::to_vec(&response).unwrap(), secret, 42).unwrap();
-    assert_eq!(report.as_object().unwrap().len(), 5);
-    assert_eq!(report["model"], "provider-echo");
-    let checked = checked_probe_report(
-        200,
-        &serde_json::to_vec(&response).unwrap(),
-        secret,
-        42,
-        "grok-4.7",
-    )
-    .unwrap();
-    assert_eq!(checked["model_matches_request"], false);
-    assert_eq!(checked["requested_model"], "grok-4.7");
-    assert_eq!(checked["model"], "provider-echo");
-    assert_eq!(checked["received_model_sha256"], hash(b"provider-echo"));
-    let mut long_model = response.clone();
-    let exact = "grok-fixture-model-with-a-long-version-id";
-    long_model["model"] = json!(exact);
-    assert_eq!(
-        probe_report(200, &serde_json::to_vec(&long_model).unwrap(), secret, 1).unwrap()["model"],
-        "[redacted]"
-    );
-    let matching = checked_probe_report(
-        200,
-        &serde_json::to_vec(&long_model).unwrap(),
-        secret,
-        1,
-        exact,
-    )
-    .unwrap();
-    assert_eq!(matching["model_matches_request"], true);
-    assert_eq!(matching["model"], "[redacted]");
-    let mut secret_model = response.clone();
-    secret_model["model"] = json!(secret);
-    let redacted = checked_probe_report(
-        200,
-        &serde_json::to_vec(&secret_model).unwrap(),
-        secret,
-        1,
-        secret,
-    )
-    .unwrap();
-    assert!(redacted["model_matches_request"].as_bool().unwrap());
-    assert!(!redacted.to_string().contains(secret));
-
-    assert_eq!(report["http_status"], 200);
-    assert_eq!(report["latency_ms"], 42);
-    assert_eq!(report["tool_call_made"], false);
-    assert_eq!(report["output_text"].as_str().unwrap().chars().count(), 80);
-    assert!(!report.to_string().contains(secret));
-    for kind in ["custom_tool_call", "web_search_call"] {
-        response["output"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({"type":kind}));
-        assert_eq!(
-            probe_report(200, &serde_json::to_vec(&response).unwrap(), secret, 1).unwrap()["tool_call_made"],
-            true
-        );
-    }
-    // Synthetic proxy SSE: terminal output (including tool evidence) is authoritative.
-    let mut snapshot = response.clone();
-    snapshot["status"] = json!("completed");
+    let snapshot =
+        json!({"model":"provider-echo","status":"completed","output":[{"type":"web_search_call"}]});
     let event = json!({"type":"response.completed","response":snapshot});
     let sse = format!(
         "event: response.created\r\ndata: {{\"type\":\"response.created\"}}\r\n\r\nevent: response.completed\r\ndata: {event}\r\n\r\ndata: [DONE]\r\n\r\n"
     );
-    let streamed = probe_report(200, sse.as_bytes(), secret, 42).unwrap();
-    assert_eq!(streamed["tool_call_made"], true);
-    assert!(!streamed.to_string().contains(secret));
+    let streamed = subscription_response(200, sse.as_bytes(), secret).unwrap();
+    assert_eq!(streamed["output"][0]["type"], "web_search_call");
     for broken in [
         "data: [DONE]\n\n".to_owned(),
         "data: {bad json}\n\n".to_owned(),
@@ -579,13 +492,13 @@ fn provider_diagnostics_and_probe_are_bounded_and_redacted() {
         format!("data: {event}\n\ndata: {event}\n\n"),
         "data: {\"type\":\"response.incomplete\"}\n\n".to_owned(),
     ] {
-        assert!(probe_report(200, broken.as_bytes(), secret, 0).is_err());
+        assert!(subscription_response(200, broken.as_bytes(), secret).is_err());
     }
     let failed = format!(
         "data: {}\n\n",
         json!({"type":"response.failed","response":{"error":{"message":format!("Denied {secret}")}}})
     );
-    let error = probe_report(200, failed.as_bytes(), secret, 0).unwrap_err();
+    let error = subscription_response(200, failed.as_bytes(), secret).unwrap_err();
     assert!(error.starts_with("model_http_200 Denied"));
     assert!(!error.contains(secret));
     assert_eq!(
@@ -685,67 +598,6 @@ fn provider_diagnostics_and_probe_are_bounded_and_redacted() {
         config(&openai_config).err().as_deref(),
         Some("openai_grant_path_required")
     );
-    let readiness_config = separated.path().join("readiness-model.json");
-    std::fs::write(
-        &readiness_config,
-        serde_json::to_vec(&json!({
-            "transport":"openai_codex","grant_file":openai_path
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(
-        readiness(
-            &readiness_config,
-            Transport::OpenaiCodex,
-            LUNA,
-            codex_at,
-            codex_at + chrono::Duration::minutes(30)
-        )
-        .unwrap()["status"],
-        "validated"
-    );
-    assert_eq!(
-        readiness(
-            &readiness_config,
-            Transport::OpenaiCodex,
-            LUNA,
-            codex_at,
-            codex_at + chrono::Duration::minutes(45)
-        )
-        .unwrap()["status"],
-        "validated",
-        "grant still covers a 45-minute work window"
-    );
-    assert_eq!(
-        readiness(
-            &readiness_config,
-            Transport::OpenaiCodex,
-            LUNA,
-            codex_at,
-            codex_at + chrono::Duration::minutes(46)
-        )
-        .unwrap()["status"],
-        "validated"
-    );
-    // Catalog membership is read-only and reports an unavailable precondition
-    // instead of opening a socket or printing a credential.
-    assert_eq!(
-        catalog_membership(&readiness_config, Transport::DirectOauth, LUNA)["reason"],
-        "model_transport_mismatch"
-    );
-    assert_eq!(
-        catalog_membership(&openai_config, Transport::OpenaiCodex, LUNA)["reason"],
-        "openai_grant_path_required"
-    );
-    assert_eq!(
-        catalog_membership(
-            &separated.path().join("missing-model.json"),
-            Transport::OpenaiCodex,
-            LUNA
-        )["reason"],
-        "model_config_unreadable"
-    );
     assert_eq!(
         nivra_cli::native_transport::subscription_headers("fixture-model", Some("1.0.13")).unwrap(),
         [
@@ -776,29 +628,6 @@ fn provider_diagnostics_and_probe_are_bounded_and_redacted() {
         );
     }
     assert!(serde_json::from_value::<Config>(json!({"conversation_id":context})).is_err());
-    let config: Config = serde_json::from_value(json!({})).unwrap();
-    assert_eq!(
-        probe(
-            &config,
-            "fixture-model",
-            Tool::None,
-            ProbeShape::Minimal,
-            Some("short".into())
-        )
-        .unwrap_err(),
-        "model_conversation_id_invalid"
-    );
-    assert_eq!(
-        probe(
-            &config,
-            "fixture-model",
-            Tool::None,
-            ProbeShape::Minimal,
-            None
-        )
-        .unwrap_err(),
-        "model_proxy_client_version_missing"
-    );
     assert!(serde_json::from_value::<Config>(json!({"proxy_client_version":13})).is_err());
     // Application-owned fixtures only: exclusive ownership, rotation, account
     // binding, omitted refresh preservation and durable ambiguous-failure fence.
@@ -968,12 +797,6 @@ fn provider_diagnostics_and_probe_are_bounded_and_redacted() {
         )
         .unwrap()["expires_at"],
         json!(at + chrono::Duration::seconds(1800))
-    );
-    assert!(probe_report(200, b"{}", secret, 0).is_err());
-    assert!(
-        probe_report(429, b"{}", secret, 0)
-            .unwrap_err()
-            .starts_with("model_http_429")
     );
     let now = chrono::DateTime::parse_from_rfc3339("2026-11-05T00:00:00Z")
         .unwrap()

@@ -69,16 +69,6 @@ enum Command {
         #[command(subcommand)]
         command: runtime::planner::Command,
     },
-    /// Independent xAI subscription setup; never starts trading.
-    Model {
-        #[command(subcommand)]
-        command: model::Command,
-    },
-    /// Operator CLI for the one decision owner; never starts trading.
-    Agent {
-        #[command(subcommand)]
-        command: runtime::model_selection::Commands,
-    },
     /// Manage dashboard authentication token; never starts trading.
     DashboardToken {
         #[command(subcommand)]
@@ -107,7 +97,7 @@ enum Command {
         #[arg(long)]
         events: PathBuf,
     },
-    /// Offline scanner/Luna/Grok paper replay with explicit recorded model replies.
+    /// Offline recorded-reply paper replay through the retained planner backend; never starts pi.
     PaperReplay {
         #[arg(long)]
         manifest: PathBuf,
@@ -566,8 +556,6 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::Model { command } => model::entry(command),
-        Command::Agent { command } => runtime::model_selection::run(command),
         Command::Planner { command } => runtime::planner::entry(command),
         Command::Alert {
             config,

@@ -1,295 +1,161 @@
 # Model harness
 
-Paper only. Model text proposes actions/evidence; deterministic code owns
-credentials, execution and financial validation. Configuration or a completed
-provider response alone never establishes a fill.
+Paper only. Pi owns the paper decision, research and review turns: it runs the
+provider call, conversation session, tool loop, compaction and usage report. Rust
+builds each factual brief, publishes the lane's tools, schedules turns, validates
+the returned TradePlan and commits paper fills through the unchanged deterministic
+gates. See [pi agent lanes](AGENT.md) for the service, settings and verification
+commands.
 
-| Role | Exact model / transport | Tools and output |
+| Lane | Exact model / transport | Tools and output |
 | --- | --- | --- |
-| Digest | Configured `digest` profile (normally `gpt-6-luna` / `openai_codex`) | Current factual evidence, coverage, gaps and provenance; no trade decision or veto |
-| Orchestrator | Reviewed configured model/transport profile | Persistent paper action, size, holding and exit decisions; research and registered workers |
+| Decision | Reviewed `planner.agent.lanes.decision` provider/model spec | Rust brief, read-only evidence tools and `plan`; selects paper action, size and holding period |
+| Research | Reviewed `planner.agent.lanes.research` provider/model spec | Read-only evidence, workspace write/run, registered analysis and candidate tools; answers the decision lane's research requests |
+| Review | Reviewed `planner.agent.lanes.review` provider/model spec | Read-only evidence; one redacted review after the session seal, carried as next-session memory |
 
-The opt-in [pi agent lanes](AGENT.md) run decision, research and review turns
-on pi with the same tool executors; without `planner.agent` nothing here changes.
+Each configured lane needs a reviewed provider/model spec, positive daily call and
+cost budgets, a turn timeout and a tool-call bound. Pi reads the application's own
+`auth.json` and `models.json` from its configured agent directory; Rust starts it
+as a subprocess with an explicit environment allowlist and never reads those files.
 
-Standing prompts combine the host objective with `data_owner.md` for Luna and
-`orchestrator.md` for the owner, subject to explicit reviewed prompt overrides.
-Evidence, search and prior output are lower-trust content. The objective retains
-the paper account, fees, overnight holdings and no added trading risk caps.
-Older usage journals with `decide-` records still decode, so original usage
-evidence stays valid.
+## Retained legacy planner
 
-## Fresh evidence and owner decisions
+The earlier two-role Rust harness is not on the live path. A pi paper planner
+refuses an enabled `digest`, an enabled `orchestrator`, a `model_config` or
+`approval_auto_renew` with `pi_paper_legacy_model_config_refused`, and the running
+controller refuses a policy without `agent.mode: "paper"` with
+`pi_paper_planner_required`. The retained backend still produces digest turns for
+offline `nivra paper-replay`; original archived journals, usage receipts,
+transcripts, prompts and supervisor projections remain readable.
 
-An eligible scan or held-position event schedules factual compilation. With
-`planner.context.mode:"tools_only"`, Luna receives a bounded trigger envelope and
-fetches facts through configured tools. Usable completed facts enqueue a durable
-owner decision event. Luna cannot request, veto, size or choose that action.
-The persistent orchestrator selects paper actions and research; deterministic
-execution rechecks the original financial receipt, identity, cash and fees.
-No usable evidence means no model call. Material held-position work retains
-precedence over cadence; unchanged facts coalesce without inventing evidence.
+| Retained role | Original binding | Retained use |
+| --- | --- | --- |
+| Digest (formerly Luna) | `digest` role | Offline recorded-reply replay and archived digest evidence |
+| Owner decision (formerly persistent orchestrator) | `orchestrator.model`, `model_profiles` | Archived plan-head projection and earlier admission evidence |
+
+Historical usage journals still decode (`decide-` reservations included), and the
+read-only dashboard still projects the earlier supervisor/research records. No
+live model turn uses them. The retained role mechanics are described below with
+their historical status made explicit.
+
+## How the decision lane is woken
+
+Rust's trigger engine observes each scan cycle. A fill, position risk, a
+persistent top-ranked candidate, an hourly schedule turn or the pre-close minute
+wakes the decision lane; triggers that arrive while a turn runs merge into the
+next batch under the highest-priority kind. Rust builds the brief from frozen
+controller evidence and publishes only the tools the lane may call. Only a
+completed turn whose final plan passed validation can reach the paper plan head;
+an abstention is an empty action list. No eligible evidence means no model call.
+A due turn is skipped, never invented, when the lane is unconfigured, its budget
+is exhausted or the book is not trading.
+
+A pi research lane serves the decision lane's `research` requests; completed
+answers are delivered in a later decision brief and marked delivered once that
+turn is durable. A pi review lane runs once after the seal and its redacted text
+becomes the review memory the next session's briefs carry. Registered analysis
+jobs, the workspace and the strategy sandbox are separate research evidence; they
+never place, size or promote a paper trade.
 
 The `planner-harness-v3` audit label and older projection records remain readable.
 
-The default operator prompt path is a complete `prompts/` directory beside the
-planner JSON. Releases carry the prompt set as `default-prompts.json` with its
-own SHA-256 asset; the updater retains both verified files in the immutable
-release directory and never writes the planner's policy inputs. For an existing
-book, an operator reviews and copies the prompt files beside the planner JSON,
-then applies them with the existing suspend and reviewed `config-apply` flow.
-For fresh installations, use the Rust `setup` workflow. Existing prompt
-directories remain operator-owned policy inputs.
-Content hashes bind these files into sealed policy; path-only relocation
-preserves the hash. An absent directory keeps embedded defaults for compatibility; a present
-but incomplete, unreadable, empty, oversized or invalid directory refuses
-configuration loading. Owner policy selects the factual `data_owner.md` and
-persistent `orchestrator.md`. Changes use suspend and reviewed `config-apply`,
-then audited resume; default files never silently swap during a turn. See
-[operations](OPERATIONS.md#default-prompt-files).
+Pi reads each lane's standing prompt from `agent/prompts/<lane>.md` in the built
+agent package, or from the directory in `planner.agent.prompts`. Rust hands pi the
+brief and trigger; the agent reports the prompt's SHA-256 with each turn. The
+earlier planner's `prompts/` directory, content hashes and embedded default
+prompts are retained only for offline replay and archived-policy evidence; a pi
+paper planner does not load a sibling `prompts/` directory.
 
-An optional `planner.experiment_profile` file can replace prompt text and tighten
-tool and role tunables without a release. It is excluded from the
-trading-policy hash. The controller reloads it only when no digest is in
-flight. An invalid profile keeps the previous one, logs
-`experiment_profile_rejected`, and does not halt. A valid change writes
-`experiment_profile_applied` and alerts once. Check a file with
+An optional `planner.experiment_profile` can replace the retained legacy prompt
+text and tighten tool and role tunables without a release. It is excluded from the
+trading-policy hash but is recorded in a pi decision's claim and plan head, so a
+change between reservation and commit refuses that plan. An invalid profile keeps
+the previous one, logs `experiment_profile_rejected`, and does not halt. A valid
+change writes `experiment_profile_applied` and alerts once. Check a file with
 `nivra planner profile-check`.
 
-Luna returns factual held-position observations, coverage and gaps using the
-owner digest schema. The persistent owner makes hold, trim and exit decisions.
+`planner.exit_policy` is frozen trading policy and applies to pi plan actions.
+`target` and `time` default to `review`: crossing them raises `held_exit_review`
+and does not sell. `stop` defaults to `execute`. `on_halt` defaults to `freeze`,
+which blocks new buys and model calls but does not liquidate; an executing stop
+stays armed. Absent `exit_policy` keeps the previous execute-on-intent and
+liquidate-on-halt behaviour. The decision lane may submit `revise_exit` to update
+a held intent without a trade.
 
-`planner.exit_policy` is frozen trading policy. `target` and `time` default to
-`review`: crossing them raises `held_exit_review` and does not sell. `stop`
-defaults to `execute`. `on_halt` defaults to `freeze`, which blocks new buys and
-model calls but does not liquidate; an executing stop stays armed. Absent
-`exit_policy` keeps the previous execute-on-intent and liquidate-on-halt
-behaviour. The owner may send `revise_exit` to update a held intent without a trade.
+## Historical: persistent supervisor
 
-`orchestrator.triggers.supervisor` is the persistent decision owner. Its eligible
-wakes include owner digest events, session boundaries, portfolio changes and
-configured operator instructions. A failed provider turn creates no financial
-action. Advisory directives and Luna wake requests remain bounded and audited;
-only an owner action admitted through the existing executor can alter the book.
+The earlier planner ran one persistent supervisor session per trading day with
+its own session log, notes, seed, compaction, aside questions and wake triggers.
+None of that runs on the live pi path: pi owns each lane's session, compaction and
+turn state. The artifacts (`model/supervisor-state.json`,
+`model/session/<date>/`, `seed.json`, failure records) remain readable archive
+evidence and are never rewritten or replayed, and the read-only dashboard
+operational-health projection still reads them without writing. The historical
+sections below retain their detailed mechanics for archive interpretation; the
+plan-head authority section that follows is current.
 
-The experiment profile can set `supervisor.run_first` (`on_session_start`,
-`on_resume`, `on_change`, `hold_luna_ms`) and `supervisor.change_min_gap_ms`.
-When enabled, the supervisor runs before Luna's first digest at session start or
-resume and once per distinct applied `(version, profile_sha256, prompt hashes,
-configuration hash)` tuple. Luna is held only while that run is in flight, and
-only until `hold_luna_ms` (default 120 s) expires; a failed or slow supervisor
-fails open and Luna proceeds. `change_min_gap_ms` (default 10 min) coalesces a
-burst of changes into one wake, and the supervisor's own directives or profile
-writes never count as changes.
+### Plan-head and ledger authority
 
-Supervisor state (`model/supervisor-state.json`) is read and written in one
-locked load-modify-save section, preserving counters across worker/controller updates. An unreadable or corrupt
-state file is refused (the supervisor records `model/supervisor-error.json` and
-skips) rather than silently starting a fresh session. State files written by
-older releases still load; their removed counter fields are ignored. Empty output, a
-failed provider call or a failed instruction-store write is a failed run: it
-increments the failure streak, writes `model/supervisor-failure.json` and emits
-the `supervisor_failure` alert. The recorded reason keeps the bounded underlying
-code (for example `supervisor_model_body_invalid` or
-`supervisor_budget_exhausted`) instead of the generic `supervisor_call_failed`;
-HTTP failures retain only their bounded status code (for example
-`supervisor_model_http_429`), with provider body text omitted. For model inference,
-HTTP 429 retries honor a valid `Retry-After` value or use bounded exponential
-backoff, with at most three retries inside the original call deadline. A
-malformed or incomplete response body gets one bounded retry inside the same
-deadline; schema, authority, credential and deadline failures are never retried.
-No failure triggers a silent fallback; only the reviewed
-[explicit limit fallback](OPERATIONS.md#explicit-limit-fallback) may switch one
-eligible call, with stage-bounded eligibility and no alias or foreign-cache
-substitute. Supervisor
-turn failures retry only on the next eligible wake; unknown provider text is still replaced.
-Dropped or stale `model/supervisor-wake.json` requests are logged.
+The book has one durable plan-head authority. A pi paper planner initializes it
+with the current policy: `enabled`, `model_led` not `false` and a decision lane.
+A book whose durable authority was written by the earlier orchestrator refuses
+with `decision_owner_migration_required` until the reviewed `config-apply`
+transition records the pi owner. The planner config has no `decision_owner`,
+`decide` or `handoff_gate` key, and `deny_unknown_fields` refuses a file that
+still carries one.
 
-A `planner_budget_exhausted` result parks the supervisor: `model/supervisor-state.json`
-records `parked` with the reason, time and configured allowance. Later ticks record
-one deduplicated `supervisor_parked_budget` skip and start no model turn. Recovery
-requires a reviewed configured allowance increase and intact usage evidence showing
-that the allowance now exceeds the successful (charged) supervisor usage. Failed
-provider/transport/interrupted attempts remain recorded for audit but do not consume
-the allowance. Recovery clears only the park flag; it never resets cooldowns or
-refunds, deletes or rewrites usage reservations. If usage evidence is unavailable or
-the increased allowance still does not exceed charged usage, the supervisor stays
-parked. The next trading session starts from fresh supervisor state. Existing parked
-records without a stored allowance baseline stay parked for that session. Host protection,
-execution and the trading loop continue while parked; terminal books are not
-resumed or unhalted.
+To review a policy without applying it, run
+`nivra planner config-check --planner FILE --session DATE`. It reports the policy
+hash and the resolved `agent` lanes, refuses a policy with missing pi
+prerequisites, and never writes a policy.
 
-The read-only operational projection (`view.operational_health.supervisor`) uses
-the same durable state without writing it: a bounded 64 KiB read of
-`model/supervisor-state.json`, a checked bounded read of the pending session-log
-turn (64 MiB cap, no follow, no repair/truncate on read) and the existing
-provider-usage projection. `config` is `configured`, `unavailable` or
-`not_configured`; a configured policy that failed to load or whose
-usage/authority projection failed is `unknown`, not `disabled` (`config_reason`
-matches the planner status, for example
-`planner_usage_unavailable_recovery_required`), and static caps remain visible
-when the original policy is available. `pending_source` distinguishes
-`missing`/`no_pending` from `corrupt`/`incomplete`/`unreadable`/`oversize`/
-`non_regular`/`symlink`; a real checked pending turn is still exposed separately
-as evidence. It reports `unknown` with an explicit `state` source for missing,
-malformed, oversized, unreadable or other-session state, and keeps
-`budget.exhausted`/`backoff.active` null unless the present current-session state
-records the fact. Static reason allowlists replace unknown text; raw prompts,
-transcripts and provider errors are never exposed. It reports only the
-current-session context-exhaustion backoff that the code actually enforces, not a
-general failure backoff, guessed next-retry time or progress estimate. This
-projection starts no model call, probe, network request, queue or journal.
+Installing a release does not rewrite a planner config or qualify host operation.
+A pi decision claim binds the policy, profile, model/provider, portfolio revision,
+instrument revision and input hash before the turn runs. Plan-head activation and
+its SQLite receipt share one transaction, and recovery reconstructs the session
+result from that receipt. A restart that finds a running decision without a
+committed receipt refuses the work as `owner_decision_interrupted` and records the
+session result; it never resends an ambiguous request. A committed plan is
+projected from its receipt without another model call.
 
-### Owner policy and ledger authority
-
-The persistent orchestrator is the only decision owner. The planner config has
-no `decision_owner`, `decide` or `handoff_gate` key, and `deny_unknown_fields`
-refuses a file that still carries one. An enabled policy requires an enabled
-orchestrator with an enabled supervisor trigger and model, an enabled digest and
-enabled events. A missing prerequisite refuses at load with its specific code:
-`decision_owner_supervisor_required`, `decision_owner_supervisor_model_required`,
-`decision_owner_digest_required` or `decision_owner_events_required`. To review a
-policy without applying it, run
-`nivra planner config-check --planner FILE --session DATE`. It reports the
-policy hash, refuses a missing prerequisite and never writes a policy.
-
-Installing a release does not rewrite a planner config or qualify host
-operation. Eligible digest events are factual inputs only. Event settlement
-writes the deferred digest attempt and a durable SQLite queue entry in one
-transaction; the queue pins the original attempt bytes by digest and hash. A
-persistent supervisor decision turn binds that digest to the portfolio,
-policy, profile, model and session revisions. Plan-head activation and its
-SQLite receipt share one transaction, and recovery can reconstruct the session
-result from that receipt. The decision turn carries its own bounded execution
-deadline instead of inheriting the digest attempt's deadline. Fixture buy,
-hold, exit-revision and sell plans hydrate from the activated owner plan head
-and use the existing fresh-quote, cash, fee and protection paths unchanged.
-
-The A2 owner compiler builds the owner digest content on top of the durable
-queue. The owner prompt compiles coverage and gaps, changed prospects, active
-and candidate rankings with provenance, completed-bar and relative-return
-context, spread and depth, holdings, cash, fees, recent actions and registered
-experiment results. The harness validates this owner-only schema, bounds every
-row and text field, allowlists instrument keys against the bundle, requires one
-holding per held key with matching units, sanitizes top-level and nested
-evidence IDs, and rejects fabricated thesis fields. Invalid or duplicate
-advisory ranking rows are dropped with a static warning instead of discarding
-the whole factual digest; every hard bound, allowlist and authority check
-remains. Owner eligibility means validated current usable evidence: a held book
-or fresh discovery evidence. `complete:false` is reserved for the host deadline
-fallback and never becomes work. An empty or unusable feed starts no digest
-call.
-
-With `discovery.digest_cadence_ms` (default 60 s, range 1–3600 s), `reserve`
-admits a `recheck` event with reason `digest_cadence` only after the configured
-gap since the last admitted digest and only when no material event is due.
-Material and held-position events win. The host stores a canonical facts
-signature in owner work; an eligible cadence digest with an unchanged signature
-does not wake the orchestrator, while a material event always does. A cadence
-digest never supersedes pending material work, and an ineligible digest never
-supersedes any pending work. A digest run deadline records an incomplete fallback
-but creates no owner work and no decision.
-
-The controller requires durable ledger authority initialized by the exact
-current policy. If the policy's config hash differs from the durable authority,
-startup refuses with `decision_owner_migration_required` instead of rewriting the
-authority; host protection continues. To change the policy, write the new
-planner config while stopped, check it with `planner config-check`, then run
-`config-apply --confirm-paper-review` and `resume`. Rollback is the same
-reviewed transition using the predecessor planner file. A halted book cannot run
+The controller requires durable ledger authority initialized by the exact current
+policy. If the policy's config hash differs from the durable authority, startup
+refuses with `decision_owner_migration_required` instead of rewriting the
+authority; host protection continues. To change the policy, write the new planner
+config while stopped, check it with `planner config-check`, then run
+`config-apply --confirm-paper-review` and `resume`. Rollback is the same reviewed
+transition using the predecessor planner file. A halted book cannot run
 `config-apply` and stays archive-only. A stopped book that is not halted uses
 `config-apply`.
 
-Every new authority writes its orchestrator owner marker in the same
-transaction. A missing, malformed, foreign-owner (including a stored `legacy`
-owner) or stale marker refuses as `planner_authority_owner_missing`,
-`planner_authority_owner_invalid` or `planner_authority_owner_mismatch`. No
-command reconstructs it, and such a book stays archive-only. Startup preserves
-the original active head and any stronger sticky data, news or configuration
-block; a pending claim is marked interrupted without replacing that block or
-clearing the head. Every recovery mode shares one typed block gate. Data and
-news blocks need the ordinary input proof, a configuration block is resolved by
-the exact policy rebind, and protection-only or closed recovery keeps a data or
-news block because no new decision can execute. `planner-recover` refuses a
-policy without enabled events as `planner_recover_events_disabled`. A restart
-that finds a running decision turn without a committed receipt refuses the work
-as `owner_decision_interrupted` and records the session result; it never resends
-an ambiguous model request. A committed plan is projected from its receipt
-without a second model call.
+Every new authority writes its owner marker in the same transaction. A missing,
+malformed, foreign-owner (including a stored `legacy` owner) or stale marker
+refuses as `planner_authority_owner_missing`, `planner_authority_owner_invalid` or
+`planner_authority_owner_mismatch`. No command reconstructs it, and such a book
+stays archive-only. Startup preserves the original active head and any stronger
+sticky data, news or configuration block; a pending claim is marked interrupted
+without replacing that block or clearing the head.
 
-### Orchestrator model selection
+### Historical orchestrator model selections
 
-`orchestrator.model_profiles` binds an exact, reviewed profile name to
-`model_id`, `transport` and an absolute application-owned `model_config` path;
-`orchestrator.admitted_models` lists the profile names
-the policy permits selecting. `default` is the configured `orchestrator.model`
-and is always available. Both fields are optional and omitted when empty, so
-existing policy bytes and hashes are unchanged until an operator applies a
-reviewed config that adds them.
+The earlier planner used `orchestrator.model_profiles` and
+`orchestrator.admitted_models` to bind reviewed profile names to model IDs,
+transports, and application-owned credential paths. The `default` profile
+referred to the configured `orchestrator.model`.
 
-`model/model-selection.json` is a versioned, session-bound runtime setting. It
-records the active revision, one pending revision and a bounded receipt history
-with the policy hash, model identity and credential hash (never credential
-contents). `nivra agent model show --config PAPER_CONFIG --json` reports the
-configured model, admitted profiles, active and pending revisions, and the last
-receipt. `nivra agent model set --config PAPER_CONFIG --model NAME --json`
-validates the profile against the current policy, then writes a durable pending
-revision; `--expect-revision` and a lock serialize concurrent edits.
-`nivra agent model reload --config PAPER_CONFIG --selection-config FILE --json`
-reads a bounded version 1 JSON selection file containing only `version` and
-`profile`, then follows that same validation and receipt path. It supports the
-same revision and request-ID guards. The separate selection file does not alter
-the sealed paper/planner policy or admit additional profiles; edits require an
-explicit reload.
+`model/model-selection.json` preserves the session's active and pending
+revisions. Its receipts record the policy hash, model identity, and credential
+path hash. A new session started with the configured default. For the pi
+model bindings, see the [pi lane configuration](AGENT.md#prepare-and-verify).
 
-The controller promotes a pending revision only at an idle turn boundary, after
-the current turn and its action receipts are settled, and only when no pending
-turn remains. The next turn records the revision, profile, model ID, transport,
-credential hash and policy hash in its request facts; running workers keep the
-model they started with. A pending revision that the current policy no longer
-admits or binds exactly is refused (`model_selection_policy_changed`), the last
-valid active model is retained, and the receipt records the reason. A resume of
-a turn whose recorded revision no longer matches is refused and remains explicit
-rather than replaying under another model. Selection never resets the session,
-the usage namespace or charged usage; provider entitlement, approval and
-structured output are still checked by the existing per-call admission. A
-selection file is scoped to one session/book binding; a new trading session
-starts with the configured `default` model.
+### Historical operator questions and owner instructions
 
-A persistent policy-level switch is a different operation. `nivra model
-select --role orchestrator|digest` rewrites only that role's model identity in a
-new planner config and adopts it through the reviewed `config-apply` transition,
-so the next session starts on the new model. It can only choose an already
-declared and admitted profile (or `default`), refuses while a paper session is
-open and without an authenticated target grant, and records the switch on the
-audited config transition. See
-[operations](OPERATIONS.md#selecting-a-role-model-from-the-cli). The per-turn
-`agent model set` selection above never changes the configured policy.
+The earlier planner used `model/agent-requests.json` to record request IDs,
+expiry, and outcomes. Its aside replies are archived in `aside-reply.json`
+under the session. Owner instructions remain in `model/directives.ndjson`
+with their original session, revision, and expiry.
 
-### Local operator questions and owner instructions
-
-`nivra agent ask` writes only the controller's existing read-only
-`aside-request.json`; the controller answers it with its read-only aside
-instance and publishes `aside-reply.json`. The CLI never wakes the controller
-and never writes a book, journal, note or directive from `ask`. A bounded
-`model/agent-requests.json` index persists the request id, idempotency key,
-session, expiry and terminal answer or failure. `nivra agent result` polls
-that index and the external aside files by id; it never resubmits. A started
-aside also writes `aside-start.json` so `queued` and `running` remain distinct.
-`cancel` removes only a matching aside request, never the controller or session.
-
-`nivra agent instruct` appends a typed owner directive to the existing
-`model/directives.ndjson` store with target `owner`, an authorization scope of
-`review_only` or `decision_context`, an exact expected session and instruction
-revision, and a bounded expiry. The decision owner sees it through the existing
-active-directive envelope of its decision turn as context. It is never a tool, order, financial write or execution
-authority; the execution path does not read this store. A changed session or
-revision is a durable `refused` receipt and writes no directive. Cancelling an
-applied instruction appends its supersede record.
-Status and results are CLI evidence only: an acknowledgement is never an
-application, trade or fill.
-
-`orchestrator.system_prompt` supplies the standing instructions actually sent
+That planner's `orchestrator.system_prompt` supplied the standing instructions actually sent
 to supervisor and lifecycle model calls, with the host-owned objective prepended.
 Its precedence is explicit `orchestrator.system_prompt`, then the experiment
 profile's supervisor prompt, then the compiled supervisor default. If the
@@ -306,7 +172,13 @@ in the planner policy hash, so a live edit follows the existing suspend and
 `config-apply` path instead of halting the book. Absent fields are omitted from
 serialization, so existing configuration bytes and hashes are unchanged.
 
-The supervisor runs as one persistent session per trading day, not unrelated
+### Historical: supervisor session, owner tasks and notes
+
+The following described the earlier persistent Rust supervisor and its owner
+tasks. None of it runs on the live pi path; original artifacts remain readable and
+are never rewritten or replayed.
+
+The supervisor ran as one persistent session per trading day, not unrelated
 one-shot calls. `model/session/<date>/log.bin` is an append-only, length-framed
 and SHA-256-checked log: a turn record is durable before the provider call and
 exactly one result follows it. The reader stops at the last complete frame, so a
@@ -410,7 +282,7 @@ capped `owner_tasks.research.lane` profile (`research_lane_required` otherwise):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `model_id` | absent | Optional provider-listed model; absent uses the active `model select` profile |
+| `model_id` | absent | Optional provider-listed model. Omit to use the orchestrator's active profile. |
 | `max_tool_turns` | 8 | Tool turns inside one research call |
 | `timeout_ms` | 600000 | Wall limit for one research turn (also bounded by the cutoff) |
 | `max_turns_per_session` | 6 | Research turns per session |
@@ -647,94 +519,85 @@ explicit; daily bars never become live quotes.
 
 ## Tool boundary
 
-- `read_evidence({"evidence_id":...})`: fixed bundle/portfolio/shortlist/fees/
-  session_evidence sections, no paths/URLs/query language. Bundle and shortlist
-  reads expose compact shortlist rows plus original count/hash and explicit
-  detail/row omissions. Fetch full feature details by instrument key.
-- `get_market_snapshot({"instrument_keys":[...]})` and
-  `get_instrument_features({"instrument_keys":[...]})`: up to 20 unique allowlisted
-  keys, including names outside the shortlist. Duplicate keys are folded in
-  first-seen order; empty and over-max lists stay invalid. OpenAI strict schemas
-  omit `uniqueItems`. Quotes use the application's own data credential and
-  original shared quota; feature reads preserve dates/gaps.
-- `get_scanner_prospects({"limit":...,"sort":...})`: call-time scanner rows with
-  sampled and market-relative moves, bid/ask depth, ages and trigger reason.
-- `rank_universe({"sort_by":...,"order":...,"limit":...,"min_liquidity":...})`:
-  compact rows over the full validated allowlist with explicit missing/stale
-  history. The requested row limit also bounds the missing-history diagnostic
-  sample. Exact `unavailable_count` and `unavailable_reasons` cover the full
-  universe; `unavailable_truncated` and `rows_truncated` identify omitted rows.
-  The response remains within the existing 64,000-byte tool limit, including
-  when a frozen universe has thousands of missing histories. A truncated list
-  is not complete evidence; request features for specific keys when needed.
-  `get_portfolio`, `get_recent_decisions` and `get_session_status` expose
-  current cash/holdings/exit intents, bounded prior Luna/Grok/advisory memory and
-  clock/phase/budget/trigger facts.
-- `web_search` / `x_search`: configured Grok provider-native tools, no local shell
-  or browser. Archive actual provider receipts/citations; entitlement is separate.
-- `web_search`, `web_fetch` and `news_lookup`: opt-in host tools for the
-  persistent owner, configured under `planner.web_tools` and never
-  compiled in. `web_search` calls the reviewed provider endpoint
-  (`searxng` or `brave`), `web_fetch` reads one public HTTPS URL as bounded
-  text, and `news_lookup` reads the reviewed free RSS/Atom announcement feeds.
-  Private, loopback, credential-bearing and redirecting URLs are refused; no
-  local shell, browser, broker credential or order path is reachable. Calls are
-  bounded by the configured per-run budget, minimum spacing, timeout and byte
-  caps, and each call is appended to the session's `model/web-tools.ndjson`
-  record with its query or URL, latency, bytes and outcome. Results are
-  untrusted public evidence, never official filings, quotes, fills or execution
-  authority.
+Pi lane tools are published from the existing Rust executors in
+`runtime/agent/tools.rs`; the pi-facing name is given first.
+
+- `evidence({"evidence_id":...})` (Rust `read_evidence`): fixed
+  bundle/portfolio/shortlist/fees/session_evidence sections, no paths/URLs/query
+  language. Bundle and shortlist reads expose compact shortlist rows plus original
+  count/hash and explicit detail/row omissions. Fetch full feature details by
+  instrument key.
+- `snapshot({"instrument_keys":[...]})` and `features({"instrument_keys":[...]})`:
+  up to 20 unique allowlisted keys, including names outside the shortlist.
+  Duplicate keys are folded in first-seen order; empty and over-max lists stay
+  invalid. Provider strict schemas omit `uniqueItems`. Quotes use the
+  application's own data credential and original shared quota; feature reads
+  preserve dates/gaps.
+- `prospects({"limit":...,"sort":...})`: call-time scanner rows with sampled and
+  market-relative moves, bid/ask depth, ages and trigger reason.
+- `rank({"sort_by":...,"order":...,"limit":...,"min_liquidity":...})`: compact rows
+  over the full validated allowlist with explicit missing/stale history. The
+  requested row limit also bounds the missing-history diagnostic sample. Exact
+  `unavailable_count` and `unavailable_reasons` cover the full universe;
+  `unavailable_truncated` and `rows_truncated` identify omitted rows. The response
+  remains within the existing 64,000-byte tool limit, including when a frozen
+  universe has thousands of missing histories. A truncated list is not complete
+  evidence; request features for specific keys when needed.
+- `portfolio`, `decisions` and `session`: current cash/holdings/exit intents,
+  bounded prior decision memory and clock/phase/budget/trigger facts.
+- `plan`: decision lane only. Submits this turn's paper TradePlan; the host
+  validates identity, allowlist, cash, fees, sizes and exits and returns per-action
+  verdicts. It never places an order, and a validated plan is a proposal.
+- `research`, `research_status`, `research_result` and `research_cancel`: the
+  durable research request queue. Only the decision lane may queue a research
+  request; a research turn may not queue research for itself.
+- `analysis`, `run`, `backtest`/`backtest_status`/`backtest_result`/
+  `backtest_cancel`, `quotes`, `list`/`read`/`write`/`install`: registered
+  analysis, the bounded workspace sandbox and retained research evidence. All
+  results are advisory and never place, size or promote a paper trade.
+- `search`, `fetch` and `news`: opt-in host tools configured under
+  `planner.web_tools`, never compiled in. `search` calls the reviewed provider
+  endpoint (`searxng` or `brave`), `fetch` reads one public HTTPS URL as bounded
+  text, and `news` reads the reviewed free RSS/Atom announcement feeds. Private,
+  loopback, credential-bearing and redirecting URLs are refused; no local shell,
+  browser, broker credential or order path is reachable. Calls are bounded by the
+  configured per-run budget, minimum spacing, timeout and byte caps, and each call
+  is appended to the session's `model/web-tools.ndjson` record with its query or
+  URL, latency, bytes and outcome. Results are untrusted public evidence, never
+  official filings, quotes, fills or execution authority.
 
 Strict argument schemas, unique call IDs and whole-batch validation apply before
 any local dispatch.
 
 An oversized result becomes an explicit `unavailable_no_retry` tool failure with
-original byte count/hash and the existing output limit. It contributes no successful
-observation. Read requests may be narrowed using a new call within the same turn,
-read and allowance bounds; effectful calls must not be replayed. Original full
-input/quote artifacts and existing failed records remain preserved.
+original byte count/hash and the existing output limit. It contributes no
+successful observation. Read requests may be narrowed using a new call within the
+same turn, read and allowance bounds; effectful calls must not be replayed.
+Original full input/quote artifacts and existing failed records remain preserved.
 
-Factual digest work may overlap the persistent owner and does not supersede an
-owned plan or its action receipts. Only a replacement validated owner decision
-supersedes those actions. An in-flight owner result may commit its receipt while
-the exact transient-read block is present, but that block remains and execution
-stays suspended until the existing validated-fresh-quote recovery gate clears it.
-Sticky data/config/operator blocks and stopped/halted/closed books still refuse;
-pending digest claims and their charges remain intact. A factual digest result
-stays attempt evidence and never replaces the committed owner plan head; only an
-owner plan whose decision id carries the `owner-` prefix is an executable
-decision.
+Every lane turn's tool calls and results are archived under
+`model/agent/turns/<turn-id>/`, and a failed tool call keeps its bounded reason.
+Per-tool bounds are `planner.tools.scanner_limit` (40), `ranking_limit` (50),
+`history_limit` (5) and `max_instrument_keys` (20); defaults are omitted from
+policy serialization. No tool grants orders, credential access, service control
+or strategy promotion.
 
-Original durable digest plans include complete-universe evidence and use the same
-8,000,000-byte bound for loading and strict JSON decoding. Their original raw
-hash, book/policy/profile/portfolio/attempt identities and eligibility still gate
-owner admission. This is separate from the smaller provider-response bound.
-
-Responses SSE consumption validates each frame, forwards original chunks to the
-unvalidated display observer, and retains only terminal/failure evidence. Each
-frame and the retained result stay within the existing 1,000,000-byte response
-bound; total stream traffic is bounded at 8,000,000 bytes under the original HTTP
-deadline. Repeated deltas do not accumulate into the terminal response. Duplicate
-completion, malformed JSON, incomplete/failed events and truncated tails refuse;
-a JSON snapshot returned for a streaming request retains the ordinary 1 MB limit.
-Every call-time result carries `execution_authorized:false`, explicit unknown or
-missing-data status, and is archived as `tool-<id>.result.json`. Per-tool bounds
-are `planner.tools.scanner_limit` (40), `ranking_limit` (50), `history_limit` (5)
-and `max_instrument_keys` (20); defaults are omitted from policy serialization.
-No tool grants orders, credential access, service control or strategy promotion.
+Archived digest results and earlier owner plans remain attempt evidence; only a
+plan activated through the current plan-head authority is executable.
 
 ## Opt-in intraday decision evidence
 
 The planner's optional `decision_evidence` object enables the read-only
-`get_intraday_context({"instrument_keys":[...]})` tool for digest turns. The
+`intraday` (`get_intraday_context`) tool for lane turns with
+`{"instrument_keys":[...]}`. The
 complete defaults are in the
 [configuration fragment](../packaging/rust/decision-evidence.fragment.json).
 Omitting the object keeps the tool definitions and policy bytes unchanged. The
 settings enter the reviewed policy; installing the binary alone does not enable
 this change on an existing book.
 
-The event controller freezes context from its existing scanner and minute price
-store only after an eligible event is reserved. It makes no additional provider
+The controller freezes context from its existing scanner and minute price store
+when it builds a lane brief. It makes no additional provider
 request, read-journal reservation or financial write. It supports any validated
 allowlisted key, including names outside the ranked shortlist, under the same
 configured key/read/turn/output limits as other local reads. Tool results are
@@ -757,54 +620,52 @@ daily volume and its session count, relative-volume proxy, depth quantities and
 spread/imbalance when actually available. Metadata freshness is checked separately;
 stale optional fields are withheld. Proxy parameters are returned explicitly.
 `features.move_bps`/`market_relative_bps` use irregular retained samples; only the
-`returns` array denotes aligned fixed-minute windows. Context is frozen at event
-admission and never presented as a new executable quote; `get_market_snapshot`
+`returns` array denotes aligned fixed-minute windows. Context is frozen at brief
+build and never presented as a new executable quote; `get_market_snapshot`
 and the unchanged two-second execution gate retain that responsibility.
 
-The tool gives Luna facts only. The owner still chooses actions, sizes and
-holding periods; there is no trade quota, required catalyst, fabricated
+The tool gives the lane facts only. The decision lane still chooses actions,
+sizes and holding periods; there is no trade quota, required catalyst, fabricated
 probability, lower fee assumption or new trading risk cap. An empty action list
 remains valid.
 
-### Plan binding and execution refusal (A1 groundwork)
+### Plan binding and execution refusal
 
-New plans record the revision the decision was produced against:
+A pi paper plan records the revision the decision was produced against:
 `portfolio_revision` (cash, positions, fills and exit intents; marks, health and
-high water are excluded), `policy_sha256` when the planner policy can be
-reloaded at execution, `profile_sha256` when an experiment profile is applied,
-and `digest_id`. Live ranking is retained as `selection_provenance`
-`{source_hash, selection_reason, live_ranking, attribution_only, activation_authority}`:
-it preserves which selected version was consumed but never activates a scorer.
-Execution revalidates these before the first action: a changed
-portfolio records `portfolio_changed`, a changed or unresolvable policy
-`policy_changed`, and a changed profile `profile_changed` in `planner_action`
-and performs no fill. The plan remains archived; a new decision supersedes it.
-Archived plans without these optional bindings remain readable. Runtime
-admission still requires orchestrator ownership and current durable authority.
+high water are excluded), `policy_sha256`, optional `profile_sha256`, the decision
+turn ID, provider/model and `input_hash`. The claim also binds the trigger that
+woke the lane and the instrument allowlist revision it used. Execution revalidates
+these before the first action: a changed portfolio records `portfolio_changed`, a
+changed or unresolvable policy `policy_changed` and a changed profile
+`profile_changed`; a changed allowlist refuses the plan. None performs a fill. The
+plan remains archived and a new decision supersedes it. Archived plans without
+these optional bindings remain readable, and runtime admission requires the
+current pi plan-head authority.
 
 ## What model observations establish
 
-`get_instrument_features` reads frozen dated historical features and matching
-scanner prospects; it is not a general historical-bar query. A default scanner
+The `features` tool (Rust `get_instrument_features`) reads frozen dated historical
+features and matching scanner prospects; it is not a general historical-bar query. A default scanner
 prospect includes irregular sample movement and retained top bid/ask/age fields.
 Optional VWAP/relative-volume/strategy features existing elsewhere in the runtime
 must not be assumed present in this tool. The opt-in context tool above exposes receipt-based minute price windows;
-its tick counts are not traded volume. The original feature tool remains
-compatible. Inspect actual returned fields and their coverage.
+its tick counts are not traded volume. Inspect actual returned fields and their
+coverage.
 
-`get_market_snapshot` performs a new application-owned quote read, validates
-identity and the original source/receipt freshness, and archives the original
-receipt. It grants no execution authority; model reasoning time does not extend
+The `snapshot` tool (Rust `get_market_snapshot`) performs a new application-owned
+quote read, validates identity and the original source/receipt freshness, and
+archives the original receipt. It grants no execution authority; model reasoning time does not extend
 freshness. Screening LTPC activity does not replace executable depth. Native
-web/X observations require dates, source attribution and uncertainty; they are
-not automatically official filings or independent price verification. Registered
+Web observations require dates, source attribution and uncertainty; they are not
+automatically official filings or independent price verification. Registered
 analysis availability depends on actual pinned registrations and configured
 roles; a configured catalog does not establish that a model used it. A missing or
 unreadable registered file is reported as `research_code_unreadable`,
 `research_runtime_unreadable` or `research_input_unreadable`, and preflight and
-readiness check the pinned bytes before a review call.
+readiness check the pinned bytes before a research call.
 
-When `planner.workspace` is present and `enabled`, owner decision turns also
+When `planner.workspace` is present and `enabled`, decision lane turns also
 receive bounded workspace tools: `workspace_list`, `workspace_read`,
 `workspace_write`, `workspace_run` and `workspace_install`. The host seeds
 `<book>/workspace` (or the configured relative root) with `README.md`, the
@@ -823,7 +684,7 @@ A4 lifecycle; scores still do not become orders.
 `workspace_run.input` is a nullable JSON-encoded object string (validated by the
 host); `input_path` is a nullable workspace path. Supply at most one, or nulls
 for the sibling params file. Legacy archived object inputs remain readable.
-Owner workspace/research schemas share one call-time builder with provider
+Lane workspace/research schemas share one call-time builder with provider
 preflight; harness preflight failure codes remain in failure evidence.
 
 `workspace_install` writes under `tools/` only when the reviewed allowlist
@@ -837,26 +698,26 @@ tools and makes no outbound call. An enabled block requires an explicit provider
 and endpoint (or free news feeds), and a paid provider additionally requires an
 absolute application-owned key file read only at call time. The key never enters
 a result, transcript, session record or sandbox environment. Web tools are
-advertised only on owner decision turns, and the dashboard's Models view lists
+advertised only on decision and research lane turns, and the dashboard's Models view lists
 the recorded calls. Enabling or changing the block requires reviewed
 `config-apply`.
 
-Owner-scoped registered research revisions also bind an immutable candidate in
+Registered research revisions admitted from a lane turn also bind an immutable
+candidate in
 the session's existing `model/experiment-trials.sqlite`. Task summaries expose
 `experiment_candidate_id`; later revisions link their predecessor without
 replacing it. The original scoped task binds the hypothesis, analysis/input/runtime
-hashes, policy, owner turn, session and resource limits. Admission and reconciliation
+hashes, policy, authoring turn, session and resource limits. Admission and reconciliation
 repair an interrupted ledger write from the original queue, without rerunning work.
 Terminal outcomes retain their original timestamp and result hash; analysis success
 requires verified worker receipts. Candidate/outcome identity changes are refused.
 Strategy ABI, parameters, training window and holding horizon stay explicitly
 unknown: a registered analysis does not supply those strategy specifications.
-Owner research admission also captures the digest/work identity, original facts
-signature, optional profile, prompt-set identity and exact owner claim hash in the
-immutable task. This identifies the authoring turn; an order plan does not exist
-yet at enqueue time and is never fabricated or used as research approval.
+Research admission records the authoring turn identity, policy and resource
+limits in the immutable task. An order plan does not exist at enqueue time and is
+never fabricated or used as research approval.
 
-Owner enqueue requires explicit `research_tools.admission_limits` (see
+Lane research enqueue requires explicit `research_tools.admission_limits` (see
 `packaging/rust/research-admission.example.json`). `max_trials_per_input` counts
 all admitted versions for identical code/runtime/input bytes in the same book and
 session, across aliases, task keys, goals, turns, failures and cancellations.
@@ -1076,63 +937,39 @@ operation, not profitable decisions or complete/independently certified data.
 
 ## Budgets and failure semantics
 
-Enabled roles require explicit positive `daily_call_budget`. No compiled 1000-call
-ceiling remains. `budget_unit:"event"` shares one logical allowance across that
-role's tool continuations, retaining each actual immutable request/result and all
-failed and archived charges. Request accounting remains the compatible default.
+Each configured pi lane needs positive `daily_calls` and `daily_cost_usd`,
+`turn_timeout_ms` in 1,000–3,600,000 ms and `max_tool_calls` in 1–200; an invalid
+lane refuses at planner load. Pi reports usage per turn; Rust charges it to that
+lane's daily allowance and journals the turn. A turn cut off by a crash is charged
+once from its in-flight checkpoint. A lane allowance is operational, never a
+position, loss, exposure, holding-period or trading-risk cap.
 
-`max_turns` and `max_read_tools` are configurable positive role settings;
-omissions keep 12 turns and 16 reads.
-The scorer trigger uses its own configured role allowance in the shared usage
-namespace and is reserved once per session.
-Registered experiments remain bounded to four per invocation. Digest run cap is
-120 seconds and review 30 minutes; individual requests are capped by their role
-validation and remaining invocation/event time (up to 150 seconds). See
-[GitHub Issues](https://github.com/TharunChougoni/nivra/issues) for remaining
-operating qualification; settings are not provider quota guarantees.
+The lane service dispatches at most one turn at a time and merges triggers that
+arrive while it runs. A turn beyond its wall limit is aborted; provider, schema or
+timeout failures mean no new trade for that trigger and never halt the book.
+Missing history or absence of eligible evidence produces no model call. Usage
+corruption, identity mismatch or failed durable writes are separate integrity
+failures. Protection and fills stay deterministic while a lane runs.
 
-The final turn disables tools and retains evidence/mandate. Insufficient budget
-produces a recorded host abstention; timeout/provider/schema failures mean no
-new trade for the event, never an automatic retry or ordinary model-failure halt.
-Original usage corruption, identity mismatch or failed durable writes are separate
-integrity failures. Missing history/eligibility/approval produces no model call.
+The retained legacy planner's `usage_namespace`, reservation-journal capacity
+bounds and per-role `daily_call_budget` remain archive evidence. Original inode
+pins and consumed charges are never reset, refunded or rewritten.
 
-`usage_namespace` names the original session-local directory under `model/`.
-Initialization pins it before event work; readiness does not create it. Capacity
-bounds derive from budgets/turns or explicit `usage_max_records` /
-`usage_manifest_max_bytes`. Missing/replaced pins or reservations refuse, not reset.
+### Historical: owner-turn clock and failure backoff
 
-Reservations and usage reads share a short local advisory lock. A held lock is
-waited out (1,000 ms for a writer, 250 ms for a read projection) instead of
-aborting on the first attempt; a timeout reports
-`planner_usage_lock_timeout` with the wait and attempt count in the log. The lock
-is released before any provider call, so this wait never retries inference and
-never hides a charged request. Lock ownership is not attributable from the lock
-file itself.
+The earlier supervisor's model-visible observation time was the actual wall clock
+sampled when the turn was admitted or observed; it was never
+`turn start + elapsed`. A separate monotonic `Instant` measured duration budgets,
+deadline admission and transcript `duration_ms`, so a frozen or stepped-back wall
+could not freeze a deadline. A wall backstep or negative monotonic reading refused
+the turn with `planner_clock_anomaly`; the two-second quote-receipt gate was
+unchanged. `orchestrator.triggers.supervisor.failure_backoff_ms` deferred new
+owner turns after configured supervisor/decision failures under the same
+model-selection profile.
 
-### Owner-turn clock and failure backoff
+## Historical: post-close scorer trigger
 
-The supervisor's model-visible observation time is the actual wall clock sampled
-when the turn is admitted or observed; it is never `turn start + elapsed`. A
-separate monotonic `Instant` measures duration budgets, deadline admission and
-transcript `duration_ms`, so a frozen or stepped-back wall cannot freeze a
-deadline. A wall backstep or negative monotonic reading refuses the turn with
-`planner_clock_anomaly`; absolute UTC deadlines and not-before windows also
-respect a forward wall jump or a suspended host. The immutable evidence frame's
-`asOf` remains the original sample, and the two-second quote-receipt gate is
-unchanged.
-
-`orchestrator.triggers.supervisor.failure_backoff_ms` is optional
-(60,000–3,600,000 ms). When set, a new owner turn is deferred with
-`supervisor_failure_backoff` only after the configured number of actual
-supervisor/decision failures under the same model-selection profile/revision;
-review, compaction, aside and host lifecycle failures never advance that streak.
-A same-selection success clears it. The broad `failure_streak` wake trigger and
-existing policy bytes are unchanged when the option is absent.
-
-## Post-close scorer trigger
-
-When `orchestrator.triggers.scorer.enabled` is true and
+In the earlier planner, when `orchestrator.triggers.scorer.enabled` was true and
 `orchestrator.triggers.scorer.after_minute` (or the top-level
 `scorer_after_minute`) is set, the runtime may run one scorer admission after the
 session is closed and `report.json` exists. The due minute must be in
@@ -1184,42 +1021,27 @@ as `scorer_trigger status=<...> reason=<...>` and in the dashboard
 
 ## Identity, archives and reviews
 
-Each role's absolute `model_config` names an application-owned grant/approval.
-All Grok roles can share the same xAI config and fenced refresh owner; Luna uses
-its own OpenAI config. Exact response IDs, account/origin/expiry and subscription
-approval checks apply. No alias or foreign credential cache is accepted, and no
-fallback is silent: only the reviewed
-[explicit limit fallback](OPERATIONS.md#explicit-limit-fallback) may switch one
-eligible call, with stage-bounded reason codes.
+A pi lane's provider credentials belong to the application's own pi directory
+(`auth.json`, `models.json`) and are read only by the agent process. Rust starts it
+with an explicit environment allowlist and never reads those files. The retained
+legacy planner's per-role `model_config` grant bindings remain archive evidence,
+not a live credential source.
 
-The original book owns events, attempts and active plans. `model/<decision-id>/`
-archives inputs/hashes, instruction hash, actual rounds, tool/citation output and
-validation. The full audit `input.json` is written once the provider result is
-known; a failure before any provider turn keeps a bounded `input-receipt.json`
-and at most one representative input per failure window instead of the
-multi-megabyte bundle on every retry. `model/usage/` retains
-reservations/results. SQLite per-action rows
-commit with paper fills; JSON status/execution projections cannot revive a plan.
+The original book owns events, attempts, plans and fills. A pi paper decision
+writes `model/agent/triggers.ndjson`, `model/agent/turns.ndjson`, the per-turn
+archive under `model/agent/turns/<turn-id>/`, the plan-outcome journal
+`model/agent/plans.ndjson`, lane sessions under `model/agent/pi/<lane>/` and the
+daily usage ledger `model/agent/usage.json`. A sealed review writes
+`model/agent/memory.json` and claims its single attempt with
+`review-claimed.json`. Archived legacy digest/owner artifacts under
+`model/<decision-id>/` and `model/usage/` stay readable and are never rewritten.
+SQLite per-action rows commit with paper fills; JSON status/execution projections
+cannot revive a plan.
 
 The planner config has no `post_close` block and no `operations` or `strategy`
-entry under `orchestrator.triggers`; a config that still carries one is refused
-at load. The owner's session
-review (`owner_tasks.review`) seals the closed report with fixed evidence bounds
-(128 session fills, 24 rows per planner table, 48 journal ticks).
-
-Owner review artifacts are versioned. New writes use
-`ReviewCompletedV1` with `{version,task,receipt,output,failure,evidence,clock}`;
-`clock` records `started_wall_ms`, `observed_wall_ms`,
-`monotonic_elapsed_ms` and an optional `clock_anomaly`. The bytes are canonical
-JSON with every object key recursively sorted on write and read; reordered keys,
-whitespace, trailing bytes, unknown fields or an unsupported version refuse as
-`owner_review_source_invalid`/`owner_review_artifact_version_unsupported`.
-Legacy `Completed` bytes remain frozen and readable. A failed review whose
-observed wall is before its start is terminalized once with `wall_backstep`
-evidence (its `completed_ms` is the actual observation, not a clamped UTC
-value), and an old fully-bound failed `owner_review_clock_invalid` artifact is
-recovered without rewriting its bytes or replaying the model. V1 artifacts are
-forward-only for older binaries.
+entry under `orchestrator.triggers`; a config that still carries one is refused at
+load. The earlier owner review and research artifacts (`model/reviews/`,
+`model/research/`, `ReviewCompletedV1` bytes) remain frozen archive evidence.
 
 The protected model stream exposes redacted output/tool progress with gaps,
 truncation and host-validation labels. Hidden reasoning is excluded; displayed
@@ -1229,21 +1051,22 @@ text is never interpreted as HTML. Opening the dashboard invokes no model.
 
 | Command | Scope |
 | --- | --- |
-| `planner config-check --planner FILE --session DATE` | Offline dated-policy/cap validation, no credentials/calls |
-| `planner dry-run --config FILE --planner FILE` | Read-only turn against the active book; uses and charges the configured provider |
-| `planner live-preview` | Fresh-market diagnostic, no financial book/fills; requires reviewed closed flat authority |
+| `planner config-check --planner FILE --session DATE` | Offline dated-policy validation and resolved pi lanes; no credentials or calls |
+| `planner profile-check --planner FILE --profile FILE` | Offline experiment-profile validation; no calls |
+| `agent-check --config AGENT_SETTINGS --fixture FIXTURE` | Offline decision → research → decision round trip through the real pi subprocess and its scripted fake provider; no book, network or trading |
+| `agent-turn --config PAPER_CONFIG --lane LANE [--dry]` | `--dry` prints the brief and published tools without starting pi; otherwise one shadow lane turn charged to the lane allowance and never executed |
+| `agent-shadow-report --config PAPER_CONFIG` | Read-only summary of recorded pi shadow decisions and the sealed paper session |
+| `readiness --config PAPER_CONFIG` | Read-only local pi runtime, lane-budget and history projection for the next session |
 
 Use `--help` for required options. Diagnostic namespaces cannot replenish an
 original book's allowance. Operational qualification is tracked in
 [GitHub Issues](https://github.com/TharunChougoni/nivra/issues);
-[transport](XAI_SUBSCRIPTION_TRANSPORT.md) covers explicit approval renewal.
+[transport](XAI_SUBSCRIPTION_TRANSPORT.md) covers the earlier planner's grant
+records.
 
-Digest citations may name supplied sections, allowlisted instruments, or call IDs and
-`evidence_id` values returned by that invocation’s completed tools. Unknown IDs are
-dropped with a count-only warning; valid digest content is preserved. A
-digest that cites more than 12 known IDs keeps the first 12 and logs
-`digest_citation_warning reason=excess_evidence_ids_truncated`; excess citations
-are advisory and do not invalidate the digest.
+Archived digest citation diagnostics (`digest_citation_warning` and a retained
+`rejected-digest.json`) remain readable for earlier runs; no live lane turn
+produces a digest.
 
 The authenticated dashboard’s Model run history reads dated session harnesses and
 planner audit files directly, including failed and interrupted runs. It presents
@@ -1278,46 +1101,20 @@ The opt-in [strategy sandbox](STRATEGY_SANDBOX.md) documents spec-driven shadow
 rankings, scores-only Python/WASM execution, recorded replay and typed read-only
 pipeline tools. Its proposals and approval records never activate a session.
 
-Digest rejection diagnostics distinguish `harness_digest_json_invalid`
-(strict decoding and the single permitted premature-close repair both failed),
-`harness_digest_schema_invalid` (missing, unknown or incorrectly typed fields),
-and `harness_digest_bounds_invalid` (empty summary or exceeded digest bounds).
-These static reasons retain the existing `planner_invalid_plan_no_entries`
-status without exposing model-controlled Serde error text. Valid wait digests
-remain valid through repair; repair does not authorize a decision or relax schema,
-field bounds or duplicate-key rejection. These are validation invariants, with no
-new runtime tunables. Genuine provider repair and a clean full session still
-require operating evidence.
+Archived digest failures stay diagnosable from their retained records
+(`harness_digest_json_invalid`, `harness_digest_schema_invalid`,
+`harness_digest_bounds_invalid`, duplicate changed prospects, or a bounded
+credential-redacted `rejected-digest.json`); no live lane turn produces a digest.
 
-Digest bound failures emit a fixed field-level category without model text, while
-the existing failure status and fail-closed behavior remain unchanged.
+## Retained legacy admission
 
-Owner changed-prospect rows are deduplicated by instrument key before the hard
-bounds check: the same instrument may legitimately appear both as a
-scanner prospect and as a collapsed price-move trigger, so the first row is
-kept and later duplicates are dropped with
-`owner_digest_warning reason=duplicate_changed_prospects_dropped count=N`.
-Every retained row still passes the allowlist, text, finite-value,
-observed-time and evidence-ID bounds. A digest rejected by bounds, schema or
-JSON validation retains a bounded, credential-redacted `rejected-digest.json`
-beside its harness run record (referenced from `failure.json`), so the failure
-is diagnosable from the session archive rather than only the journal.
+The earlier planner's owner prerequisites still validate a retained legacy planner
+used for offline replay, and original usage journals keep their `decide-`
+reservation names for archive validation. Installing a build migrates no book and
+starts no session, and no live dashboard identity is Digest or Orchestrator: the
+configured model identities are the pi lanes.
 
-### Owner-only runtime admission
-
-A planner config without the owner prerequisites refuses at load, and a policy
-that differs from the book's durable authority refuses at startup with
-`decision_owner_migration_required`. Write the new owner planner config while
-stopped, check it with `planner config-check`, then run reviewed `config-apply`
-and audited resume. No config is silently rewritten.
-
-Older usage journals keep their `decide-` reservation names, and they still
-decode for original journal validation. Live dashboard and API identities are
-Digest and Orchestrator. The current-market preview compiles a factual digest
-only and never produces a decision. Installing a build migrates no book and
-starts no session.
-
-### Configured model admission
+### Historical: configured model admission
 
 The inline `digest` role block is its named profile. The orchestrator `model`
 block is `orchestrator.default`; `model_profiles` plus `admitted_models` define

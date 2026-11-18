@@ -325,27 +325,6 @@ pub(crate) fn execution_tape_bounded(
     })
 }
 
-/// Build the session's own paper export in memory and extract the same feature
-/// snapshots as `strategy-lab export-features`. The source book is opened
-/// read-only; no manifest, journal or runtime state is created or changed.
-pub(crate) fn scorer_snapshots(
-    source: &Path,
-    session: NaiveDate,
-    max_snapshots: usize,
-    max_age_ms: i64,
-    lookback_samples: usize,
-) -> std::result::Result<Vec<nivra_core::strategy::FeatureSnapshot>, String> {
-    scorer_snapshots_bounded(
-        source,
-        session,
-        None,
-        max_snapshots,
-        max_age_ms,
-        lookback_samples,
-        i64::MAX,
-    )
-}
-
 /// Candidate freeze path: only quote receipts whose original source time is at
 /// or before the submitted host clock enter the dataset. Later ticks cannot
 /// mutate the frozen bytes because the caller stores them before admission.

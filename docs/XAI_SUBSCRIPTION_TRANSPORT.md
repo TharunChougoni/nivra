@@ -1,11 +1,11 @@
 # Subscription transports and grants
 
-The runtime uses application-owned grants only, never another application's auth
-cache. No unconfigured API-key/paid fallback, inferred alias or automatic origin
-failover. Login/list/status do not start trading. Genuine inference consumes
-reservations.
+This reference describes the earlier Rust planner's provider transports and
+grant receipts. The planner used application-owned grants, required an explicit
+model binding, and charged inference against its own reservations.
+[Configure the pi agent](AGENT.md#prepare-and-verify)
 
-| Transport | Fixed inference origin | Current use |
+| Transport | Fixed inference origin | Recorded use |
 | --- | --- | --- |
 | `openai_codex` | `https://chatgpt.com/backend-api/codex/responses` | Exact `gpt-6-luna` digest, separate OpenAI login/grant |
 | `direct_oauth` | `https://api.x.ai/v1/responses` | Exact `grok-4.7` decision and reviews, shared own xAI grant |
@@ -19,7 +19,7 @@ metadata, not automatically the Cargo version. There is no automatic model rewri
 ## Explicit limit fallback
 
 The reviewed explicit limit fallback
-([Operations](OPERATIONS.md#explicit-limit-fallback)) is the only fallback and is
+([Operations](OPERATIONS.md#historical-explicit-limit-fallback)) is the only fallback and is
 not part of a subscription transport: it is policy-configured, uses its own
 application-owned key, switches at most one call for the explicit reason codes,
 and never rewrites a role's transport, model or origin. A 401/403 at the catalog
@@ -27,12 +27,10 @@ or inference request and an opaque HTTP 200 response-validation rejection are
 eligible; timeouts, HTTP 5xx, cancellation, malformed output from a real
 response and local refusals are not.
 
-## Commands and grant ownership
+## Grant ownership
 
-Use `nivra model login|list|status|probe --help` for the exact CLI. Each transport
-uses its own configured private grant. `status` is read-only; list/probe may refresh
-an expiring grant under one exclusive owner. All Grok roles can name the same model
-config so refresh is shared rather than copied per role.
+Each transport used the application's private grant. Grok roles could share
+one grant config and one refresh owner.
 
 Refresh is durably fenced before network access. Success verifies account identity,
 expiry and response, then atomically fsyncs/renames the private grant. Omitted rotated

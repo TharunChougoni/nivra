@@ -1,11 +1,13 @@
 use super::*;
 
 /// Path-free hash references to original review artifacts, for the successor seed.
+#[cfg(test)]
 pub(crate) fn review_state(root: &std::path::Path, session: &str) -> Value {
     review::state(root, session)
 }
 
 /// Bounded read-only projection of owner review work. It never starts or writes work.
+#[cfg(test)]
 pub(crate) fn review_status(
     c: &Config,
     cfg: &PlannerConfig,
@@ -480,6 +482,7 @@ pub(crate) fn research_projection(
 /// of model summaries. Version and trigger must agree before recovery.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(test)]
 pub(super) struct Lifecycle {
     pub(super) version: u32,
     pub(super) hashes: AppliedHashes,
@@ -488,11 +491,13 @@ pub(super) struct Lifecycle {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[cfg(test)]
 pub(super) enum LifecycleTask {
     Compaction { up_to_seq: u64 },
     Handoff { target_session: String, seed: Value },
 }
 
+#[cfg(test)]
 impl Lifecycle {
     pub(super) fn kind(&self) -> RunKind {
         match self.task {
@@ -502,6 +507,7 @@ impl Lifecycle {
     }
 }
 
+#[cfg(test)]
 pub(super) fn persist_handoff_seed(
     root: &std::path::Path,
     lifecycle: &Lifecycle,
@@ -516,6 +522,7 @@ pub(super) fn persist_handoff_seed(
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn lifecycle_for(
     turn: &session::Turn,
 ) -> std::result::Result<Option<Lifecycle>, &'static str> {

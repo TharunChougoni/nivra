@@ -493,6 +493,17 @@ impl<'a> LaneRunner<'a> {
     pub(crate) fn decision(
         &mut self,
         trigger: Value,
+        brief: Brief,
+        context: &mut TurnContext,
+    ) -> Result<LaneTurn> {
+        let id = self.next_id(Lane::Decision);
+        self.decision_as(id, trigger, brief, context)
+    }
+
+    pub(super) fn decision_as(
+        &mut self,
+        id: String,
+        trigger: Value,
         mut brief: Brief,
         context: &mut TurnContext,
     ) -> Result<LaneTurn> {
@@ -506,7 +517,7 @@ impl<'a> LaneRunner<'a> {
             .iter()
             .map(crate::runtime::lane_queue::update_fact)
             .collect();
-        let turn = self.turn(Lane::Decision, trigger, json!(brief.render()?), context)?;
+        let turn = self.turn_as(id, Lane::Decision, trigger, json!(brief.render()?), context)?;
         if turn.outcome.status == TurnStatus::Ok {
             let ids: Vec<String> = updates.into_iter().map(|update| update.id).collect();
             self.requests
@@ -611,11 +622,13 @@ impl<'a> LaneRunner<'a> {
 /// Today's spend per lane for the controller's budget reads, counting turns
 /// still in flight. Read only.
 pub(crate) fn spend(c: &Config) -> BTreeMap<Lane, Usage> {
-    let Ok(mut spend) = Ledger::new(c).read() else {
-        return BTreeMap::new();
-    };
+    read_spend(c).unwrap_or_default()
+}
+
+pub(crate) fn read_spend(c: &Config) -> Result<BTreeMap<Lane, Usage>> {
+    let mut spend = Ledger::new(c).read()?;
     for turn in spend.in_flight.values() {
         add(spend.lanes.entry(turn.lane).or_default(), &turn.usage);
     }
-    spend.lanes
+    Ok(spend.lanes)
 }

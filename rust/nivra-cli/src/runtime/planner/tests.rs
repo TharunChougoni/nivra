@@ -1121,7 +1121,6 @@ fn validation_reserves_cash_and_holdings_and_failure_never_creates_entries() {
             .get("run_timeout_ms")
             .is_none()
     );
-    live::tests::freshness_and_cash();
     super::super::harness::check_boundaries();
     let d = tempfile::tempdir().unwrap();
     let c = super::super::tests::config(d.path());

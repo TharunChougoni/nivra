@@ -1,8 +1,11 @@
 //! Exact configured role/profile admission before a real provider reservation.
 //! Catalog membership and a structurally valid profile do not prove entitlement;
 //! the model transport still validates the application grant.
-use super::{Config, Result, model_selection, planner};
+use super::model_selection;
+#[cfg(test)]
+use super::{Config, Result, planner};
 use nivra_cli::native_transport::Transport;
+#[cfg(test)]
 use std::path::Path;
 
 pub(super) fn binding_shape(
@@ -38,6 +41,7 @@ pub(super) fn transport_tools(
 /// Named inline role blocks are profiles too: `digest` and historical review
 /// blocks keep their exact config identity. The persistent owner uses only the
 /// currently selected, policy-admitted orchestrator profile, never a pending one.
+#[cfg(test)]
 pub(super) fn validate(
     c: &Config,
     cfg: &planner::PlannerConfig,
@@ -76,6 +80,7 @@ pub(super) fn validate(
     Ok(profile)
 }
 
+#[cfg(test)]
 fn inline(
     cfg: &planner::PlannerConfig,
     role: &planner::ModelRole,

@@ -1,5 +1,8 @@
 use super::*;
 
+/// Historical supervisor handoff projection. The pi lane carries research
+/// state itself, so only the offline replay tests read this.
+#[cfg(test)]
 pub(crate) fn carry_state(c: &Config, cfg: &PlannerConfig) -> Value {
     let Some(settings) = cfg.research_tools.as_ref() else {
         return json!({"available":true,"status":"disabled","tasks":[]});
@@ -274,6 +277,9 @@ pub(crate) fn open_original_queue_read_only_strict(
     last
 }
 
+/// Test-only cross-session resolution helpers; the pi lane never resolves a
+/// predecessor task through this path.
+#[cfg(test)]
 pub(crate) fn resolve_one(
     c: &Config,
     cfg: &PlannerConfig,
@@ -390,6 +396,7 @@ pub(crate) fn resolve_one(
 
 /// Read predecessor task refs from the original queue. This never creates a
 /// queue, pin, task, cancellation or worker.
+#[cfg(test)]
 pub(crate) fn resolve_carried_research(c: &Config, cfg: &PlannerConfig, seed: &Value) -> Value {
     if cfg.research_tools.is_none() {
         return json!({"available":true,"status":"disabled","tasks":[],"launched":false,"action":"none"});
@@ -462,6 +469,8 @@ pub(crate) fn resolve_carried_research(c: &Config, cfg: &PlannerConfig, seed: &V
     })
 }
 
+/// Test-only adoption receipt helpers for the historical handoff tests.
+#[cfg(test)]
 pub(crate) fn adoption_receipt(resolution: &Value) -> Value {
     let tasks = resolution["tasks"]
         .as_array()
@@ -479,6 +488,7 @@ pub(crate) fn adoption_receipt(resolution: &Value) -> Value {
     })
 }
 
+#[cfg(test)]
 pub(crate) fn read_adoption(path: &Path) -> Result<Option<Value>> {
     if !path.is_file() {
         return Ok(None);
@@ -489,6 +499,8 @@ pub(crate) fn read_adoption(path: &Path) -> Result<Option<Value>> {
 
 /// Record that carried predecessor refs are not new work. The receipt does not
 /// copy the queue or authorize a launch; a conflicting ref list is refused.
+/// The pi lane never adopts through this path, so only tests call it now.
+#[cfg(test)]
 pub(crate) fn adopt_carried_research(c: &Config, cfg: &PlannerConfig, seed: &Value) -> Value {
     let resolution = resolve_carried_research(c, cfg, seed);
     if resolution["status"] != "resolved" {

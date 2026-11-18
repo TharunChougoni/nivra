@@ -272,42 +272,15 @@ pub(super) fn fallback_contract() {
         model_config: config.clone(),
         ..profile.clone()
     };
-    let ready = fallback_readiness(&configured);
-    assert_eq!(ready["status"], "ready");
-    assert_eq!(ready["budget"], "none");
-    assert_eq!(
-        ready["origin"],
-        "https://api.mistral.ai/v1/chat/completions"
-    );
-    assert_eq!(ready["eligibility"], json!(FALLBACK_REASONS));
-    assert!(!ready.to_string().contains("fixture-mistral-key"));
-    // The fallback call's own transport evidence is secret-free: a zero
-    // remaining budget refuses before any network call, after the key was read.
-    let frame = json!({"role":"supervisor","input":[{"role":"user","content":"Decide."}],
-        "tools":[],"final_answer_only":true,"review_only":true});
-    let mut provenance = json!({});
-    assert_eq!(
-        fallback_response(&configured, &role, &frame.to_string(), 0, &mut provenance).unwrap_err(),
-        "model_timeout"
-    );
-    assert_eq!(provenance["stage"], "application_config");
-    let evidence = provenance.to_string();
-    for secret in ["fixture-mistral-key", "account", "token", "grant"] {
-        assert!(!evidence.contains(secret), "{secret}");
-    }
-    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o640)).unwrap();
-    assert_eq!(
-        fallback_readiness(&configured)["reason"],
-        "fallback_key_unavailable"
-    );
-    std::fs::write(
-        &config,
-        json!({"transport":"openai_codex","api_key_file":key}).to_string(),
-    )
-    .unwrap();
-    assert_eq!(
-        fallback_readiness(&configured)["reason"],
-        "fallback_config_invalid"
+    let config_bytes = std::fs::read(&configured.model_config).unwrap();
+    assert!(parse_fallback_config(&config_bytes).is_ok());
+    assert!(
+        parse_fallback_config(
+            json!({"transport":"openai_codex","api_key_file":key})
+                .to_string()
+                .as_bytes(),
+        )
+        .is_err()
     );
 }
 

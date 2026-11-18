@@ -1,8 +1,11 @@
 //! Owner work is projected from original domain evidence, never queued here.
 use super::workspace::WorkspaceRefV1;
 use super::*;
-use nivra_core::postclose::{ReviewOutput, SealedEvidence};
+#[cfg(test)]
+use nivra_core::postclose::ReviewOutput;
+use nivra_core::postclose::SealedEvidence;
 use serde_json::{Value, json};
+#[cfg(test)]
 use std::collections::BTreeSet;
 
 /// Earliest post-close owner-task cutoff config validation accepts: one minute
@@ -65,6 +68,8 @@ pub(crate) struct AgendaSettings {
 /// One explicit owner agenda turn. Each runs at most once per session through
 /// the existing supervisor turn (notes and digest directives only; no order
 /// tools), never through the operations / post-close review paths.
+/// The pi lane owns its turns, so the agenda projection is test-only now.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AgendaTurn {
     /// The session-open turn, at the supervisor `session_open_minute`.
@@ -73,6 +78,7 @@ pub(crate) enum AgendaTurn {
     /// the post-close sealed review.
     PreClose,
 }
+#[cfg(test)]
 impl AgendaTurn {
     /// The supervisor trigger (and prompt) the turn runs as.
     pub(crate) const fn reason(self) -> &'static str {
@@ -84,6 +90,7 @@ impl AgendaTurn {
 }
 
 /// Pure admission input for agenda turns.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AgendaInput {
     pub settings: Option<AgendaSettings>,
@@ -99,6 +106,7 @@ pub(crate) struct AgendaInput {
 }
 
 /// Typed agenda admission outcome.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AgendaState {
     Disabled,
@@ -112,6 +120,7 @@ pub(crate) enum AgendaState {
     Done,
 }
 
+#[cfg(test)]
 pub(crate) fn project_agenda(input: &AgendaInput) -> AgendaState {
     let Some(settings) = input.settings.filter(|s| s.pre_open || s.pre_close) else {
         return AgendaState::Disabled;
@@ -233,7 +242,7 @@ impl IdleTriggerSettings {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct ResearchLaneSettings {
-    /// `None` uses the orchestrator's active `model select` profile.
+    /// `None` uses the orchestrator's active model profile.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
     pub max_tool_turns: u32,
@@ -574,6 +583,9 @@ impl ResearchEvidenceV1 {
         self.kind.order()
     }
 }
+/// Historical owner research receipt and output shape. The pi research lane
+/// carries its own receipts, so only the offline replay tests read these.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ResearchReceipt {
@@ -584,6 +596,7 @@ pub(crate) struct ResearchReceipt {
     pub completed_ms: i64,
     pub status: String,
 }
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ResearchOutputV1 {
@@ -597,6 +610,7 @@ pub(crate) struct ResearchOutputV1 {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspace_refs: Vec<String>,
 }
+#[cfg(test)]
 impl ResearchOutputV1 {
     pub(crate) fn validate(
         raw: &str,
@@ -661,6 +675,7 @@ impl ResearchOutputV1 {
         Ok(output)
     }
 }
+#[cfg(test)]
 fn forbidden_financial_key(value: &Value) -> bool {
     match value {
         Value::Object(map) => map.iter().any(|(key, value)| {
@@ -715,12 +730,16 @@ fn sha256_hex(value: &str) -> bool {
 }
 
 impl OwnerTask {
+    /// Historical supervisor admission projection; the pi research lane reads
+    /// the task kind from its own lane journal.
+    #[cfg(test)]
     pub(crate) fn kind(&self) -> &'static str {
         match self {
             Self::Review { .. } => "review",
             Self::Research { .. } => "research",
         }
     }
+    #[cfg(test)]
     pub(crate) fn review_identity(&self) -> Option<&ReviewIdentity> {
         match self {
             Self::Review { identity, .. } => Some(identity),
@@ -833,6 +852,9 @@ impl OwnerTask {
         Ok(())
     }
 }
+/// Historical owner review output shape. The pi lane validates its review
+/// output directly, so only the offline replay tests exercise these.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct OwnerReviewOutput {
@@ -841,6 +863,7 @@ pub(crate) struct OwnerReviewOutput {
     pub sealed_sha256: String,
     pub review: ReviewOutput,
 }
+#[cfg(test)]
 impl OwnerReviewOutput {
     pub(crate) fn validate(raw: &str, task: &OwnerTask, sealed: &SealedEvidence) -> Result<Self> {
         if raw.len() > 65_536 {
@@ -860,6 +883,7 @@ impl OwnerReviewOutput {
         Ok(output)
     }
 }
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ReviewReceipt {
@@ -976,6 +1000,7 @@ pub(crate) fn validate_research_bundle(
     Ok(true)
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 pub(crate) struct ScheduleInput {
     pub enabled: bool,
@@ -997,6 +1022,8 @@ pub(crate) struct ScheduleInput {
 }
 /// Typed post-close review schedule state (#229). Adding a variant fails to
 /// compile until `as_str` and the projection handle it.
+/// Historical supervisor scheduling only; the pi lane owns its review turn.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ReviewState {
@@ -1010,6 +1037,7 @@ pub(crate) enum ReviewState {
     Deferred,
     Due,
 }
+#[cfg(test)]
 impl ReviewState {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
@@ -1025,6 +1053,7 @@ impl ReviewState {
         }
     }
 }
+#[cfg(test)]
 impl PartialEq<&str> for ReviewState {
     fn eq(&self, other: &&str) -> bool {
         self.as_str() == *other
@@ -1062,6 +1091,8 @@ impl PartialEq<&str> for ResearchState {
         self.as_str() == *other
     }
 }
+/// Historical post-close review schedule projection for the retired supervisor.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub(crate) struct OwnerSchedule {
     pub version: u32,
@@ -1074,6 +1105,7 @@ pub(crate) struct OwnerSchedule {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deferred_until_ms: Option<i64>,
 }
+#[cfg(test)]
 pub(crate) fn project(input: &ScheduleInput) -> OwnerSchedule {
     let deferred_until = input.backoff_until_ms.filter(|until| input.now_ms < *until);
     let (state, reason) = if !input.enabled {

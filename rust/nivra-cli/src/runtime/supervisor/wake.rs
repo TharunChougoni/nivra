@@ -1,4 +1,5 @@
 //! Supervisor wake configuration and pure scheduling precedence.
+#[cfg(test)]
 use super::AppliedHashes;
 use super::state::State;
 use crate::runtime::orchestrator_model::RunFirstSettings;
@@ -169,6 +170,7 @@ pub(super) fn failure_backoff_until(
     (now < until).then_some(until)
 }
 
+#[cfg(test)]
 pub(crate) struct Inputs {
     pub minute: u32,
     pub in_session: bool,
@@ -178,6 +180,7 @@ pub(crate) struct Inputs {
     pub budget_left: bool,
 }
 
+#[cfg(test)]
 pub(super) fn due(
     state: &State,
     wake: &Wake,

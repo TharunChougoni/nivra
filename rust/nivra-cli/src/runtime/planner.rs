@@ -5,13 +5,11 @@ use nivra_core::execution::{Instrument, Portfolio};
 use nivra_core::finance::{Amount, Price};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-mod live;
 mod turn;
+#[cfg(test)]
 pub(crate) use turn::produce;
 pub(super) use turn::{call_time_input, produce_clocked};
 // Preserve the historical crate path for all internal consumers.
-#[allow(unused_imports)]
-pub(crate) use turn::produce_for;
 #[cfg(test)]
 use turn::produce_with_backend;
 
@@ -33,7 +31,7 @@ pub(crate) use failure::failure_record;
 pub(crate) use failure::failure_record_with_provider;
 #[allow(unused_imports)] // re-exported for crate callers and tests
 pub(crate) use failure::{
-    ProviderFailure, failure_evidence, logged_reason, provider_error_code_ok, provider_failure,
+    ProviderFailure, failure_evidence, provider_error_code_ok, provider_failure,
     provider_failure_evidence, reason,
 };
 mod usage;
@@ -382,6 +380,12 @@ impl Default for PlannerConfig {
     }
 }
 impl PlannerConfig {
+    pub(crate) fn uses_pi_paper(&self) -> bool {
+        self.agent
+            .as_ref()
+            .is_some_and(|agent| agent.mode == super::agent::AgentMode::Paper)
+    }
+
     /// Resolve role identity without merging historical charges. The digest
     /// has its own planner role; every other role runs through the orchestrator
     /// and is disabled when the orchestrator is absent.
@@ -427,6 +431,30 @@ impl PlannerConfig {
     /// factual digest and the persistent orchestrator owns paper decisions.
     /// Empty for a disabled planner. The same list feeds config validation.
     pub(crate) fn decision_owner_requirements(&self) -> Vec<&'static str> {
+        if self.uses_pi_paper() {
+            let mut missing = Vec::new();
+            if !self.enabled || self.model_led == Some(false) {
+                missing.push("pi_paper_planner_required");
+            }
+            if !self
+                .agent
+                .as_ref()
+                .is_some_and(|agent| agent.lanes.contains_key(&super::agent::Lane::Decision))
+            {
+                missing.push("pi_paper_decision_lane_required");
+            }
+            if self.digest.enabled
+                || self
+                    .orchestrator
+                    .as_ref()
+                    .is_some_and(|owner| owner.enabled)
+                || self.model_config.is_some()
+                || self.approval_auto_renew.is_some()
+            {
+                missing.push("pi_paper_legacy_model_config_refused");
+            }
+            return missing;
+        }
         if !self.enabled {
             return Vec::new();
         }
@@ -510,11 +538,13 @@ impl PlannerConfig {
         if !(1..=65_536).contains(&c.prompt_max_bytes) {
             return Err("planner_prompt_max_bytes_invalid".into());
         }
-        c.file_prompts = super::experiment_profile::PromptSet::load_directory(
-            &directory.join("prompts"),
-            c.prompt_max_bytes,
-        )
-        .map_err(|reason| format!("planner_default_{reason}"))?;
+        if !c.uses_pi_paper() {
+            c.file_prompts = super::experiment_profile::PromptSet::load_directory(
+                &directory.join("prompts"),
+                c.prompt_max_bytes,
+            )
+            .map_err(|reason| format!("planner_default_{reason}"))?;
+        }
         if c.usage_max_records == Some(0) || c.usage_manifest_max_bytes == Some(0) {
             return Err("planner_usage_limits_invalid".into());
         }
@@ -537,7 +567,9 @@ impl PlannerConfig {
             discovery.validate()?;
             let projection =
                 c.context.as_ref().map(|x| x.mode).unwrap_or_default() == ContextMode::Projection;
-            if !c.digest.enabled || (projection && c.full_universe_features != Some(true)) {
+            if !c.uses_pi_paper()
+                && (!c.digest.enabled || (projection && c.full_universe_features != Some(true)))
+            {
                 return Err("planner_discovery_roles_and_full_features_required".into());
             }
         }
@@ -644,30 +676,15 @@ pub(crate) trait Backend {
         Value::Null
     }
 }
-pub(super) struct Subscription<'a>(
-    &'a Path,
-    Value,
-    Option<&'a Path>,
-    Option<&'a super::decision_evidence::Snapshot>,
-);
+#[cfg(test)]
+pub(super) struct Subscription<'a>(&'a Path, Value, Option<&'a Path>);
+#[cfg(test)]
 impl<'a> Subscription<'a> {
     pub(super) fn new(path: &'a Path) -> Self {
-        Self(path, Value::Null, None, None)
+        Self(path, Value::Null, None)
     }
 }
-impl<'a> Subscription<'a> {
-    pub(super) fn with_context(
-        mut self,
-        context: Option<&'a super::decision_evidence::Snapshot>,
-    ) -> Self {
-        self.3 = context;
-        self
-    }
-    pub(super) fn with_alerts(mut self, webhook: Option<&'a Path>) -> Self {
-        self.2 = webhook;
-        self
-    }
-}
+#[cfg(test)]
 impl Backend for Subscription<'_> {
     fn validate_role(
         &mut self,
@@ -686,34 +703,13 @@ impl Backend for Subscription<'_> {
         Ok(())
     }
     fn call(&mut self, role: &ModelRole, prompt: &str) -> Result<String> {
-        let started = std::time::Instant::now();
-        let primary = crate::model::planner_response_with_alerts(
+        let result = crate::model::planner_response_with_alerts(
             role.model_config.as_deref().unwrap_or(self.0),
             role,
             prompt,
             &mut self.1,
             self.2,
         );
-        let result = match (primary, role.fallback.as_ref()) {
-            (Err(error), Some(fallback)) => match crate::model::fallback_reason(&error, &self.1) {
-                Some(reason) => {
-                    let remaining = role
-                        .timeout_ms
-                        .saturating_sub(started.elapsed().as_millis() as u64);
-                    limit_fallback(
-                        role,
-                        fallback,
-                        prompt,
-                        reason,
-                        remaining,
-                        &mut self.1,
-                        self.2,
-                    )
-                }
-                None => Err(error),
-            },
-            (primary, _) => primary,
-        };
         if let Err(error) = &result
             && let Some(cause) = error.split_whitespace().next()
             && failure::LOCAL_FAILURE_CAUSES.contains(&cause)
@@ -740,85 +736,9 @@ impl Backend for Subscription<'_> {
         }
         result
     }
-    fn intraday_context(&mut self, keys: &[String], at: i64) -> Option<Result<Value>> {
-        self.3.map(|snapshot| snapshot.read(keys, at))
-    }
     fn provenance(&self) -> Value {
         self.1.clone()
     }
-}
-
-/// Minimum time between two `model_fallback` alerts for one role. Every
-/// switch is still logged and recorded in the call's transport evidence.
-const FALLBACK_ALERT_INTERVAL: Duration = Duration::from_secs(1800);
-
-/// Retry one call on the role's reviewed fallback after a primary failure in
-/// one of the reviewed eligibility classes (#245, #21): provider limits, an
-/// entitlement/auth failure at catalog or inference, or an opaque HTTP 200
-/// response-validation rejection. The switch is logged with its reason,
-/// recorded in the transport evidence (so the usage journal and dashboard show
-/// it) and alerted at most once per interval per role. Any other primary
-/// failure never gets here.
-fn limit_fallback(
-    role: &ModelRole,
-    fallback: &FallbackProfile,
-    prompt: &str,
-    reason: &'static str,
-    remaining_ms: u64,
-    provenance: &mut Value,
-    webhook: Option<&Path>,
-) -> std::result::Result<String, String> {
-    let primary = std::mem::take(provenance);
-    let frame_role = serde_json::from_str::<super::harness::Frame>(prompt)
-        .map(|frame| frame.role)
-        .unwrap_or_else(|_| "unknown".into());
-    eprintln!(
-        "model_fallback role={frame_role} from={} to={} reason={reason} primary_status={}",
-        role.model_id,
-        fallback.model_id,
-        primary["http_status"].as_u64().unwrap_or(0)
-    );
-    let result = crate::model::fallback_response(fallback, role, prompt, remaining_ms, provenance);
-    let outcome = if result.is_ok() { "ok" } else { "failed" };
-    provenance["fallback"] = json!({"from_model":role.model_id,"from_transport":role.transport,
-        "to_model":fallback.model_id,"to_transport":fallback.transport,"reason":reason,
-        "primary_http_status":primary["http_status"],"primary_stage":primary["stage"],
-        "primary_error_code":primary["provider_error_code"],"outcome":outcome});
-    if let Err(error) = &result {
-        eprintln!(
-            "model_fallback_failed role={frame_role} to={} reason={}",
-            fallback.model_id,
-            provider_failure(error)
-                .map(|detail| detail.reason)
-                .unwrap_or_else(|| "planner_provider_failed".into())
-        );
-    }
-    static LAST_ALERT: std::sync::Mutex<BTreeMap<String, std::time::Instant>> =
-        std::sync::Mutex::new(BTreeMap::new());
-    let due = LAST_ALERT.lock().is_ok_and(|mut last| {
-        let now = std::time::Instant::now();
-        let due = last
-            .get(&frame_role)
-            .is_none_or(|at| now.duration_since(*at) >= FALLBACK_ALERT_INTERVAL);
-        if due {
-            last.insert(frame_role.clone(), now);
-        }
-        due
-    });
-    if due {
-        let alerts = crate::alert::Alerts::start(webhook, false);
-        alerts.emit(
-            crate::alert::Event::ModelFallback,
-            chrono::DateTime::from_timestamp_millis(millis())
-                .unwrap_or_default()
-                .with_timezone(&chrono::FixedOffset::east_opt(19800).expect("IST"))
-                .date_naive(),
-            json!({"role":frame_role,"from_model":role.model_id,"to_model":fallback.model_id,
-                "reason":reason,"outcome":outcome}),
-        );
-        alerts.finish();
-    }
-    result
 }
 
 pub(crate) const PROMPT_VERSION: &str = "planner-harness-v3";
@@ -826,6 +746,7 @@ pub(crate) const PROMPT_VERSION: &str = "planner-harness-v3";
 /// is a normal no-op, not a failed attempt, a block or an alert (#221).
 pub(crate) const NO_DECISION_WORK: &str = "model_plan_no_prospects_no_positions";
 /// Original durable plans include full-universe evidence, unlike provider replies.
+#[cfg(test)]
 pub(crate) const SAVED_PLAN_MAX_BYTES: usize = 8_000_000;
 #[cfg(test)]
 pub(crate) fn bundle(
@@ -1225,96 +1146,42 @@ pub enum Command {
         #[arg(long)]
         planner: PathBuf,
     },
-    /// One-shot current-market diagnostic; never opens a book or executes trades.
-    LivePreview {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        planner: PathBuf,
-        /// New private diagnostic directory, separate from all financial books.
-        #[arg(long)]
-        output: PathBuf,
-        /// Exact symbols resolved through the newly validated dated universe.
-        #[arg(long, value_delimiter = ',')]
-        symbols: Vec<String>,
-    },
-    DryRun {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        planner: PathBuf,
-    },
 }
 pub fn entry(cmd: Command) -> ExitCode {
-    if let Command::ProfileCheck { profile, planner } = &cmd {
-        return match super::experiment_profile::check(planner, profile) {
-            Ok(value) => {
-                println!("{value}");
-                ExitCode::SUCCESS
+    match cmd {
+        Command::ProfileCheck { profile, planner } => {
+            match super::experiment_profile::check(&planner, &profile) {
+                Ok(value) => {
+                    println!("{value}");
+                    ExitCode::SUCCESS
+                }
+                Err(code) => {
+                    eprintln!("experiment_profile_refused: {code}");
+                    ExitCode::FAILURE
+                }
             }
-            Err(code) => {
-                eprintln!("experiment_profile_refused: {code}");
-                ExitCode::FAILURE
-            }
-        };
-    }
-    if let Command::ConfigCheck { planner, session } = &cmd {
-        return match PlannerConfig::load_for_session(planner, *session) {
-            Ok(cfg) => {
-                let digest_role = cfg.role(Trigger::Digest);
-                println!(
-                    "{}",
-                    json!({"status":"planner_config_valid","session":session,"policy_sha256":digest(&policy_bytes(&cfg).expect("serializable")),"enabled":cfg.enabled,"model_led":cfg.model_led,"discovery":cfg.discovery,"digest_model":digest_role.model_id,"digest_daily_allowance":digest_role.daily_call_budget,"effective_from":cfg.effective_from,"paper_only":true,"model_calls":0})
-                );
-                ExitCode::SUCCESS
-            }
-            Err(error) => {
-                eprintln!("planner_config_refused: {}", failure_code(error.as_ref()));
-                ExitCode::FAILURE
-            }
-        };
-    }
-    if let Command::LivePreview {
-        config,
-        planner,
-        output,
-        symbols,
-    } = &cmd
-    {
-        return live::entry(config, planner, output, symbols);
-    }
-    let result = (|| -> Result<Value> {
-        let Command::DryRun { config, planner } = cmd else {
-            unreachable!()
-        };
-        let c: Config = serde_json::from_slice(
-            &crate::read_bounded(&config, 16384).map_err(|_| "paper_config_unreadable")?,
-        )?;
-        c.validate()?;
-        let c = rollover::current(&c)?;
-        let cfg = PlannerConfig::load_for_session(&planner, c.session)?;
-        let instruments = wide::history_instruments(&c)?;
-        // Read-only: a dry run never creates/changes a financial book.
-        let p = if c.directory.join("paper.sqlite").exists() {
-            let (_, body) = rollover::bound_state(&c)?;
-            serde_json::from_str::<Portfolio>(&body)?
-        } else {
-            let mut p = Portfolio::with_capital(c.allocation()?);
-            p.costs = c.paper_costs.clone();
-            p
-        };
-        p.reconcile()?;
-        let value = produce(&c, &cfg, &p, &instruments, true)?;
-        Ok(json!({"paper_only":true,"dry_run":true,"traded":false,"result":value}))
-    })();
-    match result {
-        Ok(v) => {
-            println!("{v}");
-            ExitCode::SUCCESS
         }
-        Err(error) => {
-            eprintln!("{}", reason(error.as_ref()));
-            ExitCode::FAILURE
+        Command::ConfigCheck { planner, session } => {
+            match PlannerConfig::load_for_session(&planner, session) {
+                Ok(cfg) => {
+                    println!(
+                        "{}",
+                        json!({
+                            "status":"planner_config_valid","session":session,
+                            "policy_sha256":digest(&policy_bytes(&cfg).expect("serializable")),
+                            "enabled":cfg.enabled,"model_led":cfg.model_led,"discovery":cfg.discovery,
+                            "agent_mode":cfg.agent.as_ref().map(|agent| agent.mode),
+                            "agent_lanes":cfg.agent.as_ref().map(|agent| &agent.lanes),
+                            "effective_from":cfg.effective_from,"paper_only":true,"model_calls":0
+                        })
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("planner_config_refused: {}", failure_code(error.as_ref()));
+                    ExitCode::FAILURE
+                }
+            }
         }
     }
 }

@@ -1,35 +1,44 @@
-//! The research lane: bounded research turns beside, never inside, trading.
-//!
-//! Research runs on its own worker slot, its own session log
-//! (`<session>/research-lane`), its own capped usage bucket and its own failure
-//! record (#237, #238). It has no financial authority and never parks, backs
-//! off or blocks the trading lane. A turn answers either a typed request the
-//! trading lane queued (#239) or terminal original evidence; it records one
-//! durable turn and persists one idempotent receipt. A failed attempt is
-//! terminal for that evidence id and is never replayed.
-use super::super::lane_queue::{self, MessageBody, MessageKind, MessageState, TransitionReason};
+//! Read projections for the original supervisor research lane's log, usage,
+//! and evidence. The historical worker is exercised only by archive fixtures.
+use super::super::lane_queue::{self, MessageKind, MessageState};
+#[cfg(test)]
+use super::super::lane_queue::{MessageBody, TransitionReason};
 use super::super::owner_tasks::{
-    self, OwnerTask, ResearchEvidenceKind, ResearchEvidenceV1, ResearchIdentity, ResearchOutputV1,
-    ResearchReceipt, ResearchScheduleInput,
+    self, OwnerTask, ResearchEvidenceKind, ResearchEvidenceV1, ResearchScheduleInput,
 };
+#[cfg(test)]
+use super::super::owner_tasks::{ResearchIdentity, ResearchOutputV1, ResearchReceipt};
 use super::*;
 use nivra_store::research_jobs as jobs;
+#[cfg(test)]
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 use std::collections::BTreeSet;
+#[cfg(test)]
 use std::io::{Read, Write};
+#[cfg(test)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 
+#[cfg(test)]
 const MAX_ARTIFACT_BYTES: u64 = 1_000_000;
+#[cfg(test)]
 const MAX_ARTIFACT_WRITE_BYTES: usize = 262_144;
+#[cfg(test)]
 const RESEARCH_COMPLETED_VERSION: u32 = 1;
 /// The lane log directory beside the trading session log.
 pub(crate) const LANE_LOG: &str = "research-lane";
 /// Lane turns whose history is carried into the next research prompt.
+#[cfg(test)]
 const LANE_HISTORY: usize = 6;
 /// Research results stay deliverable to the trading lane this long.
+#[cfg(test)]
 const RESULT_TTL_MS: i64 = 43_200_000;
+#[cfg(test)]
 const LANE_FAILURE_PATH: &str = "model/research-lane-failure.json";
 
 /// The research lane's own durable log. It shares nothing with the trading
@@ -40,6 +49,7 @@ pub(crate) fn lane_log(root: &Path, session: &str) -> session::SessionLog {
 
 /// The log a research turn lives in: the lane log for every lane turn, the
 /// trading log only for a turn a pre-lane build already wrote there.
+#[cfg(test)]
 fn log_for(root: &Path, turn: &session::Turn) -> session::SessionLog {
     if turn.request["lane"] == "research" {
         lane_log(root, &turn.session)
@@ -50,6 +60,7 @@ fn log_for(root: &Path, turn: &session::Turn) -> session::SessionLog {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(test)]
 struct ResearchClockV1 {
     started_wall_ms: i64,
     observed_wall_ms: i64,
@@ -57,6 +68,7 @@ struct ResearchClockV1 {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(test)]
 struct ResearchCompletedV1 {
     version: u32,
     task: OwnerTask,
@@ -67,6 +79,7 @@ struct ResearchCompletedV1 {
     clock: ResearchClockV1,
 }
 
+#[cfg(test)]
 fn current_uid() -> u32 {
     fs::metadata("/proc/self")
         .map(|metadata| metadata.uid())
@@ -80,6 +93,7 @@ fn is_sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+#[cfg(test)]
 fn checked_owned_dir(path: &Path, missing: &'static str) -> Result<fs::Metadata> {
     match fs::symlink_metadata(path) {
         Ok(meta)
@@ -93,6 +107,7 @@ fn checked_owned_dir(path: &Path, missing: &'static str) -> Result<fs::Metadata>
     }
 }
 
+#[cfg(test)]
 fn ensure_owned_dir_component(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(meta) => {
@@ -125,6 +140,7 @@ fn ensure_owned_dir_component(path: &Path) -> Result<()> {
 /// only a missing component is created, with 0700. The final directory must be
 /// owned and 0700. A symlinked or non-regular component fails before any mkdir
 /// or chmod can touch the outside target.
+#[cfg(test)]
 pub(super) fn research_directory(root: &Path, create: bool) -> Result<PathBuf> {
     let model = root.join("model");
     let directory = model.join("research");
@@ -147,6 +163,7 @@ pub(super) fn research_directory(root: &Path, create: bool) -> Result<PathBuf> {
     Ok(directory)
 }
 
+#[cfg(test)]
 fn artifact_path(root: &Path, task: &OwnerTask) -> Result<PathBuf> {
     Ok(research_directory(root, false)?.join(format!("{}.json", task.id()?)))
 }
@@ -170,6 +187,7 @@ pub(super) fn canonical_bytes(value: &Value) -> Result<Vec<u8>> {
     Ok(serde_json::to_vec(&canonical_value(value.clone()))?)
 }
 
+#[cfg(test)]
 fn task_for(root: &Path, worker: &Worker) -> Result<(OwnerTask, session::Turn)> {
     let turn = lane_log(root, &worker.session)
         .records()
@@ -189,6 +207,7 @@ fn task_for(root: &Path, worker: &Worker) -> Result<(OwnerTask, session::Turn)> 
     Ok((task, turn))
 }
 
+#[cfg(test)]
 fn read_source(root: &Path, task: &OwnerTask) -> Result<(Vec<u8>, PathBuf)> {
     let path = artifact_path(root, task)?;
     let file = fs::OpenOptions::new()
@@ -224,6 +243,7 @@ fn read_source(root: &Path, task: &OwnerTask) -> Result<(Vec<u8>, PathBuf)> {
     Ok((bytes, path))
 }
 
+#[cfg(test)]
 fn source_present(root: &Path, task: &OwnerTask) -> Result<bool> {
     match artifact_path(root, task) {
         Ok(path) => Ok(path.is_file()),
@@ -232,6 +252,7 @@ fn source_present(root: &Path, task: &OwnerTask) -> Result<bool> {
     }
 }
 
+#[cfg(test)]
 fn parse_completed(bytes: &[u8]) -> Result<ResearchCompletedV1> {
     let value: Value =
         serde_json::from_slice(bytes).map_err(|_| "owner_research_source_invalid")?;
@@ -245,6 +266,7 @@ fn parse_completed(bytes: &[u8]) -> Result<ResearchCompletedV1> {
     Ok(completed)
 }
 
+#[cfg(test)]
 fn validate_completed(completed: &ResearchCompletedV1, task: &OwnerTask) -> Result<()> {
     let identity = task
         .research_identity()
@@ -279,6 +301,7 @@ fn validate_completed(completed: &ResearchCompletedV1, task: &OwnerTask) -> Resu
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_artifact_clock(completed: &ResearchCompletedV1, turn: &session::Turn) -> Result<()> {
     if completed.clock.started_wall_ms != turn.started_at_ms
         || completed.clock.observed_wall_ms != completed.receipt.completed_ms
@@ -294,6 +317,7 @@ fn validate_artifact_clock(completed: &ResearchCompletedV1, turn: &session::Turn
     Ok(())
 }
 
+#[cfg(test)]
 fn persist(root: &Path, task: &OwnerTask, completed: &ResearchCompletedV1) -> Result<()> {
     let bytes = canonical_bytes(&serde_json::to_value(completed)?)?;
     if bytes.len() > MAX_ARTIFACT_WRITE_BYTES {
@@ -327,6 +351,7 @@ fn persist(root: &Path, task: &OwnerTask, completed: &ResearchCompletedV1) -> Re
     Ok(())
 }
 
+#[cfg(test)]
 fn research_action(turn: &session::Turn, receipt: &ResearchReceipt) -> session::Action {
     session::action(
         "owner_research",
@@ -335,6 +360,7 @@ fn research_action(turn: &session::Turn, receipt: &ResearchReceipt) -> session::
     )
 }
 
+#[cfg(test)]
 fn expected_result(
     turn: &session::Turn,
     completed: &ResearchCompletedV1,
@@ -358,6 +384,7 @@ fn expected_result(
 /// Settle lane messages from the lane log. Idempotent and crash-safe: the
 /// log is the truth, so this re-derives every request state and result
 /// message after any crash between the log append and the ledger write.
+#[cfg(test)]
 fn reconcile_research(root: &Path, turn: &session::Turn) {
     if turn.request["lane"] != "research" {
         return;
@@ -366,6 +393,7 @@ fn reconcile_research(root: &Path, turn: &session::Turn) {
         eprintln!("research_lane_settle_failed reason={error}");
     }
 }
+#[cfg(test)]
 fn complete_log(
     root: &Path,
     turn: &session::Turn,
@@ -408,6 +436,7 @@ fn complete_log(
     Ok(())
 }
 
+#[cfg(test)]
 fn append_result_only(
     root: &Path,
     turn: &session::Turn,
@@ -435,11 +464,13 @@ fn append_result_only(
 /// Recover the one durable research attempt. A persisted artifact wins and is
 /// never re-provider-called; an action without an artifact appends the result
 /// only; neither means an explicit terminal interruption, never replay.
+#[cfg(test)]
 pub(super) fn recover(root: &Path, turn: &session::Turn, now: i64) -> Result<bool> {
     recover_in(root, turn, now)
 }
 
 /// Close a research turn a pre-lane build left pending in the trading log.
+#[cfg(test)]
 pub(super) fn recover_legacy(root: &Path, turn: &session::Turn, now: i64) -> Result<bool> {
     if turn.request["lane"] == "research" {
         return Err("owner_research_binding_invalid".into());
@@ -447,6 +478,7 @@ pub(super) fn recover_legacy(root: &Path, turn: &session::Turn, now: i64) -> Res
     recover_in(root, turn, now)
 }
 
+#[cfg(test)]
 fn recover_in(root: &Path, turn: &session::Turn, now: i64) -> Result<bool> {
     let Some(task) = OwnerTask::from_turn(turn)? else {
         return Ok(false);
@@ -953,6 +985,7 @@ fn idle_due(
 
 /// The host-authored request an idle-triggered turn serves. It goes through
 /// the same durable queue, capacity and claim as a trading request.
+#[cfg(test)]
 fn idle_request(
     c: &Config,
     cfg: &PlannerConfig,
@@ -1082,6 +1115,7 @@ fn request_evidence(
 
 /// Short lane-only history for the next research prompt. Research never sees
 /// the trading conversation; trading never sees this trace.
+#[cfg(test)]
 fn lane_history(log: &session::SessionLog) -> Vec<Value> {
     let mut results = log.results();
     let skip = results.len().saturating_sub(LANE_HISTORY);
@@ -1099,11 +1133,13 @@ fn lane_history(log: &session::SessionLog) -> Vec<Value> {
 /// The research lane slot. It is separate from the trading worker and the
 /// aside slot, so research in flight never holds a trading decision.
 #[derive(Default)]
+#[cfg(test)]
 pub(crate) struct Lane {
     pub(crate) worker: Option<Worker>,
     settled: bool,
 }
 
+#[cfg(test)]
 impl Lane {
     pub(crate) fn stop(&mut self) {
         if let Some(worker) = self.worker.take() {
@@ -1115,6 +1151,7 @@ impl Lane {
 /// One research lane tick: finish a returned turn, settle the queue, and admit
 /// at most one new turn. Every error stays inside the lane; nothing here
 /// writes trading supervisor state, parks trading or arms its backoff.
+#[cfg(test)]
 pub(crate) fn tick_lane(
     c: &Config,
     cfg: &PlannerConfig,
@@ -1160,6 +1197,7 @@ pub(crate) fn tick_lane(
 }
 
 /// Finish a returned lane turn. True when a turn finished this tick.
+#[cfg(test)]
 pub(super) fn poll_lane(root: &Path, lane: &mut Lane, now: i64) -> bool {
     let Some(worker) = lane.worker.as_ref() else {
         return false;
@@ -1194,6 +1232,7 @@ pub(super) fn poll_lane(root: &Path, lane: &mut Lane, now: i64) -> bool {
 }
 
 /// Re-derive request states and result messages from the lane log.
+#[cfg(test)]
 fn settle_lane(root: &Path, session: &str, now: i64) -> Result<()> {
     let log = lane_log(root, session);
     let turns = log.turns();
@@ -1281,6 +1320,7 @@ fn settle_lane(root: &Path, session: &str, now: i64) -> Result<()> {
 }
 
 /// A bounded, redacted one-paragraph summary for the trading lane.
+#[cfg(test)]
 fn result_summary(summary: &str) -> String {
     let redacted = super::transcript::redact(&json!(summary));
     let text: String = redacted
@@ -1303,6 +1343,7 @@ fn result_summary(summary: &str) -> String {
     }
 }
 
+#[cfg(test)]
 fn record_lane_failure(root: &Path, session: &str, turn_id: &str, now: i64, reason: &str) {
     eprintln!("research_lane_failed reason={reason}");
     let body = json!({"version":1,"session":session,"turn_id":turn_id,"reason":reason,"at_ms":now});
@@ -1311,6 +1352,7 @@ fn record_lane_failure(root: &Path, session: &str, turn_id: &str, now: i64, reas
     }
 }
 
+#[cfg(test)]
 pub(super) fn consider_lane(
     c: &Config,
     cfg: &PlannerConfig,
@@ -1482,10 +1524,12 @@ pub(super) fn consider_lane(
     )))
 }
 
+#[cfg(test)]
 fn monotonic_elapsed_ms(worker: &Worker) -> i64 {
     worker.started.elapsed().as_millis().min(i64::MAX as u128) as i64
 }
 
+#[cfg(test)]
 fn research_clock(worker: &Worker, turn: &session::Turn, now: i64) -> ResearchClockV1 {
     ResearchClockV1 {
         started_wall_ms: turn.started_at_ms,
@@ -1494,6 +1538,7 @@ fn research_clock(worker: &Worker, turn: &session::Turn, now: i64) -> ResearchCl
     }
 }
 
+#[cfg(test)]
 pub(super) fn finish_reply(root: &Path, worker: &Worker, now: i64, raw: &str) -> bool {
     let result = (|| -> Result<()> {
         let (task, turn) = task_for(root, worker)?;
@@ -1552,6 +1597,7 @@ pub(super) fn finish_reply(root: &Path, worker: &Worker, now: i64, raw: &str) ->
     }
 }
 
+#[cfg(test)]
 pub(super) fn finish_failed(root: &Path, worker: &Worker, now: i64, reason: &str) -> bool {
     let mut settled = false;
     let result = (|| -> Result<()> {

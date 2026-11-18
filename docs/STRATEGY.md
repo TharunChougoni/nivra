@@ -5,11 +5,14 @@ long-premium Nifty weekly options. The objective is to maximise profit; there is
 no profitability claim. Futures, stock options, naked short options and live
 orders remain out of scope.
 
-One persistent orchestrator owns paper action, size and holding decisions. Luna
-compiles current factual digests without selecting actions or vetoing owner
-evaluation. Planner configs use the owner-only shape. Cadence and evidence
-eligibility are described in [the model harness](MODEL_HARNESS.md). Policy changes
-use the reviewed [config-apply flow](OPERATIONS.md#reviewing-a-planner-policy-change).
+Pi owns the paper decision, research and review turns. Rust builds each factual
+brief from controller evidence and publishes the lane tools; only a completed
+turn with a final validated TradePlan can reach the paper plan head. Planner
+configs enable the planner, set `model_led`, and carry an `agent` block in
+`paper` mode with a decision lane. Trigger cadence, lane budgets and evidence
+eligibility are described in [the model harness](MODEL_HARNESS.md) and
+[pi agent lanes](AGENT.md). Policy changes use the reviewed
+[config-apply flow](OPERATIONS.md#reviewing-a-planner-policy-change).
 
 Deterministic code validates every intent and commits simulated fills. No fixed
 position-count, exposure, entry-count, daily-loss or drawdown caps apply to the

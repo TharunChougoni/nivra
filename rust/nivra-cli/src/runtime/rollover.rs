@@ -896,7 +896,37 @@ fn verify_carry_with(c: &Config, value: &Value, immutable: bool) -> Result<()> {
     Ok(())
 }
 pub(super) fn advance(c: &Config, now: i64) -> Result<Option<Config>> {
+    advance_checked(c, now, false)
+}
+
+pub(super) fn advance_pi(c: &Config, now: i64) -> Result<Option<Config>> {
+    advance_checked(c, now, true)
+}
+
+fn configured_for_pi(c: &Config, session: NaiveDate) -> bool {
+    c.planner_config
+        .as_deref()
+        .and_then(|path| planner::PlannerConfig::load_for_session(path, session).ok())
+        .is_some_and(|cfg| cfg.uses_pi_paper())
+}
+
+fn advance_checked(c: &Config, now: i64, require_pi: bool) -> Result<Option<Config>> {
     let mut plan = preview(c, now)?;
+    let source = if plan["status"] == "rollover_ready" {
+        // Check the dated successor before changing the original review, the
+        // successor directory or the current pointer. Read the original policy
+        // receipt as well because the selected planner file can change.
+        let (db, body) = bound_state(c)?;
+        let target = serde_json::from_value(plan["session"].clone())?;
+        if (require_pi || redecision::has_pi_authority(&db, c)? || configured_for_pi(c, c.session))
+            && !configured_for_pi(c, target)
+        {
+            return Err(Fail::new("rollover_pi_paper_config_required").into());
+        }
+        Some((db, body))
+    } else {
+        None
+    };
     if let Some(old) = plan.get("review")
         && old["reason"] != STOPPED_CARRY_REASON
         && old["reason"] != HALTED_CARRY_REASON
@@ -904,9 +934,9 @@ pub(super) fn advance(c: &Config, now: i64) -> Result<Option<Config>> {
     {
         atomic(&c.directory.join("review.json"), old)?;
     }
-    if plan["status"] != "rollover_ready" {
+    let Some((source_db, body)) = source else {
         return Ok(None);
-    }
+    };
     // The controller must persist its closed state and report before this commit.
     if plan["review"]["closed"] != true || plan["review"]["report_hash"].is_null() {
         return Err(Fail::new("rollover_requires_sealed_report").into());
@@ -948,7 +978,6 @@ pub(super) fn advance(c: &Config, now: i64) -> Result<Option<Config>> {
         &next.directory.join("strategy-decision.json"),
         &plan["strategy_decision"],
     )?;
-    let (source_db, body) = bound_state(c)?;
     if let Ok(mut p) = serde_json::from_str::<Portfolio>(&body)
         && p.model_led
     {

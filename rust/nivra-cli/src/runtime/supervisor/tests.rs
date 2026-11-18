@@ -107,10 +107,9 @@ pub(crate) fn run_named(cases: &[(&str, fn())]) {
 /// The supervisor exercise chains, split so one failure no longer hides the
 /// rest (#231).
 #[cfg(test)]
-pub(crate) fn exercise_chains() -> [(&'static str, fn()); 5] {
+pub(crate) fn exercise_chains() -> [(&'static str, fn()); 4] {
     [
         ("model_selection", super::super::model_selection::exercise),
-        ("model_select", super::super::model_select::exercise),
         ("supervisor", exercise),
         ("session", super::super::session::exercise),
         ("review", review::exercise),
@@ -1479,7 +1478,7 @@ pub(crate) fn exercise() {
             directives: json!([]),
             alerts: json!([]),
             research_state: json!({"available":false,"reason":"no_durable_research_state_source"}),
-            unresolved_work_refs: super::super::agent_cli::unresolved_request_refs(
+            unresolved_work_refs: session::legacy_operator_request_refs(
                 dir.path(),
                 failed_handoff_session,
                 56_001,
@@ -1820,9 +1819,13 @@ pub(crate) fn exercise() {
         None
     );
     // A slow or failed supervisor releases Luna at the hold deadline.
-    assert!(should_hold(true, 10_000, 9_999));
-    assert!(!should_hold(true, 10_000, 10_000));
-    assert!(!should_hold(false, 10_000, 9_999));
+    let mut worker = test_worker("fixture-session", "fixture-turn", 0);
+    worker.run_first = true;
+    worker.hold_until_ms = 10_000;
+    assert!(holding_luna(Some(&worker), 9_999));
+    assert!(!holding_luna(Some(&worker), 10_000));
+    worker.run_first = false;
+    assert!(!holding_luna(Some(&worker), 9_999));
     let overlaid = wake
         .overlay(&json!({
             "run_first":{"on_session_start":false,"on_resume":false,"on_change":true,"hold_luna_ms":30_000},

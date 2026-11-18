@@ -1,112 +1,84 @@
 # Current paper configuration setup
 
-These templates describe source configuration, not an installed session. They
-contain no credentials and must never be copied over active or original config.
-Current setup uses `paper-current.example.json` and
-`planner-current.example.json`. The retired dated shell installer is not shipped.
-A sanitized legacy delivery fixture lives under `fixtures/rust/` for tests only;
-its home and filesystem identifiers are synthetic. Account/scope aliases and
-paper-policy values are retained solely for legacy validator compatibility,
-not as broker account identifiers, balances or an operational configuration.
+`paper-current.example.json` lists the paper runtime inputs.
+`agent-settings.example.json` shows settings for the three pi lanes. Replace the
+paths with the installed application paths. Keep any credentials in the
+application's private files. The earlier planner template
+`planner-current.example.json` is retained as a reference for archived books.
 
 ## Explicit fresh paper installation
 
-An ordinary update continues the existing account. A fresh account requires a
-separate explicit operator mandate, including its new capital and preservation
-of the original account as an archive. It is not a migration or an updater retry.
-Use the current Rust command:
+A fresh paper account requires a separate operator mandate and an explicit
+starting capital. Preserve the original account and its evidence as an archive.
+
+1. Prepare the pi settings JSON with `mode` set to `paper`. The example
+   configures decision, research, and review lanes. Confirm access to each
+   configured model through its provider account.
+   [Pi lane configuration](../../docs/AGENT.md#prepare-and-verify)
+2. Provide a private paper base config with the exchange-verified session date
+   and predecessor. For a first book, supply the reviewed account, fee, market
+   and dashboard credential paths, history directory, and read quota journal
+   path, device, inode, and scope. The source book and session directories can
+   be absent. A paper start still requires the bound quota journal.
+3. Choose two unused absolute paths with existing parent directories. Keep them
+   outside the original config, book, and session directories.
+4. Run setup with the reviewed starting capital.
 
 ```sh
-nivra setup --paper ORIGINAL_PAPER_CONFIG \
-  --digest-model-config APP_DIGEST_MODEL_CONFIG \
-  --owner-model-config APP_OWNER_MODEL_CONFIG \
+nivra setup --paper PAPER_BASE_CONFIG \
+  --agent-settings AGENT_SETTINGS_JSON \
   --config-directory NEW_CONFIG_DIRECTORY \
   --state-directory NEW_STATE_DIRECTORY \
   --capital PAPER_CAPITAL --confirm-fresh-paper
 ```
 
-Replace `PAPER_CAPITAL` with the reviewed paper capital.
+Setup writes private `paper.json`, `planner.json`, and `setup.json` with policy
+hashes and `activated:false`. It creates empty state directories. It leaves
+the original book and quota journal untouched and does not open credential files.
+If setup fails after writing files, retain them for inspection.
 
-Both output paths must be absolute, absent, outside original config/book/session
-namespaces, and have existing parents. The source config must be private and
-contain the verified target session/predecessor pair. Setup retains its exact
-account/broker identity, market quota journal identity, fees, market/dashboard
-credentials, history and public-host/alert bindings. It never opens credentials,
-journals or books. The explicit model paths bind the current template's Luna
-Digest and Grok owner; setup admits no alternative model profile. Verify their
-exact-model entitlement with readiness before any later paper activation.
-
-Setup writes private `paper.json`, `planner.json`, packaged prompts and `setup.json`
-with source/policy hashes and `activated:false`. It prepares empty state/session
-directories without creating a financial book or model usage namespace. Only
-current owner planning is configured; independent Decide, legacy handoff gates,
-post-close roles and predecessor policy schedules are not imported. A failed or
-existing output refuses; retain its artifacts and inspect it instead of retrying
-over it. Setup does not stop services, switch deployment pointers or install units.
-
-Stop and disable the original paper service before making the prepared config
-active. Preserve all old config, books, failed artifacts and release evidence.
-Install the verified release with the existing updater against the original
-stopped book, using its operator-stopped guards. Then point the canonical paper
-unit and updater's `paper_config` at the new stable `paper.json`; leave the paper
-service stopped. Future releases use that same updater/config and never rerun
-setup. Starting the fresh account is a separate paper-session action; setup and
-installation do not authorize it. Do not change the shared quota journal or grant
-approvals to make readiness pass.
+Before an authorized start, authenticate the configured providers in the
+application's pi directory. The `agent-check` fixture uses the
+decision and research settings and runs offline. Run `preflight` and
+`readiness` on the prepared installation. Readiness checks local pi files and
+the recorded allowance.
+It reports `model_roles_unknown` and `agent_provider_not_checked` when provider
+authentication was not verified offline. Check authentication in the application's
+pi directory. Keep the original service stopped before making the new config
+active.
 
 ## Continuing the existing account
 
-1. Prepare a new private configuration directory outside every original book.
-   Copy both examples to new filenames. Copy this revision's complete `prompts/`
-   beside `planner.json`. Do not replace an existing prompt directory. The full
-   directory includes historical prompts for decoding; owner Digest uses
-   `data_owner.md`, and only the persistent Orchestrator owns decisions.
-2. Replace `${CONFIG_DIR}` with that directory's absolute path. Replace every
-   `${ORIGINAL_*}` from reviewed original config/book evidence. Device/inode
-   placeholders must become JSON integers, not strings. Retain the existing
-   account, broker read-scope, journal, book, session/predecessor, sessions root
-   and history bindings. Dates must match the verified exchange calendar.
-   Retain original configured capital; actual continuing cash/holdings/fees come
-   from the original ledger. Never initialize a replacement account as part of
-   continuation; the explicit fresh-account workflow above is a separate mandate.
-3. Replace `/REVIEWED/APP_*` paths with this application's own private model,
-   market and dashboard grant locations. These are placeholders, not paths to
-   discover by reading other applications' caches. Review exact-model approvals
-   and provider entitlement separately; templates do not prove either.
-4. Review all allowances, scanner/feed bounds, costs, tools and timeouts. The
-   example costs match `paper-costs.fragment.json`; they are a proposed policy,
-   not permission to change the original book's fees. Owner defaults to the
-   explicit Grok profile; Sol is selectable only after its own binding/approval
-   is reviewed. No automatic fallback exists. No price/cost estimate is invented
-   for a model whose pricing evidence is absent.
-5. Validate the completed planner offline with
-   `nivra planner config-check --planner NEW_PLANNER --session SESSION`.
-   Review original authority, self-check and preflight separately before
-   applying. These templates neither apply policy nor start, resume, unhalt,
-   reset usage or roll over a book.
-6. Choose disposition explicitly: retain archived books read-only with original
-   configs, or continue the original book through reviewed `config-apply`.
-   Preserve halted/stopped state. Keep predecessor configs, journals, failed
-   artifacts and immutable release rollback evidence unchanged.
-   Any installation or paper start needs the operator's separate authorization.
+1. Prepare a new private config directory. Preserve the existing paper config,
+   book, session pointer, history, fees, and market quota journal binding.
+2. Create a planner config with `enabled` and `model_led` set to `true` and the
+   pi settings under `agent`. Keep the reviewed scanner, market feed, and
+   admissible tool settings. Use the application's own market and dashboard
+   credential files.
+3. Run `nivra planner config-check --planner NEW_PLANNER --session SESSION` and
+   verify self-check and preflight.
+4. Use the reviewed policy transition for an eligible open book. An authorized
+   successor uses the configured policy on normal rollover from a sealed book.
+   Preserve stopped or halted books and any failed artifacts.
+   [Review a planner policy change](../../docs/OPERATIONS.md#reviewing-a-planner-policy-change)
 
-## Compatibility inventory
+## Archived configuration compatibility
 
 | Input/path | Current treatment |
 | --- | --- |
-| `decision_owner`, `decide` or `handoff_gate` key | Removed; the persistent orchestrator is the only decision owner. A planner file that still carries one refuses with `planner_config_invalid` until it is rewritten and applied with `config-apply` |
-| Absent `workspace` | No owner workspace tools; sealed policy hash unchanged. Enable with a reviewed `workspace` block and `config-apply` |
+| `decision_owner`, `decide` or `handoff_gate` key | Removed; the pi decision lane owns the paper plan head. A planner file that still carries one refuses with `planner_config_invalid` until it is rewritten and applied with `config-apply` |
+| Absent `workspace` | No lane workspace tools; sealed policy hash unchanged. Enable with a reviewed `workspace` block and `config-apply` |
 | `workspace.network` | Default off and omitted from serialized policy. Explicit opt-in outbound network for allowlisted scanner scripts only; the scorer sandbox refuses it |
-| Absent `web_tools` | No orchestrator web tools and no outbound call; sealed policy hash unchanged. Enable with a reviewed `web_tools` block and `config-apply`. See `web-tools.fragment.json` |
-| Enabled Operations/Strategy/post-close | Refused under owner policy; historical records remain readable |
-| Orchestrator plus old review-role blocks | Refused as `orchestrator_and_legacy_roles_conflict`; do not grow compatibility shims to reuse a clashing config |
+| Absent `web_tools` | No lane web tools and no outbound call; sealed policy hash unchanged. Enable with a reviewed `web_tools` block and `config-apply`. See `web-tools.fragment.json` |
+| Enabled Operations/Strategy/post-close | Refused for a pi paper planner; historical records remain readable |
+| Orchestrator plus old review-role blocks | Refused as `orchestrator_and_legacy_roles_conflict`; do not grow compatibility shims to reuse a clashing config. A pi paper planner refuses any enabled orchestrator with `pi_paper_legacy_model_config_refused` |
 | Old `max_handoff_instruments`/context schema | Retained for sealed historical policy and tool bounds; new template uses factual tools-only defaults and no handoff gate |
 | Dated planner schedule/predecessor fields | Retained as explicit reviewed authority evidence, not a silent active-config conversion |
 | Retired dashboard tuning keys | Decode to preserve original config/hash interpretation; omit from new configuration, current React runtime ignores them |
 | `prior_config`/cost transition proofs | Only exact reviewed original-binding transitions; never bypass stopped/halted/open-book guards |
 | Five-asset release manifest and `/api/status` | Delivery compatibility only; independent of active planner policy. Alias removal requires an installed-updater inventory |
 
-The source fixtures validate the template schemas and owner admission without
+The source fixtures validate the template schemas and pi paper admission without
 opening credential files, sockets or an existing book. Host preparation, actual
 entitlements, authority validation and operating qualification remain separate
 work.

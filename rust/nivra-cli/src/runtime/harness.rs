@@ -20,11 +20,16 @@ pub(crate) use failure_window::{
 pub(crate) mod research;
 pub(crate) use research::{
     LaunchBook, OwnerResearchRuntime, ResearchLaunch, ResearchSettings,
-    adopt_carried_research as research_adopt_carried,
-    capture_observation_tick as research_capture_observation, carry_state as research_carry_state,
+    capture_observation_tick as research_capture_observation,
     helper_entry as research_candidate_helper, observation_status as research_observation_status,
     status as research_status, tick_owner_tasks as research_tick_owner_tasks,
     validate_files as validate_research_files,
+};
+/// Legacy supervisor handoff helpers: the pi lane carries research state itself,
+/// so only the historical replay tests still call these.
+#[cfg(test)]
+pub(crate) use research::{
+    adopt_carried_research as research_adopt_carried, carry_state as research_carry_state,
 };
 
 pub(crate) const DATA_OWNER_PROMPT: &str =
@@ -36,6 +41,8 @@ pub(crate) const ORCHESTRATOR_PROMPT: &str =
     include_str!("../../../../packaging/rust/prompts/orchestrator.md");
 /// One exact project objective owned by the host and rendered into every role.
 pub(crate) const OBJECTIVE: &str = include_str!("../../../../packaging/rust/prompts/objective.md");
+/// Test-only helper for the historical prompt-shape tests.
+#[cfg(test)]
 pub(crate) fn objective() -> &'static str {
     OBJECTIVE.trim()
 }
@@ -426,6 +433,9 @@ impl<'a, 'b> DomainClock<'a, 'b> {
     }
 }
 
+/// The old one-shot supervisor run wrapper. The pi lane calls `run_collect`
+/// directly, so this survives only for the offline replay/dashboard tests.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn run(
     c: &Config,

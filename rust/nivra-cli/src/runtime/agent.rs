@@ -10,6 +10,7 @@ mod brief;
 pub(crate) mod check;
 mod client;
 mod lanes;
+pub(crate) mod paper;
 mod protocol;
 mod requests;
 pub(crate) mod service;
@@ -19,6 +20,7 @@ mod triggers;
 pub(crate) mod turn_cli;
 
 pub(crate) use client::{Agent, AgentClient};
+pub(crate) use lanes::read_spend;
 pub(crate) use triggers::{Ranked, TriggerSettings};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -81,6 +83,8 @@ pub(crate) enum AgentMode {
     /// trading unchanged.
     #[default]
     Shadow,
+    /// The sealed pi decision lane owns the paper plan head.
+    Paper,
 }
 
 impl AgentMode {

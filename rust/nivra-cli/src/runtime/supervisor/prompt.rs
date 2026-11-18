@@ -378,7 +378,7 @@ pub(super) fn handoff_lifecycle(
                     directives: context.facts["active_directives"].clone(),
                     alerts: context.facts["alerts"].clone(),
                     research_state: super::super::harness::research_carry_state(c, cfg),
-                    unresolved_work_refs: super::super::agent_cli::unresolved_request_refs(
+                    unresolved_work_refs: session::legacy_operator_request_refs(
                         &c.directory,
                         &context.session,
                         now,

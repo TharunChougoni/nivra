@@ -1,57 +1,77 @@
-//! Intraday orchestrator supervisor. It may wake Luna and write directives.
-//! It never creates, sizes or blocks an order, and a failure is a skip, not a halt.
-use super::directives::{self, Limits};
+//! Historical supervisor projections and offline replay receipts.
+#[cfg(test)]
+use super::directives;
+use super::directives::Limits;
 use super::operational_health::{
     BackoffSettings, SupervisorAside, SupervisorBackoff, SupervisorBudget, SupervisorCompaction,
     SupervisorConfigSource, SupervisorContext, SupervisorLastRun, SupervisorOperationalStatus,
     SupervisorOwnerFailureBackoff, SupervisorParked, SupervisorPending, SupervisorPendingSource,
     SupervisorResearch, SupervisorStateSource, SupervisorStatus,
 };
-use super::orchestrator_model::{self, SessionTrigger, Trigger};
-use super::planner::{PlannerConfig, Subscription};
+use super::orchestrator_model::Trigger;
+#[cfg(test)]
+use super::orchestrator_model::{self, SessionTrigger};
+use super::planner::PlannerConfig;
+#[cfg(test)]
+use super::planner::Subscription;
 use super::session;
 use super::*;
+#[cfg(test)]
 mod consider;
+#[cfg(test)]
 mod decision;
 pub(crate) mod research;
+#[cfg(test)]
 mod review;
 mod state;
 #[cfg(test)]
 use consider::consider;
+#[cfg(test)]
 pub(crate) use consider::{Tick, consider_owner};
+#[cfg(test)]
 use decision::*;
 mod wake;
 #[cfg(test)]
 use self::state::Parked;
 use self::state::STATE_PATH;
+use self::state::State;
+#[cfg(test)]
 use self::state::{
-    CompactionFailure, ContextExhaustion, State, allowance_recovery_allowed,
-    clear_context_exhaustion, load, park, record_context_exhaustion, record_failure,
-    record_failure_with_evidence, record_request_envelope, record_skip, record_state_error,
-    with_state,
+    CompactionFailure, ContextExhaustion, allowance_recovery_allowed, clear_context_exhaustion,
+    load, park, record_context_exhaustion, record_failure, record_failure_with_evidence,
+    record_request_envelope, record_skip, record_state_error, with_state,
 };
+#[cfg(test)]
+use self::wake::Inputs;
+use self::wake::Wake;
+#[cfg(test)]
 use self::wake::due;
-pub(crate) use self::wake::{Inputs, Wake};
+#[cfg(test)]
 use crate::alert::{Alerts, Event};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{
-    fs,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
+use std::fs;
+#[cfg(test)]
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
 };
 mod accounting;
 pub(crate) use accounting::*;
 mod capture;
 pub(crate) use capture::*;
+#[cfg(test)]
 mod worker;
+#[cfg(test)]
 pub(crate) use worker::*;
+#[cfg(test)]
 mod prompt;
+#[cfg(test)]
 pub(crate) use prompt::*;
+#[cfg(test)]
 mod turns;
+#[cfg(test)]
 pub(crate) use turns::*;
 mod replies;
 pub(crate) use replies::*;
@@ -65,6 +85,7 @@ pub(crate) use status::*;
 const COMPACT_AFTER_TURNS: usize = 12;
 /// A note that keeps changing mid-turn can re-run a bounded number of times;
 /// after that the turn is dropped with an alert rather than starving the day (#143).
+#[cfg(test)]
 const MAX_NOTE_RERUNS: u32 = 3;
 /// Bounded supervisor state accepted by the read-only operational projection.
 const MAX_STATUS_STATE_BYTES: u64 = 64 * 1024;

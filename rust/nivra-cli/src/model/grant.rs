@@ -2,6 +2,7 @@ use super::*;
 
 // Refresh is fenced durably before sending a rotating credential. An ambiguous
 // failure leaves `refreshing`, requiring operator review rather than another attempt.
+#[cfg(test)]
 pub(crate) fn grant_with_observer<F>(
     owner: &nivra_store::native_grant::FileOwner,
     at: chrono::DateTime<chrono::FixedOffset>,
@@ -20,6 +21,7 @@ where
         failed,
     )
 }
+#[cfg(test)]
 pub(crate) fn refresh_with<F>(
     bytes: Vec<u8>,
     at: chrono::DateTime<chrono::FixedOffset>,
@@ -101,6 +103,7 @@ where
     }
     result
 }
+#[cfg(test)]
 pub(crate) fn refresh_pending(
     value: &Value,
     at: chrono::DateTime<chrono::FixedOffset>,
@@ -129,6 +132,7 @@ pub(crate) fn refresh_pending(
     pending["updated_at"] = json!(at);
     Ok(pending)
 }
+#[cfg(test)]
 pub(crate) fn refresh_rotation(
     old: &Value,
     mut pending: Value,
@@ -178,124 +182,14 @@ pub(crate) fn refresh_rotation(
         .map_err(|_| "token_response_invalid")?;
     Ok(pending)
 }
-pub(crate) fn grant(c: &Config, owner: &nivra_store::native_grant::FileOwner) -> Result<Value> {
-    if c.transport == Transport::OpenaiCodex {
-        return grant_openai(c, owner);
-    }
-    let value = grant_with_observer(
-        owner,
-        now(),
-        |url, form, body, token| request(c, url, form, body, token),
-        |details| {
-            let alerts = crate::alert::Alerts::start(c.alert_webhook_file.as_deref(), false);
-            alerts.emit(
-                crate::alert::Event::ModelRefreshFailed,
-                now().date_naive(),
-                details,
-            );
-            alerts.finish();
-        },
-    )?;
-    let record = GrantRecord::parse(&serde_json::to_vec(&value).map_err(|_| "grant_invalid")?)
-        .map_err(|_| "grant_invalid")?;
-    if record.status(now()).state != "authenticated" {
-        return Err("grant_expired_during_refresh".into());
-    }
-    Ok(value)
-}
-pub(crate) fn grant_openai(
-    c: &Config,
-    owner: &nivra_store::native_grant::FileOwner,
-) -> Result<Value> {
-    let at = now();
-    let bytes = owner.read_openai().map_err(|_| "grant_unavailable")?;
-    nivra_core::openai_grant::GrantRecord::parse(&bytes).map_err(|_| "grant_invalid")?;
-    let mut value = native::decode(&bytes).map_err(|_| "grant_invalid")?;
-    if value["state"] != "authenticated" {
-        return Err("grant_login_required".into());
-    }
-    let expiry =
-        chrono::DateTime::parse_from_rfc3339(value["expires_at"].as_str().ok_or("grant_invalid")?)
-            .map_err(|_| "grant_invalid")?;
-    if expiry > at + chrono::Duration::seconds(60) {
-        return Ok(value);
-    }
-    let refreshing = refresh_pending(&value, at)?;
-    let pending = serde_json::to_vec(&refreshing).map_err(|_| "grant_invalid")?;
-    owner
-        .replace_openai(&bytes, &pending)
-        .map_err(|_| "grant_store_failed")?;
-    let access = value["access_token"].as_str().ok_or("grant_invalid")?;
-    let refresh = value["refresh_token"].as_str().ok_or("grant_invalid")?;
-    let (status, response) = request(
-        c,
-        nivra_cli::native_transport::OPENAI_OAUTH_TOKEN,
-        Some(&[
-            ("grant_type", "refresh_token"),
-            ("client_id", nivra_core::openai_grant::CLIENT),
-            ("refresh_token", refresh),
-        ]),
-        None,
-        None,
-    )?;
-    check_http_secrets(status, &response, &[access, refresh])?;
-    value = refresh_rotation(&value, refreshing, &response, at, |bytes| {
-        nivra_core::openai_grant::GrantRecord::parse(bytes)
-            .map(|_| ())
-            .map_err(|_| ())
-    })?;
-    let access = value["access_token"].as_str().ok_or("grant_invalid")?;
-    let identity = nivra_cli::native_transport::codex_identity(access)?;
-    if value["account_hash"].as_str() != Some(hash(identity.account_id.as_bytes()).as_str()) {
-        return Err("account_identity_changed".into());
-    }
-    let rotated = serde_json::to_vec(&value).map_err(|_| "grant_invalid")?;
-    owner
-        .replace_openai(&pending, &rotated)
-        .map_err(|_| "grant_store_failed")?;
-    let record =
-        nivra_core::openai_grant::GrantRecord::parse(&rotated).map_err(|_| "grant_invalid")?;
-    if record.status(now()).state != "authenticated" {
-        return Err("grant_expired_during_refresh".into());
-    }
-    Ok(value)
-}
-pub(crate) fn request(
-    c: &Config,
-    url: &str,
-    form: Option<&[(&str, &str)]>,
-    body: Option<&Value>,
-    token: Option<&str>,
-) -> Result<(u16, Vec<u8>)> {
-    let timeout_ms = if let Some(deadline) = c.deadline {
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .ok_or("model_timeout")?
-            .as_millis();
-        if remaining == 0 {
-            return Err("model_timeout".into());
-        }
-        c.timeout_ms.min(remaining as u64)
-    } else {
-        c.timeout_ms
-    };
-    nivra_cli::native_transport::http(
-        timeout_ms,
-        url,
-        form,
-        body,
-        token,
-        c.proxy_client_version.as_deref(),
-        c.conversation_id.as_deref(),
-    )
-    .map_err(str::to_owned)
-}
-
+#[cfg(test)]
 pub(crate) const MODEL_429_MAX_RETRIES: u32 = 3;
 /// One bounded retry for a malformed or incomplete response body. Schema,
 /// authority, credential and deadline failures are never retried.
+#[cfg(test)]
 pub(crate) const MODEL_BODY_MAX_RETRIES: u32 = 1;
 
+#[cfg(test)]
 pub(crate) fn transient_model_body_error(error: &str) -> bool {
     matches!(
         error,
@@ -303,6 +197,7 @@ pub(crate) fn transient_model_body_error(error: &str) -> bool {
     )
 }
 
+#[cfg(test)]
 pub(crate) fn parse_retry_after(
     value: &str,
     now: chrono::DateTime<chrono::Utc>,
@@ -322,6 +217,7 @@ pub(crate) fn parse_retry_after(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn model_429_backoff(
     retry_after: Option<&str>,
     retry_index: u32,
@@ -332,6 +228,7 @@ pub(crate) fn model_429_backoff(
         .unwrap_or_else(|| Duration::from_millis(250_u64 << retry_index.min(3)))
 }
 
+#[cfg(test)]
 pub(crate) fn retry_model_429<F, W>(
     deadline: Instant,
     mut send: F,
@@ -384,308 +281,13 @@ where
     }
 }
 
-/// Moves an expired grant aside so login can replace it; never touches a live grant.
-pub(crate) fn retire_expired_grant(
-    path: &Path,
-    at: chrono::DateTime<chrono::FixedOffset>,
-) -> Result<Option<PathBuf>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let value: Value =
-        serde_json::from_slice(&std::fs::read(path).map_err(|_| "grant_unreadable")?)
-            .map_err(|_| "grant_exists_preserve_and_review")?;
-    let expires = value["expires_at"]
-        .as_str()
-        .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
-        .ok_or("grant_exists_preserve_and_review")?;
-    if expires > at {
-        return Err("grant_exists_preserve_and_review".into());
-    }
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or("grant_path_invalid")?;
-    let backup = path.with_file_name(format!("{name}.expired-{}", at.timestamp()));
-    if backup.exists() {
-        return Err("grant_backup_exists".into());
-    }
-    std::fs::rename(path, &backup).map_err(|_| "grant_backup_failed")?;
-    Ok(Some(backup))
-}
-pub(crate) fn login(c: &Config) -> Result<()> {
-    if c.transport == Transport::OpenaiCodex {
-        return login_openai(c);
-    }
-    if c.grant_file.exists() {
-        return Err("grant_exists_preserve_and_review".into());
-    }
-    let (status, bytes) = request(
-        c,
-        "https://auth.x.ai/.well-known/openid-configuration",
-        None,
-        None,
-        None,
-    )?;
-    nivra_core::discovery::validate(status, &bytes).map_err(|_| "discovery_changed")?;
-    let (status, bytes) = request(
-        c,
-        "https://auth.x.ai/oauth2/device/code",
-        Some(&[("client_id", CLIENT), ("scope", SCOPE)]),
-        None,
-        None,
-    )?;
-    if status != 200 {
-        return Err("device_authorization_failed".into());
-    }
-    let v = native::decode(&bytes).map_err(|_| "device_challenge_invalid")?;
-    let display = json!({"verification_uri":v["verification_uri"],"user_code":v["user_code"],"expires_in":v["expires_in"]});
-    let challenge = nivra_core::device_challenge::DeviceChallenge::parse(
-        &serde_json::to_vec(&display).map_err(|_| "device_challenge_invalid")?,
-    )
-    .map_err(|_| "device_challenge_invalid")?;
-    let code = v["device_code"]
-        .as_str()
-        .filter(|s| !s.is_empty() && s.len() <= 16384)
-        .ok_or("device_code_invalid")?;
-    let mut interval = v
-        .get("interval")
-        .map_or(Some(5), Value::as_u64)
-        .filter(|v| (1..=1800).contains(v))
-        .ok_or("device_interval_invalid")?;
-    println!(
-        "{}\n{}\n{}",
-        challenge.verification_uri(),
-        challenge.user_code(),
-        challenge.expires_in_seconds()
-    );
-    let deadline = Instant::now() + Duration::from_secs(challenge.expires_in_seconds().into());
-    loop {
-        if Instant::now() + Duration::from_secs(interval) >= deadline {
-            return Err("device_code_expired".into());
-        }
-        std::thread::sleep(Duration::from_secs(interval));
-        let (status, bytes) = request(
-            c,
-            "https://auth.x.ai/oauth2/token",
-            Some(&[
-                ("client_id", CLIENT),
-                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-                ("device_code", code),
-            ]),
-            None,
-            None,
-        )?;
-        let token = native::decode(&bytes).map_err(|_| "token_response_invalid")?;
-        if status != 200 {
-            match token["error"].as_str() {
-                Some("authorization_pending") => continue,
-                Some("slow_down") => {
-                    interval += 5;
-                    continue;
-                }
-                _ => return Err("device_login_denied".into()),
-            }
-        }
-        let now = now();
-        let metadata = nivra_core::token_envelope::validate(&bytes, now)
-            .map_err(|_| "token_response_invalid")?;
-        let access = token["access_token"]
-            .as_str()
-            .ok_or("token_response_invalid")?;
-        let (status, user) = request(
-            c,
-            "https://auth.x.ai/oauth2/userinfo",
-            None,
-            None,
-            Some(access),
-        )?;
-        if status != 200 {
-            return Err("account_identity_unavailable".into());
-        }
-        let user = native::decode(&user).map_err(|_| "account_identity_invalid")?;
-        let sub = user["sub"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .ok_or("account_identity_invalid")?;
-        let account = hash(sub.as_bytes());
-        let id = hash(format!("{}:{now}", account).as_bytes());
-        let record = json!({"state":"authenticated","grant_id":&id[..32],"revision":1,"login_attempts":1,"updated_at":now,"expires_at":metadata.expires_at,"account_hash":account,"access_token":token["access_token"],"refresh_token":token["refresh_token"]});
-        return nivra_store::native_grant::create_file(
-            &c.grant_file,
-            &serde_json::to_vec(&record).map_err(|_| "grant_invalid")?,
-        )
-        .map_err(|_| "grant_store_failed".to_owned());
-    }
-}
-pub(crate) fn login_openai(c: &Config) -> Result<()> {
-    if c.grant_file.exists() {
-        return Err("grant_exists_preserve_and_review".into());
-    }
-    let (status, bytes) = request(
-        c,
-        nivra_cli::native_transport::OPENAI_DEVICE_CODE,
-        None,
-        Some(&json!({"client_id": nivra_core::openai_grant::CLIENT})),
-        None,
-    )?;
-    if status != 200 {
-        return Err("device_authorization_failed".into());
-    }
-    let v = native::decode(&bytes).map_err(|_| "device_challenge_invalid")?;
-    let user_code = v["user_code"]
-        .as_str()
-        .filter(|s| (4..=64).contains(&s.len()))
-        .ok_or("device_challenge_invalid")?;
-    let device_auth_id = v["device_auth_id"]
-        .as_str()
-        .filter(|s| !s.is_empty() && s.len() <= 256 && s.bytes().all(|b| (33..=126).contains(&b)))
-        .ok_or("device_code_invalid")?;
-    let interval = v
-        .get("interval")
-        .map_or(Some(5), |value| {
-            value
-                .as_u64()
-                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
-        })
-        .filter(|value| (1..=1800).contains(value))
-        .ok_or("device_interval_invalid")?;
-    let expires = v
-        .get("expires_in")
-        .and_then(|value| {
-            value
-                .as_u64()
-                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
-        })
-        .filter(|value| (1..=1800).contains(value))
-        .unwrap_or(900);
-    let display = json!({"verification_uri":nivra_cli::native_transport::OPENAI_DEVICE_URI,"user_code":user_code,"expires_in":expires});
-    let challenge = nivra_core::device_challenge::DeviceChallenge::parse(
-        &serde_json::to_vec(&display).map_err(|_| "device_challenge_invalid")?,
-    )
-    .map_err(|_| "device_challenge_invalid")?;
-    println!(
-        "{}\n{}\n{}",
-        challenge.verification_uri(),
-        challenge.user_code(),
-        challenge.expires_in_seconds()
-    );
-    let deadline = Instant::now() + Duration::from_secs(challenge.expires_in_seconds().into());
-    loop {
-        if Instant::now() + Duration::from_secs(interval) >= deadline {
-            return Err("device_code_expired".into());
-        }
-        std::thread::sleep(Duration::from_secs(interval));
-        let (status, bytes) = request(
-            c,
-            nivra_cli::native_transport::OPENAI_DEVICE_TOKEN,
-            None,
-            Some(&json!({"device_auth_id":device_auth_id,"user_code":user_code})),
-            None,
-        )?;
-        if matches!(status, 403 | 404) {
-            continue;
-        }
-        if status != 200 {
-            return Err("device_login_denied".into());
-        }
-        let pending = native::decode(&bytes).map_err(|_| "token_response_invalid")?;
-        let code = printable(pending["authorization_code"].as_str())?;
-        let verifier = printable(pending["code_verifier"].as_str())?;
-        let (status, bytes) = request(
-            c,
-            nivra_cli::native_transport::OPENAI_OAUTH_TOKEN,
-            Some(&[
-                ("grant_type", "authorization_code"),
-                ("code", code),
-                (
-                    "redirect_uri",
-                    "https://auth.openai.com/deviceauth/callback",
-                ),
-                ("client_id", nivra_core::openai_grant::CLIENT),
-                ("code_verifier", verifier),
-            ]),
-            None,
-            None,
-        )?;
-        if status != 200 {
-            return Err("token_response_invalid".into());
-        }
-        let now = now();
-        let metadata = nivra_core::token_envelope::validate_codex(&bytes, now)
-            .map_err(|_| "token_response_invalid")?;
-        let token = native::decode(&bytes).map_err(|_| "token_response_invalid")?;
-        let access = token["access_token"]
-            .as_str()
-            .ok_or("token_response_invalid")?;
-        let identity = nivra_cli::native_transport::codex_identity(access)?;
-        let account = hash(identity.account_id.as_bytes());
-        let id = hash(format!("{account}:{now}").as_bytes());
-        let record = json!({"version":"ind-sadr-openai-grant-v1","issuer":"https://auth.openai.com","client_id":nivra_core::openai_grant::CLIENT,"scope":"openai-codex-device","state":"authenticated","grant_id":&id[..32],"revision":1,"login_attempts":1,"updated_at":now,"expires_at":metadata.expires_at,"account_hash":account,"access_token":token["access_token"],"refresh_token":token["refresh_token"]});
-        return nivra_store::native_grant::create_openai_file(
-            &c.grant_file,
-            &serde_json::to_vec(&record).map_err(|_| "grant_invalid")?,
-        )
-        .map_err(|_| "grant_store_failed".to_owned());
-    }
-}
-pub(crate) fn printable(value: Option<&str>) -> Result<&str> {
-    value
-        .filter(|text| {
-            !text.is_empty() && text.len() <= 16384 && text.bytes().all(|b| (33..=126).contains(&b))
-        })
-        .ok_or("token_response_invalid".into())
-}
 /// Read-only preflight for a configured model role. It validates the application's
 /// own grant through the supplied work deadline; it never refreshes credentials or
 /// contacts a provider.
-pub(crate) fn readiness(
-    model_config: &Path,
-    expected_transport: Transport,
-    _expected_model: &str,
-    at: chrono::DateTime<chrono::FixedOffset>,
-    deadline: chrono::DateTime<chrono::FixedOffset>,
-) -> Result<Value> {
-    let c = config(model_config)?;
-    if c.transport != expected_transport {
-        return Err("model_transport_mismatch".into());
-    }
-    let bytes = if c.transport == Transport::OpenaiCodex {
-        nivra_store::native_grant::read_openai_file(&c.grant_file)
-    } else {
-        nivra_store::native_grant::read_file(&c.grant_file)
-    }
-    .map_err(|_| "grant_unavailable")?;
-    if c.transport == Transport::OpenaiCodex {
-        nivra_core::openai_grant::GrantRecord::parse(&bytes).map_err(|_| "grant_invalid")?;
-    } else {
-        GrantRecord::parse(&bytes).map_err(|_| "grant_invalid")?;
-    }
-    let g = native::decode(&bytes).map_err(|_| "grant_invalid")?;
-    if g["state"] != "authenticated" {
-        return Err("grant_login_required".into());
-    }
-    let expires =
-        chrono::DateTime::parse_from_rfc3339(g["expires_at"].as_str().ok_or("grant_invalid")?)
-            .map_err(|_| "grant_invalid")?;
-    let grant_ready = expires > deadline
-        || (c.transport != Transport::OpenaiCodex && verified_refresh_covers(&g, at));
-    if matches!(c.transport, Transport::DirectOauth | Transport::OpenaiCodex) {
-        Ok(
-            json!({"status":if grant_ready {"validated"} else {"unknown"},"required_until":deadline,
-            "reason":if grant_ready {Value::Null} else {json!("grant_refresh_required_or_expiry_unverified")},
-            "grant_expires_at":expires,"grant_binding_sha256":crate::model::hash(format!("{}:{}",g["account_hash"],g["grant_id"]).as_bytes()),"refresh_owner":"same_application_grant"}),
-        )
-    } else {
-        Ok(
-            json!({"status":if grant_ready {"validated"} else {"unknown"},"grant_expires_at":expires}),
-        )
-    }
-}
-// A verified refresh is evidence of refreshability, not a promise by the provider.
-// Only the current authenticated revision may supply this evidence.
+#[cfg(test)]
 pub(crate) const REFRESH_EVIDENCE_MAX_AGE: chrono::Duration = chrono::Duration::hours(36);
 
+#[cfg(test)]
 pub(crate) fn verified_refresh_covers(
     g: &Value,
     at: chrono::DateTime<chrono::FixedOffset>,

@@ -584,6 +584,9 @@ pub(crate) fn scan_refreshed(
     market_baseline: Option<f64>,
     market_sample_count: usize,
 ) -> Result<Option<String>> {
+    if cfg.uses_pi_paper() {
+        return Ok(None);
+    }
     let Some(discovery) = cfg.discovery.as_ref() else {
         return Ok(None);
     };

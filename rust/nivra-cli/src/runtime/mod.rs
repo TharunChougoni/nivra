@@ -1,7 +1,6 @@
 //! Paper-only runtime. No broker order APIs or model credentials exist here.
 pub mod activity_attribution;
 pub(crate) mod agent;
-mod agent_cli;
 pub mod closed_incident;
 mod data;
 mod decision_evidence;
@@ -20,7 +19,6 @@ mod lane_queue;
 mod market_feed;
 mod model_admission;
 mod model_history;
-pub(crate) mod model_select;
 pub(crate) mod model_selection;
 pub(crate) mod operational_health;
 mod options;
@@ -36,7 +34,6 @@ mod redecision;
 pub mod research_dashboard;
 pub mod retention;
 pub mod rollover;
-pub(crate) mod scorer_trigger;
 mod session;
 pub(crate) mod setup;
 mod strategy_results;

@@ -1,10 +1,19 @@
 use super::*;
 fn cost_transition_fixture(dir: &Path, closed: bool) -> (Config, Config) {
+    cost_transition_fixture_with_planner(dir, closed, None)
+}
+
+fn cost_transition_fixture_with_planner(
+    dir: &Path,
+    closed: bool,
+    planner: Option<PathBuf>,
+) -> (Config, Config) {
     use nivra_core::{
         execution::{ExitIntent, Instrument, Quote},
         finance::Price,
     };
     let mut old = super::super::tests::config(dir);
+    old.planner_config = planner;
     old.sessions_root = Some(dir.join("sessions"));
     old.directory = old
         .sessions_root
@@ -1090,6 +1099,68 @@ fn offline_advance_binds_successor_and_preserves_source_evidence() {
         anchor
     );
 }
+
+#[test]
+fn rollover_refuses_a_legacy_successor_to_pi_before_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let head = dir.path().join("planner.json");
+    let prior = dir.path().join("prior-planner.json");
+    let pi = json!({"enabled":true,"agent":{
+        "mode":"paper","node":dir.path().join("node"),"entry":dir.path().join("agent.js"),
+        "agent_dir":dir.path().join("agent"),"lanes":{"decision":{
+            "model":{"provider":"fixture","id":"fixture"},"daily_calls":2,"daily_cost_usd":3.0
+        }}
+    }});
+    fs::write(&prior, pi.to_string()).unwrap();
+    fs::write(
+        &head,
+        json!({"enabled":false,"effective_from":"2026-10-19","previous_config":prior}).to_string(),
+    )
+    .unwrap();
+    let (c, _) = cost_transition_fixture_with_planner(dir.path(), true, Some(head.clone()));
+    let now = DateTime::parse_from_rfc3339("2026-10-19T08:30:00+05:30")
+        .unwrap()
+        .timestamp_millis();
+    let root = root(&c).unwrap();
+    assert_eq!(preview(&c, now).unwrap()["status"], "rollover_ready");
+    for error in [
+        advance_pi(&c, now).err().expect("live rollover refused"),
+        advance_offline(&c, now, true).unwrap_err(),
+    ] {
+        assert_eq!(
+            failure_code(error.as_ref()),
+            "rollover_pi_paper_config_required"
+        );
+    }
+    assert!(!c.directory.join("review.json").exists());
+    assert!(!root.join("current.json").exists());
+    assert!(!root.join("2026-10-19").exists());
+
+    let mut db = open_book(&c).unwrap();
+    let cfg = planner::PlannerConfig::load_for_session(&head, c.session).unwrap();
+    let mut p: Portfolio = serde_json::from_str(&state_body(&c)).unwrap();
+    p.closed = false;
+    redecision::initialize(&mut db, &c, &p, Some(&cfg), now).unwrap();
+    assert!(redecision::has_pi_authority(&db, &c).unwrap());
+    drop(db);
+    fs::write(&head, br#"{"enabled":false}"#).unwrap();
+    let source = fs::read(c.directory.join("paper.sqlite")).unwrap();
+    let error = advance_offline(&c, now, true).unwrap_err();
+    assert_eq!(
+        failure_code(error.as_ref()),
+        "rollover_pi_paper_config_required"
+    );
+    assert!(!c.directory.join("review.json").exists());
+    assert!(!root.join("current.json").exists());
+    assert!(!root.join("2026-10-19").exists());
+    assert_eq!(fs::read(c.directory.join("paper.sqlite")).unwrap(), source);
+
+    fs::write(&head, pi.to_string()).unwrap();
+    let next = advance_pi(&c, now).unwrap().unwrap();
+    assert_eq!(next.session.to_string(), "2026-10-19");
+    assert_eq!(current(&c).unwrap().session, next.session);
+}
+
 #[test]
 fn offline_advance_resolves_pointer_source_and_stays_idempotent() {
     let d = tempfile::tempdir().unwrap();

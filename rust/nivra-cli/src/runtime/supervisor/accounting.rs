@@ -114,12 +114,14 @@ impl Compaction {
 /// The full provider request size implied by an already JSON-escaped prompt:
 /// the escaped prompt plus the measured envelope. Without a measured envelope
 /// this is the historical prompt-only measure.
+#[cfg(test)]
 pub(super) fn full_request_bytes(escaped_prompt_bytes: u64, bounds: &Compaction) -> u64 {
     escaped_prompt_bytes.saturating_add(bounds.request_envelope_bytes.unwrap_or(0))
 }
 
 /// A rendered prompt fits only when the full provider request plus the reserve
 /// stays under the configured cap (#224).
+#[cfg(test)]
 pub(super) fn request_fits(escaped_prompt_bytes: u64, bounds: &Compaction) -> bool {
     full_request_bytes(escaped_prompt_bytes, bounds).saturating_add(bounds.reserve_bytes)
         <= bounds.max_request_bytes
@@ -127,12 +129,14 @@ pub(super) fn request_fits(escaped_prompt_bytes: u64, bounds: &Compaction) -> bo
 
 /// The JSON-escaped length of a rendered prompt, as embedded in the provider
 /// request body. A serialization failure falls back to the raw length.
+#[cfg(test)]
 pub(super) fn escaped_prompt_bytes(prompt: &str) -> u64 {
     serde_json::to_string(prompt)
         .map(|escaped| escaped.len() as u64)
         .unwrap_or(prompt.len() as u64)
 }
 
+#[cfg(test)]
 pub(super) fn compaction_due(turns: usize, context_bytes: u64, settings: &Compaction) -> bool {
     turns >= settings.max_turns
         || context_bytes
@@ -154,6 +158,7 @@ pub(crate) struct AppliedHashes {
     pub(super) config: String,
 }
 
+#[cfg(test)]
 impl AppliedHashes {
     pub(super) fn current(cfg: &PlannerConfig) -> Self {
         let prompts =
@@ -173,6 +178,7 @@ impl AppliedHashes {
     }
 }
 
+#[cfg(test)]
 struct LifecycleResult {
     seq: u64,
     trigger: String,
@@ -185,6 +191,7 @@ struct LifecycleResult {
 /// Apply state effects from durable terminal results exactly once. The cursor
 /// and the state transition share one atomic state-file replacement, so a
 /// crash after the result frame cannot double-count a run or lose cooldown.
+#[cfg(test)]
 pub(super) fn reconcile_lifecycle_results(
     root: &std::path::Path,
     session_id: &str,
@@ -317,6 +324,7 @@ pub(super) fn reconcile_lifecycle_results(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(super) enum RunKind {
     Supervisor,
     Decision,

@@ -1,0 +1,39 @@
+{
+  "mode": "paper",
+  "node": "/opt/nivra/node-22/bin/node",
+  "entry": "/opt/nivra/agent/dist/src/main.js",
+  "agent_dir": "/var/lib/nivra/pi",
+  "lanes": {
+    "decision": {
+      "model": {
+        "provider": "openai-codex",
+        "id": "gpt-6.1-sol",
+        "thinking": "medium"
+      },
+      "daily_calls": 300,
+      "daily_cost_usd": 10.0,
+      "turn_timeout_ms": 180000,
+      "max_tool_calls": 40
+    },
+    "research": {
+      "model": {
+        "provider": "deepseek",
+        "id": "deepseek-v4-pro"
+      },
+      "daily_calls": 200,
+      "daily_cost_usd": 3.0,
+      "turn_timeout_ms": 600000,
+      "max_tool_calls": 40
+    },
+    "review": {
+      "model": {
+        "provider": "deepseek",
+        "id": "deepseek-v4-pro"
+      },
+      "daily_calls": 20,
+      "daily_cost_usd": 1.0,
+      "turn_timeout_ms": 180000,
+      "max_tool_calls": 40
+    }
+  }
+}

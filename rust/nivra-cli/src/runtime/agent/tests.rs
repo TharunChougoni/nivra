@@ -681,9 +681,6 @@ fn budgets_preemption_and_agent_exit_stop_turns() {
     let (c, cfg) = all_tools(dir.path());
     let settings = settings(10, 1.0);
     assert!(settings.validate().is_ok());
-    let mut activation = serde_json::to_value(&settings).unwrap();
-    activation["mode"] = json!("paper");
-    assert!(serde_json::from_value::<AgentSettings>(activation).is_err());
     let mut unbounded = settings.clone();
     unbounded
         .lanes
@@ -702,7 +699,7 @@ fn budgets_preemption_and_agent_exit_stop_turns() {
         peer.message(&id, 0.6);
         peer.message(&id, 0.6);
         let abort = peer.recv();
-        peer.finish(&id, "aborted", "", 2, 1.2);
+        peer.finish(&id, "ok", "", 2, 1.2);
         let (research, _) = peer.turn();
         peer.message(&research, 0.1);
         let preempted = peer.recv();
@@ -840,4 +837,21 @@ fn next_decision_receives_only_the_sealed_predecessor_review() {
     std::fs::write(&path, report.to_string()).unwrap();
     successor.previous_session = "2026-10-15".parse().unwrap();
     assert!(lanes::memory(&successor, Lane::Decision).is_none());
+}
+
+#[test]
+fn pi_paper_config_needs_no_legacy_model_and_refuses_one() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut agent = settings(10, 1.0);
+    agent.mode = AgentMode::Paper;
+    let mut cfg = json!({"enabled":true,"agent":agent});
+    let parse =
+        |cfg: &Value| planner::PlannerConfig::parse(cfg.to_string().as_bytes(), temp.path());
+    assert!(parse(&cfg).unwrap().uses_pi_paper());
+
+    cfg["digest"] = json!({"enabled":true,"model_id":"retired","daily_call_budget":1});
+    assert_eq!(
+        parse(&cfg).err().unwrap().to_string(),
+        "pi_paper_legacy_model_config_refused"
+    );
 }

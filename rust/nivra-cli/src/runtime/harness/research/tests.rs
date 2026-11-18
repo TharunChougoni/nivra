@@ -13692,14 +13692,6 @@ fn registered_file_failures_name_the_exact_artifact() {
         "reconciliation_required"
     );
     assert!(progress_runtime.active.is_none());
-    let question = super::super::super::agent_cli::queue_question(
-        &progress_config,
-        "Why was the entry skipped?",
-        "ask-progress",
-        progress_at + 2,
-    )
-    .unwrap();
-    assert_eq!(question["status"], "queued");
     let first_claim = super::super::super::redecision::reserve(
         &mut progress_book,
         &progress_config,
@@ -13790,7 +13782,6 @@ fn registered_file_failures_name_the_exact_artifact() {
         "reconciliation_required"
     );
     assert!(progress_runtime.active.is_none());
-    assert_eq!(question["id"], "ask-progress");
 
     std::fs::write(&runtime, b"replaced").unwrap();
     assert_eq!(

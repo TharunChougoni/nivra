@@ -1,4 +1,5 @@
-//! Explicit independent subscription login and verification only.
+//! Configuration compatibility for archived planner policies and host migration.
+#[cfg(test)]
 fn now() -> chrono::DateTime<chrono::FixedOffset> {
     let duration = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -8,132 +9,41 @@ fn now() -> chrono::DateTime<chrono::FixedOffset> {
         .fixed_offset()
 }
 
-use clap::Subcommand;
 use nivra_cli::native_transport::Transport;
+#[cfg(test)]
+use nivra_core::native_grant::SCOPE;
+#[cfg(test)]
 use nivra_core::{
     native,
-    native_grant::{CLIENT, GrantRecord, SCOPE},
+    native_grant::{CLIENT, GrantRecord},
 };
 use serde::Deserialize;
-/// Catalog display suggestion; configured role profiles own inference admission.
+#[cfg(test)]
 pub(crate) const LUNA: &str = "gpt-6-luna";
-/// Refused paid/fast variant. Config/profile admission never overrides this check.
+#[cfg(test)]
 pub(crate) const FAST_VARIANT: &str = "grok-4.7-build-fast";
+#[cfg(test)]
 use serde_json::{Value, json};
+#[cfg(test)]
 use sha2::{Digest, Sha256};
+use std::path::PathBuf;
+#[cfg(test)]
 use std::{
-    path::{Path, PathBuf},
-    process::ExitCode,
+    path::Path,
     time::{Duration, Instant},
 };
 type Result<T> = std::result::Result<T, String>;
-#[derive(Subcommand)]
-pub enum Command {
-    /// Device login. An expired grant is moved aside to a timestamped backup first;
-    /// an unexpired grant is preserved and refused.
-    Login {
-        #[arg(long)]
-        config: PathBuf,
-        /// Accepted for compatibility with existing login scripts; ignored.
-        #[arg(long)]
-        confirm_paper_review: bool,
-    },
-    List {
-        #[arg(long)]
-        config: PathBuf,
-    },
-    /// Make exactly one inference request; never starts a paper session.
-    Probe {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        model: String,
-        #[arg(long, value_enum, default_value = "none")]
-        tool: Tool,
-        /// Explicit source-backed request shape for diagnostics; never a fallback.
-        #[arg(long, value_enum, default_value = "minimal")]
-        request_shape: ProbeShape,
-        /// Explicit diagnostic context; never generated or stored by the application.
-        #[arg(long)]
-        conversation_id: Option<String>,
-    },
-    /// Make exactly one minimal request to a configured limit fallback
-    /// (#245) to prove its key and model; never starts a paper session.
-    ProbeFallback {
-        /// Fallback credential config (the profile's `model_config`).
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        model: String,
-        #[arg(long)]
-        reasoning_effort: Option<String>,
-    },
-    Status {
-        #[arg(long)]
-        config: Option<PathBuf>,
-        /// Show only non-secret application grant/account identity hashes.
-        #[arg(long)]
-        show_identity: bool,
-    },
-    /// Switch one planner role to a model the reviewed policy already declares.
-    /// Writes a new planner config and adopts it through the reviewed apply path;
-    /// never switches a role while a paper session is open.
-    Select {
-        /// Paper config file whose planner config declares the switch.
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long, value_enum)]
-        role: crate::runtime::model_select::Role,
-        /// Admitted profile name from the planner config.
-        #[arg(long)]
-        profile: Option<String>,
-        /// Declared model id; requires `--transport` instead of `--profile`.
-        #[arg(long)]
-        model_id: Option<String>,
-        /// Transport for `--model-id`; must match the declared profile.
-        #[arg(long, value_parser = ["subscription_proxy", "direct_oauth", "openai_codex"])]
-        transport: Option<String>,
-        /// Confirm the operator reviewed the paper book; required to apply.
-        #[arg(long)]
-        confirm_paper_review: bool,
-        /// Print the planner diff, grant and catalog preflight; change nothing.
-        #[arg(long)]
-        dry_run: bool,
-        #[arg(long)]
-        json: bool,
-    },
-}
-#[derive(Clone, Copy, clap::ValueEnum, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProbeShape {
-    Minimal,
-    HermesText,
-}
-#[derive(Clone, Copy, clap::ValueEnum)]
-pub enum Tool {
-    None,
-    #[value(name = "x_search")]
-    XSearch,
-    #[value(name = "web_search")]
-    WebSearch,
-}
-
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Config {
-    #[serde(default)]
-    alert_webhook_file: Option<PathBuf>,
+    #[serde(default, rename = "alert_webhook_file")]
+    _alert_webhook_file: Option<PathBuf>,
     #[serde(default)]
     transport: Transport,
-    #[serde(default)]
-    #[allow(dead_code)] // parse-compatible unused leftover from removed approval files
-    direct_oauth_approval_file: Option<PathBuf>,
-    #[serde(default)]
-    proxy_client_version: Option<String>,
-    #[serde(skip)]
-    deadline: Option<Instant>,
-    #[serde(skip)]
-    conversation_id: Option<String>,
+    #[serde(default, rename = "direct_oauth_approval_file")]
+    _direct_oauth_approval_file: Option<PathBuf>,
+    #[serde(default, rename = "proxy_client_version")]
+    _proxy_client_version: Option<String>,
     #[serde(default = "default_grant")]
     grant_file: PathBuf,
     #[serde(default, rename = "model_id")]
@@ -149,6 +59,7 @@ fn default_timeout() -> u64 {
 fn default_grant() -> PathBuf {
     PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config/nivra/xai-grant")
 }
+#[cfg(test)]
 fn config(path: &Path) -> Result<Config> {
     let bytes = crate::read_bounded(path, 16384).map_err(|_| "model_config_unreadable")?;
     parse_config(&bytes)
@@ -165,6 +76,7 @@ pub(crate) fn parse_config(bytes: &[u8]) -> Result<Config> {
     nivra_store::native_grant::file_path_ok(&c.grant_file).map_err(|_| "grant_path_invalid")?;
     Ok(c)
 }
+#[cfg(test)]
 pub fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -172,169 +84,21 @@ pub fn hash(bytes: &[u8]) -> String {
         .collect()
 }
 
+#[cfg(test)]
 mod catalog;
 mod fallback;
 mod grant;
+#[cfg(test)]
 mod probe;
+#[cfg(test)]
 pub(crate) use catalog::*;
 pub(crate) use fallback::*;
 pub(crate) use grant::*;
+#[cfg(test)]
 pub(crate) use probe::*;
 
-pub fn entry(command: Command) -> ExitCode {
-    // The planner switch owns its own config preflight, writes and refusal codes.
-    let command = match command {
-        Command::Select {
-            config: path,
-            role,
-            profile,
-            model_id,
-            transport,
-            dry_run,
-            confirm_paper_review,
-            json,
-        } => {
-            let transport = match transport.as_deref() {
-                Some("subscription_proxy") => Some(Transport::SubscriptionProxy),
-                Some("direct_oauth") => Some(Transport::DirectOauth),
-                Some("openai_codex") => Some(Transport::OpenaiCodex),
-                Some(_) => {
-                    eprintln!("model_select_transport_unknown");
-                    return ExitCode::FAILURE;
-                }
-                None => None,
-            };
-            return crate::runtime::model_select::entry(&crate::runtime::model_select::Request {
-                path: &path,
-                role,
-                profile: profile.as_deref(),
-                model_id: model_id.as_deref(),
-                transport,
-                dry_run,
-                confirm: confirm_paper_review,
-                json,
-            });
-        }
-        Command::ProbeFallback {
-            config,
-            model,
-            reasoning_effort,
-        } => {
-            return match probe_fallback(&config, &model, reasoning_effort.as_deref()) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => {
-                    eprintln!("{error}");
-                    ExitCode::FAILURE
-                }
-            };
-        }
-        command => command,
-    };
-    let result: Result<()> = (|| {
-        let c = match &command {
-            Command::Login { config: path, .. }
-            | Command::List { config: path }
-            | Command::Probe { config: path, .. } => config(path)?,
-            Command::Status {
-                config: Some(path), ..
-            }
-            | Command::Select { config: path, .. } => config(path)?,
-            Command::ProbeFallback { .. } => return Ok(()),
-            Command::Status { config: None, .. } => Config {
-                alert_webhook_file: None,
-                transport: Transport::default(),
-                direct_oauth_approval_file: None,
-                proxy_client_version: None,
-                deadline: None,
-                conversation_id: None,
-                grant_file: default_grant(),
-                _model_id: String::new(),
-                timeout_ms: default_timeout(),
-                _enabled: false,
-            },
-        };
-        match command {
-            // Handled before this closure: these report their own codes.
-            Command::Select { .. } | Command::ProbeFallback { .. } => {}
-            Command::Login { .. } => {
-                if let Some(backup) = retire_expired_grant(&c.grant_file, now())? {
-                    eprintln!("expired_grant_moved_aside {}", backup.display());
-                }
-                login(&c)?;
-            }
-            Command::List { .. } => {
-                let owner = nivra_store::native_grant::FileOwner::acquire(&c.grant_file)
-                    .map_err(|_| "grant_busy_or_unavailable")?;
-                let g = grant(&c, &owner)?;
-                let ids = catalog(&c, g["access_token"].as_str().ok_or("grant_invalid")?)?;
-                if c.transport == Transport::DirectOauth {
-                    println!(
-                        "{}",
-                        json!({"transport":c.transport,"origin":c.transport.models_url(),"provider_listed":ids})
-                    );
-                } else if c.transport == Transport::OpenaiCodex {
-                    println!(
-                        "{}",
-                        json!({"transport":c.transport,"origin":c.transport.models_url(),"provider_listed":ids,"data_model":{"id":LUNA,"provider_listed":ids.iter().any(|id|id==LUNA)},"entitlement":"not_proven_by_catalog"})
-                    );
-                } else {
-                    for id in ids {
-                        println!("{id}");
-                    }
-                }
-            }
-            Command::Probe {
-                model,
-                tool,
-                request_shape,
-                conversation_id,
-                ..
-            } => probe(&c, &model, tool, request_shape, conversation_id)?,
-            Command::Status { show_identity, .. } => {
-                if !c.grant_file.exists() {
-                    println!("not_logged_in");
-                } else {
-                    let bytes = if c.transport == Transport::OpenaiCodex {
-                        nivra_store::native_grant::read_openai_file(&c.grant_file)
-                    } else {
-                        nivra_store::native_grant::read_file(&c.grant_file)
-                    }
-                    .map_err(|_| "grant_unavailable")?;
-                    let state = if c.transport == Transport::OpenaiCodex {
-                        nivra_core::openai_grant::GrantRecord::parse(&bytes)
-                            .map_err(|_| "grant_invalid")?
-                            .status(now())
-                            .state
-                    } else {
-                        GrantRecord::parse(&bytes)
-                            .map_err(|_| "grant_invalid")?
-                            .status(now())
-                            .state
-                    };
-                    if show_identity {
-                        let grant = native::decode(&bytes).map_err(|_| "grant_invalid")?;
-                        println!(
-                            "{}",
-                            json!({"state":state,"account_hash":grant["account_hash"],"grant_id":grant["grant_id"],"transport":c.transport,"entitlement":"not_proven_by_login"})
-                        );
-                    } else {
-                        println!("{state}");
-                    }
-                }
-            }
-        }
-        Ok(())
-    })();
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("{e}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
 // Redact before truncating: neither a clipped credential nor terminal escapes may leak.
+#[cfg(test)]
 fn safe_text(raw: &str, token: &str, limit: usize) -> String {
     let raw = if token.is_empty() {
         raw.to_owned()
@@ -378,15 +142,18 @@ fn safe_text(raw: &str, token: &str, limit: usize) -> String {
     }
     words.join(" ").chars().take(limit).collect()
 }
+#[cfg(test)]
 fn check_http(status: u16, bytes: &[u8], token: &str) -> Result<()> {
     check_http_secrets(status, bytes, &[token])
 }
+#[cfg(test)]
 fn check_http_secrets(status: u16, bytes: &[u8], secrets: &[&str]) -> Result<()> {
     if (200..300).contains(&status) {
         return Ok(());
     }
     Err(http_error(status, bytes, secrets))
 }
+#[cfg(test)]
 fn http_error(status: u16, bytes: &[u8], secrets: &[&str]) -> String {
     // Only provider error fields, never the raw body, headers, account or request.
     let value: Value = serde_json::from_slice(bytes).unwrap_or(Value::Null);
@@ -420,8 +187,6 @@ fn http_error(status: u16, bytes: &[u8], secrets: &[&str]) -> String {
 
 #[cfg(test)]
 mod fallback_tests;
-#[cfg(test)]
-mod grant_retire_tests;
 #[cfg(test)]
 mod verification_tests;
 

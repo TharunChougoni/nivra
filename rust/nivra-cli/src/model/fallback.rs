@@ -1,14 +1,6 @@
-//! Explicit limit fallback (#245, #21). One planner call whose primary failed
-//! with a reviewed eligibility class is retried once on the role's configured
-//! fallback: an OpenAI-compatible chat completions provider (Mistral). The
-//! eligible classes are the provider limits, an entitlement/auth failure at
-//! catalog or inference, and an opaque HTTP 200 response-validation rejection;
-//! timeouts, 5xx, cancellation, malformed output from a real response and
-//! local refusals never switch. The Responses-shaped harness frame is
-//! translated to chat messages and the reply back to the same
-//! `{output, model, usage}` envelope, so the harness, tool validation, usage
-//! journal and paper boundaries are unchanged.
+//! Archived fallback configuration and offline response fixtures.
 use super::*;
+#[cfg(test)]
 use crate::runtime::planner::{FallbackProfile, ModelRole};
 use nivra_cli::native_transport::FallbackTransport;
 
@@ -17,13 +9,9 @@ use nivra_cli::native_transport::FallbackTransport;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FallbackConfig {
-    transport: FallbackTransport,
+    #[serde(rename = "transport")]
+    _transport: FallbackTransport,
     api_key_file: PathBuf,
-}
-
-fn fallback_config(path: &Path) -> Result<FallbackConfig> {
-    let bytes = crate::read_bounded(path, 16384).map_err(|_| "fallback_config_unreadable")?;
-    parse_fallback_config(&bytes)
 }
 
 pub(crate) fn parse_fallback_config(bytes: &[u8]) -> Result<FallbackConfig> {
@@ -33,19 +21,11 @@ pub(crate) fn parse_fallback_config(bytes: &[u8]) -> Result<FallbackConfig> {
     Ok(c)
 }
 
-fn fallback_key(profile: &FallbackProfile) -> Result<String> {
-    let c = fallback_config(&profile.model_config)?;
-    if c.transport != profile.transport {
-        return Err("fallback_transport_mismatch".into());
-    }
-    nivra_store::native_grant::read_api_key_file(&c.api_key_file)
-        .map_err(|_| "fallback_key_unavailable".into())
-}
-
 /// Every reason code that may switch one call, in operator-facing order.
 /// Readiness publishes this set so the reviewed policy is visible without
 /// reading the source; each switch records exactly one of these static codes
 /// in evidence, logs and the alert, never provider text.
+#[cfg(test)]
 pub(crate) const FALLBACK_REASONS: [&str; 5] = [
     "usage_limit_reached",
     "rate_limited",
@@ -71,6 +51,7 @@ pub(crate) const FALLBACK_REASONS: [&str; 5] = [
 ///
 /// Timeouts, HTTP 5xx, cancellation, malformed output from a real response, a
 /// grant-refresh auth failure (`grant_owner`) and local refusals never switch.
+#[cfg(test)]
 pub(crate) fn fallback_reason(error: &str, primary: &Value) -> Option<&'static str> {
     let code = error.split_whitespace().next()?;
     if !code.starts_with("model_http_") {
@@ -100,23 +81,7 @@ pub(crate) fn fallback_reason(error: &str, primary: &Value) -> Option<&'static s
     }
 }
 
-/// Fallback readiness without a provider call: configured, credential config
-/// parses, transport matches and the private key file is readable. The
-/// reviewed eligibility reason codes are published so an operator can see
-/// which primary failures the fallback covers.
-pub(crate) fn fallback_readiness(profile: &FallbackProfile) -> Value {
-    let status = match fallback_key(profile) {
-        Ok(_) => json!({"status":"ready","reason":Value::Null}),
-        Err(reason) => json!({"status":"blocked","reason":reason}),
-    };
-    let mut report = json!({"configured":true,"model":profile.model_id,"transport":profile.transport,
-        "origin":profile.transport.chat_url(),"budget":"none","admission":"reviewed_policy_fallback",
-        "eligibility":FALLBACK_REASONS});
-    report["status"] = status["status"].clone();
-    report["reason"] = status["reason"].clone();
-    report
-}
-
+#[cfg(test)]
 fn text_of(content: &Value) -> Option<String> {
     match content {
         Value::String(text) => Some(text.clone()),
@@ -140,6 +105,7 @@ fn text_of(content: &Value) -> Option<String> {
 
 /// Responses input items to chat messages. Consecutive assistant text and
 /// function calls form one assistant message; reasoning items are dropped.
+#[cfg(test)]
 pub(crate) fn chat_messages(instructions: &str, input: &[Value]) -> Result<Vec<Value>> {
     let mut messages = Vec::new();
     if !instructions.is_empty() {
@@ -213,6 +179,7 @@ pub(crate) fn chat_messages(instructions: &str, input: &[Value]) -> Result<Vec<V
 
 /// Responses function tools to chat tools. Provider-native tools (search) have
 /// no chat equivalent and refuse the fallback instead of being dropped.
+#[cfg(test)]
 pub(crate) fn chat_tools(tools: &[Value]) -> Result<Vec<Value>> {
     tools
         .iter()
@@ -231,6 +198,7 @@ pub(crate) fn chat_tools(tools: &[Value]) -> Result<Vec<Value>> {
 
 /// The exact chat completions request: `max_tokens`, no `store`, no stream,
 /// system role, and `reasoning_effort` only when the profile configures it.
+#[cfg(test)]
 pub(crate) fn chat_body(
     profile: &FallbackProfile,
     role: &ModelRole,
@@ -251,6 +219,7 @@ pub(crate) fn chat_body(
 
 /// A chat completion to the Responses envelope the harness consumes. Thinking
 /// parts are dropped; a length stop is an incomplete response, never output.
+#[cfg(test)]
 pub(crate) fn chat_envelope(
     status: u16,
     bytes: &[u8],
@@ -318,151 +287,4 @@ pub(crate) fn chat_envelope(
         output.push(json!({"type":"function_call","call_id":id,"name":name,"arguments":arguments}));
     }
     Ok(json!({"model":value["model"],"output":output,"usage":mapped}))
-}
-
-/// One fallback call for the same frame within the remaining call time.
-/// Errors keep the existing bounded codes; the key is redacted everywhere.
-pub(crate) fn fallback_response(
-    profile: &FallbackProfile,
-    role: &ModelRole,
-    prompt: &str,
-    remaining_ms: u64,
-    provenance: &mut Value,
-) -> Result<String> {
-    *provenance = json!({"transport":profile.transport,"origin":profile.transport.chat_url(),
-        "model":profile.model_id});
-    provenance["stage"] = json!("frame_decode");
-    let frame: crate::runtime::harness::Frame = serde_json::from_value(
-        native::decode_bounded(prompt.as_bytes(), 2_000_000)
-            .map_err(|_| "harness_request_invalid")?,
-    )
-    .map_err(|_| "harness_request_invalid")?;
-    provenance["stage"] = json!("tool_definitions");
-    let instructions = frame_preflight(&frame, role)?;
-    provenance["stage"] = json!("application_config");
-    let key = fallback_key(profile)?;
-    if remaining_ms == 0 {
-        return Err("model_timeout".into());
-    }
-    provenance["stage"] = json!("inference");
-    let tools = (!frame.final_answer_only).then_some(frame.tools.as_slice());
-    let body = chat_body(profile, role, &instructions, &frame.input, tools)?;
-    provenance["request_bytes"] = json!(
-        serde_json::to_vec(&body)
-            .map_err(|_| "model_request_invalid")?
-            .len()
-    );
-    provenance["max_output_tokens"] = json!(profile.max_tokens(role));
-    nivra_cli::model_stream::publish(
-        &frame.role,
-        &profile.model_id,
-        &hash(prompt.as_bytes()),
-        "request_started",
-        "Fallback request after a primary usage limit; output is unvalidated",
-    );
-    provenance["stage"] = json!("transport");
-    let deadline = Instant::now() + Duration::from_millis(remaining_ms);
-    let response = retry_model_429(
-        deadline,
-        || {
-            let timeout_ms = deadline
-                .checked_duration_since(Instant::now())
-                .map(|remaining| remaining.as_millis() as u64)
-                .filter(|remaining| *remaining > 0)
-                .ok_or_else(|| "model_timeout".to_owned())?;
-            nivra_cli::native_transport::http_observed_with_retry_after(
-                timeout_ms,
-                profile.transport.chat_url(),
-                None,
-                Some(&body),
-                Some(&key),
-                None,
-                None,
-                None,
-            )
-            .map_err(str::to_owned)
-        },
-        std::thread::sleep,
-    )?;
-    provenance["stage"] = json!("http_response");
-    provenance["http_status"] = json!(response.status);
-    provenance["stage"] = json!("response_validation");
-    let value = chat_envelope(response.status, &response.body, &key, provenance)?;
-    if value["model"] != profile.model_id.as_str() {
-        return Err("planner_response_model_mismatch".into());
-    }
-    provenance["stage"] = json!("output_validation");
-    let text = serde_json::to_string(&value)
-        .map_err(|_| "harness_output_invalid")?
-        .replace(&key, "[redacted]");
-    if let Some(code) = role.provider_envelope_code(&text) {
-        return Err(code.into());
-    }
-    nivra_cli::model_stream::publish(
-        &frame.role,
-        &profile.model_id,
-        &hash(prompt.as_bytes()),
-        "response_complete_unvalidated",
-        "Fallback response completed; host validation pending",
-    );
-    Ok(text)
-}
-
-/// One minimal fallback inference that proves the configured key and model
-/// work. It never starts a paper session or touches any journal.
-pub(crate) fn probe_fallback(model_config: &Path, model: &str, effort: Option<&str>) -> Result<()> {
-    let profile = FallbackProfile {
-        model_id: model.to_owned(),
-        transport: fallback_config(model_config)?.transport,
-        model_config: model_config.to_path_buf(),
-        output_cap: Some(64),
-        reasoning_effort: effort.map(str::to_owned),
-    };
-    if profile.invalid() {
-        return Err("fallback_profile_invalid".into());
-    }
-    let key = fallback_key(&profile)?;
-    let role = ModelRole {
-        output_cap: 64,
-        ..ModelRole::default()
-    };
-    let body = chat_body(
-        &profile,
-        &role,
-        "You are a terse health check.",
-        &[json!({"role":"user","content":"Reply with OK."})],
-        None,
-    )?;
-    let start = Instant::now();
-    let response = nivra_cli::native_transport::http_observed_with_retry_after(
-        60_000,
-        profile.transport.chat_url(),
-        None,
-        Some(&body),
-        Some(&key),
-        None,
-        None,
-        None,
-    )?;
-    let mut evidence = json!({});
-    let value = chat_envelope(response.status, &response.body, &key, &mut evidence)?;
-    let received = value["model"].as_str().unwrap_or_default();
-    let text = value["output"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item["content"].as_array())
-        .flatten()
-        .filter_map(|part| part["text"].as_str())
-        .collect::<String>();
-    let report = json!({"http_status":response.status,"transport":profile.transport,
-        "origin":profile.transport.chat_url(),"requested_model":model,
-        "model_matches_request":received == model,"latency_ms":start.elapsed().as_millis(),
-        "output_text":safe_text(&text, &key, 80),"tokens_in":evidence["tokens_in"],
-        "tokens_out":evidence["tokens_out"],"billing_verified_by_probe":false});
-    println!("{report}");
-    if received != model {
-        return Err("model_response_model_mismatch".into());
-    }
-    Ok(())
 }

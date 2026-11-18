@@ -201,14 +201,6 @@ impl PlannerConfig {
             }
         }
     }
-    /// Re-apply the previous profile after a rejected reload, over new policy values.
-    pub(crate) fn retain_previous_profile(&mut self, previous: &PlannerConfig) {
-        if let Some(old) = &previous.profile
-            && let Ok(applied) = apply(self, old.raw.clone(), old.prompts.clone())
-        {
-            self.profile = Some(Box::new(applied));
-        }
-    }
     pub(crate) fn profile_sha256(&self) -> Option<&str> {
         self.profile.as_ref().map(|p| p.sha256.as_str())
     }

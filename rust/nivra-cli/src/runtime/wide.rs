@@ -11,14 +11,16 @@ mod controller;
 pub(super) use controller::run;
 mod operator;
 pub(super) use operator::{
-    config_apply, config_apply_with, planner_recover, planner_recover_protection_only, resume, stop,
+    config_apply, planner_recover, planner_recover_protection_only, resume, stop,
 };
 #[cfg(test)]
-use operator::{planner_recover_checked, resume_preflight};
+use operator::{config_apply_with, planner_recover_checked, resume_preflight};
 mod projection;
 mod shadow;
 mod shutdown;
-use projection::{execution_projection, usage_projection};
+use projection::execution_projection;
+#[cfg(test)]
+use projection::usage_projection;
 use shadow::{ShadowScorer, ShadowSelection};
 #[cfg(test)]
 use shadow::{sandbox_failure_detail, shadow_regime_inputs};
@@ -871,12 +873,12 @@ fn block_read_failure(db: &mut Connection, c: &Config, p: &mut Portfolio, reason
     }
 }
 #[allow(clippy::too_many_arguments)] // Contain optional planner failure without replacing the financial book.
+#[cfg(test)]
 fn contain_event_error(
     result: Result<()>,
     db: &mut Connection,
     c: &Config,
     p: &mut Portfolio,
-    worker: &mut Option<redecision::Worker>,
     cfg: &mut Option<planner::PlannerConfig>,
     fallback: &mut Option<planner::PlannerConfig>,
     config_reason: &mut Option<&'static str>,
@@ -900,13 +902,11 @@ fn contain_event_error(
             )
         {
             redecision::fail_pending(db, c, &code)?;
-            *worker = None;
             return Ok(());
         }
         // A live config/prompt edit is an explicit config-apply transition, not
         // an integrity halt. Suspend the planner and keep protection running.
         if code == "planner_event_configuration_changed" {
-            *worker = None;
             if let Some(config) = cfg.take() {
                 *fallback = Some(config);
             }
@@ -926,7 +926,6 @@ fn contain_event_error(
             )?;
             return Ok(());
         }
-        *worker = None;
         if let Some(config) = cfg.take() {
             *fallback = Some(config);
         }
@@ -1135,107 +1134,6 @@ fn refresh_experiment_profile(
         }
     }
 }
-#[allow(clippy::too_many_arguments)] // Frozen controller context joins the existing claim/eligibility checks.
-fn event_tick(
-    db: &mut Connection,
-    c: &Config,
-    cfg: &planner::PlannerConfig,
-    p: &Portfolio,
-    instruments: &[Instrument],
-    worker: &mut Option<redecision::Worker>,
-    scanner: &Scanner,
-    store: &FeatureStore,
-    index: Option<&IndexContext>,
-    now: i64,
-    eligible: bool,
-    fresh_observation: bool,
-) -> Result<()> {
-    if let Some(path) = &c.planner_config {
-        let mut current = planner::PlannerConfig::load_for_session(path, c.session)?;
-        if current.profile_error.is_some() {
-            current.retain_previous_profile(cfg);
-        }
-        if planner::policy_bytes(&current)? != planner::policy_bytes(cfg)? {
-            return Err("planner_event_configuration_changed".into());
-        }
-    }
-    if let Some(settings) = &cfg.discovery
-        && settings.strategy.as_ref().is_some_and(|s| s.enabled)
-    {
-        super::strategy_results::record_pipeline(
-            settings,
-            c,
-            p,
-            planner::saved_plan(db, c)?.as_ref(),
-        )?;
-    }
-    match redecision::news(cfg, c, instruments) {
-        Ok(news) => redecision::observe(db, c, cfg, p, &[], &news, now)?,
-        Err(_) => redecision::block(db, c, "planner_news_evidence_invalid")?,
-    }
-    if let Some(pending) = worker {
-        if !eligible
-            || p.stopped
-            || p.halted
-            || p.closed
-            || now > pending.claim.deadline_ms
-            || redecision::sticky_blocked(db, c)?
-        {
-            pending
-                .cancel
-                .store(true, std::sync::atomic::Ordering::Release);
-            redecision::block(db, c, "planner_cancelled_no_replay")?;
-        }
-        let result = match pending.receiver.try_recv() {
-            Ok(result) => Some(result),
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                Some(Err("planner_worker_failed_no_replay".into()))
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => None,
-        };
-        if let Some(result) = result {
-            redecision::settle(db, c, cfg, p, &pending.claim, result, now, eligible)?;
-            *worker = None;
-            return Ok(());
-        }
-    }
-    if worker.is_none()
-        && let Some(claim) = redecision::reserve(
-            db,
-            c,
-            cfg,
-            p,
-            now,
-            eligible && fresh_observation && planner::has_eligible_input(c, p, instruments)?,
-        )?
-    {
-        eprintln!(
-            "luna_trigger reason={} kind={} event_at_ms={} digest_start_ms={now}",
-            redecision::trigger_reason(&claim.trigger),
-            claim.trigger["kind"].as_str().unwrap_or("unknown"),
-            claim.trigger["observed_ms"],
-        );
-        let context = cfg
-            .decision_evidence
-            .as_ref()
-            .map(|settings| {
-                super::decision_evidence::Snapshot::capture(
-                    settings,
-                    c.session,
-                    now,
-                    instruments,
-                    scanner,
-                    store,
-                    index.map(IndexContext::json),
-                )
-            })
-            .transpose()?;
-        *worker = Some(redecision::launch(c, cfg, p, instruments, claim, context));
-    }
-    Ok(())
-}
-/// Match the explicit provider key; a renamed symbol is a visible diagnostic.
-/// Screening metadata is independent of executable depth availability.
 #[allow(clippy::too_many_arguments)] // Preserve original receipt separately from the processing clock.
 fn scan_rest_rows(
     scan: &mut Scanner,
@@ -1575,7 +1473,9 @@ fn read_apply(
         Some(&allowed_buys),
         held_positions,
     )?;
-    if let Ok(binding) = book_binding(c) {
+    if !event_config.is_some_and(planner::PlannerConfig::uses_pi_paper)
+        && let Ok(binding) = book_binding(c)
+    {
         for review in &p.exit_reviews {
             let _ = redecision::enqueue_exit_review(
                 db,
@@ -1623,9 +1523,5 @@ pub(super) fn pending_orders(_p: &Portfolio) -> u64 {
 pub(super) fn history_instruments(c: &Config) -> Result<Vec<Instrument>> {
     Ok(universe::cached(c)?.instruments)
 }
-pub(super) fn preview_instruments(client: &data::Client, c: &Config) -> Result<Vec<Instrument>> {
-    Ok(universe::prepare(client, c)?.instruments)
-}
-
 #[cfg(test)]
 mod tests;

@@ -1,7 +1,9 @@
 //! Durable supervisor state, bounded skip/failure records, and park recovery.
+#[cfg(test)]
 use super::super::rollover;
 use super::AppliedHashes;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use serde_json::{Value, json};
 use std::{fs, sync::Mutex};
 
@@ -101,6 +103,7 @@ pub(super) struct ToolFailure {
     pub(super) hashes: AppliedHashes,
 }
 
+#[cfg(test)]
 impl State {
     pub(super) fn block_tool_failure(&mut self, reason: &str, now: i64, hashes: &AppliedHashes) {
         let code = reason.strip_prefix("supervisor_").unwrap_or(reason);
@@ -203,6 +206,7 @@ fn read_state(root: &std::path::Path, session: &str) -> std::result::Result<Stat
     }
 }
 
+#[cfg(test)]
 fn write_state(root: &std::path::Path, state: &State) -> std::result::Result<(), &'static str> {
     let path = state_path(root);
     if let Some(parent) = path.parent() {
@@ -215,6 +219,7 @@ fn write_state(root: &std::path::Path, state: &State) -> std::result::Result<(),
 /// One load-modify-save critical section. Two threads (Luna's worker and the
 /// controller tick) can no longer overwrite each other's handoff counts between
 /// separate lock acquisitions (#156).
+#[cfg(test)]
 pub(super) fn with_state<R>(
     root: &std::path::Path,
     session: &str,
@@ -237,6 +242,7 @@ pub(super) fn load(
 
 /// Durable, bounded sidecar for a state/store failure. A corrupt state file is
 /// never overwritten; the operator and the next wake still get a reason and time.
+#[cfg(test)]
 pub(super) fn record_state_error(root: &std::path::Path, session: &str, reason: &str) {
     let path = root.join("model/supervisor-error.json");
     let value = json!({"session":session,"reason":reason,"at_ms":super::super::millis()});
@@ -245,6 +251,7 @@ pub(super) fn record_state_error(root: &std::path::Path, session: &str, reason: 
     }
 }
 
+#[cfg(test)]
 pub(super) fn record_skip(root: &std::path::Path, session: &str, now: i64, reason: &str) {
     let result =
         with_state(root, session, |state| {
@@ -267,6 +274,7 @@ pub(super) fn record_skip(root: &std::path::Path, session: &str, now: i64, reaso
     }
 }
 
+#[cfg(test)]
 pub(super) fn allowance_recovery_allowed(
     parked: &Parked,
     current_allowance: u32,
@@ -281,6 +289,7 @@ pub(super) fn allowance_recovery_allowed(
             .is_some_and(|prior_allowance| current_allowance > prior_allowance)
 }
 
+#[cfg(test)]
 pub(super) fn park(
     root: &std::path::Path,
     session: &str,
@@ -305,12 +314,14 @@ pub(super) fn park(
     }
 }
 
+#[cfg(test)]
 pub(super) fn record_failure(root: &std::path::Path, session: &str, now: i64, reason: &str) {
     record_failure_with_evidence(root, session, now, reason, &Value::Null);
 }
 
 /// Bounded provider evidence retained beside the failure reason: the
 /// incomplete cause and measured request/token sizes, never provider text (#224).
+#[cfg(test)]
 const FAILURE_EVIDENCE_FIELDS: &[&str] = &[
     "incomplete_reason",
     "request_bytes",
@@ -321,6 +332,7 @@ const FAILURE_EVIDENCE_FIELDS: &[&str] = &[
     "http_status",
 ];
 
+#[cfg(test)]
 pub(super) fn record_failure_with_evidence(
     root: &std::path::Path,
     session: &str,
@@ -343,6 +355,7 @@ pub(super) fn record_failure_with_evidence(
 }
 
 /// Persist the measured provider-request envelope from the last provider call.
+#[cfg(test)]
 pub(super) fn record_request_envelope(root: &std::path::Path, session: &str, envelope_bytes: u64) {
     let result = with_state(root, session, |state| {
         state.request_envelope_bytes = Some(envelope_bytes);
@@ -355,6 +368,7 @@ pub(super) fn record_request_envelope(root: &std::path::Path, session: &str, env
 
 /// Record context exhaustion from an incomplete provider response. A prior
 /// retry count is preserved so a failed retry cannot restart the loop.
+#[cfg(test)]
 pub(super) fn record_context_exhaustion(
     root: &std::path::Path,
     session: &str,
@@ -376,6 +390,7 @@ pub(super) fn record_context_exhaustion(
     }
 }
 
+#[cfg(test)]
 pub(super) fn clear_context_exhaustion(root: &std::path::Path, session: &str) {
     let result = with_state(root, session, |state| state.context_exhaustion = None);
     if let Err(error) = result {

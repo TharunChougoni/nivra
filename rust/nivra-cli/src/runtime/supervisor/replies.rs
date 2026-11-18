@@ -3,6 +3,7 @@ use super::*;
 /// Bounded, role-prefixed failure code for the supervisor archive. The
 /// underlying planner/model/harness code stays visible instead of becoming the
 /// generic `supervisor_call_failed`; unknown text is still replaced.
+#[cfg(test)]
 pub(super) fn supervisor_failure_reason(reason: &str) -> String {
     let safe = !reason.is_empty()
         && reason.len() <= 64
@@ -35,6 +36,7 @@ pub(super) fn supervisor_failure_reason(reason: &str) -> String {
     }
 }
 
+#[cfg(test)]
 fn model_http_code(reason: &str) -> bool {
     let Some(status) = reason
         .split_ascii_whitespace()
@@ -48,6 +50,7 @@ fn model_http_code(reason: &str) -> bool {
         && (100..=599).contains(&status.parse::<u16>().unwrap_or_default())
 }
 
+#[cfg(test)]
 pub(super) fn record_compaction_failure(
     root: &std::path::Path,
     session: &str,
@@ -66,6 +69,7 @@ pub(super) fn record_compaction_failure(
     }
 }
 
+#[cfg(test)]
 pub(super) fn clear_compaction_failure(root: &std::path::Path, session: &str) {
     let result = with_state(root, session, |state| state.compaction_failed = None);
     if let Err(error) = result {
@@ -79,6 +83,7 @@ pub(super) fn clear_compaction_failure(root: &std::path::Path, session: &str) {
 /// and envelope). The envelope bounds the whole request, not only the prompt,
 /// on later renders (#224). Tool round trips grow the input, so only the first
 /// turn measures it.
+#[cfg(test)]
 pub(super) fn record_request_evidence(root: &std::path::Path, worker: &Worker) {
     let evidence = worker.evidence();
     if evidence["input_items"]
@@ -102,6 +107,7 @@ pub(super) fn record_request_evidence(root: &std::path::Path, worker: &Worker) {
 /// A provider-incomplete response on a request at or over the configured cap
 /// means the same oversized history will fail again until it is compacted. A
 /// `content_filter` cause is retained in evidence but is not a size signal.
+#[cfg(test)]
 fn context_exhaustion(worker: &Worker, reason: &str, now: i64) -> Option<ContextExhaustion> {
     // Supervisor turns pass the role-prefixed code; decision turns the raw one.
     let code = reason.strip_prefix("supervisor_").unwrap_or(reason);
@@ -137,6 +143,7 @@ fn context_exhaustion(worker: &Worker, reason: &str, now: i64) -> Option<Context
 
 /// Record context exhaustion for the bounded compaction retry. The retry count
 /// is preserved across failures so the loop cannot restart every cycle.
+#[cfg(test)]
 fn record_context_exhaustion_if_oversize(
     root: &std::path::Path,
     worker: &Worker,
@@ -158,6 +165,7 @@ fn record_context_exhaustion_if_oversize(
 
 /// Record the failed result and count the failed turn. The turn stays pending
 /// only when the log append itself failed; every other path clears it.
+#[cfg(test)]
 pub(super) fn fail_reply(
     root: &std::path::Path,
     worker: &Worker,
@@ -224,6 +232,7 @@ pub(super) fn fail_reply(
 /// failed instruction store, a stale note set or an invalid answer is a failed
 /// run that alerts and retries on the next wake (#143, #155).
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(super) fn handle_reply(
     root: &std::path::Path,
     worker: &Worker,
@@ -393,6 +402,7 @@ pub(super) fn handle_reply(
     true
 }
 
+#[cfg(test)]
 pub(super) fn record_result(
     root: &std::path::Path,
     worker: &Worker,
@@ -420,6 +430,7 @@ pub(super) fn record_result(
     logged
 }
 
+#[cfg(test)]
 pub(super) fn emit_failure(alerts: Option<&Alerts>, session: &str, now: i64, reason: &str) {
     if let Some(alerts) = alerts {
         let day = chrono::NaiveDate::parse_from_str(session, "%Y-%m-%d")
@@ -433,12 +444,14 @@ pub(super) fn emit_failure(alerts: Option<&Alerts>, session: &str, now: i64, rea
 }
 
 /// The backend returns the Responses envelope; directives live in its final text.
+#[cfg(test)]
 pub(super) fn reply_text(raw: &str) -> Option<String> {
     let value: Value = serde_json::from_str(raw).ok()?;
     super::super::harness::final_text(value["output"].as_array()?).ok()
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(super) fn apply_finish(
     state: &mut State,
     kind: RunKind,
@@ -505,6 +518,7 @@ pub(super) fn apply_finish(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(super) fn finish(
     root: &std::path::Path,
     session: &str,
@@ -524,6 +538,7 @@ pub(super) fn finish(
     }
 }
 
+#[cfg(test)]
 fn enqueue_wake(root: &std::path::Path, session: &str, now: i64) -> Result<()> {
     let path = root.join("model/supervisor-wake.json");
     rollover::atomic(

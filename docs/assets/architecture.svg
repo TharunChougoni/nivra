@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 280" role="img" aria-labelledby="title description">
   <title id="title">Nivra architecture</title>
-  <desc id="description">Verified market data flows through a factual Luna digest and decision owner to the paper engine, SQLite journal and read-only dashboard. A separate research lane runs a sandboxed worker and produces evidence and replay.</desc>
+  <desc id="description">Verified market data feeds a Rust-built brief and lane tools. A pi decision lane returns a trade plan; Rust validates it, the paper engine enforces identity, cash, fees and the two-second freshness gate, commits fills to the SQLite journal and serves a read-only dashboard. A separate pi research lane runs a sandboxed worker that produces evidence and replay.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#aeb8c4"/></marker>
     <style>
@@ -24,12 +24,12 @@
   </g>
   <g class="label">
     <text x="92.5" y="68"><tspan x="92.5">Verified market</tspan><tspan x="92.5" dy="23">data</tspan></text>
-    <text x="267.5" y="68"><tspan x="267.5">Factual digest</tspan><tspan x="267.5" dy="23">Luna</tspan></text>
-    <text x="442.5" y="68"><tspan x="442.5">Decision owner</tspan><tspan x="442.5" dy="23">typed actions</tspan></text>
+    <text x="267.5" y="68"><tspan x="267.5">Rust brief</tspan><tspan x="267.5" dy="23">and lane tools</tspan></text>
+    <text x="442.5" y="68"><tspan x="442.5">pi decision lane</tspan><tspan x="442.5" dy="23">typed plan</tspan></text>
     <text x="635" y="52"><tspan x="635">Paper engine</tspan><tspan x="635" dy="22">identity, cash, fees</tspan><tspan x="635" dy="22">2s freshness</tspan></text>
     <text x="827.5" y="85">SQLite journal</text>
     <text x="1002.5" y="68"><tspan x="1002.5">Read-only</tspan><tspan x="1002.5" dy="23">dashboard</tspan></text>
-    <text x="92.5" y="228">Research lane</text>
+    <text x="92.5" y="228">pi research lane</text>
     <text x="267.5" y="216"><tspan x="267.5">Sandboxed</tspan><tspan x="267.5" dy="23">worker</tspan></text>
     <text x="442.5" y="216"><tspan x="442.5">Evidence and</tspan><tspan x="442.5" dy="23">replay</tspan></text>
   </g>

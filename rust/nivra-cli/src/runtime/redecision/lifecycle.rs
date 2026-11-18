@@ -396,54 +396,6 @@ pub(crate) fn status(db: &Connection, c: &Config) -> Result<Option<Value>> {
     Ok(Some(view))
 }
 
-pub(crate) struct Worker {
-    pub claim: Claim,
-    pub cancel: Arc<std::sync::atomic::AtomicBool>,
-    pub receiver: std::sync::mpsc::Receiver<std::result::Result<Value, String>>,
-}
-impl Drop for Worker {
-    fn drop(&mut self) {
-        self.cancel
-            .store(true, std::sync::atomic::Ordering::Release);
-    }
-}
-pub(crate) fn launch(
-    c: &Config,
-    cfg: &planner::PlannerConfig,
-    p: &Portfolio,
-    instruments: &[nivra_core::execution::Instrument],
-    claim: Claim,
-    context: Option<super::super::decision_evidence::Snapshot>,
-) -> Worker {
-    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    let worker = Worker {
-        claim: claim.clone(),
-        cancel: cancel.clone(),
-        receiver,
-    };
-    let c = c.clone();
-    let cfg = cfg.clone();
-    let p = p.clone();
-    let instruments = instruments.to_vec();
-    thread::spawn(move || {
-        let result = planner::produce_clocked(
-            &c,
-            &cfg,
-            &p,
-            &instruments,
-            false,
-            Some(&claim),
-            Some(&cancel),
-            &millis,
-            None,
-            context.as_ref(),
-        )
-        .map_err(|e| planner::logged_reason(e.as_ref()).to_owned());
-        let _ = sender.send(result);
-    });
-    worker
-}
 pub(crate) fn block(db: &mut Connection, c: &Config, reason: &str) -> Result<()> {
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     if let Some(mut state) = load(&tx)? {

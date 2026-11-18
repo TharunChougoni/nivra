@@ -1,10 +1,10 @@
 //! The controller's side of the pi lanes. Each scan cycle feeds the trigger
 //! engine; a due lane turn runs on one worker thread that owns the agent
-//! process, so the controller loop never waits on a model. A decision plan is
-//! journalled as a proposal, with no execution authority.
+//! process. The controller settles its claim before a paper plan can execute.
 use super::brief::{self, Brief, Facts, SessionFacts};
 use super::client::{Agent, AgentClient};
 use super::lanes::{self, LaneRunner, TurnContext};
+use super::paper;
 use super::protocol::{TurnStatus, Usage};
 use super::requests::Requests;
 use super::tools::PlanAttempt;
@@ -13,7 +13,7 @@ use super::triggers::{
 };
 use super::{AgentMode, AgentSettings, Lane};
 use crate::runtime::planner::{self, Backend, ModelRole, PlannerConfig};
-use crate::runtime::{Config, Result, decision_evidence};
+use crate::runtime::{Config, Connection, Result, decision_evidence, decision_owner, redecision};
 use nivra_core::execution::{Instrument, Portfolio, Scanner};
 use nivra_core::feature_store::FeatureStore;
 use serde_json::{Value, json};
@@ -87,18 +87,20 @@ struct Work {
     triggers: Vec<Trigger>,
     brief: Brief,
     context: TurnContext,
+    paper_turn_id: Option<String>,
 }
 
 /// One finished job, as the controller settles it.
-pub(crate) struct Done {
-    pub lane: Lane,
-    pub triggers: Vec<Trigger>,
-    pub turns: Vec<Value>,
-    pub plan: Option<(String, PlanAttempt)>,
-    pub review: Option<String>,
-    pub error: Option<String>,
+struct Done {
+    lane: Lane,
+    triggers: Vec<Trigger>,
+    turns: Vec<Value>,
+    plan: Option<(String, PlanAttempt)>,
+    paper_input: Option<Value>,
+    review: Option<String>,
+    error: Option<String>,
     /// The agent is restarting; the batch may run again from this time.
-    pub retry_at_ms: Option<i64>,
+    retry_at_ms: Option<i64>,
 }
 
 pub(crate) struct LaneService {
@@ -110,6 +112,7 @@ pub(crate) struct LaneService {
     worker: Option<JoinHandle<()>>,
     preempt: Arc<AtomicBool>,
     busy: Option<Lane>,
+    pending_claim: Option<redecision::Claim>,
     hold_until_ms: i64,
     agenda: Option<String>,
     status: Value,
@@ -148,6 +151,7 @@ fn run(runner: &mut LaneRunner<'_>, job: &mut Work) -> Done {
         triggers: job.triggers.clone(),
         turns: Vec::new(),
         plan: None,
+        paper_input: None,
         review: None,
         error: None,
         retry_at_ms: None,
@@ -155,7 +159,16 @@ fn run(runner: &mut LaneRunner<'_>, job: &mut Work) -> Done {
     let result = (|| -> Result<()> {
         match job.lane {
             Lane::Decision => {
-                let turn = runner.decision(trigger, job.brief.clone(), &mut job.context)?;
+                let brief = job.brief.clone();
+                let turn = if let Some(id) = job.paper_turn_id.take() {
+                    let turn = runner.decision_as(id, trigger, brief, &mut job.context)?;
+                    if turn.outcome.status == TurnStatus::Ok && turn.outcome.error.is_none() {
+                        done.paper_input = Some(std::mem::take(&mut job.context.bundle));
+                    }
+                    turn
+                } else {
+                    runner.decision(trigger, brief, &mut job.context)?
+                };
                 done.turns.push(turn_summary(&turn));
                 if let Some(plan) = turn.plan {
                     done.plan = Some((turn.outcome.id.clone(), plan));
@@ -244,6 +257,7 @@ impl LaneService {
             worker: Some(worker),
             preempt,
             busy: None,
+            pending_claim: None,
             hold_until_ms: 0,
             agenda: None,
             status: json!({"status":"idle"}),
@@ -252,6 +266,19 @@ impl LaneService {
 
     pub(crate) fn status(&self) -> Value {
         self.status.clone()
+    }
+
+    pub(crate) fn pending_claim(&self) -> Option<&redecision::Claim> {
+        self.pending_claim.as_ref()
+    }
+
+    pub(crate) fn cancel_decision(&mut self, db: &mut Connection, c: &Config) -> Result<()> {
+        if let Some(claim) = self.pending_claim.as_ref() {
+            paper::refuse(db, c, claim, "session_closed_no_replay")?;
+            self.pending_claim = None;
+            self.preempt.store(true, Ordering::Release);
+        }
+        Ok(())
     }
 
     fn spent(&self, c: &Config) -> BTreeMap<Lane, Usage> {
@@ -270,11 +297,15 @@ impl LaneService {
 
     /// One scan cycle: settle a finished turn, evaluate triggers and start the
     /// next due turn. Lane failures are journalled; they never stop trading.
-    pub(crate) fn tick(&mut self, cycle: &Cycle<'_>) -> Result<()> {
+    pub(crate) fn tick(&mut self, cycle: &Cycle<'_>, db: &mut Connection) -> Result<()> {
         let c = cycle.c;
         match self.done.try_recv() {
-            Ok(done) => self.settle(cycle, done)?,
+            Ok(done) => self.settle(cycle, db, done)?,
             Err(TryRecvError::Disconnected) if self.busy.is_some() => {
+                if let Some(claim) = self.pending_claim.as_ref() {
+                    paper::refuse(db, c, claim, "agent_worker_exited")?;
+                    self.pending_claim = None;
+                }
                 self.busy = None;
                 self.status = json!({"status":"unavailable","reason":"agent_worker_exited"});
             }
@@ -349,7 +380,7 @@ impl LaneService {
             self.preempt.store(true, Ordering::Release);
         }
         if self.busy.is_none() && cycle.now >= self.hold_until_ms {
-            self.dispatch(cycle, &held, phase, &spent)?;
+            self.dispatch(cycle, db, &held, phase, &spent)?;
         }
         Ok(())
     }
@@ -365,6 +396,7 @@ impl LaneService {
     fn dispatch(
         &mut self,
         cycle: &Cycle<'_>,
+        db: &mut Connection,
         held: &[super::triggers::Held],
         phase: Phase,
         spent: &BTreeMap<Lane, Usage>,
@@ -421,7 +453,11 @@ impl LaneService {
             portfolio: p,
             ranking: cycle.ranking,
             memory: memory.as_ref(),
-            execution: "shadow_never_executed",
+            execution: if self.mode == AgentMode::Paper {
+                "paper_plan_pending_host_validation"
+            } else {
+                "shadow_never_executed"
+            },
         };
         let used = spent.get(&lane).cloned().unwrap_or_default();
         let budget = brief::budget(
@@ -444,6 +480,23 @@ impl LaneService {
             Lane::Decision => Value::Null,
         };
         let brief = Brief::build(&facts, budget, task, &triggers);
+        let claim = if lane == Lane::Decision && self.mode == AgentMode::Paper {
+            let claim = paper::reserve(
+                db,
+                c,
+                cycle.cfg,
+                p,
+                cycle.now,
+                &context.bundle,
+                primary(&triggers),
+            )?;
+            let Some(claim) = claim else {
+                return self.skip(c, lane, &triggers, "agent_paper_authority_unavailable");
+            };
+            Some(claim)
+        } else {
+            None
+        };
         let job = Job {
             c: c.clone(),
             cfg: cycle.cfg.clone(),
@@ -452,20 +505,29 @@ impl LaneService {
                 triggers: triggers.clone(),
                 brief,
                 context,
+                paper_turn_id: claim.as_ref().map(paper::turn_id),
             },
         };
         self.preempt.store(false, Ordering::Release);
         match jobs.try_send(job) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
-                self.engine.requeue(lane, triggers);
+                if let Some(claim) = &claim {
+                    paper::refuse(db, c, claim, "agent_worker_busy")?;
+                } else {
+                    self.engine.requeue(lane, triggers);
+                }
                 return Ok(());
             }
             Err(TrySendError::Disconnected(_)) => {
+                if let Some(claim) = &claim {
+                    paper::refuse(db, c, claim, "agent_worker_unavailable")?;
+                }
                 self.jobs = None;
                 return self.skip(c, lane, &triggers, "agent_worker_unavailable");
             }
         }
+        self.pending_claim = claim;
         if consumes_agenda {
             self.agenda = None;
         }
@@ -514,14 +576,32 @@ impl LaneService {
         })
     }
 
-    fn settle(&mut self, cycle: &Cycle<'_>, done: Done) -> Result<()> {
+    fn settle(&mut self, cycle: &Cycle<'_>, db: &mut Connection, done: Done) -> Result<()> {
         let c = cycle.c;
         self.busy = None;
         self.preempt.store(false, Ordering::Release);
+        let paper_decision = done.lane == Lane::Decision && self.mode == AgentMode::Paper;
         if let Some(retry_at) = done.retry_at_ms {
             self.hold_until_ms = retry_at;
-            self.engine.requeue(done.lane, done.triggers.clone());
+            if !paper_decision {
+                self.engine.requeue(done.lane, done.triggers.clone());
+            }
         }
+        let paper_status = if let Some(claim) = self.pending_claim.as_ref() {
+            let result = commit_done(cycle, db, claim, &done);
+            let status = match result {
+                Ok(_) => "committed_for_paper_execution".to_owned(),
+                Err(error) => {
+                    let reason = paper::failure_reason(error.as_ref());
+                    paper::refuse(db, c, claim, &reason)?;
+                    reason
+                }
+            };
+            self.pending_claim = None;
+            Some(status)
+        } else {
+            paper_decision.then(|| "agent_paper_claim_unavailable".to_owned())
+        };
         if let Some(text) = &done.review {
             self.agenda = Some(text.chars().take(4_000).collect());
             self.engine.push(Trigger::new(
@@ -531,16 +611,16 @@ impl LaneService {
             ));
         }
         let plan = done.plan.as_ref().map(|(turn_id, attempt)| {
-            let status = match attempt {
+            let status = paper_status.as_deref().unwrap_or(match attempt {
                 PlanAttempt::Validated { .. } => "shadow_not_executed",
                 PlanAttempt::Refused { .. } => "refused_by_validation",
-            };
+            });
             crate::runtime::transcript::redact(&json!({"status":status,"record":{
                 "turn_id":turn_id,"mode":self.mode,"at_ms":cycle.now,"attempt":attempt
             }}))
         });
         self.status = json!({"status":"idle","last":{"lane":done.lane,"turns":done.turns,
-            "error":done.error,"plan":plan,"settled_ms":cycle.now},"mode":self.mode});
+            "error":done.error,"plan":plan,"paper_status":paper_status,"settled_ms":cycle.now},"mode":self.mode});
         if let Some(plan) = plan {
             append(c, "plans.ndjson", &plan)?;
         }
@@ -555,6 +635,45 @@ impl LaneService {
             let _ = worker.join();
         }
     }
+}
+
+fn commit_done(
+    cycle: &Cycle<'_>,
+    db: &mut Connection,
+    claim: &redecision::Claim,
+    done: &Done,
+) -> Result<Value> {
+    if done.lane != Lane::Decision || !cycle.decision_ready || cycle.sealed {
+        return Err("agent_paper_book_not_ready".into());
+    }
+    let (Some(input), Some((turn_id, PlanAttempt::Validated { plan, .. })), [turn]) =
+        (&done.paper_input, &done.plan, done.turns.as_slice())
+    else {
+        return Err("agent_paper_no_validated_decision".into());
+    };
+    let mut context = decision_owner::Context {
+        db,
+        portfolio: cycle.portfolio,
+        instruments: cycle.instruments,
+    };
+    paper::commit(
+        &mut context,
+        cycle.c,
+        cycle.cfg,
+        claim,
+        paper::Completed {
+            turn_id,
+            provider: turn["provider"]
+                .as_str()
+                .ok_or("agent_paper_turn_binding_invalid")?,
+            model: turn["model"]
+                .as_str()
+                .ok_or("agent_paper_turn_binding_invalid")?,
+            proposal: plan,
+            input,
+        },
+        crate::runtime::millis(),
+    )
 }
 
 #[cfg(test)]
@@ -590,7 +709,8 @@ mod tests {
             index: None,
         };
 
-        service.tick(&cycle).unwrap();
+        let mut db = Connection::open_in_memory().unwrap();
+        service.tick(&cycle, &mut db).unwrap();
 
         assert!(service.busy.is_none());
         assert!(!lanes::root(&c).join("review-claimed.json").exists());

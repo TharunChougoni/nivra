@@ -248,17 +248,3 @@ pub(crate) fn failure_record_with_provider(
     );
     record
 }
-/// Maps an error to its status code and journals the bounded underlying reason.
-pub(crate) fn logged_reason(error: &(dyn std::error::Error + 'static)) -> &'static str {
-    let status = reason(error);
-    let text: String = error.to_string().chars().take(512).collect();
-    let text = if status == "planner_provider_failed" {
-        provider_failure(&text)
-            .map(|detail| detail.reason)
-            .unwrap_or_else(|| status.to_owned())
-    } else {
-        text
-    };
-    eprintln!("planner_error status={status} reason={text:?}");
-    status
-}

@@ -6,8 +6,8 @@
 [![Rust 1.95](https://img.shields.io/badge/rust-1.95-orange)](rust-toolchain.toml)
 
 Nivra is an experimental Rust workspace for paper-only trading and research on
-Indian markets. A model-led decision owner receives factual, verified market
-digests and emits typed actions. Deterministic code owns identity, cash, fees,
+Indian markets. A pi decision lane receives a factual, verified market brief and
+returns a typed paper TradePlan. Deterministic code owns identity, cash, fees,
 fills and protection, and rejects any action that cannot be supported by an
 original quote receipt no more than two seconds old.
 
@@ -22,9 +22,8 @@ original quote receipt no more than two seconds old.
   weekly option-long mandate. Full F&O metadata and contract chains are
   display-only. Futures, stock options, short options and live orders are not
   executable.
-- **Models:** `gpt-6-luna` compiles factual digests; a persistent orchestrator
-  owns paper decisions (Grok 4.7 by default, `gpt-6.1-sol` selectable as a
-  reviewed profile). Models propose; Rust disposes.
+- **Models:** pi owns the decision, research, and review sessions and their
+  provider calls. Rust builds the briefs and validates every paper action.
 - **Sources:** Upstox v3 market data/history and NSE BOD/contract metadata
   adapters.
 - **Research lane:** registered, hash-pinned jobs run in an owned
@@ -50,7 +49,7 @@ fee path as the paper controller.
   validation, and separate cash and option mandates in Rust.
 - **Deterministic paper fills.** Original quote receipts, adverse tick rounding,
   cash/held-unit checks, and no ambiguous retry or broker failover.
-- **Model-led, code-checked decisions.** A factual digest and typed action
+- **Model-led, code-checked decisions.** A factual brief and typed action
   contract keep model output away from credentials, cash arithmetic and fill
   authority.
 - **Independent lanes with typed budgets.** Trading and research have separate
@@ -79,9 +78,10 @@ fee path as the paper controller.
 ## Getting started
 
 Requirements: Linux x86_64 and Rust **1.95.0** (pinned by `rust-toolchain.toml`).
-Node **24** is optional for the dashboard source/build; it is not a runtime
-dependency of the paper controller. Add the `x86_64-unknown-linux-musl` target
-only to reproduce release artifacts.
+Node **22.19+** runs the pi agent subprocess the paper controller uses for model
+turns; Node **24** builds the dashboard sources. The committed dashboard bundle
+needs no Node runtime. Add the `x86_64-unknown-linux-musl` target only to reproduce
+release artifacts.
 
 ```sh
 git clone https://github.com/TharunChougoni/nivra.git
@@ -112,7 +112,7 @@ features.
 | [Architecture](docs/ARCHITECTURE.md) | Crates, runtime flow, durable state and lane boundaries |
 | [Operations](docs/OPERATIONS.md) | Configuration, startup, recovery and operator safety procedures |
 | [Strategy](docs/STRATEGY.md) | Paper mandate, execution gates, fees and Nifty option scope |
-| [Model Harness](docs/MODEL_HARNESS.md) | Digest/owner roles, tools, budgets, trust boundaries and limits |
+| [Model Harness](docs/MODEL_HARNESS.md) | Lane tool boundary, evidence, budgets, archives and retained offline-replay mechanics |
 | [Dashboard](docs/DASHBOARD.md) | Read-only API, React workspace and captured-data projections |
 | [Testing](docs/TESTING.md) | Behavioral test strategy and current gate |
 | [Development](docs/DEVELOPMENT.md) | Build, release workflow and immutable-tag policy |
@@ -126,7 +126,7 @@ research worker and strategy-sandbox references.
 | --- | --- |
 | `nivra-core` | Decimal finance, fees, instruments/calendar, quotes, paper execution and replay |
 | `nivra-store` | SQLite ledger, durable control/read journals, writer bindings |
-| `nivra-cli` | Paper controller, scanner, model harness, history, dashboard, recovery and updater |
+| `nivra-cli` | Paper controller, scanner, pi agent lanes, history, dashboard, recovery and updater |
 | `nivra-research` | Registered jobs, leases, sandbox worker and result contracts |
 | `nivra-sandbox` | CLI-free scorer/replay containment API |
 | `nivra-tools` | Release assembly/checks, streaming replay and repository checks |

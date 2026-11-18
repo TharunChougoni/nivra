@@ -8,13 +8,20 @@
 //! Notes live in their own store, outside the compactable log. Every mutation
 //! bumps the note-set version; a turn records the version it was built from and
 //! its action commit is refused when the set changed (#143).
+// The pi cutover left these modules read-only in production builds: every
+// writer below is compiled for tests only, together with what it needs.
+#[cfg(test)]
 use super::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::io::Write;
 use std::{
     fs::{self, OpenOptions},
-    io::{Read, Write},
+    io::Read,
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     sync::Mutex,
@@ -27,16 +34,21 @@ pub(crate) use tests::*;
 const ROOT: &str = "model/session";
 pub(crate) const ROOT_PREFIX: &str = ROOT;
 const MAX_LOG_BYTES: usize = 64 * 1024 * 1024;
+#[cfg(test)]
 const MAX_REPLY_BYTES: usize = 32 * 1024;
 /// Bound on one replayed turn request. The owner re-reads detail with tools, so
 /// replay keeps continuity fields instead of embedding an old data payload.
+#[cfg(test)]
 const MAX_REPLAY_REQUEST_BYTES: usize = 4_096;
 /// Bound on the replayed committed conversation. Oldest exchanges are omitted
 /// first; the original log is never rewritten.
+#[cfg(test)]
 const MAX_REPLAY_CONVERSATION_BYTES: usize = 12_288;
 /// Bound on the latest compaction summary text carried into the prompt.
+#[cfg(test)]
 const MAX_REPLAY_SUMMARY_BYTES: usize = 6_144;
 /// Continuity fields kept when one replayed request is over its bound.
+#[cfg(test)]
 const REPLAY_CONTINUITY_KEYS: [&str; 14] = [
     "digest",
     "digest_id",
@@ -138,6 +150,7 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
+#[cfg(test)]
 fn encode_frame(record: &Record) -> Result<Vec<u8>> {
     let body = serde_json::to_vec(record)?;
     let len = u32::try_from(body.len()).map_err(|_| "session_record_too_large")?;
@@ -253,6 +266,7 @@ pub(crate) enum PendingSource {
 /// artifact refs in `actions`, but not the sealed evidence, notes block,
 /// evidence payload or full reply. The log itself is never rewritten; this
 /// only shrinks prompt reconstruction.
+#[cfg(test)]
 fn owner_task_reference(turn: &Turn, result: &TurnResult) -> Option<Value> {
     let owner_task = turn.request.get("owner_task");
     if owner_task.is_none() && !matches!(turn.trigger.as_str(), "review" | "research") {
@@ -328,7 +342,7 @@ fn pending_from_records(records: &[Record]) -> Option<Turn> {
 enum FrameOutcome {
     Complete,
     IncompleteTail,
-    Corrupt(&'static str),
+    Corrupt,
 }
 
 struct FrameScan {
@@ -353,11 +367,11 @@ fn scan_frames(raw: &[u8]) -> FrameScan {
             u32::from_be_bytes(raw[cursor..cursor + 4].try_into().unwrap_or([0, 0, 0, 0])) as usize;
         let start = cursor + frame_header();
         if len == 0 || len > MAX_LOG_BYTES - frame_header() {
-            scan.outcome = FrameOutcome::Corrupt("session_frame_length_invalid");
+            scan.outcome = FrameOutcome::Corrupt;
             break;
         }
         let Some(end) = start.checked_add(len) else {
-            scan.outcome = FrameOutcome::Corrupt("session_frame_length_invalid");
+            scan.outcome = FrameOutcome::Corrupt;
             break;
         };
         if end > raw.len() {
@@ -365,18 +379,18 @@ fn scan_frames(raw: &[u8]) -> FrameScan {
             // be an interrupted body, even when its declared length exceeds EOF.
             scan.outcome = match serde_json::from_slice::<Value>(&raw[start..]) {
                 Err(error) if error.is_eof() => FrameOutcome::IncompleteTail,
-                _ => FrameOutcome::Corrupt("session_frame_length_invalid"),
+                _ => FrameOutcome::Corrupt,
             };
             break;
         }
         if raw[cursor + 4..start] != sha256(&raw[start..end])[..] {
-            scan.outcome = FrameOutcome::Corrupt("session_frame_checksum_invalid");
+            scan.outcome = FrameOutcome::Corrupt;
             break;
         }
         let record = match decode_frame(&raw[start..end]) {
             Ok(record) => record,
-            Err(reason) => {
-                scan.outcome = FrameOutcome::Corrupt(reason);
+            Err(_) => {
+                scan.outcome = FrameOutcome::Corrupt;
                 break;
             }
         };
@@ -408,6 +422,7 @@ impl SessionLog {
 
     /// Append one record and durably commit it. The process-wide lock serialises
     /// the orchestrator; a partial tail left by a crash is truncated first.
+    #[cfg(test)]
     pub(crate) fn append(&self, at_ms: i64, body: Body) -> Result<Record> {
         let _guard = io_lock();
         fs::create_dir_all(&self.directory)?;
@@ -434,8 +449,8 @@ impl SessionLog {
             return Err("session_log_too_large".into());
         }
         let scan = scan_frames(&raw);
-        if let FrameOutcome::Corrupt(reason) = scan.outcome {
-            return Err(reason.into());
+        if let FrameOutcome::Corrupt = scan.outcome {
+            return Err("session_log_corrupt".into());
         }
         if scan
             .records
@@ -500,6 +515,7 @@ impl SessionLog {
 
     /// Identity of the latest durable turn result and its independently
     /// committed action receipts. Missing results remain explicitly absent.
+    #[cfg(test)]
     fn latest_receipt_reference(&self, root: &Path, session: &str) -> Value {
         let records = self.records();
         let Some((result_seq, result)) = records.iter().rev().find_map(|record| {
@@ -569,7 +585,7 @@ impl SessionLog {
                     PendingSource::Incomplete
                 }
             }
-            FrameOutcome::Corrupt(_) => PendingSource::Corrupt,
+            FrameOutcome::Corrupt => PendingSource::Corrupt,
         };
         PendingProjection { source, turn }
     }
@@ -585,12 +601,14 @@ impl SessionLog {
             })
     }
 
+    #[cfg(test)]
     pub(crate) fn last_seq(&self) -> u64 {
         self.records().last().map_or(0, |record| record.seq)
     }
 
     /// Turns recorded after the latest compaction summary. A session compacts
     /// when this crosses its budget, never by rewriting the log (#144).
+    #[cfg(test)]
     pub(crate) fn turns_since_summary(&self) -> usize {
         let after = self.summary().map_or(0, |summary| summary.up_to_seq);
         self.records()
@@ -604,6 +622,7 @@ impl SessionLog {
     /// reconstructed conversation after it. The static prompt, notes, seed,
     /// current facts and reserved result space are covered by configured
     /// headroom. This is a byte proxy for context, not a provider token count.
+    #[cfg(test)]
     pub(crate) fn context_bytes(&self) -> u64 {
         serde_json::to_vec(&self.conversation()).map_or(u64::MAX, |bytes| bytes.len() as u64)
     }
@@ -616,6 +635,7 @@ impl SessionLog {
     /// request keeps only continuity fields, the digest keeps only its brief,
     /// and the oldest exchanges are omitted past the replay budget. The log
     /// itself is never rewritten.
+    #[cfg(test)]
     pub(crate) fn conversation(&self) -> Value {
         let records = self.records();
         let summary = records.iter().rev().find_map(|record| match &record.body {
@@ -721,6 +741,7 @@ impl SessionLog {
     }
 
     /// Turns after the latest summary, oldest first, bounded.
+    #[cfg(test)]
     pub(crate) fn recent_turns(&self, limit: usize) -> Vec<Turn> {
         let after = self.summary().map_or(0, |summary| summary.up_to_seq);
         let mut turns: Vec<Turn> = self
@@ -743,16 +764,19 @@ impl SessionLog {
 // Action receipts
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 fn action_directory(root: &Path, session: &str) -> PathBuf {
     root.join(ROOT).join(session).join("actions")
 }
 
+#[cfg(test)]
 fn action_path(root: &Path, session: &str, turn_id: &str) -> PathBuf {
     action_directory(root, session).join(format!("{turn_id}.json"))
 }
 
 /// A directive (or any future session action) is committed at most once for a
 /// turn. A replay finds the receipt and writes only the result (#141).
+#[cfg(test)]
 pub(crate) fn commit_action(
     root: &Path,
     session: &str,
@@ -782,6 +806,7 @@ pub(crate) fn commit_action(
 
 /// Permissive reader for archived projections. Control paths use
 /// [`checked_actions_for`] so a corrupt receipt is never mistaken for absence.
+#[cfg(test)]
 pub(crate) fn actions_for(root: &Path, session: &str, turn_id: &str) -> Vec<Action> {
     fs::read(action_path(root, session, turn_id))
         .ok()
@@ -791,6 +816,7 @@ pub(crate) fn actions_for(root: &Path, session: &str, turn_id: &str) -> Vec<Acti
 
 /// Checked action-receipt read for control paths. A missing receipt is empty;
 /// an unreadable or corrupt receipt is an explicit refusal.
+#[cfg(test)]
 pub(crate) fn checked_actions_for(
     root: &Path,
     session: &str,
@@ -803,6 +829,7 @@ pub(crate) fn checked_actions_for(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn action(kind: &str, id: &str, value: &Value) -> Action {
     Action {
         kind: kind.into(),
@@ -856,6 +883,7 @@ pub(crate) struct NoteSet {
 }
 
 impl NoteSet {
+    #[cfg(test)]
     pub(crate) fn active(&self) -> Vec<Note> {
         self.notes
             .iter()
@@ -865,6 +893,7 @@ impl NoteSet {
     }
 
     /// Pinned block sent with every turn. Notes stay outside the compactable log.
+    #[cfg(test)]
     pub(crate) fn prompt_block(&self) -> Value {
         json!(
             self.active()
@@ -900,6 +929,7 @@ impl Notes {
             .unwrap_or_default()
     }
 
+    #[cfg(test)]
     fn write(&self, notes: &NoteSet) -> Result<()> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
@@ -913,10 +943,12 @@ impl Notes {
         self.read()
     }
 
+    #[cfg(test)]
     pub(crate) fn version(&self) -> u64 {
         self.snapshot().version
     }
 
+    #[cfg(test)]
     fn update(
         &self,
         now: i64,
@@ -967,6 +999,7 @@ impl Notes {
 
     /// Pin every waiting note the turn is about to see. One version bump covers
     /// the whole set, so the turn records the version that includes its own pin.
+    #[cfg(test)]
     pub(crate) fn pin_waiting(&self, turn_id: &str, now: i64) -> Result<u64> {
         let notes = self.update(now, |notes| {
             let mut changed = false;
@@ -984,6 +1017,7 @@ impl Notes {
     }
 
     /// Mark done/superseded only for the revision this turn saw.
+    #[cfg(test)]
     pub(crate) fn mark(&self, id: &str, revision: u64, state: NoteState, now: i64) -> Result<u64> {
         if !matches!(state, NoteState::Done | NoteState::Superseded) {
             return Err("session_note_mark_invalid".into());
@@ -1012,6 +1046,7 @@ impl Notes {
 
     /// At close, non-keep notes expire. Keep notes and already-closed notes are
     /// untouched; the caller copies keep notes into tomorrow's seed (#144).
+    #[cfg(test)]
     pub(crate) fn expire_at_close(&self, now: i64) -> Result<Vec<String>> {
         let mut expired = Vec::new();
         self.update(now, |notes| {
@@ -1028,6 +1063,7 @@ impl Notes {
     }
 
     /// Today's keep notes for tomorrow's seed, independent of the handoff call.
+    #[cfg(test)]
     pub(crate) fn keep_for_seed(&self) -> Vec<Note> {
         self.snapshot()
             .notes
@@ -1041,6 +1077,7 @@ impl Notes {
 
 /// Tools a parallel chat instance may use. Every write-capable tool is removed
 /// in the host before the request is built, not by prompt text (#145).
+#[cfg(test)]
 pub(crate) fn read_only_tools(tools: &[String]) -> Vec<String> {
     tools
         .iter()
@@ -1049,6 +1086,7 @@ pub(crate) fn read_only_tools(tools: &[String]) -> Vec<String> {
         .collect()
 }
 
+#[cfg(test)]
 pub(crate) fn write_tool(tool: &str) -> bool {
     matches!(
         tool,
@@ -1064,12 +1102,14 @@ pub(crate) fn write_tool(tool: &str) -> bool {
 
 /// Build a read-only chat role: no write tools and no analysis sandbox. The
 /// caller still uses the plane session log/notes/book as prompt facts.
+#[cfg(test)]
 pub(crate) fn read_only_role(role: &mut super::planner::ModelRole) {
     role.tools = read_only_tools(&role.tools);
     role.max_analysis_tools = 0;
 }
 
 /// Refuse an action commit built on a note set that has since changed (#143).
+#[cfg(test)]
 pub(crate) fn check_notes_version(root: &Path, session: &str, expected: u64) -> Result<()> {
     let current = Notes::new(root, session).version();
     if current == expected {
@@ -1084,6 +1124,7 @@ pub(crate) fn check_notes_version(root: &Path, session: &str, expected: u64) -> 
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct NoteMark {
     pub id: String,
     pub revision: u64,
@@ -1092,6 +1133,7 @@ pub(crate) struct NoteMark {
 /// Parse the orchestrator's note marks. A mark always names the note revision
 /// the model saw; a missing/invalid mark is a model failure, never a silent
 /// success that drops or clobbers a note (#143).
+#[cfg(test)]
 pub(crate) fn note_marks(value: &Value) -> Result<(Vec<NoteMark>, Vec<NoteMark>)> {
     fn parse(value: &Value) -> Result<Vec<NoteMark>> {
         let Some(items) = value.as_array() else {
@@ -1128,10 +1170,12 @@ pub(crate) fn note_marks(value: &Value) -> Result<(Vec<NoteMark>, Vec<NoteMark>)
     Ok((done, superseded))
 }
 
+#[cfg(test)]
 pub(crate) fn prompt_version(system_prompt: &str, trigger_prompt: &str) -> String {
     super::digest(format!("{system_prompt}\0{trigger_prompt}").as_bytes())
 }
 
+#[cfg(test)]
 fn read_existing_seed(path: &Path) -> Result<Option<Value>> {
     let mut file = match OpenOptions::new()
         .read(true)
@@ -1167,6 +1211,7 @@ fn read_existing_seed(path: &Path) -> Result<Option<Value>> {
 
 /// Persist a successor seed once. Existing valid identical JSON makes retries
 /// idempotent; a different, unreadable or partial artifact is never replaced.
+#[cfg(test)]
 pub(crate) fn write_seed(root: &Path, session: &str, seed: &Value) -> Result<()> {
     validate_seed(seed, session).map_err(std::io::Error::other)?;
     let directory = root.join(ROOT).join(session);
@@ -1489,6 +1534,7 @@ fn seed_hash(value: &Value) -> bool {
     })
 }
 
+#[cfg(test)]
 pub(crate) fn add_seed_fact(
     root: &Path,
     session: &str,
@@ -1498,8 +1544,52 @@ pub(crate) fn add_seed_fact(
     Ok(())
 }
 
+/// Read references from the earlier planner's operator-request archive.
+#[cfg(test)]
+pub(crate) fn legacy_operator_request_refs(root: &Path, session: &str, now: i64) -> Value {
+    #[derive(Deserialize)]
+    struct Request {
+        id: String,
+        kind: String,
+        session: String,
+        state: String,
+        expires_at_ms: i64,
+    }
+
+    #[derive(Deserialize)]
+    struct Store {
+        version: u32,
+        requests: Vec<Request>,
+    }
+
+    let path = root.join("model/agent-requests.json");
+    let Ok(bytes) = crate::read_bounded(&path, 1_048_576) else {
+        return json!({"available":false,"reason":"request_store_unavailable","refs":[]});
+    };
+    let Ok(store) = serde_json::from_slice::<Store>(&bytes) else {
+        return json!({"available":false,"reason":"request_store_invalid","refs":[]});
+    };
+    if store.version != 1 {
+        return json!({"available":false,"reason":"request_store_version_unsupported","refs":[]});
+    }
+    let refs = store
+        .requests
+        .iter()
+        .filter(|request| {
+            request.session == session
+                && request.expires_at_ms > now
+                && matches!(request.state.as_str(), "queued" | "running")
+        })
+        .map(|request| {
+            json!({"request_id":request.id,"kind":request.kind,"state":request.state,"expires_at_ms":request.expires_at_ms})
+        })
+        .collect::<Vec<_>>();
+    json!({"available":true,"refs":refs})
+}
+
 /// Build tomorrow's seed from host-owned facts. Never depends on the handoff
 /// model reply: keep notes and positions survive a failed handoff (#144).
+#[cfg(test)]
 pub(crate) fn build_seed(root: &Path, session: &str, target: &str, context: &SeedContext) -> Value {
     let keep = Notes::new(root, session).keep_for_seed();
     // Position context is descriptive only. Strip fields which could be
@@ -1561,6 +1651,7 @@ pub(crate) fn build_seed(root: &Path, session: &str, target: &str, context: &See
     seed
 }
 
+#[cfg(test)]
 pub(crate) struct SeedContext {
     pub source_turn_id: String,
     pub standing_instructions: String,
@@ -1578,6 +1669,7 @@ pub(crate) struct SeedContext {
     pub workspace_state: Value,
 }
 
+#[cfg(test)]
 pub(crate) fn bound_reply(reply: &str) -> String {
     let safe = super::transcript::redact(&json!(reply));
     let reply = safe.as_str().unwrap_or_default();

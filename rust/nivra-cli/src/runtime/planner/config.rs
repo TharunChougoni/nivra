@@ -66,6 +66,7 @@ impl FallbackProfile {
                 .as_deref()
                 .is_some_and(|effort| !["low", "medium", "high", "max"].contains(&effort))
     }
+    #[cfg(test)]
     pub(crate) fn max_tokens(&self, role: &ModelRole) -> u32 {
         self.output_cap.unwrap_or(role.output_cap)
     }

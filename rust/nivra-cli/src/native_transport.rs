@@ -1,4 +1,4 @@
-//! Bounded response consumption and fixed-origin model HTTP. No cookies or retry.
+//! Bounded decoding and wire types for archived native provider evidence.
 use nivra_core::{
     native::{self, ParsedResponse, ResponseKind},
     native_stream::{Error, Headers},
@@ -114,10 +114,6 @@ pub const CODEX_MODELS: &str = "https://chatgpt.com/backend-api/codex/models?cli
 pub const CODEX_MODELS_LEGACY: &str =
     "https://chatgpt.com/backend-api/codex/models?client_version=0.0.0";
 pub const CODEX_RESPONSES: &str = "https://chatgpt.com/backend-api/codex/responses";
-pub const OPENAI_DEVICE_CODE: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
-pub const OPENAI_DEVICE_TOKEN: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
-pub const OPENAI_OAUTH_TOKEN: &str = "https://auth.openai.com/oauth/token";
-pub const OPENAI_DEVICE_URI: &str = "https://auth.openai.com/codex/device";
 
 /// Proxy-only identity from OpenClaw extensions/xai/stream.ts; see transport sources doc.
 pub fn subscription_headers<'a>(
@@ -228,18 +224,6 @@ pub fn codex_identity(token: &str) -> Result<CodexIdentity, &'static str> {
         residency,
     })
 }
-fn apply_codex_identity<B>(
-    req: ureq::RequestBuilder<B>,
-    identity: &CodexIdentity,
-) -> ureq::RequestBuilder<B> {
-    let req = req.header("ChatGPT-Account-ID", &identity.account_id);
-    if let Some(residency) = &identity.residency {
-        req.header("x-openai-internal-codex-residency", residency)
-    } else {
-        req
-    }
-}
-
 /// The global request deadline also covers streaming the response body. A read
 /// that hits it is a timeout, not a malformed body: keep the two evidence codes
 /// distinct so a slow or stalled provider is not reported as invalid decoding.
@@ -413,27 +397,6 @@ fn retain_response_frame(
     Ok(())
 }
 
-/// Fixed provider origins, no redirects/proxies/cookies, bounded body and deadline.
-pub fn http(
-    timeout_ms: u64,
-    url: &str,
-    form: Option<&[(&str, &str)]>,
-    body: Option<&serde_json::Value>,
-    token: Option<&str>,
-    proxy_client_version: Option<&str>,
-    conversation_id: Option<&str>,
-) -> Result<(u16, Vec<u8>), &'static str> {
-    http_observed(
-        timeout_ms,
-        url,
-        form,
-        body,
-        token,
-        proxy_client_version,
-        conversation_id,
-        None,
-    )
-}
 pub type Observer<'a> = &'a mut dyn FnMut(&[u8]);
 
 #[derive(Debug)]
@@ -442,169 +405,4 @@ pub struct HttpResponse {
     pub body: Vec<u8>,
     /// Bounded standard Retry-After field. Callers must parse it as untrusted input.
     pub retry_after: Option<String>,
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn http_observed(
-    timeout_ms: u64,
-    url: &str,
-    form: Option<&[(&str, &str)]>,
-    body: Option<&serde_json::Value>,
-    token: Option<&str>,
-    proxy_client_version: Option<&str>,
-    conversation_id: Option<&str>,
-    observer: Option<Observer<'_>>,
-) -> Result<(u16, Vec<u8>), &'static str> {
-    let response = http_observed_with_retry_after(
-        timeout_ms,
-        url,
-        form,
-        body,
-        token,
-        proxy_client_version,
-        conversation_id,
-        observer,
-    )?;
-    Ok((response.status, response.body))
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn http_observed_with_retry_after(
-    timeout_ms: u64,
-    url: &str,
-    form: Option<&[(&str, &str)]>,
-    body: Option<&serde_json::Value>,
-    token: Option<&str>,
-    proxy_client_version: Option<&str>,
-    conversation_id: Option<&str>,
-    mut observer: Option<Observer<'_>>,
-) -> Result<HttpResponse, &'static str> {
-    if let Some(id) = conversation_id {
-        validate_conversation_id(id)?;
-    }
-    if ![
-        "https://auth.x.ai/.well-known/openid-configuration",
-        "https://auth.x.ai/oauth2/device/code",
-        "https://auth.x.ai/oauth2/token",
-        "https://auth.x.ai/oauth2/userinfo",
-        DIRECT_MODELS,
-        DIRECT_RESPONSES,
-        SUBSCRIPTION_MODELS,
-        SUBSCRIPTION_RESPONSES,
-        CODEX_MODELS,
-        CODEX_MODELS_LEGACY,
-        CODEX_RESPONSES,
-        OPENAI_DEVICE_CODE,
-        OPENAI_DEVICE_TOKEN,
-        OPENAI_OAUTH_TOKEN,
-        MISTRAL_CHAT,
-    ]
-    .contains(&url)
-    {
-        return Err("model_origin_refused");
-    }
-    let started = std::time::Instant::now();
-    let timeout = std::time::Duration::from_millis(timeout_ms);
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_millis(timeout_ms)))
-        .max_redirects(0)
-        .proxy(None)
-        .user_agent(concat!("nivra/", env!("CARGO_PKG_VERSION")))
-        .http_status_as_error(false)
-        .build()
-        .into();
-    let mut response = if let Some(form) = form {
-        agent
-            .post(url)
-            .header("Accept", "application/json")
-            .send_form(form.iter().copied())
-            .map_err(|e| {
-                if matches!(e, ureq::Error::Timeout(_)) {
-                    "model_timeout"
-                } else {
-                    "model_transport_failed"
-                }
-            })?
-    } else if let Some(body) = body {
-        let bytes = serde_json::to_vec(body).map_err(|_| "model_request_invalid")?;
-        let device = matches!(url, OPENAI_DEVICE_CODE | OPENAI_DEVICE_TOKEN);
-        let mut req = agent
-            .post(url)
-            .header("Accept", "application/json")
-            .header("Content-Type", "application/json");
-        if !device {
-            let bearer = token.ok_or("grant_invalid")?;
-            req = req.header("Authorization", &format!("Bearer {bearer}"));
-            if url == CODEX_RESPONSES {
-                req = apply_codex_identity(req, &codex_identity(bearer)?);
-            }
-        }
-        let transport = match url {
-            SUBSCRIPTION_RESPONSES => Some(Transport::SubscriptionProxy),
-            DIRECT_RESPONSES => Some(Transport::DirectOauth),
-            CODEX_RESPONSES => Some(Transport::OpenaiCodex),
-            _ => None,
-        };
-        if let Some(transport) = transport {
-            for (name, value) in response_headers(
-                transport,
-                body["model"].as_str().ok_or("model_request_invalid")?,
-                proxy_client_version,
-            )? {
-                req = req.header(name, value);
-            }
-            for (name, value) in context_headers(transport, conversation_id)? {
-                req = req.header(name, value);
-            }
-        }
-        req.send(bytes.as_slice()).map_err(|e| {
-            if matches!(e, ureq::Error::Timeout(_)) {
-                "model_timeout"
-            } else {
-                "model_transport_failed"
-            }
-        })?
-    } else {
-        let mut req = agent.get(url).header("Accept", "application/json");
-        if let Some(token) = token {
-            req = req.header("Authorization", &format!("Bearer {token}"));
-            if matches!(url, CODEX_MODELS | CODEX_MODELS_LEGACY) {
-                req = apply_codex_identity(req, &codex_identity(token)?);
-                req = req.header("originator", "nivra");
-            }
-        }
-        req.call().map_err(|e| {
-            if matches!(e, ureq::Error::Timeout(_)) {
-                "model_timeout"
-            } else {
-                "model_transport_failed"
-            }
-        })?
-    };
-    let status = response.status().as_u16();
-    let retry_after = response
-        .headers()
-        .get("retry-after")
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| value.len() <= 128 && value.is_ascii())
-        .map(str::to_owned);
-    let mut reader = response.body_mut().as_reader();
-    let streaming = status == 200
-        && matches!(
-            url,
-            DIRECT_RESPONSES | SUBSCRIPTION_RESPONSES | CODEX_RESPONSES
-        )
-        && body.is_some_and(|request| request["stream"] == true);
-    let bytes = read_response_body_until(
-        &mut reader,
-        response_body_limit(url) as usize,
-        streaming,
-        if status == 200 { observer.take() } else { None },
-        || started.elapsed() >= timeout,
-    )?;
-    Ok(HttpResponse {
-        status,
-        body: bytes,
-        retry_after,
-    })
 }

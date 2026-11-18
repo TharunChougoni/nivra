@@ -1147,6 +1147,9 @@ pub(crate) fn read_pinned(
 
 /// Bounded pinned references for the successor seed. It never copies or updates
 /// a predecessor file; only regular notes/skills files are hashed.
+// The pi cutover removed the live handoff seed writer; only offline supervisor
+// tests still build this projection.
+#[cfg(test)]
 pub(crate) fn seed_state(
     book: &Path,
     settings: &WorkspaceSettings,
@@ -1193,6 +1196,7 @@ pub(crate) fn seed_state(
     json!({"version":1,"refs":refs,"available":true})
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn collect_refs(
     root: &Path,

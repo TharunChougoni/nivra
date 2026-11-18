@@ -3,7 +3,9 @@ use super::*;
 #[derive(Clone, Debug)]
 pub(crate) struct AsideRequest {
     pub id: String,
+    #[cfg(test)]
     pub session: String,
+    #[cfg(test)]
     pub question: String,
 }
 
@@ -20,7 +22,7 @@ pub(crate) fn aside_request(root: &std::path::Path, session: &str) -> Option<Asi
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())?;
     let id = value["id"].as_str().filter(|id| id.len() <= 80)?;
-    let question = value["question"]
+    value["question"]
         .as_str()
         .filter(|question| !question.trim().is_empty() && question.chars().count() <= 4000)?;
     if value["session"] != session {
@@ -28,14 +30,17 @@ pub(crate) fn aside_request(root: &std::path::Path, session: &str) -> Option<Asi
     }
     Some(AsideRequest {
         id: id.to_owned(),
+        #[cfg(test)]
         session: session.to_owned(),
-        question: question.to_owned(),
+        #[cfg(test)]
+        question: value["question"].as_str()?.to_owned(),
     })
 }
 
 /// Mark the read-only aside as started so the local `agent result` view can
 /// distinguish queued from running. The marker carries only the request id and
 /// harness clock; it never grants write authority.
+#[cfg(test)]
 fn mark_aside_started(root: &std::path::Path, request: &AsideRequest, now: i64) {
     let directory = root.join(session::ROOT_PREFIX).join(&request.session);
     let _ = fs::create_dir_all(&directory);
@@ -52,6 +57,7 @@ fn mark_aside_started(root: &std::path::Path, request: &AsideRequest, now: i64) 
 /// Start one read-only aside instance. It gets the host-filtered read tools, no
 /// write tools, and never touches the session log, notes, directives or state
 /// counters (#145).
+#[cfg(test)]
 pub(super) fn start_aside(
     c: &Config,
     cfg: &PlannerConfig,
@@ -114,6 +120,7 @@ pub(super) fn start_aside(
 
 /// Publish the aside reply and remove the request only when it is still the
 /// request this instance answered. A newer question is never overwritten.
+#[cfg(test)]
 pub(crate) fn poll_aside(root: &std::path::Path, worker: &Worker, now: i64) -> Option<bool> {
     match worker.receiver.try_recv() {
         Err(mpsc::TryRecvError::Empty) => None,
@@ -132,6 +139,7 @@ pub(crate) fn poll_aside(root: &std::path::Path, worker: &Worker, now: i64) -> O
     }
 }
 
+#[cfg(test)]
 fn publish_aside(
     root: &std::path::Path,
     worker: &Worker,

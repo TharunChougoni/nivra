@@ -42,6 +42,9 @@ pub(crate) struct Claim {
     pub research_tasks_truncated: bool,
 }
 
+/// A claimed digest ready to run as a durable owner turn. Test-only since the
+/// pi cutover removed the live claim path.
+#[cfg(test)]
 pub(crate) struct Work {
     pub claim: Claim,
     pub facts: Value,
@@ -56,6 +59,19 @@ pub(crate) struct Context<'a> {
 
 fn exists(db: &Connection) -> Result<bool> {
     Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='owner_digest_work')", [], |r| r.get(0))?)
+}
+
+pub(super) fn retire_for_pi_cutover(db: &Connection, c: &Config) -> Result<()> {
+    if exists(db)? {
+        db.execute(
+            "UPDATE owner_digest_work SET state='superseded',result=? WHERE binding=? AND state IN ('pending','running')",
+            rusqlite::params![
+                json!({"version":1,"status":"superseded","reason":"pi_authority_cutover","no_replay":true}).to_string(),
+                book_binding(c)?
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 fn is_false(value: &bool) -> bool {
@@ -163,27 +179,6 @@ fn research_task_refs(source: &redecision::Claim) -> Result<(Vec<Value>, bool)> 
             "result_sha256":result_hash,"source_event_id":event_id,"source_observed_ms":observed_ms}));
     }
     Ok((refs, truncated))
-}
-
-/// Research dispatch yields to any durable owner work for the current book.
-/// A session turn without a result is included so a controller restart cannot
-/// launch a research worker while the model decision is unresolved.
-pub(crate) fn research_priority_blocked(db: &Connection, c: &Config) -> Result<bool> {
-    if exists(db)? {
-        let pending: bool = db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM owner_digest_work WHERE binding=? AND state IN ('pending','running'))",
-            [book_binding(c)?],
-            |row| row.get(0),
-        )?;
-        if pending {
-            return Ok(true);
-        }
-    }
-    Ok(
-        super::session::SessionLog::new(&c.directory, &c.session.to_string())
-            .pending()
-            .is_some_and(|turn| turn.trigger == "decision"),
-    )
 }
 
 pub(crate) fn is_cadence_trigger(trigger: &Value) -> bool {
@@ -319,6 +314,7 @@ pub(crate) fn selected_version(base: &Value) -> Value {
     Value::Null
 }
 
+#[cfg(test)]
 fn base_plan(db: &Connection, c: &Config, claim: &Claim) -> Result<Value> {
     if claim.version != 1 || claim.binding != book_binding(c)? {
         return Err("owner_claim_binding_invalid".into());
@@ -361,6 +357,7 @@ pub(crate) fn in_window(c: &Config, cfg: &planner::PlannerConfig, now: i64) -> b
         && (start..c.execution.session_end_minute).contains(&minute(now))
 }
 
+#[cfg(test)]
 fn current(
     c: &Config,
     cfg: &planner::PlannerConfig,
@@ -388,6 +385,7 @@ fn current(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn queued(
     context: &mut Context<'_>,
     c: &Config,
@@ -435,6 +433,7 @@ pub(crate) fn queued(
     }))
 }
 
+#[cfg(test)]
 pub(crate) fn reason(error: &(dyn std::error::Error + 'static)) -> String {
     let text = error.to_string();
     if text.len() <= 96
@@ -458,6 +457,7 @@ pub(crate) fn reason(error: &(dyn std::error::Error + 'static)) -> String {
     }
 }
 
+#[cfg(test)]
 fn decision_window_ms(cfg: &planner::PlannerConfig) -> Result<i64> {
     let events = cfg.events.as_ref().ok_or("owner_event_settings_missing")?;
     Ok(events
@@ -466,6 +466,7 @@ fn decision_window_ms(cfg: &planner::PlannerConfig) -> Result<i64> {
         .clamp(30_000, 900_000))
 }
 
+#[cfg(test)]
 pub(crate) fn bind(
     context: &mut Context<'_>,
     c: &Config,
@@ -507,6 +508,7 @@ pub(crate) fn bind(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn validate_running(
     context: &Context<'_>,
     c: &Config,
@@ -525,6 +527,7 @@ pub(crate) fn validate_running(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn refuse(db: &Connection, c: &Config, claim: &Claim, reason: &str) -> Result<()> {
     if claim.binding != book_binding(c)? {
         return Err("owner_claim_binding_invalid".into());
@@ -560,6 +563,7 @@ pub(crate) fn refuse(db: &Connection, c: &Config, claim: &Claim, reason: &str) -
 
 /// Both the plan head and its turn receipt commit in this transaction. A file
 /// receipt is merely a projection; recovery reads this ledger before replay.
+#[cfg(test)]
 pub(crate) fn commit(
     context: &mut Context<'_>,
     c: &Config,
@@ -628,6 +632,7 @@ pub(crate) fn commit(
     Ok(plan)
 }
 
+#[cfg(test)]
 pub(crate) fn committed(db: &Connection, c: &Config, claim: &Claim) -> Result<Option<Value>> {
     if !exists(db)? {
         return Ok(None);
@@ -679,25 +684,31 @@ pub(crate) fn committed(db: &Connection, c: &Config, claim: &Claim) -> Result<Op
     Ok(Some(plan))
 }
 
-pub(crate) fn supersede_plan_actions(db: &Connection, c: &Config, id: &str) -> Result<()> {
+pub(crate) fn supersede_plan_actions(
+    db: &Connection,
+    c: &Config,
+    id: &str,
+    reason: &str,
+) -> Result<()> {
     let raw: String = db.query_row("SELECT body FROM planner_plan WHERE id=?", [id], |r| {
         r.get(0)
     })?;
     let plan: Value = serde_json::from_str(&raw)?;
     planner::validate_saved(c, &plan)?;
-    if plan["decision_owner"] != "orchestrator" {
+    if plan["decision_id"] != id {
         return Err("owner_plan_identity_invalid".into());
     }
     let verdicts: Vec<planner::Verdict> = serde_json::from_value(plan["verdicts"].clone())?;
     for verdict in verdicts.into_iter().filter(|v| v.action.is_some()) {
         db.execute(
-            "INSERT OR IGNORE INTO planner_action VALUES(?,?,'superseded_by_digest')",
-            rusqlite::params![id, verdict.index as i64],
+            "INSERT OR IGNORE INTO planner_action VALUES(?,?,?)",
+            rusqlite::params![id, verdict.index as i64, reason],
         )?;
     }
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn actions_settled(db: &mut Connection, c: &Config, now: i64) -> Result<bool> {
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let Some(plan) = redecision::active_plan(&tx, c)?.flatten() else {

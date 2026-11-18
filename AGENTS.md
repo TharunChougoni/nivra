@@ -10,10 +10,9 @@ Issues and leave handoff detail in Git history.
 - **Paper only.** No live orders or live activation without a separate, explicit
   live mandate from the repository owner. A tag, install or passing build never
   authorizes a session.
-- Models select paper actions/sizes/holding periods. Luna compiles factual
-  digests and the persistent orchestrator owns decisions. Planner configs use
-  the owner-only shape; older usage journals and transcripts remain readable as
-  archive evidence. Deterministic code owns validation, credentials, cash/fees,
+- Models select paper actions/sizes/holding periods. Rust builds factual briefs.
+  Pi owns decision, research, and review turns. Older usage journals and
+  transcripts remain readable as archive evidence. Deterministic code owns validation, credentials, cash/fees,
   fills and protection. The reviewed model-led paper policy has no
   added trading risk caps. No eligible evidence means no model call; no silent
   fallback.
@@ -39,15 +38,17 @@ Issues and leave handoff detail in Git history.
 
 ## Code and verification
 
-- The repository is Cargo only. Every commit must build and be formatted; before
-  committing to `main`, run the full gate in
-  [Fast build and test](#fast-build-and-test) below.
+- The application is Cargo; the pi agent is a separate TypeScript package under
+  `agent/` with its own build and tests. Every commit must build and be formatted;
+  before committing to `main`, run the full gate in
+  [Fast build and test](#fast-build-and-test) below and the
+  [pi agent gate](#pi-agent-gate).
 - Keep the test suite lean and behavioral ([testing](docs/TESTING.md)). Tests
   never open sockets; use fixtures, fakes and injectable clocks.
 - Keep `nivra paper`, `probe`, `resume` and the dashboard compatible with the
   installed config and on-disk state unless a migration is explicitly planned.
 - New work follows open [GitHub Issues](https://github.com/TharunChougoni/nivra/issues),
-  implemented in Rust.
+  implemented in Rust (or in the pi agent package where the lane owns it).
 - Commit and push directly to `main` after the required checks pass. A separate
   branch is optional when isolation helps. Delete branches after their work is
   included in `main`. Create release tags only when asked.
@@ -101,6 +102,23 @@ npm test --prefix rust/nivra-cli/src/runtime/web/v2
 
 Commit source, lockfile and generated bundle together. The removed Preact shell
 has no separate package or test gate. The committed bundle needs no Node runtime.
+
+## Pi agent gate
+
+The live paper controller starts the pi agent subprocess, so after changes under
+`agent/`, install, build and test it:
+
+```sh
+npm ci --prefix agent
+npm run build --prefix agent
+npm test --prefix agent
+```
+
+Commit `agent/src`, `agent/test` and the lockfile. `agent/dist` stays out of Git
+(the existing `dist/` ignore covers it) and is built with `npm run build` on the
+run host; the paper controller resolves the configured `node`, `entry` and the
+installed `agent/node_modules`. A committed source tree is not by itself a
+working provider session.
 
 ## Releases
 

@@ -67,11 +67,11 @@ Review the complete set together:
 | --- | --- |
 | Paper config | Explicit broker, account, session, original read-journal and sessions/history/source paths; continuing account cash comes from its original ledger, never a replacement journal |
 | Costs and instruments | Complete `paper_costs` (see packaged fragment), verified cash instrument identities/tick units, calendar and provider metadata; no derivative execution |
-| Planner | Owner-only policy (no `decision_owner`, `decide`, `handoff_gate` or `post_close` key); factual Digest enabled; events and supervisor enabled |
-| Models | Digest `gpt-6-luna`; reviewed owner profile for `grok-4.7` or `gpt-6.1-sol`, with exact model/transport/application credential binding and explicit admission; catalog presence does not establish entitlement |
-| Prompts | Complete revision-matched `prompts/` beside the planner JSON; reviewed prompt bytes participate in authority; see [model harness](MODEL_HARNESS.md) |
-| Credentials | Application-owned private grants and a live-catalog model ID; never reuse another application's authentication or put credentials in templates/history |
-| Limits | Explicit reviewed role allowances, timeouts, tool/output limits and source bounds in config; no new trading risk caps or silent provider fallback; the explicit limit fallback is separately reviewed |
+| Planner | Pi paper policy: `enabled`, `model_led`, and an `agent` block in `paper` mode with a decision lane; no enabled legacy `digest`/`orchestrator`, `model_config` or `approval_auto_renew`, and no `decision_owner`, `decide`, `handoff_gate` or `post_close` key |
+| Models | One reviewed provider/model spec per enabled pi lane, authenticated in the application's own pi directory; catalog or directory presence does not establish entitlement |
+| Prompts | Pi lane prompts come from the built agent (`agent/prompts/`) or `planner.agent.prompts`; the earlier planner's `prompts/` directory is archive/offline-replay evidence. See [pi agent lanes](AGENT.md) |
+| Credentials | Application-owned pi `auth.json`/`models.json`; never reuse another application's authentication or put credentials in templates/history |
+| Limits | Explicit reviewed per-lane daily call/cost budgets, turn timeouts, tool limits and source bounds; no new trading risk caps and no silent provider fallback |
 
 Choose each existing book's disposition before applying any new policy. Archived
 books remain read-only with their original config, journal, usage and failed
@@ -80,7 +80,7 @@ it never creates a replacement ledger, resets allowances, replays an ambiguous
 attempt or clears stop/halt flags. A fresh config is not a fresh account.
 
 Use `planner config-check --planner NEW_PLANNER --session SESSION` for offline
-planner validation; it reports owner prerequisites. Source/fixture
+planner validation; it reports the pi paper prerequisites and resolved lanes. Source/fixture
 validation does not establish credential entitlement or installed-host readiness.
 Before any separately authorized paper start, validate the original authority,
 self-check and preflight under the reviewed configuration. Preserve stopped or
@@ -94,8 +94,9 @@ qualification remain separate.
 
 For an explicitly requested fresh account, use the Rust
 [`setup` workflow](../packaging/rust/CONFIGURATION.md#explicit-fresh-paper-installation).
-It prepares the current owner policy in unused private config/state directories,
-preserves original evidence and shared quotas, and does not activate a session.
+It prepares a fresh pi paper planner (`enabled`, `model_led` and the reviewed
+`agent` block) in unused private config/state directories, preserves original
+evidence and shared quotas, and does not activate a session.
 Keep the old installation archived and the new paper service stopped after
 installation. Future updates use the canonical updater and stable new config;
 do not replay setup or reset a journal to work around
@@ -109,13 +110,13 @@ its committed current pointer under a root-wide writer lock.
 
 | Phase, IST | Behaviour |
 | --- | --- |
-| Pre-open | Validate calendar, predecessor/carry, dated metadata, model settings and history |
+| Pre-open | Validate calendar, predecessor/carry, dated metadata, pi settings and history |
 | 08:00–09:10 | Optional prior-session daily-history preparation under original read quota |
 | Before 15:00 | Commit the next eligible session. A session first committed after the preparation cutoff prepares history immediately with the bounded retries and protects carried holdings at once |
 | After 15:00 | An uncommitted session waits for the next trading date (`missed_preopen_idle`) |
-| 09:15–15:30 | Protect holdings, rotate scans, compile factual Luna digests and run persistent orchestrator decisions; independently validate paper fills |
+| 09:15–15:30 | Protect holdings, rotate scans, wake the pi decision lane on eligible triggers, serve research requests and validate paper fills independently |
 | Close | Seal/report actual cash, fees and unresolved/carried holdings; no forced 15:15 liquidation for model-led holdings |
-| After close, before 18:00 | Seal financial reporting; the optional owner review and scorer trigger run only when configured |
+| After close, before 18:00 | Seal financial reporting; the configured pi review lane may run once after the seal. The earlier owner-review and scorer triggers exist only as archived legacy evidence |
 
 An open operator-stopped book is expected protection: startup diagnostics,
 stop alerts and `/api/v1/health` book / summary state classify it as
@@ -284,8 +285,7 @@ a retained release's `nivra-analysis` binary as described in the
 [research worker](RESEARCH_WORKER.md#re-registering-a-stale-runtime), then rerun
 preflight and readiness.
 
-The reviewed decision-owner policy can queue registered research separately from
-its decision turn. Its optional planner setting is:
+The pi lanes can queue registered analysis through the `analysis` tool. Its optional planner setting is:
 
 | Setting | Default | Valid range | Meaning |
 | --- | --- | --- | --- |
@@ -392,15 +392,18 @@ or move their original device/inode identity to satisfy preflight.
 
 ## Planner configuration
 
-The paper config points to ordinary planner JSON. Explicit enabled roles need
-exact model IDs, application model configs and positive daily budgets. Set
-`model_led:true` and `require_digest:true` for the current model-led flow.
-`planner.context.mode` defaults to `tools_only`: Luna receives only a trigger
-envelope and the orchestrator receives only the trigger and Luna's validated digest.
-Set `"context":{"mode":"projection",...}` only to reproduce the v2 rollback
-message; projection still requires `full_universe_features:true`. Deployed
-configs may retain `context` and `full_universe_features`; tools-only validates
-but does not paste them.
+The paper config points to ordinary planner JSON. A pi paper planner sets
+`enabled: true`, `model_led: true` and an `agent` block in `paper` mode with a
+reviewed `decision` lane; the setup workflow writes that shape. Each enabled lane
+needs an exact provider/model spec, positive daily call and cost budgets, a valid
+turn timeout and tool-call bound. An enabled `digest` or `orchestrator`, a
+`model_config` or `approval_auto_renew` refuses with
+`pi_paper_legacy_model_config_refused`; there is no live legacy model role.
+
+A planner without `agent.mode: "paper"` is refused by the running controller with
+`pi_paper_planner_required` and by readiness with `pi_paper_config_required`. It is
+usable only for offline `paper-replay` and archive validation. Retained
+`context`/`full_universe_features` settings apply to that legacy replay path.
 
 `planner.tools` bounds call-time reads and defaults are omitted from policy bytes:
 
@@ -410,14 +413,8 @@ but does not paste them.
 
 `operator_context` supplies up to 8192 characters of task context; it cannot
 authorise live orders, unsafe fills or credential/service tools.
-`orchestrator.triggers.supervisor.failure_backoff_ms` is optional
-(60,000–3,600,000 ms). It defers new owner turns with
-`supervisor_failure_backoff` only for the same model-selection profile/revision
-after actual supervisor/decision failures; review, compaction, aside and host
-lifecycle failures do not arm it. Omitted keeps the old policy/config/state
-bytes and the broad failure-streak wake behavior.
 [Replay/flow](PAPER_REPLAY.md) contains the discovery/allowance example;
-[harness](MODEL_HARNESS.md) explains accounting and tools.
+[harness](MODEL_HARNESS.md) explains the lane tool boundary and archives.
 
 Prefer dated configuration for the next session:
 
@@ -425,8 +422,8 @@ Prefer dated configuration for the next session:
 {"effective_from":"2026-10-23","previous_config":"/absolute/original-planner.json"}
 ```
 
-These fields belong in a complete new planner config retaining actual roles,
-credentials and policy. Before the effective date, resolution uses the untouched
+These fields belong in a complete new planner config retaining the reviewed
+lanes and policy. Before the effective date, resolution uses the untouched
 previous config; it detects missing pairs/cycles. Point only the ordinary paper
 config at the new file after review, and compare resolved policies:
 
@@ -491,19 +488,21 @@ replaced by enabling this policy. Source tests do not qualify a real session.
 ## Diagnosing a running book with no fills
 
 Separate model choice from execution refusal. Check current book stop/halt/close
-flags, model readiness and remaining allowances, feed/scanner eligibility and
-history admission first. Then inspect the original ledger read-only: accepted
+flags, pi readiness and remaining lane allowances, feed/scanner eligibility and
+history admission first. Then inspect the original ledger read-only: the active
 `planner_plan.body.parsed_plan.actions`, its `verdicts`, `planner_action` verdict
-counts and failed/deferred/planned attempt counts. Share aggregates and bounded
-reason codes only; never dump book bodies, account context or model requests.
-Use the authenticated run detail for the corresponding retained model explanation.
+counts and failed/planned attempt counts. Inspect `model/agent/triggers.ndjson`,
+`model/agent/turns.ndjson` and `model/agent/plans.ndjson` for why a lane turn did
+not run or which plan was refused. Share aggregates and bounded reason codes only;
+never dump book bodies, account context or model requests. `agent-turn --dry` prints
+the current brief and published tools; `agent-shadow-report` summarizes recorded
+shadow turns.
 
 An accepted empty action list is a model abstention and has no execution verdicts.
 It does not establish stale-quote, affordability or price-limit rejection. A
-`model_plan_unavailable_no_trades` dashboard label alone does not diagnose why:
-a later deferred event can clear the active plan while preserving earlier
-accepted abstentions. Distinguish current readiness from earlier failed attempts,
-and do not count repeated log lines as new calls. PARTIAL history is admitted
+`model_plan_unavailable_no_trades` label alone does not diagnose why a plan was not
+produced. Distinguish current readiness from earlier failed turns, and do not count
+repeated log lines as new calls. PARTIAL history is admitted
 under the documented conditions; it is not itself proof that inference is blocked.
 
 Do not manufacture a trade to verify the pipeline. Compare a proposed prompt or
@@ -561,31 +560,18 @@ never be used to enable live trading.
 
 ## Event and history behaviour
 
-Discovery adds scanner-refresh events; configured cooldown coalesces work rather
-than forcing inference. Luna compiles facts; validated eligible evidence creates
-durable work for the persistent orchestrator.
-Optional deterministic price/volume/gap/proximity/fill/news detectors retain their
-own configured thresholds, with no enabled signal defaults. News requires an
-explicit bounded dated/cited archive, not automatic collection.
+The pi trigger engine replaces the earlier scanner-refresh event queue: a fill,
+position risk, persistent top-K candidate, the hourly schedule turn or the
+pre-close minute wakes the decision lane; triggers that arrive while a turn runs
+merge into the next batch. Only a completed turn with a validated plan reaches the
+paper plan head, and no eligible evidence means no model call. Trigger settings
+live in `planner.agent.triggers`.
 
-`events.decision_timeout_ms` is 30,000–900,000 ms from admission. Queue observation
-age governs admission separately; it does not consume the admitted model lifetime.
-Latest covered rechecks collapse with retained rows; fills/news/initial identities
-are not silently discarded. A plan needs execution-time quotes regardless of how
-long inference took. Provider failure/timeout/schema errors produce event no-trades,
-not book halts. Integrity failures remain distinct.
-
-Failed provider attempts retain a bounded `reason`/`provider_reason` from the
-allowlisted model validation codes (for example `model_stream_incomplete`,
-`model_http_502`, `planner_response_model_mismatch`, `planner_output_cap`) and a
-`provider_stage` such as `transport`, `http_response`, `response_validation` or
-`output_validation` in `failure.json`, with the numeric HTTP status when present.
-`planner_output_cap` bounds the serialized provider envelope (`output`, `model`,
-`usage`, including encrypted reasoning) at `output_cap × 64` bytes (512 KiB for
-an `output_cap` of 8192). Empty output still fails.
-Non-timeout planner block status stays `planner_provider_failed`; timeouts keep
-their existing status. Raw provider bodies, headers, credentials, account context
-and model text are never retained; unknown errors fall back to the generic status.
+A legacy `events` block is still parsed for archived policies but is inert on a pi
+paper planner. Archived events still decode for journal validation. Failed pi lane
+turns keep their bounded status/error in `model/agent/turns.ndjson` and produce no
+order and no book halt. Raw provider bodies, headers, credentials, account context
+and model text are never retained.
 
 Scanner samples carry optional `avg_daily_volume` and `avg_daily_volume_sessions`
 from validated daily receipts within the prepared 21-session window.
@@ -789,16 +775,15 @@ halt. Eligible pending claims receive audited failed/no-replay disposition.
 Unrelated risk halts, missing/cross-book authority and non-flat open books refuse
 with a failed-check reason. Recovery leaves the book stopped and preserves charges.
 Apply reviewed config before resume if required; recovery itself makes no call/fill.
-Recovery checks the enabled orchestrator supervisor role. The same reviewed
+Recovery validates the current pi paper prerequisites (enabled planner, `model_led`, a decision lane). The same reviewed
 eligibility checks apply to flat recovery and protection-only recovery.
 
-Owner review artifacts written by this build are versioned canonical JSON
-(`ReviewCompletedV1`). Older binaries reject them; this build still reads the
-frozen older `Completed` shape. A failed review whose observed wall stepped
-behind its start is terminalized once with clock-anomaly evidence, and the old
-fully-bound failed `owner_review_clock_invalid` artifact is recovered in place
-without rewriting bytes or replaying the model. Unknown or corrupt review
-artifacts still fail closed.
+Earlier owner review artifacts were versioned canonical JSON
+(`ReviewCompletedV1`). This build still reads the frozen older `Completed` shape
+and recovers an old fully-bound failed `owner_review_clock_invalid` artifact in
+place without rewriting bytes or replaying the model. Unknown or corrupt review
+artifacts fail closed; the pi review lane writes its own redacted memory under
+`model/agent/`.
 
 Every recovery mode uses one shared typed block gate. A data, news or transient
 read block requires the same input validation as a stopped recovery; an
@@ -811,19 +796,20 @@ or seal means no new decision can execute; they never clear an unknown sticky
 block. An interrupted claim is retired only from its exact stored claim body and
 preserves its charges.
 
-Owner authority receipts are versioned separately from the planner event state.
-Every new authority writes its orchestrator owner marker in the same
-transaction, and `config-apply` and `planner-recover` rewrite it with the
-control hash they bind. Startup preserves the original active head and any
+Authority receipts are versioned separately from the planner event state. Every
+new authority writes its owner marker (the earlier orchestrator or pi) in the same
+transaction, and `config-apply` and `planner-recover` rewrite it with the control
+hash they bind. Startup preserves the original active head and any
 stronger sticky data/news/configuration block; a pending claim is marked
 interrupted without replacing that block or clearing the head. A journal that
 predates the marker refuses as `planner_authority_owner_missing` and stays
 archive-only; nothing reconstructs a marker. Do not hand-create or edit the
 marker table.
 
-`planner-recover` refuses a policy without enabled events with
-`planner_recover_events_disabled`, and `config-apply` refuses a halted book. A
-halted book that recovery cannot clear stays archive-only.
+`planner-recover` refuses a policy with missing pi prerequisites; for a retained
+legacy planner it also refuses a policy without enabled events with
+`planner_recover_events_disabled`. `config-apply` refuses a halted book. A halted
+book that recovery cannot clear stays archive-only.
 
 A present table with a missing row also refuses as
 `planner_authority_owner_missing`. A malformed receipt or one naming another
@@ -832,8 +818,14 @@ owner, including a stored `legacy` owner, refuses as
 hash refuses as `planner_authority_owner_mismatch`. These refusals leave the
 book, report, charges and authority unchanged.
 
-When the reviewed `owner_tasks.review` policy is enabled, the controller may run
-one sealed owner review after the report is written. It is advisory: it cannot
+### Historical: owner review and research turns (earlier planner)
+
+The earlier planner's optional owner review/research turns and their dashboard
+projections are retained as archive evidence. The pi lanes replace these model
+turns; their artifacts and read-only projections stay readable.
+
+When the reviewed `owner_tasks.review` policy was enabled, the controller could run
+one sealed owner review after the report was written. It is advisory: it cannot
 place, size or block an order, change policy, or write the workspace. The
 dashboard `owner_review` projection is read-only and reports `disabled`, `due`,
 `busy`, `attempted`, `expired`, `parked` or
@@ -931,6 +923,8 @@ file is copied. Pinning uses the reviewed `workspace.max_file_bytes` limit and
 the same bounded UTF-8 reader, so a larger or non-UTF-8 file is not offered as a
 readable ref. New seeds with this field are forward-only for older binaries;
 restore the original seed or disable the workspace policy before rollback.
+
+### Workspace write safety (current pi research lane)
 
 Workspace writes replace the destination with a new owner-only inode: a private
 0600 temp file is created in the already-validated private parent, written,
@@ -1077,25 +1071,18 @@ Malformed or identity-invalid quote data (`planner_data_failed_no_replay`), news
 configuration and interrupted-attempt blocks remain sticky and require explicit
 review and `planner-recover`.
 
-Only sticky blocks refuse an owner decision.
-A recoverable digest failure (provider, budget, deadline, invalid plan) is one
-bad attempt: it keeps its own reason on the attempt, appears as
-`last_digest_failure` in the planner status, and does not stop the orchestrator
-from committing a decision built from the earlier valid digest. The transient
-quote suspension is not sticky either: the decision commits and stays suspended
-until a validated fresh quote clears the block, then the committed plan becomes
-active. The commit is still refused with `planner_decision_owner_not_ready`
-while a sticky block is set.
+Only sticky blocks refuse a pi decision.
+A failed pi decision turn (provider, budget, deadline, invalid plan) is one bad
+attempt: it keeps its own bounded reason on the attempt and journal, and does not
+stop a later turn from producing a plan. The transient quote suspension is not
+sticky either: a completed decision waits until a validated fresh quote clears the
+block, then the committed plan becomes active. A commit is still refused with
+`planner_decision_owner_not_ready` while a sticky block is set, and an interrupted
+decision is retired without replay.
 
 Nothing to buy and nothing to manage is a normal no-op, reported as
 `model_plan_no_prospects_no_positions`. It is not a failed attempt, a block or an
 alert, and it needs no recovery.
-
-A decision skipped in a cycle that already compacted the session history is
-recorded as `supervisor_context_limit_compacted`. The decision itself waits for
-the next cycle: replaying history with omitted exchanges would record a turn
-that differs from the one rendered, and a mid-cycle compaction summary does not
-exist until the lifecycle turn completes.
 
 For an old reconciled closed/flat/non-halted stopped book lacking its review seal:
 
@@ -1166,195 +1153,27 @@ and predecessor seals; do not generalise compatibility flags to new successors.
 
 ## Grants and model admission
 
-Use `model login/list/status/probe/select --help` for the application's independent
-login, exact-model diagnostic and reviewed role-model switch. Probes consume requests; status is read-only. Luna
-uses its own OpenAI grant, all Grok roles can share one refreshed xAI model config.
-The model config's `enabled` field is ignored; it is not planner role enablement.
-Production uses Luna's factual digest and one persistent orchestrator, with
-independent credentials and original charge identities. Readiness and the
-dashboard expose Digest and Orchestrator only. Original `decide-` reservations in
-older usage journals remain separate evidence and are never refunded or merged.
+Use the application's pi directory to authenticate each configured provider.
+[Install the pi agent and authenticate](AGENT.md#prepare-and-verify)
 
-To change the planner policy, stop the paper controller and back up reviewed
-configs. Write the owner policy to a new planner file and check it with
-`planner config-check`, which refuses a missing digest, supervisor trigger or
-events block.
-Install the exact revision's prompt files and bind application-owned credentials.
-Confirm the digest and owner grants, run self-check and preflight, then reviewed
-`config-apply --confirm-paper-review` and audited `resume` before an authorized
-paper start. On failure preserve the failed artifacts and restore the reviewed
-predecessor config and compatible release through the updater guards.
+The earlier planner's Luna and Grok evidence records independent application
+grants, catalog admission, and charge identities. Preserve those receipts when
+archiving the book. [Subscription transports](XAI_SUBSCRIPTION_TRANSPORT.md)
 
-The supervisor runs before Luna's first digest at session start or resume when
-`supervisor.run_first.on_session_start`/`on_resume` is enabled in the experiment
-profile. It also wakes once per applied `(version, profile, prompts, config)`
-tuple when `on_change` is enabled; `change_min_gap_ms` coalesces a burst and the
-supervisor's own writes do not retrigger it. Luna waits only while that run is
-in flight, at most `hold_luna_ms` (default 120 s); a failed, slow or skipped
-supervisor fails open and Luna proceeds. If the supervisor's own daily allowance
-is exhausted, it parks and records the reason, time and allowance in
-`supervisor-state.json`; the controller writes at most one deduplicated
-`supervisor_parked_budget` skip per minute. Recovery requires a reviewed
-`daily_call_budget` increase and intact usage evidence showing that the allowance
-now exceeds already charged supervisor usage. Recovery clears only the park flag;
-it does not reset cooldowns or refund, delete or rewrite reservations. An
-unavailable/corrupt journal or insufficient allowance keeps the supervisor parked.
-Host protection, execution and the trading loop continue; terminal books are not
-resumed or unhalted. Existing parked records without an allowance baseline remain
-parked for that session; the next trading session starts fresh. See the
-[model harness](MODEL_HARNESS.md#identity-archives-and-reviews) for the full contract.
+### Switch a pi lane model
 
-### Switching the orchestrator model
+Change `provider` and `id` in the lane's `model` block. Authenticate the
+selected provider in the application's pi directory and validate the planner
+config before applying the reviewed policy transition.
+[Pi lane configuration](AGENT.md#prepare-and-verify)
 
-The reviewed policy must define the exact binding and admit it before a switch:
+### Historical: explicit limit fallback
 
-```json
-"orchestrator": {
-  "model": {"model_config": "/absolute/application-model.json", "model_id": "<default>", "...": "..."},
-  "model_profiles": {
-    "PROFILE_NAME": {
-      "model_id": "<exact provider model id>",
-      "transport": "direct_oauth",
-      "model_config": "/absolute/application-model.json"
-    }
-  },
-  "admitted_models": ["PROFILE_NAME"]
-}
-```
-
-Apply that policy through the normal reviewed `config-apply`; the profile is
-rejected at load when the name, exact model ID, absolute credential path or
-admission list is invalid. Then inspect and request the switch:
-
-```sh
-nivra agent model show --config PAPER_CONFIG --json
-nivra agent model set --config PAPER_CONFIG --model PROFILE_NAME --json
-nivra agent model show --config PAPER_CONFIG --json
-```
-
-For a config-driven request, keep the runtime selection in a separate JSON file:
-
-```json
-{"version":1,"profile":"PROFILE_NAME"}
-```
-
-Reload that file with the same optional revision and request-ID guards as `set`:
-
-```sh
-nivra agent model reload --config PAPER_CONFIG --selection-config SELECTION_CONFIG --json
-```
-
-The selection file names a reviewed profile; it cannot add a model binding or
-admission. Reload uses the same validator, lock and pending/active receipts as
-`set`. Editing this file takes effect only after an explicit reload. Keep the
-paper and planner policy files unchanged for a model-only switch.
-
-`set` records a durable pending revision; it does not edit the policy or restart
-the service. The controller applies it at the next idle turn boundary after the
-current turn and its action receipts settle. `show` reports configured, active
-and pending models. A stale `--expect-revision` is refused, and a pending profile
-the current policy no longer admits or binds exactly is refused while the last
-valid active model is retained. Provider entitlement and structured
-output are rechecked by the existing per-call admission; a catalog listing alone
-is not authorization. Selection never resets the session, notes, receipts or
-usage; a new trading session starts with the configured `default` model. This is
-a per-turn runtime selection; for a persistent policy-level switch that survives
-the next session, use `model select` below. See the
-[model harness](MODEL_HARNESS.md#orchestrator-model-selection).
-
-### Selecting a role model from the CLI
-
-`nivra model select` changes the model one planner role uses, without a hand
-edit or a manual migration. It only chooses between bindings the reviewed
-planner policy already declares: the target must be an admitted profile in
-`orchestrator.model_profiles`/`admitted_models`, or the role's configured
-`default`. It never adds a model, credential, admission or budget, and settings
-stay in the planner config.
-
-Preview first; `--dry-run` writes no planner, paper-config, book or audit state:
-
-```sh
-nivra model select --config PAPER_CONFIG --role orchestrator --profile PROFILE_NAME --dry-run --json
-```
-
-The preview reports the planner-config diff (only the role's `model_id`,
-`transport` and `model_config` move), the target transport's grant status, live
-catalog membership, whether a paper session is open, and the refusal a real run
-would return. Catalog membership is read-only: it uses the target's own
-application grant without refreshing it and never prints token content; an
-unavailable grant or catalog is reported as `unavailable` with its reason.
-
-Apply it with the same reviewed confirmation as `config-apply`:
-
-```sh
-nivra model select --config PAPER_CONFIG --role orchestrator --profile PROFILE_NAME --confirm-paper-review --json
-```
-
-The command writes a new planner file beside the live one (same `prompts/`
-directory, so prompt hashes are unchanged), points the paper config's
-`planner_config` at it atomically, and runs the reviewed
-`config-apply --confirm-paper-review` transition: preflight, controller lock,
-book and flatness checks, then the audited config transition. The same book
-eligibility as `config-apply` applies, so a closed, halted or non-flat book is
-refused with the printed `config-apply` reason. The switch is recorded on the
-`operator_config_apply_confirmed_paper_review` tick under `operator_command`.
-The book stops with `operator_stopped`; `resume` starts the next session on the
-new model. Rollback is the same command with the previous
-profile (for example `--profile grok-owner` after switching to `sol-owner`); the
-predecessor planner file is kept, so a binding that is not declared as a profile
-can be restored by pointing `planner_config` back at it and running the reviewed
-`config-apply`. The first reviewed use is the packaged owner profiles:
-orchestrator `grok-4.7` (`direct_oauth`, `grok-owner`) to `gpt-6.1-sol`
-(`openai_codex`, `sol-owner`).
-
-Refusals, all with a printed reason code:
-
-- `model_select_session_open`: a paper session is running or its controller lock
-  is held. Wait for the session to close; the change applies to the next session.
-- `model_select_grant_required`: the target transport has no authenticated grant.
-  Run `nivra model login` for that transport, then retry.
-- `model_select_model_config_invalid`: the target credential config is missing,
-  invalid or declares another transport.
-- `model_select_profile_unknown` / `model_select_model_not_declared`: the profile
-  or exact model ID is not declared by the current planner policy.
-- `model_select_transport_incompatible`: the declared profile's transport cannot
-  use the role's configured tools.
-- `model_select_ambiguous_target`, `model_select_transport_required`,
-  `model_select_profile_required`, `model_select_same_path`: give exactly one
-  target form, and never point the paper config at the file it already uses.
-- `model_select_shared_credential`: the role's effective credential comes from
-  the shared top-level `model_config`, so a role-only switch cannot be expressed
-  without changing another role. Bind the role's own `model_config` first.
-- `model_select_policy_not_effective`: the live planner file is a future-dated
-  schedule; switch the policy in force instead of deferring the change.
-- `model_select_unchanged`: the role already uses that exact binding, so no
-  book stop is needed.
-- `model_select_confirm_paper_review_required`: review the book, then pass
-  `--confirm-paper-review`.
-- `model_select_apply_refused`: the reviewed apply refused and printed the
-  `config-apply` reason; the new planner file was removed and nothing changed.
-- `model_select_config_unwritable`: the book transition was applied but the
-  paper config could not be rewritten. The printed planner path is the reviewed
-  file to point `planner_config` at before `resume`.
-- `model_select_config_changed` / `model_select_config_unreadable` /
-  `model_select_config_invalid`: the paper config changed or could not be
-  read/parsed; nothing was applied.
-- `model_select_unwritable` / `model_select_invalid` / `model_select_policy_invalid`:
-  the new planner file or policy could not be written or revalidated; nothing
-  was applied.
-
-`--model-id ID --transport TRANSPORT` selects by exact binding instead of by
-profile name; the pair must match a declared profile or the current default.
-The current model per role is reported by the readiness report and the dashboard
-roster; `model status` remains the grant-state check.
-
-### Explicit limit fallback
-
-A reviewed role may configure one explicit fallback for a single call whose
-primary fails with one of the reviewed eligibility classes below. It is never a
-silent fallback and never replaces the primary for another failure. It applies
-to `digest.fallback` and `orchestrator.model.fallback`; omit it to keep existing
-policy bytes and hashes unchanged.
+The earlier planner could configure one explicit fallback for a single call whose
+primary failed with one of the reviewed eligibility classes below. It applies to
+`digest.fallback` and `orchestrator.model.fallback` in that retained planner; omit
+it to keep existing policy bytes and hashes unchanged. A pi lane turn has no
+fallback: a configured lane starts on its exact provider/model or not at all.
 
 ```json
 "digest": {
@@ -1408,18 +1227,6 @@ Readiness reports each role's `fallback` status, reason and `eligibility`
 reason codes. No key, grant, token or auth cache enters the evidence, alert or
 report.
 
-Probe the configured key and model with one minimal request (it never starts a
-paper session or touches a journal):
-
-```sh
-nivra model probe-fallback --config /absolute/path/mistral-fallback.json --model deepseek-v4-1-flash-1017 --reasoning-effort max
-```
-
-The JSON report includes the HTTP status, transport, requested/received model,
-latency and token counts; `billing_verified_by_probe` is always false. A fixture
-or probe does not establish provider entitlement, host qualification or future
-availability.
-
 Adding a fallback is a policy change: it changes the serialized policy bytes and
 hash. With the old config still in place, install the release that supports the
 key first, then back up the reviewed config, add the fallback and key reference,
@@ -1438,62 +1245,28 @@ new file and validate it offline:
 nivra planner config-check --planner NEW_PLANNER.json --session SESSION
 ```
 
-The check refuses any missing owner prerequisite and writes nothing. Point the
+The check refuses any missing pi paper prerequisite and writes nothing. Point the
 paper config's `planner_config` at the new file, run
 `config-apply --confirm-paper-review`, then `resume`. Rollback uses the
 predecessor planner file and the same reviewed transition.
 
 A policy that differs from the one that initialized the durable authority is
-refused at controller startup with `decision_owner_migration_required`. An
-active plan written without the orchestrator owner refuses with
-`decision_owner_legacy_plan_requires_migration`. Host protection continues until
-a reviewed `config-apply` rebinds the policy. See the
-[model harness](MODEL_HARNESS.md#owner-policy-and-ledger-authority).
+refused at controller startup with `decision_owner_migration_required`. An active
+plan written by the other authority (the earlier orchestrator versus pi) refuses
+with `decision_owner_legacy_plan_requires_migration`. Host protection continues
+until a reviewed `config-apply` rebinds the policy. See the
+[model harness](MODEL_HARNESS.md#plan-head-and-ledger-authority).
 
-### Personal-agent status and requests
+### Inspect archived operator requests
 
-The local agent CLI is machine-readable and works over the operator's existing
-authenticated remote access. It adds no HTTP control endpoint and no dashboard
-editor.
-Every command accepts `--config PAPER_CONFIG --json`; findings are JSON, never
-an order, fill or application acknowledgement.
+The previous planner recorded operator questions in
+`model/agent-requests.json` and wrote answers under the corresponding session
+in `aside-reply.json`. Its owner instructions remain in
+`model/directives.ndjson`. Preserve these files with the archived book.
 
-```sh
-nivra agent status --config PAPER_CONFIG --json
-nivra agent ask --config PAPER_CONFIG --question 'Why was the entry skipped?' \
-  --request-id ask-1 --idempotency-key ask-key-1 --json
-nivra agent result --config PAPER_CONFIG --request-id REQUEST_ID --json
-nivra agent instruct --config PAPER_CONFIG \
-  --expect-session 2026-11-04 --expect-revision 0 \
-  --scope decision_context --text 'Prefer cash when the quote is stale.' \
-  --request-id instruct-1 --idempotency-key instruct-key-1 --json
-nivra agent cancel --config PAPER_CONFIG --request-id REQUEST_ID --json
-```
+### Historical scorer trigger
 
-`status` reads the resolved session, paper-book flags, controller state, model
-selection revision, pending aside slot and owner-directive ids. It makes no
-model call and writes nothing. `ask` uses the controller's existing single
-read-only `aside-request.json`/`aside-reply.json` slot; it never writes the
-book, journal, notes, directives or trading session and never wakes the
-controller. Only one question may be outstanding. `result` polls by request id
-without resubmitting and reports `queued`, `running`, `answered`, `failed`,
-`expired`, `applied`, `refused` or `cancelled` as applicable. `cancel` removes
-only that question or supersedes only that owner directive; the trading
-instance is untouched.
-
-`instruct` is an explicitly requested, typed, expiring directive for the one
-decision owner. It requires the exact session and instruction revision reported
-by `status`. A stale session or revision creates a durable `refused` receipt and
-writes no directive. Successful instructions use only the `review_only` or
-`decision_context` authorization scope and are delivered to the decision owner
-on a later controller turn, never as an order or an execution authority. Request ids, idempotency
-keys, expiry and receipts live under `model/agent-requests.json`; repeating the
-same idempotency key returns the same receipt, and the per-session instruction
-revision stays monotonic when old receipts are pruned. Instructions live in the
-existing `model/directives.ndjson` store with target `owner`; model output may
-not nominate that target.
-
-The orchestrator scorer trigger is post-close only. Configure
+In the earlier planner the orchestrator scorer trigger was post-close only. Configure
 `orchestrator.triggers.scorer.after_minute` (931–1439 IST, or the top-level
 `scorer_after_minute` fallback), its prompt/tools, and
 `orchestrator.triggers.scorer.replay` (`max_snapshots` 60,
@@ -1512,20 +1285,7 @@ snapshots and zero failed snapshots publishes the written scorer and parameter
 files to the configured `scorer_path`/`params_path`, plus a
 `<scorer>.qualification.json` hash sidecar; no strategy is promoted. A restart
 leaves an admitted run `interrupted` and never replays it automatically. See the
-[model harness](MODEL_HARNESS.md#post-close-scorer-trigger).
-
-After same-account re-login, inference uses the authenticated application grant
-and the live provider catalog. There is no separate approval file, rebind,
-renewal command or scheduled auto-renew. Optional leftover keys
-`direct_oauth_approval_file` and `approval_auto_renew` are accepted in existing
-config for parse compatibility and ignored at runtime.
-
-`nivra model login|list|status|probe` remain the grant and catalog tools, and
-`model select` is the reviewed role-model switch. A model ID must appear in the
-live catalog; `grok-4.7-build-fast` is still refused.
-Catalog presence is not entitlement, billing or tool-quality proof. Credential
-failures emit `model_credential_unavailable` notices. See
-[transport](XAI_SUBSCRIPTION_TRANSPORT.md).
+[model harness](MODEL_HARNESS.md#historical-post-close-scorer-trigger).
 
 ## Releases and updates
 
@@ -1967,10 +1727,8 @@ automatically.
      `decision_owner` are gone. With an explicit paper continuation mandate,
      run `~/nivra-current/nivra config-apply --confirm-paper-review --config ~/.config/ind-sadr/rust-paper.json`,
      then `resume --confirm-paper-review`, then `readiness`, then start
-     `nivra-paper.service`. If `agent model show` reports an active non-default
-     profile, it retains the old policy hash and refuses with
-     `model_selection_policy_changed` until the owner requests the profile again
-     with `agent model set`.
+     `nivra-paper.service`. The migration preserves recorded model-selection
+     profiles and receipts for inspection.
    - `inspect_book_readiness`: the book state could not be read, including when
      a WAL or shared-memory file prevents immutable inspection. Inspect it with
      `readiness` and preserve its state until reviewed.
@@ -2040,10 +1798,10 @@ transcript once on `run_ended`. Live events are hints only and carry
 `execution_authority:false`; they never imply an order, fill or validation fact.
 The workspace remains read-only and exposes no controls.
 
-The Orchestrator tab lists digest, orchestrator and scorer runs with their
-individual model identities and outcomes. System
-health lists each configured role's own status and grant expiry; missing
-evidence stays unknown.
+The Model run history lists archived digest/orchestrator/scorer runs with their
+individual model identities and outcomes; pi lane status and turn journals are
+exposed by the controller's `agent` status and `agent-shadow-report`. System
+health lists each configured role's own status; missing evidence stays unknown.
 
 An optional authenticated tunnel uses the exact `dashboard_public_host` hostname
 (no scheme/path) and proxies to loopback. Enable it only through the operator's
@@ -2084,7 +1842,10 @@ clock never renews the projection, the controller heartbeat, `as_of_ms` or a
 quote receipt. There is no UI for this projection yet.
 
 The snapshot has `version`, `captured_at_ms`, `supervisor`, `calendar` and
-`alert_transport`. New fields are nullable and mean unknown, not zero:
+`alert_transport`. New fields are nullable and mean unknown, not zero. The
+`supervisor` block is a read-only projection of the earlier planner's state; a pi
+paper book reports its own lane status separately and this block stays
+`not_configured`/`disabled`.
 
 - `supervisor` reads the bounded current-session `model/supervisor-state.json`
   (64 KiB limit, no follow) and the pending session-log turn with a checked,
@@ -2205,7 +1966,7 @@ from serialized configuration so existing sealed configuration hashes remain sta
 
 | Configuration file / key | Default | Valid range |
 | --- | --- | --- |
-| Planner: `digest.max_analysis_tools` | 4 | 0–64 calls per invocation; 0 disables analysis calls |
+| Planner: `digest.max_analysis_tools` (retained legacy planner) | 4 | 0–64 calls per invocation; 0 disables analysis calls |
 | Planner: `max_handoff_instruments` | 20 | 1–20 keys per snapshot or feature tool request |
 | Runtime: `history_download.quota_wait_max_attempts` | 1800 | 0–1800 retries after the initial shared-quota reservation attempt |
 | Runtime: `history_download.quota_wait_poll_ms` | 1000 | 1–60000 ms between denied reservations |
@@ -2306,50 +2067,47 @@ run directory is packed or deleted. The list index, transcript detail and
 content-addressed prompts stay readable; a blob whose original artifact is gone
 returns 404, so the transcript is shown without inventing the missing value.
 
-### Default prompt files
+### Prompt files
 
-For file-based prompts, copy the exact revision's `packaging/rust/prompts/`
-directory beside the planner JSON as `prompts/`. It must contain `objective.md`,
-`data_owner.md`, `supervisor.md`, `orchestrator.md` and `scorer.md`; the other
-packaged files are shipped for the fixed release list and are not read. The directory is optional for existing configurations; when absent,
-embedded defaults preserve their existing policy bytes. Once present, missing,
-empty, unreadable, oversized or invalid UTF-8 files refuse configuration loading.
-There is no partial-directory fallback.
+A pi paper planner reads each lane's standing prompt from the built agent's
+`agent/prompts/decision.md`, `research.md` and `review.md`, or from the directory in
+`planner.agent.prompts`. Rust hands pi the brief and trigger; the agent reports each
+prompt's SHA-256 in the turn record. The prompt text is not sealed into the planner
+policy; changing it is a reviewed agent-build or configuration change, and the
+controller never swaps lane prompts during a running turn.
 
-The owner policy selects `data_owner.md` and `orchestrator.md`. Explicit orchestrator system prompts and
-experiment profile overrides retain their precedence. Default file contents are
-part of the sealed trading-policy hash; their location is not. Edit these files
-only with the existing suspend → `config-apply --confirm-paper-review` → audited
-resume workflow. The controller never reloads these default files in flight;
-a changed file requires reviewed apply before further model work. Keep a backup
-of the previously reviewed files for rollback. Installing files or applying a
-config does not authorize starting a session.
+The earlier planner's `prompts/` directory (with `objective.md`, `data_owner.md`,
+`supervisor.md`, `orchestrator.md` and `scorer.md`) is retained only for offline
+replay and archived-policy loading. A present legacy directory must be complete:
+missing, empty, unreadable, oversized or invalid UTF-8 files refuse configuration
+loading, and there is no partial-directory fallback. Its file contents were part of
+that sealed policy hash; their location was not. A pi paper planner does not load a
+sibling `prompts/` directory at all.
 
-### Owner-only planner policy
+### Pi paper planner policy
 
-The persistent orchestrator is the only decision owner. Planner JSON that still
-carries `decision_owner`, `decide` or `handoff_gate` refuses with
+The pi decision lane owns the paper plan head. Planner JSON that still carries
+`decision_owner`, `decide` or `handoff_gate` refuses with
 `planner_config_invalid`, and a book bound to an older policy hash refuses with
 `decision_owner_migration_required`. To change the policy, write it to a new
-planner config, check it with `planner config-check`, and review its exact prompt
-and credential bindings. On an open, non-halted book, use
+planner config, check it with `planner config-check`, and review its lane model,
+budget, prompt and credential bindings. On an open, non-halted book, use
 `config-apply --confirm-paper-review`. Preserve an existing operator stop unless
 the owner separately authorizes continuation. A halted book needs separate
 reviewed recovery, and a closed book refuses both config apply and resume.
-The authority checks preserve original journals and separate
-role charges. Installing a build does not change a book's policy.
-Rollback means restoring the reviewed predecessor config and compatible binary
-through the documented updater guards; never edit seals or replay pending work.
-The current-market `planner live-preview` compiles only a factual digest; use
-read-only `agent ask` for owner-session inspection.
+The authority checks preserve original journals and separate lane usage.
+Installing a build does not change a book's policy. Rollback means restoring the
+reviewed predecessor config and compatible binary through the documented updater
+guards; never edit seals or replay pending work. Inspect the current decision brief
+with `agent-turn --dry`. Use `agent-check` for an offline round trip through the pi
+subprocess.
 
-Model profiles use the existing inline `digest`, orchestrator `model`,
-`model_profiles` and `admitted_models` configuration. Review their exact model,
-transport and application credential bindings before applying policy. A profile
-must be admitted and promoted at the normal turn boundary before owner calls can
-use it. Native xAI tool flags are incompatible with OpenAI Codex profiles; refusal
-keeps the active selection and never chooses another model. Configuration/catalog
-presence does not replace a valid application grant and live-catalog listing.
+Lane model profiles are the per-lane `model` blocks in `planner.agent`; review their
+exact provider and model IDs before applying policy. Changing a lane model is a
+reviewed policy transition; there is no live per-turn selection profile. A
+provider/model listing does not replace a valid provider account in the
+application's own pi directory, and a refused lane start never falls back to
+another model.
 
 ### Display instrument sources
 

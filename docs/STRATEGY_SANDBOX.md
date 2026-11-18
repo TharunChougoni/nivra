@@ -79,7 +79,8 @@ with 900,000 ms cooldown. These are the recommended legacy settings; compare
 the exported values with the actual discovery configuration before proposing a
 replacement. Relative-market wake mode uses `absolute_market_relative_bps`.
 Ranking membership and wake eligibility are retained separately. Quiet shortlisted
-names do not wake Luna; missing trigger evidence cannot rearm a signal.
+names do not wake the pi decision lane; missing trigger evidence cannot rearm a
+signal.
 
 Each spec has `lookback_samples` (1–20, default 20), computed independently from
 the same original cache without changing it. These are irregular retained quote

@@ -420,7 +420,6 @@ fn run(
             None,
             &|| clock.get(),
             Some(&mut backend),
-            None,
         )
         .map_err(|e| planner::reason(e.as_ref()).to_owned());
         let finished = clock.get();

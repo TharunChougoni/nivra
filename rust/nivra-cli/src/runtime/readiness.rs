@@ -1,121 +1,81 @@
 //! Bounded, read-only model readiness projection for the next paper session.
+use super::agent::{AgentSettings, Lane};
 use super::*;
 use serde_json::{Value, json};
 
-// The orchestrator is a readiness identity; reservations retain trigger names.
-// Alias only the selected trigger, preserving unknown/missing usage as unknown.
-fn orchestrator_usage(usage: Option<&Value>, trigger: &str) -> Option<Value> {
-    usage.map(|usage| json!({"orchestrator": usage[trigger]}))
-}
-
-fn remaining_calls(budget: u32, used: Option<u64>) -> Option<u32> {
-    used.and_then(|n| u32::try_from(n).ok())
-        .map(|n| budget.saturating_sub(n))
-}
-
-fn role_report(
-    name: &str,
-    role: &planner::ModelRole,
-    at: DateTime<FixedOffset>,
-    deadline: DateTime<FixedOffset>,
-    usage: Option<&Value>,
-    fallback: Option<&Path>,
-) -> Value {
-    if !role.enabled {
-        return json!({"role":name,"enabled":false,"status":"disabled",
-            "model":role.model_id,"transport":role.transport});
+fn pi_runtime_issue(settings: &AgentSettings) -> Option<&'static str> {
+    if !fs::metadata(&settings.node)
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    {
+        return Some("agent_node_unavailable");
     }
-    let result = match role.model_config.as_deref().or(fallback) {
-        Some(path) => crate::model::readiness(path, role.transport, &role.model_id, at, deadline),
-        None => Err("model_config_required".into()),
+    if !settings.entry.is_file() {
+        return Some("agent_entry_unavailable");
+    }
+    if !settings.agent_dir.is_dir() {
+        return Some("agent_directory_unavailable");
+    }
+    if settings.prompts.as_ref().is_some_and(|path| !path.is_dir()) {
+        return Some("agent_prompts_unavailable");
+    }
+    None
+}
+
+fn pi_report(c: &Config, settings: &AgentSettings, session: NaiveDate) -> Value {
+    let runtime_issue = pi_runtime_issue(settings);
+    let spend = (session == c.session).then(|| super::agent::read_spend(c));
+    let (usage, usage_issue) = match &spend {
+        Some(Ok(by_lane)) => (json!({"status":"reported","used":by_lane}), None),
+        Some(Err(_)) => (
+            json!({"status":"unavailable","reason":"agent_usage_unavailable"}),
+            Some("agent_usage_unavailable"),
+        ),
+        None => (
+            json!({"status":"unknown","reason":"future_session_namespace_not_created"}),
+            None,
+        ),
     };
-    // A reviewed limit fallback (#245) is reported beside the primary. It
-    // never changes the primary's status: it serves only limit failures.
-    let limit_fallback = role.fallback.as_ref().map_or(
-        json!({"configured":false}),
-        crate::model::fallback_readiness,
-    );
-    let mut report = role_status(name, role, result, deadline, usage);
-    report["fallback"] = limit_fallback;
-    report
-}
-
-fn role_status(
-    name: &str,
-    role: &planner::ModelRole,
-    result: std::result::Result<Value, String>,
-    deadline: DateTime<FixedOffset>,
-    usage: Option<&Value>,
-) -> Value {
-    match result {
-        Ok(details) => {
-            let current = usage
-                .and_then(|v| v[name].as_u64())
-                .and_then(|v| u32::try_from(v).ok());
-            let remaining = remaining_calls(role.daily_call_budget, current.map(u64::from));
-            let budget_ready = remaining.is_some_and(|n| n > 0);
-            let usage_known = remaining.is_some();
-            let credential_unknown = details["status"] == "unknown";
-            json!({"role":name,"enabled":true,"model":role.model_id,"transport":role.transport,
-            "status":if budget_ready && !credential_unknown {"ready"} else if !budget_ready && usage_known {"blocked"} else {"unknown"},
-            "reason":if budget_ready {details["reason"].clone()} else {json!(if usage_known {"daily_budget_exhausted"} else {"usage_namespace_unavailable"})},
-            "approval_covers_until":deadline,"daily_call_budget":role.daily_call_budget,"budget_unit":role.budget_unit.as_deref().unwrap_or("request"),
-            "current_usage":current,"remaining_current":remaining,
-            "usage_status":if current.is_some() {"verified_original_namespace"} else {"unknown"},
-            "credential_check":details})
+    let mut decision_issue = Some("agent_decision_lane_required");
+    let mut roles = Vec::new();
+    for (lane, lane_settings) in &settings.lanes {
+        let spent = match &spend {
+            Some(Ok(by_lane)) => Some(by_lane.get(lane).cloned().unwrap_or_default()),
+            _ => None,
+        };
+        let issue = runtime_issue.or(usage_issue).or_else(|| {
+            spent.as_ref().and_then(|spent| {
+                if !spent.cost_usd.is_finite() || spent.cost_usd < 0.0 {
+                    Some("agent_usage_unavailable")
+                } else if spent.calls >= lane_settings.daily_calls
+                    || spent.cost_usd >= lane_settings.daily_cost_usd
+                {
+                    Some("daily_budget_exhausted")
+                } else {
+                    None
+                }
+            })
+        });
+        if *lane == Lane::Decision {
+            decision_issue = issue;
         }
-        Err(code) => {
-            json!({"role":name,"enabled":true,"model":role.model_id,"transport":role.transport,
-            "status":"blocked","reason":code.as_str(),"daily_call_budget":role.daily_call_budget,"budget_unit":role.budget_unit.as_deref().unwrap_or("request"),
-            "current_usage":usage.and_then(|v|v[name].as_u64()),
-            "remaining_current":remaining_calls(role.daily_call_budget,usage.and_then(|v|v[name].as_u64())),
-            "usage_status":if usage.is_some() {"verified_original_namespace"} else {"unknown"},
-            "credential_check":Value::Null})
-        }
+        roles.push(json!({
+            "role":lane.as_str(),"enabled":true,"model":lane_settings.model.id,
+            "transport":"pi","provider":lane_settings.model.provider,
+            "status":if issue.is_some() {"blocked"} else {"unknown"},
+            "reason":issue.unwrap_or("agent_provider_not_checked"),
+            "credential_check":{"status":"not_checked","reason":"agent_provider_not_checked"},
+            "daily_call_budget":lane_settings.daily_calls,"budget_unit":"request",
+            "daily_cost_usd":lane_settings.daily_cost_usd,
+            "current_usage":spent.as_ref().map(|spent| spent.calls),
+            "current_cost_usd":spent.as_ref().map(|spent| spent.cost_usd),
+            "remaining_current":spent.as_ref().map(|spent| lane_settings.daily_calls.saturating_sub(spent.calls)),
+            "remaining_cost_usd":spent.as_ref().map(|spent| (lane_settings.daily_cost_usd - spent.cost_usd).max(0.0))
+        }));
     }
-}
-
-// Alert reasons are stable lowercase codes, never provider text or paths.
-fn safe_reason(value: &Value) -> Option<&str> {
-    value.as_str().filter(|reason| {
-        !reason.is_empty()
-            && reason.len() <= 96
-            && reason
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-    })
-}
-
-/// Project only static role identifiers/statuses into alerts; never forward provider
-/// diagnostics, paths, grant metadata or account payloads. Unknown future refresh
-/// remains a warning, rather than an assertion of session coverage. If the role
-/// is blocked, the real stable reason code survives instead of a generic
-/// credential failure.
-pub(super) fn credential_warnings(models: &Value) -> Vec<Value> {
-    models["roles"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|role| {
-            if role["enabled"] != true {
-                return None;
-            }
-            let name = role["role"].as_str()?;
-            if !["digest", "orchestrator"].contains(&name) {
-                return None;
-            }
-            let credential = &role["credential_check"];
-            let reason = if credential["status"] == "unknown" {
-                safe_reason(&credential["reason"])
-                    .unwrap_or("grant_refresh_required_or_expiry_unverified")
-            } else if role["status"] == "blocked" && credential.is_null() {
-                safe_reason(&role["reason"]).unwrap_or("model_credential_validation_failed")
-            } else {
-                return None;
-            };
-            Some(json!({"model":name,"reason":reason}))
-        })
-        .collect()
+    json!({"status":if decision_issue.is_some() {"model_roles_blocked"} else {"model_roles_unknown"},
+        "reason":decision_issue.unwrap_or("agent_provider_not_checked"),"harness":"pi",
+        "planner_enabled":true,"roles":roles,"current_usage":usage,
+        "runtime":{"status":if runtime_issue.is_some() {"blocked"} else {"present"},"reason":runtime_issue}})
 }
 
 /// Returns a redacted preflight for the configured next session. No provider
@@ -153,104 +113,36 @@ pub(super) fn report(c: &Config, now_ms: i64) -> Result<Value> {
         "%Y-%m-%d %H:%M:%S%:z",
     )
     .map_err(|_| Fail::new("target_session_time_invalid"))?;
-    let mut roles = Vec::new();
-    let usage: Value;
-    let mut usage_unknown = false;
-    let mut planner_enabled = false;
     let mut research = json!({"status":"disabled","reason":"research_tools_not_configured"});
-    if let Some(path) = c.planner_config.as_deref() {
-        match planner::PlannerConfig::load_for_session(path, session) {
-            Ok(cfg) => {
-                planner_enabled = cfg.enabled;
+    let mut report = match c.planner_config.as_deref() {
+        None => blocked("planner_config_missing"),
+        Some(path) => match planner::PlannerConfig::load_for_session(path, session) {
+            Ok(cfg) if cfg.uses_pi_paper() => {
                 if let Some(settings) = cfg.research_tools.as_ref() {
-                    // Registered inputs are checked before a post-close review can
-                    // discover a stale runtime path (#114).
                     research = super::harness::research_status(settings);
                 }
-                let fallback = cfg.model_config.clone();
-                let now = local(now_ms);
-                let has_original_namespace =
-                    c.directory.join("model/usage-identity.json").is_file();
-                let usage_result = if has_original_namespace {
-                    planner::usage(c).ok()
-                } else {
-                    None
-                };
-                let digest_deadline = close
-                    + chrono::Duration::milliseconds(
-                        cfg.digest.run_budget_ms().max(cfg.digest.timeout_ms) as i64,
-                    );
-                // Digest and orchestrator retain their independent credentials.
-                roles.push(role_report(
-                    "digest",
-                    &cfg.digest,
-                    now,
-                    digest_deadline,
-                    usage_result.as_ref(),
-                    fallback.as_deref(),
-                ));
-                if let Some(orchestrator) = cfg.orchestrator.as_ref() {
-                    use super::orchestrator_model::Trigger;
-                    let trigger = [Trigger::Supervisor, Trigger::Scorer]
-                        .into_iter()
-                        .find(|trigger| {
-                            orchestrator
-                                .triggers
-                                .get(trigger)
-                                .is_some_and(|settings| settings.enabled)
-                        })
-                        .unwrap_or(Trigger::Supervisor);
-                    let mut role = orchestrator.role_for(trigger);
-                    role.enabled = orchestrator.enabled
-                        && orchestrator
-                            .triggers
-                            .values()
-                            .any(|settings| settings.enabled);
-                    let trigger_usage = orchestrator_usage(usage_result.as_ref(), trigger.as_str());
-                    roles.push(role_report(
-                        "orchestrator",
-                        &role,
-                        now,
-                        close,
-                        trigger_usage.as_ref(),
-                        fallback.as_deref(),
-                    ));
+                match cfg.agent.as_ref() {
+                    Some(settings) => pi_report(c, settings, session),
+                    None => blocked("agent_settings_missing"),
                 }
-                usage = if usage_result.is_some() {
-                    json!({"status":"verified_original_namespace","used":usage_result})
-                } else {
-                    usage_unknown = true;
-                    json!({"status":"unknown","reason":"original_usage_namespace_unavailable"})
-                };
             }
-            Err(_) => return Err(Fail::new("planner_config_invalid").into()),
-        }
-    } else {
-        usage_unknown = true;
-        usage = json!({"status":"unknown","reason":"planner_config_missing"});
-        roles.push(json!({"status":"unknown","reason":"planner_config_missing"}));
-    }
-    let blocked = roles
-        .iter()
-        .any(|r| r["enabled"] == true && r["status"] == "blocked")
-        || !planner_enabled
-        || !roles.iter().any(|r| r["enabled"] == true);
-    let unknown = roles
-        .iter()
-        .any(|r| r["enabled"] == true && r["status"] == "unknown")
-        || usage_unknown;
-    let status = if blocked {
-        "model_roles_blocked"
-    } else if unknown {
-        "model_roles_unknown"
-    } else {
-        "model_roles_ready"
+            Ok(_) => blocked("pi_paper_config_required"),
+            Err(_) => blocked("planner_config_invalid"),
+        },
     };
-    Ok(json!({"status":status,"reason":null,
-        "target_session":session,"previous_session":previous,"opens_at":start,"closes_at":close,
-        "planner_enabled":planner_enabled,"roles":roles,"current_usage":usage,
-        "research":research,
-        "future_usage":{"status":"unknown","reason":"future_session_namespace_not_created"}}))
+    report["target_session"] = json!(session);
+    report["previous_session"] = json!(previous);
+    report["opens_at"] = json!(start);
+    report["closes_at"] = json!(close);
+    report["research"] = research;
+    report["future_usage"] =
+        json!({"status":"unknown","reason":"future_session_namespace_not_created"});
+    Ok(report)
+}
+
+fn blocked(reason: &str) -> Value {
+    json!({"status":"model_roles_blocked","reason":reason,"harness":"pi","planner_enabled":false,
+        "roles":[],"current_usage":{"status":"unknown","reason":reason}})
 }
 
 // The dashboard snapshot nests the model report. Only older snapshots without
@@ -364,7 +256,7 @@ pub(crate) fn check_boundaries() {
     assert_eq!(after["target_session"], "2026-10-22");
     assert_eq!(after["previous_session"], "2026-10-21");
     assert_eq!(after["status"], "model_roles_blocked");
-    assert_eq!(after["roles"][0]["reason"], "planner_config_missing");
+    assert_eq!(after["reason"], "planner_config_missing");
     let holiday_morning = DateTime::parse_from_rfc3339("2026-10-20T08:00:00+05:30").unwrap();
     let holiday = report(&c, holiday_morning.timestamp_millis()).unwrap();
     assert_eq!(holiday["target_session"], "2026-10-21");
@@ -383,91 +275,14 @@ pub(crate) fn check_boundaries() {
             .as_str()
             .unwrap()
     );
-    assert_eq!(remaining_calls(8, Some(8)), Some(0));
-    assert_eq!(remaining_calls(8, None), None);
-    assert_eq!(
-        role_report(
-            "disabled",
-            &planner::ModelRole::default(),
-            after_close,
-            after_close,
-            None,
-            None,
-        )["status"],
-        "disabled"
-    );
-    let planner = root.path().join("disabled-planner.json");
-    std::fs::write(&planner, br#"{"enabled":false}"#).unwrap();
+    let planner = root.path().join("legacy-planner.json");
+    fs::write(&planner, br#"{"enabled":false,"digest":{"enabled":false}}"#).unwrap();
     let mut with_planner = c.clone();
     with_planner.planner_config = Some(planner);
-    let disabled = report(&with_planner, after_close.timestamp_millis()).unwrap();
-    assert_eq!(disabled["status"], "model_roles_blocked");
-    assert_eq!(disabled["planner_enabled"], false);
-
-    let disabled_roles = root.path().join("disabled-roles.json");
-    std::fs::write(
-        &disabled_roles,
-        br#"{"enabled":false,"digest":{"enabled":false}}"#,
-    )
-    .unwrap();
-    let mut no_roles = with_planner.clone();
-    no_roles.planner_config = Some(disabled_roles);
-    let no_roles_report = report(&no_roles, after_close.timestamp_millis()).unwrap();
-    assert_eq!(no_roles_report["status"], "model_roles_blocked");
-    assert_eq!(no_roles_report["planner_enabled"], false);
-    assert_eq!(no_roles_report["roles"][0]["status"], "disabled");
-    // A disabled role still reports the model the policy declares for it, so the
-    // dashboard shows the switch target without a second configuration read.
-    assert_eq!(no_roles_report["roles"][0]["model"], "");
-    assert_eq!(
-        no_roles_report["roles"][0]["transport"],
-        "subscription_proxy"
-    );
-    assert_eq!(no_roles_report["roles"].as_array().unwrap().len(), 1);
-
-    // A stale registered runtime is reported as a blocked research status with
-    // the exact artifact code, not hidden until the post-close review call.
-    let research_code = root.path().join("research-code.py");
-    let research_input = root.path().join("research-input.json");
-    std::fs::write(&research_code, b"code").unwrap();
-    std::fs::write(&research_input, b"input").unwrap();
-    let research_planner = root.path().join("research-planner.json");
-    std::fs::write(
-        &research_planner,
-        serde_json::to_vec(&json!({
-            "enabled":false,
-            "research_tools":{
-                "queue":root.path().join("research.sqlite"),
-                "stage_root":root.path().join("research-stage"),
-                "registrations":[{
-                    "analysis_id":"shared_core_backtest",
-                    "dataset_id":"synthetic_no_quotes_fixture",
-                    "code_file":research_code,
-                    "runtime_file":root.path().join("stale-nivra-analysis"),
-                    "input_file":research_input,
-                    "code_sha256":digest(b"code"),
-                    "runtime_sha256":digest(b"runtime"),
-                    "input_sha256":digest(b"input"),
-                    "memory_bytes":67108864,"wall_millis":5000,
-                    "limits":{"cpu_millis":1000,"tasks":2,"workspace_bytes":1048576,"file_bytes":65536}
-                }]
-            }
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-    let mut research_config = with_planner.clone();
-    research_config.planner_config = Some(research_planner);
-    let research_report = report(&research_config, after_close.timestamp_millis()).unwrap();
-    assert_eq!(research_report["research"]["status"], "blocked");
-    assert_eq!(
-        research_report["research"]["registrations"][0]["reason"],
-        "research_runtime_unreadable"
-    );
-    assert_eq!(
-        research_report["research"]["registrations"][0]["files"][1]["artifact"],
-        "runtime"
-    );
+    let legacy = report(&with_planner, after_close.timestamp_millis()).unwrap();
+    assert_eq!(legacy["status"], "model_roles_blocked");
+    assert_eq!(legacy["reason"], "pi_paper_config_required");
+    assert_eq!(legacy["roles"], json!([]));
 
     // Internal callers must receive an error for an unrepresentable clock.
     assert_eq!(
@@ -477,113 +292,80 @@ pub(crate) fn check_boundaries() {
 }
 
 #[cfg(test)]
-mod warning_tests {
-    use super::*;
+#[test]
+fn pi_readiness_projects_only_locally_verified_facts() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path();
+    let mut c = super::tests::config(dir);
+    let planner = dir.join("planner.json");
+    c.planner_config = Some(planner.clone());
+    let node = dir.join("node");
+    let entry = dir.join("agent.js");
+    let agent_dir = dir.join("pi");
+    fs::create_dir(&agent_dir).unwrap();
+    fs::write(&node, b"fixture; do not execute").unwrap();
+    fs::set_permissions(&node, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(&entry, b"fixture; do not execute").unwrap();
+    fs::write(agent_dir.join("auth.json"), b"opaque provider credentials").unwrap();
+    fs::create_dir_all(dir.join("model/agent")).unwrap();
+    fs::write(dir.join("model/usage-identity.json"), b"legacy evidence").unwrap();
+    fs::write(
+        planner,
+        json!({"enabled":true,"agent":{
+            "mode":"paper","node":node,"entry":entry,"agent_dir":agent_dir,
+            "lanes":{"decision":{"model":{"provider":"fixture","id":"decision-model"},
+                "daily_calls":2,"daily_cost_usd":3.0}}
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    let now = DateTime::parse_from_rfc3339("2026-10-16T08:00:00+05:30")
+        .unwrap()
+        .timestamp_millis();
+    let fresh = report(&c, now).unwrap();
+    assert_eq!(fresh["harness"], "pi");
+    assert_eq!(fresh["status"], "model_roles_unknown");
+    assert_eq!(fresh["runtime"]["status"], "present");
+    assert_eq!(fresh["roles"].as_array().unwrap().len(), 1);
+    assert_eq!(fresh["roles"][0]["role"], "decision");
+    assert_eq!(
+        fresh["roles"][0]["credential_check"]["status"],
+        "not_checked"
+    );
+    assert_eq!(fresh["roles"][0]["remaining_current"], 2);
+    assert!(!fresh.to_string().contains("opaque provider credentials"));
+    assert!(!dir.join("model/agent/usage.json").exists());
 
-    #[test]
-    fn session_credential_warnings_are_independent_of_usage_and_redacted() {
-        // Validate cadence without opening any path or creating auth fixtures.
-        let mut config = super::super::tests::config(Path::new("/synthetic-unused"));
-        assert_eq!(config.model_readiness_check_interval_ms, 60_000);
-        assert!(config.validate().is_ok());
-        config.model_readiness_check_interval_ms = 1234;
-        assert!(config.validate().is_ok());
-        for invalid in [0, -1] {
-            config.model_readiness_check_interval_ms = invalid;
-            assert!(config.validate().is_err());
-        }
-        let models = json!({"roles":[
-            {"role":"digest","enabled":true,"status":"unknown",
-             "reason":"usage_namespace_unavailable",
-             "credential_check":{"status":"unknown","secret":"synthetic-private"}},
-            {"role":"orchestrator","enabled":true,"status":"blocked",
-             "reason":"grant_login_required"},
-            {"role":"operations","enabled":true,"status":"blocked",
-             "reason":"daily_budget_exhausted","credential_check":{"status":"validated"}},
-            {"role":"strategy","enabled":false,"status":"blocked"}
-        ]});
-        assert_eq!(
-            credential_warnings(&models),
-            vec![
-                json!({"model":"digest","reason":"grant_refresh_required_or_expiry_unverified"}),
-                json!({"model":"orchestrator","reason":"grant_login_required"})
-            ]
-        );
-        assert!(credential_warnings(&json!({})).is_empty());
-        assert_eq!(
-            credential_warnings(&json!({"roles":[
-                {"role":"orchestrator","enabled":true,"status":"blocked",
-                 "reason":"provider text is not an alert code"}
-            ]})),
-            vec![json!({"model":"orchestrator","reason":"model_credential_validation_failed"})]
-        );
-        assert!(
-            credential_warnings(&json!({"roles":[
-                {"role":"digest","enabled":true,"status":"ready",
-                 "credential_check":{"status":"validated"}}
-            ]}))
-            .is_empty()
-        );
-    }
-}
+    let spend = dir.join("model/agent/usage.json");
+    fs::write(&spend, b"invalid usage").unwrap();
+    let blocked = report(&c, now).unwrap();
+    assert_eq!(blocked["status"], "model_roles_blocked");
+    assert_eq!(blocked["reason"], "agent_usage_unavailable");
+    assert_eq!(fs::read(&spend).unwrap(), b"invalid usage");
 
-#[cfg(test)]
-mod orchestrator_tests {
-    use super::*;
+    fs::write(
+        &spend,
+        json!({"date":c.session,"lanes":{"decision":{
+            "input":0,"output":0,"cache_read":0,"cache_write":0,"cost_usd":3,"calls":1
+        }}})
+        .to_string(),
+    )
+    .unwrap();
+    let exhausted = report(&c, now).unwrap();
+    assert_eq!(exhausted["status"], "model_roles_blocked");
+    assert_eq!(exhausted["reason"], "daily_budget_exhausted");
 
-    fn report_for(root: &Path, planner: &str) -> Value {
-        let planner_path = root.join("planner.json");
-        std::fs::write(&planner_path, planner).unwrap();
-        let c: Config = serde_json::from_value(json!({
-            "account":"tharun-upstox","session":"2026-10-16","previous_session":"2026-10-15",
-            "calendar_source":"NSE/CMTR/71775","directory":root,
-            "token_file":root.join("unused-token"),
-            "dashboard_token_file":root.join("unused-dashboard"),
-            "read_journal":root.join("unused-journal"),
-            "read_scope":"upstox-market-tharun-upstox","read_journal_device":0,
-            "read_journal_inode":0,"strategy":"model_planner_v1",
-            "planner_config":planner_path
-        }))
-        .unwrap();
-        let at = DateTime::parse_from_rfc3339("2026-10-21T15:30:01+05:30").unwrap();
-        report(&c, at.timestamp_millis()).unwrap()
-    }
+    let after_close = DateTime::parse_from_rfc3339("2026-10-16T15:30:01+05:30")
+        .unwrap()
+        .timestamp_millis();
+    let future = report(&c, after_close).unwrap();
+    assert_eq!(future["target_session"], "2026-10-19");
+    assert_eq!(future["reason"], "agent_provider_not_checked");
+    assert_eq!(future["roles"][0]["remaining_current"], Value::Null);
 
-    #[test]
-    fn two_live_readiness_identities_project_trigger_usage() {
-        let root = tempfile::tempdir_in("/var/tmp").unwrap();
-        let value = report_for(
-            root.path(),
-            r#"{"enabled":false,"digest":{"enabled":true,"model_id":"gpt-6-luna","transport":"openai_codex","daily_call_budget":5},"orchestrator":{"enabled":true,"scorer_after_minute":960,"model":{"model_id":"grok-4.7","transport":"direct_oauth"}}}"#,
-        );
-        let roles = value["roles"].as_array().unwrap();
-        assert_eq!(roles.len(), 2, "{value}");
-        assert_eq!(roles[0]["role"], "digest");
-        assert_eq!(roles[1]["role"], "orchestrator");
-        assert!(roles.iter().all(|role| role["enabled"] == true));
-        // This fixture previews a future session without an original namespace.
-        assert_eq!(roles[1]["current_usage"], Value::Null, "{value}");
-        assert_eq!(roles[1]["remaining_current"], Value::Null);
-        assert_ne!(roles[1]["reason"], "usage_namespace_unavailable");
-
-        // Trigger counts, rather than a new role namespace, carry existing usage.
-        let zero = orchestrator_usage(Some(&json!({"operations":0})), "operations").unwrap();
-        assert_eq!(remaining_calls(3, zero["orchestrator"].as_u64()), Some(3));
-        let usage = json!({"digest":4,"operations":3,"strategy":1});
-        let before = usage.clone();
-        for (trigger, count) in [("operations", 3), ("strategy", 1)] {
-            let projected = orchestrator_usage(Some(&usage), trigger).unwrap();
-            assert_eq!(projected["orchestrator"], count);
-            assert_eq!(
-                remaining_calls(3, projected["orchestrator"].as_u64()),
-                Some(3 - count)
-            );
-        }
-        assert_eq!(usage, before);
-        assert!(orchestrator_usage(None, "operations").is_none());
-        assert_eq!(
-            orchestrator_usage(Some(&json!({})), "operations").unwrap()["orchestrator"],
-            Value::Null
-        );
-    }
+    fs::remove_file(entry).unwrap();
+    assert_eq!(
+        report(&c, now).unwrap()["reason"],
+        "agent_entry_unavailable"
+    );
 }

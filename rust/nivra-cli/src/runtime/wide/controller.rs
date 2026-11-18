@@ -111,16 +111,10 @@ struct Controller<'a> {
     owner_research_status: serde_json::Value,
     owner_research_worker: harness::OwnerResearchRuntime,
     scorer_status: serde_json::Value,
-    scorer_worker: Option<scorer_trigger::Worker>,
-    research_lane: super::super::supervisor::research::Lane,
-    aside_worker: Option<super::super::supervisor::Worker>,
-    supervisor_worker: Option<super::super::supervisor::Worker>,
-    event_worker: Option<redecision::Worker>,
     /// pi lanes, when the planner has an `agent` block.
     agent: Option<super::super::agent::service::LaneService>,
     /// The built-in ranking the last rank pass produced, best first.
     live_ranking: Vec<super::super::agent::Ranked>,
-    event_mode: bool,
     supervisor_config_fallback: Option<planner::PlannerConfig>,
     event_config_reason: Option<&'static str>,
     event_config: Option<planner::PlannerConfig>,
@@ -236,10 +230,58 @@ fn dashboard_token(c: &Config) -> Result<String> {
     Ok(token)
 }
 
+fn load_pi_policy(c: &Config) -> Result<planner::PlannerConfig> {
+    let path = c
+        .planner_config
+        .as_deref()
+        .ok_or("pi_paper_planner_required")?;
+    let cfg = planner::PlannerConfig::load_for_session(path, c.session)?;
+    if !cfg.uses_pi_paper() {
+        return Err("pi_paper_planner_required".into());
+    }
+    Ok(cfg)
+}
+
+fn attach_agent(
+    db: &mut Connection,
+    c: &Config,
+    p: &mut Portfolio,
+    policy: Result<planner::PlannerConfig>,
+) -> Result<
+    Option<(
+        planner::PlannerConfig,
+        super::super::agent::service::LaneService,
+    )>,
+> {
+    let attach = (|| -> Result<_> {
+        let cfg = policy?;
+        super::super::agent::paper::initialize(db, c, &cfg, p, millis())?;
+        let agent = super::super::agent::service::LaneService::start(&cfg)
+            .ok_or("pi_paper_service_unavailable")?;
+        Ok((cfg, agent))
+    })();
+    match attach {
+        Ok((cfg, agent)) => {
+            p.settings.exit_policy = cfg.exit_policy.clone();
+            Ok(Some((cfg, agent)))
+        }
+        Err(error) => {
+            planner_incident_cause(db, c, p, millis(), Some(&failure_code(error.as_ref())))?;
+            Ok(None)
+        }
+    }
+}
+
 impl<'a> Controller<'a> {
     fn start(c: &Config, client: &'a data::Client) -> Result<Self> {
         let _daily_lock = rollover::controller_lock(c)?;
         let config = c.clone();
+        let policy = load_pi_policy(c);
+        let policy = if c.directory.join("paper.sqlite").is_file() {
+            policy
+        } else {
+            Ok(policy?)
+        };
         fs::create_dir_all(&c.directory)?;
         fs::set_permissions(&c.directory, fs::Permissions::from_mode(0o700))?;
         let lock = fs::OpenOptions::new()
@@ -250,13 +292,6 @@ impl<'a> Controller<'a> {
             .open(c.directory.join("controller.lock"))?;
         lock.try_lock_exclusive()?;
         let lock = AdvisoryLock::new(lock);
-        // The controller refuses a policy that does not meet the decision-owner
-        // prerequisites before it opens the book.
-        if let Some(path) = &c.planner_config
-            && let Ok(planner_config) = planner::PlannerConfig::load_for_session(path, c.session)
-        {
-            planner_config.validate_decision_owner()?;
-        }
         let mut db = open_book(c)?;
         let action_fault = ensure_actions(&db).is_err();
         let mut p = load_wide(&mut db, c)?;
@@ -266,50 +301,12 @@ impl<'a> Controller<'a> {
         if action_fault {
             planner_incident(&mut db, c, &mut p, millis())?;
         }
-        let planner_config_path = c
-            .planner_config
-            .as_deref()
-            .filter(|_| c.prior_config.is_none() || c.legacy_directory.is_some());
-        let mut event_config = planner_config_path
-            .and_then(|path| planner::PlannerConfig::load_for_session(path, c.session).ok());
-        // A configured path that failed to load is unavailable, not unconfigured.
-        let mut event_config_reason = if planner_config_path.is_some() && event_config.is_none() {
-            Some("planner_config_unavailable")
-        } else {
-            None
+        let (event_config, agent) = match attach_agent(&mut db, c, &mut p, policy)? {
+            Some((cfg, agent)) => (Some(cfg), Some(agent)),
+            None => (None, None),
         };
-        // The last loaded policy is retained only for static health caps after a
-        // usage/authority failure; it is never used to resume planner work.
-        let mut supervisor_config_fallback: Option<planner::PlannerConfig> = None;
-        if let Some(cfg) = &event_config {
-            p.settings.exit_policy = cfg.exit_policy.clone();
-        }
-        let event_mode = if closed_incident::closed_sealed(c, &p) {
-            false
-        } else {
-            match redecision::initialize(&mut db, c, &p, event_config.as_ref(), millis()) {
-                Ok(mode) => mode,
-                Err(error) => {
-                    let cause = error.to_string();
-                    supervisor_config_fallback = event_config.take().or(supervisor_config_fallback);
-                    event_config_reason = Some("planner_authority_invalid");
-                    planner_incident_cause(&mut db, c, &mut p, millis(), Some(&cause))?;
-                    true
-                }
-            }
-        };
-        // An owner policy may only run against authority initialized by that exact
-        // policy. A legacy or interrupted authority needs the reviewed config-apply
-        // transition; stop planner admissions and keep host protection running.
-        if event_mode
-            && let Some(cfg) = event_config.as_ref()
-            && let Err(error) = redecision::owner_startup_check(&db, c, cfg)
-        {
-            let cause = error.to_string();
-            supervisor_config_fallback = event_config.take().or(supervisor_config_fallback);
-            event_config_reason = Some("planner_authority_invalid");
-            planner_incident_cause(&mut db, c, &mut p, millis(), Some(&cause))?;
-        }
+        let event_config_reason = agent.is_none().then_some("pi_paper_authority_unavailable");
+        let supervisor_config_fallback = None;
         if c.prior_config.is_none() || c.legacy_directory.is_some() {
             persist(&mut db, c, &p, millis(), None, None, "wide_reconciled")?;
         }
@@ -432,17 +429,9 @@ impl<'a> Controller<'a> {
             owner_research_status: serde_json::json!({"status":"disabled"}),
             owner_research_worker: harness::OwnerResearchRuntime::default(),
             scorer_status: serde_json::json!({"status":"awaiting_close"}),
-            scorer_worker: None,
             // The research lane's own slot (#237): never shared with trading turns.
-            research_lane: super::super::supervisor::research::Lane::default(),
-            aside_worker: None,
-            supervisor_worker: None,
-            event_worker: None,
-            agent: event_config
-                .as_ref()
-                .and_then(super::super::agent::service::LaneService::start),
+            agent,
             live_ranking: Vec::new(),
-            event_mode,
             supervisor_config_fallback,
             event_config_reason,
             event_config,
@@ -463,9 +452,7 @@ impl<'a> Controller<'a> {
             day: local(now).date_naive(),
             m: minute(now),
         };
-        if self.event_worker.is_none()
-            && let Some(cfg) = self.event_config.as_mut()
-        {
+        if let Some(cfg) = self.event_config.as_mut() {
             let _ = refresh_experiment_profile(&mut self.db, &self.config, cfg, now, &self.alerts);
         }
         let session_end_ms = session_end_ms(&self.config);
@@ -477,7 +464,6 @@ impl<'a> Controller<'a> {
                 "action":"none"
             });
         }
-        self.owner_tick(t, session_end_ms);
         if self.stopping.load(Ordering::Relaxed) {
             return Ok(Flow::Stopped { at: now });
         }
@@ -494,18 +480,22 @@ impl<'a> Controller<'a> {
         .to_owned();
         self.track_feed_activity(now, active);
         let history_admitted = self.history_admitted();
-        self.pre_session_owner_tick(t, active, history_admitted)?;
         if active {
             status = self.trade_session(t, history_admitted)?.to_owned();
         }
         if let Some(closed) = self.close_session(t)? {
             status = closed;
         }
-        if self.reported {
-            self.scorer_tick(now);
-        }
         self.owner_research(now, research_context_unavailable);
-        self.agent_tick(t, active && history_admitted && self.universe.is_some());
+        let agent_now = millis();
+        self.agent_tick(
+            Now {
+                now: agent_now,
+                day: local(agent_now).date_naive(),
+                m: minute(agent_now),
+            },
+            active && history_admitted && self.universe.is_some() && self.read_failure.is_none(),
+        );
         if t.day > self.config.session {
             match self.rollover(t)? {
                 Advance::Adopted => return Ok(Flow::Continue),
@@ -526,54 +516,6 @@ impl<'a> Controller<'a> {
         )?;
         thread::sleep(Duration::from_millis(interval_ms));
         Ok(Flow::Continue)
-    }
-
-    fn owner_tick(&mut self, t: Now, session_end_ms: Option<i64>) {
-        let Now { now, day, m } = t;
-        let c = &self.config;
-        if let (Some(cfg), Some(session_end_ms)) = (self.event_config.as_ref(), session_end_ms) {
-            let allowlist = self
-                .tradable
-                .iter()
-                .map(|i| i.key.clone())
-                .collect::<Vec<_>>();
-            let tick = super::super::supervisor::Tick {
-                now,
-                minute: m,
-                in_session: day == c.session
-                    && (c.execution.session_start_minute..c.execution.session_end_minute)
-                        .contains(&m),
-                fill_count: self.p.fills.len(),
-                allowlist: &allowlist,
-                session_end_ms,
-                positions: serde_json::to_value(&self.p.positions)
-                    .unwrap_or(serde_json::Value::Null),
-            };
-            let mut context = super::super::decision_owner::Context {
-                db: &mut self.db,
-                portfolio: &self.p,
-                instruments: &self.tradable,
-            };
-            super::super::supervisor::consider_owner(
-                c,
-                cfg,
-                &mut self.supervisor_worker,
-                &mut self.aside_worker,
-                &tick,
-                Some(&self.alerts),
-                &mut context,
-            );
-            // Research ticks after trading and never gates it.
-            super::super::supervisor::research::tick_lane(
-                c,
-                cfg,
-                &mut self.research_lane,
-                now,
-                session_end_ms,
-                !self.p.halted && !self.p.stopped,
-                self.p.fills.iter().map(|fill| fill.at).max(),
-            );
-        }
     }
 
     /// Feed this pass to the pi lanes. A lane failure is reported and never
@@ -613,7 +555,7 @@ impl<'a> Controller<'a> {
                 .enabled
                 .then(|| self.index_context.json()),
         };
-        if let Err(error) = agent.tick(&cycle) {
+        if let Err(error) = agent.tick(&cycle, &mut self.db) {
             eprintln!("agent_lanes_failed reason={}", failure_code(error.as_ref()));
         }
     }
@@ -627,17 +569,10 @@ impl<'a> Controller<'a> {
                 intent.history = self.settle_cancelled_history(worker);
             }
         }
-        drop(self.supervisor_worker.take());
-        drop(self.aside_worker.take());
-        self.research_lane.stop();
-        if let Some(agent) = self.agent.take() {
+        let in_flight = self.agent.take().and_then(|agent| {
+            let claim = agent.pending_claim().cloned();
             agent.stop();
-        }
-        let in_flight = self.event_worker.take().map(|worker| {
-            worker
-                .cancel
-                .store(true, std::sync::atomic::Ordering::Release);
-            worker.claim.clone()
+            claim
         });
         let details = shutdown::settle(
             &mut self.db,
@@ -850,12 +785,6 @@ impl<'a> Controller<'a> {
                     serde_json::json!({"ready":false}),
                 );
             }
-            if day == c.session {
-                for warning in readiness::credential_warnings(&self.readiness_status["models"]) {
-                    self.alerts
-                        .emit(Event::ModelCredentialUnavailable, c.session, warning);
-                }
-            }
             self.last_readiness = now;
         }
     }
@@ -905,63 +834,6 @@ impl<'a> Controller<'a> {
                 ))
     }
 
-    /// Pre-open owner digest before the cash session admits entries.
-    fn pre_session_owner_tick(
-        &mut self,
-        t: Now,
-        active: bool,
-        history_admitted: bool,
-    ) -> Result<()> {
-        let Now { now, day, m } = t;
-        let c = &self.config;
-        if history_admitted
-            && day == c.session
-            && (c.history_preparation_start_minute..c.execution.session_end_minute).contains(&m)
-            && !self.p.closed
-            && !self.p.halted
-            && !self.p.stopped
-            && self.universe.is_some()
-            && self.event_mode
-            && !active
-            && self.p.positions.is_empty()
-            && !super::super::supervisor::holding_luna(self.supervisor_worker.as_ref(), now)
-            && let Some(cfg) = &self.event_config
-        {
-            let result = {
-                let store = self
-                    .feature_store
-                    .lock()
-                    .map_err(|_| Fail::new("feature_store_lock"))?;
-                event_tick(
-                    &mut self.db,
-                    c,
-                    cfg,
-                    &self.p,
-                    &self.tradable,
-                    &mut self.event_worker,
-                    &self.scan,
-                    &store,
-                    None,
-                    now,
-                    true,
-                    true,
-                )
-            };
-            contain_event_error(
-                result,
-                &mut self.db,
-                c,
-                &mut self.p,
-                &mut self.event_worker,
-                &mut self.event_config,
-                &mut self.supervisor_config_fallback,
-                &mut self.event_config_reason,
-                millis(),
-            )?;
-        }
-        Ok(())
-    }
-
     /// Market reads, scanning, ranking and the owner tick inside the session.
     fn trade_session(&mut self, t: Now, history_admitted: bool) -> Result<&'static str> {
         let Now { now, m, .. } = t;
@@ -989,7 +861,7 @@ impl<'a> Controller<'a> {
                 .and_then(|d| d.screens.clone())
                 .unwrap_or_else(nivra_core::execution::ScreenPolicy::recommended),
         );
-        let (feed_fallback, feed_fresh) = self.poll_feed(&u, now, feed_settings.as_ref())?;
+        let (feed_fallback, _) = self.poll_feed(&u, now, feed_settings.as_ref())?;
         // Held instruments always read and committed before any scanner request.
         let held: Vec<_> = self
             .p
@@ -1046,7 +918,7 @@ impl<'a> Controller<'a> {
         if self.p.halted {
             status = "risk_halted_protective_exits_only";
         }
-        self.in_session_owner_tick(history_admitted, freshness, feed_fresh)?;
+        self.clear_read_block(freshness)?;
         Ok(status)
     }
 
@@ -1185,8 +1057,8 @@ impl<'a> Controller<'a> {
                 &[],
                 None,
                 &mut self.last_fresh_receipt,
-                self.event_config.as_ref().filter(|_| self.event_mode),
-                self.event_worker.as_ref().map(|w| w.cancel.as_ref()),
+                self.event_config.as_ref(),
+                None,
                 false,
                 None,
                 &self.feature_store,
@@ -1248,8 +1120,8 @@ impl<'a> Controller<'a> {
                     &[],
                     None,
                     &mut self.last_fresh_receipt,
-                    self.event_config.as_ref().filter(|_| self.event_mode),
-                    self.event_worker.as_ref().map(|w| w.cancel.as_ref()),
+                    self.event_config.as_ref(),
+                    None,
                     false,
                     None,
                     &self.feature_store,
@@ -1290,8 +1162,8 @@ impl<'a> Controller<'a> {
             &[],
             Some(&mut self.scan),
             &mut self.last_fresh_receipt,
-            self.event_config.as_ref().filter(|_| self.event_mode),
-            self.event_worker.as_ref().map(|w| w.cancel.as_ref()),
+            self.event_config.as_ref(),
+            None,
             feed_live,
             None,
             &self.feature_store,
@@ -1334,8 +1206,8 @@ impl<'a> Controller<'a> {
                 &[],
                 None,
                 &mut self.last_fresh_receipt,
-                self.event_config.as_ref().filter(|_| self.event_mode),
-                self.event_worker.as_ref().map(|w| w.cancel.as_ref()),
+                self.event_config.as_ref(),
+                None,
                 false,
                 Some(&mut self.scan),
                 &self.feature_store,
@@ -1360,7 +1232,7 @@ impl<'a> Controller<'a> {
             .as_ref()
             .and_then(|cfg| cfg.discovery.as_ref());
         let scan_started = std::time::Instant::now();
-        if let (Some(cfg), Some(settings)) = (&self.event_config, discovery) {
+        if let Some(settings) = discovery {
             let rank_now = millis();
             let projection =
                 super::super::discovery::project(&self.scan, &u.instruments, settings, rank_now);
@@ -1454,17 +1326,6 @@ impl<'a> Controller<'a> {
                 "stale":projection["stale_count"]
             });
             let candidates = super::super::discovery::candidates(&projection);
-            if let Some(reason) = redecision::scan_refreshed(
-                &mut self.db,
-                c,
-                cfg,
-                millis(),
-                &candidates,
-                projection["market_median_bps"].as_f64(),
-                projection["market_sample_count"].as_u64().unwrap_or(0) as usize,
-            )? {
-                eprintln!("scanner_trigger_queued {reason}");
-            }
             checkpoint_scanner(&self.db, &self.scan)?;
             if let Some(settings) = feed_settings
                 && now - self.last_depth >= settings.depth_poll_ms
@@ -1508,8 +1369,8 @@ impl<'a> Controller<'a> {
                 &[],
                 None,
                 &mut self.last_fresh_receipt,
-                self.event_config.as_ref().filter(|_| self.event_mode),
-                self.event_worker.as_ref().map(|w| w.cancel.as_ref()),
+                self.event_config.as_ref(),
+                None,
                 false,
                 Some(&mut self.scan),
                 &self.feature_store,
@@ -1519,72 +1380,19 @@ impl<'a> Controller<'a> {
         Ok(())
     }
 
-    fn in_session_owner_tick(
-        &mut self,
-        history_admitted: bool,
-        freshness: i64,
-        feed_fresh: bool,
-    ) -> Result<()> {
-        let c = &self.config;
-        if self.event_mode
-            && !super::super::supervisor::holding_luna(self.supervisor_worker.as_ref(), millis())
-            && let Some(cfg) = &self.event_config
+    fn clear_read_block(&mut self, freshness: i64) -> Result<()> {
+        let now = millis();
+        let fresh = self.last_fresh_receipt.is_some_and(|at| {
+            now.checked_sub(at)
+                .is_some_and(|age| (0..=freshness).contains(&age))
+        });
+        if fresh
+            && self.read_failure.is_none()
+            && !self.p.stopped
+            && !self.p.halted
+            && !self.p.closed
         {
-            let rest_fresh = self.last_fresh_receipt.is_some_and(|at| {
-                millis()
-                    .checked_sub(at)
-                    .is_some_and(|age| (0..=freshness).contains(&age))
-            });
-            let fresh = feed_fresh || rest_fresh;
-            // A transport/quota read block clears only after a validated
-            // REST quote and with no attempt in flight. The attempt itself
-            // is settled as failed/no-replay, never replayed.
-            if self.event_worker.is_none()
-                && self.read_failure.is_none()
-                && rest_fresh
-                && !self.p.stopped
-                && !self.p.halted
-                && !self.p.closed
-            {
-                redecision::clear_transient_read_block(&mut self.db, c)?;
-            }
-            let result = {
-                let store = self
-                    .feature_store
-                    .lock()
-                    .map_err(|_| Fail::new("feature_store_lock"))?;
-                event_tick(
-                    &mut self.db,
-                    c,
-                    cfg,
-                    &self.p,
-                    &self.tradable,
-                    &mut self.event_worker,
-                    &self.scan,
-                    &store,
-                    c.index_feeds.enabled.then_some(&self.index_context),
-                    millis(),
-                    history_admitted
-                        && self.read_failure.is_none()
-                        && self.p.positions.values().all(|position| {
-                            millis()
-                                .checked_sub(position.marked_at)
-                                .is_some_and(|age| (0..=freshness).contains(&age))
-                        }),
-                    fresh,
-                )
-            };
-            contain_event_error(
-                result,
-                &mut self.db,
-                c,
-                &mut self.p,
-                &mut self.event_worker,
-                &mut self.event_config,
-                &mut self.supervisor_config_fallback,
-                &mut self.event_config_reason,
-                millis(),
-            )?;
+            redecision::clear_transient_read_block(&mut self.db, &self.config)?;
         }
         Ok(())
     }
@@ -1597,13 +1405,16 @@ impl<'a> Controller<'a> {
         if !(day > c.session || (day == c.session && m >= c.execution.session_end_minute)) {
             return Ok(None);
         }
-        if let Some(worker) = self.event_worker.take() {
-            worker
-                .cancel
-                .store(true, std::sync::atomic::Ordering::Release);
-            if redecision::block(&mut self.db, c, "session_closed_no_replay").is_err() {
-                self.p.halted = true;
-            }
+        if let Some(agent) = &mut self.agent
+            && let Err(error) = agent.cancel_decision(&mut self.db, c)
+        {
+            planner_incident_cause(
+                &mut self.db,
+                c,
+                &mut self.p,
+                now,
+                Some(&failure_code(error.as_ref())),
+            )?;
         }
         if close_portfolio(&mut self.p) {
             persist(&mut self.db, c, &self.p, now, None, None, "post_close")?;
@@ -1660,30 +1471,13 @@ impl<'a> Controller<'a> {
         Ok(())
     }
 
-    fn scorer_tick(&mut self, now: i64) {
-        let c = &self.config;
-        self.scorer_status = match scorer_trigger::tick(
-            &mut self.db,
-            c,
-            self.event_config.as_ref(),
-            &self.p,
-            now,
-            &mut self.scorer_worker,
-        ) {
-            Ok(status) => status,
-            Err(_) => {
-                drop(self.scorer_worker.take());
-                serde_json::json!({"status":"scorer_unavailable_original_evidence_preserved"})
-            }
-        };
-    }
-
     fn owner_research(&mut self, now: i64, research_context_unavailable: bool) {
         let c = &self.config;
         if let Some(cfg) = self.event_config.as_ref() {
-            let owner_blocked =
-                super::super::decision_owner::research_priority_blocked(&self.db, c)
-                    .unwrap_or(true);
+            let owner_blocked = self
+                .agent
+                .as_ref()
+                .is_some_and(|agent| agent.pending_claim().is_some());
             let launch = harness::ResearchLaunch::for_book(harness::LaunchBook {
                 halted: self.p.halted,
                 stopped: self.p.stopped,
@@ -1721,7 +1515,7 @@ impl<'a> Controller<'a> {
     fn rollover(&mut self, t: Now) -> Result<Advance> {
         let Now { now, day, .. } = t;
         let c = &self.config;
-        match rollover::advance(c, now) {
+        match rollover::advance_pi(c, now) {
             Ok(Some(next)) => {
                 self.adopt(next, now)?;
                 Ok(Advance::Adopted)
@@ -1814,8 +1608,6 @@ impl<'a> Controller<'a> {
         self.reported = false;
         self.read_failure = None;
         self.planner_status = serde_json::json!({"status":"disabled_no_plan"});
-        self.event_worker = None;
-        drop(self.scorer_worker.take());
         self.scorer_status = serde_json::json!({"status":"awaiting_close"});
         self.owner_research_status = if self.config.planner_config.is_some() {
             serde_json::json!({
@@ -1826,53 +1618,23 @@ impl<'a> Controller<'a> {
         } else {
             serde_json::json!({"status":"disabled"})
         };
-        self.event_config = self.config.planner_config.as_deref().and_then(|path| {
-            planner::PlannerConfig::load_for_session(path, self.config.session).ok()
-        });
-        self.event_config_reason =
-            if self.config.planner_config.is_some() && self.event_config.is_none() {
-                Some("planner_config_unavailable")
-            } else {
-                None
-            };
         if let Some(agent) = self.agent.take() {
             agent.stop();
         }
         self.live_ranking.clear();
         self.supervisor_config_fallback = None;
-        self.p.settings.exit_policy = self
-            .event_config
-            .as_ref()
-            .and_then(|cfg| cfg.exit_policy.clone());
-        self.event_mode = match redecision::initialize(
-            &mut self.db,
-            &self.config,
-            &self.p,
-            self.event_config.as_ref(),
-            millis(),
-        ) {
-            Ok(mode) => mode,
-            Err(error) => {
-                let cause = error.to_string();
-                self.supervisor_config_fallback = self
-                    .event_config
-                    .take()
-                    .or(self.supervisor_config_fallback.take());
-                self.event_config_reason = Some("planner_authority_invalid");
-                planner_incident_cause(
-                    &mut self.db,
-                    &self.config,
-                    &mut self.p,
-                    millis(),
-                    Some(&cause),
-                )?;
-                true
+        let policy = load_pi_policy(&self.config);
+        match attach_agent(&mut self.db, &self.config, &mut self.p, policy)? {
+            Some((cfg, agent)) => {
+                self.event_config = Some(cfg);
+                self.event_config_reason = None;
+                self.agent = Some(agent);
             }
-        };
-        self.agent = self
-            .event_config
-            .as_ref()
-            .and_then(super::super::agent::service::LaneService::start);
+            None => {
+                self.event_config = None;
+                self.event_config_reason = Some("pi_paper_authority_unavailable");
+            }
+        }
         Ok(())
     }
 
@@ -1949,7 +1711,6 @@ impl<'a> Controller<'a> {
         if let Some(events) = match redecision::status(&self.db, c) {
             Ok(status) => status,
             Err(_) => {
-                self.event_worker = None;
                 self.supervisor_config_fallback = self
                     .event_config
                     .take()
@@ -1975,23 +1736,10 @@ impl<'a> Controller<'a> {
         }
         self.planner_status["execution"] = serde_json::json!(execution);
         self.planner_status["nifty_options"] = self.option_status.clone();
-        let usage = usage_projection(&mut self.db, c, &mut self.p, millis())?;
-        let supervisor_charged_calls = usage["supervisor"].as_u64();
-        if usage.is_null() {
-            self.event_worker = None;
-            self.supervisor_config_fallback = self
-                .event_config
-                .take()
-                .or(self.supervisor_config_fallback.take());
-            self.event_config_reason = Some("planner_usage_unavailable_recovery_required");
-            self.planner_status["status"] =
-                serde_json::json!("planner_usage_unavailable_recovery_required");
-        }
-        self.planner_status["budget_used"] = usage["digest"]
-            .as_u64()
-            .map_or(serde_json::Value::Null, |digest| serde_json::json!(digest));
-        self.planner_status["calls_used"] = usage;
-        Ok(supervisor_charged_calls)
+        self.planner_status["authority"] = serde_json::json!("pi");
+        self.planner_status["calls_used"] =
+            serde_json::to_value(super::super::agent::read_spend(c).ok())?;
+        Ok(None)
     }
 
     fn entry_status(&self) -> &'static str {
@@ -2002,8 +1750,6 @@ impl<'a> Controller<'a> {
             "operator_stopped"
         } else if self.planner_status["pending_attempt"].is_string() {
             "planning_no_new_entries"
-        } else if self.planner_status["last_review"]["handoff_requested"] == false {
-            "luna_waiting_for_next_scan"
         } else if planner::saved_plan(&self.db, c).ok().flatten().is_some() {
             "model_plan_ready"
         } else if self.planner_status["status"].as_str() == Some(planner::NO_DECISION_WORK) {
@@ -2085,7 +1831,7 @@ impl<'a> Controller<'a> {
         {
             series.observe(now, &self.p.cash.to_string(), &equity.to_string());
         }
-        let initialization = serde_json::json!({"stage":if self.p.halted {"halted_requires_review"} else if !history_admitted {"waiting_for_history"} else if self.planner_status["pending_attempt"].is_string() {"digest_and_decide_in_progress"} else if entry_status=="model_plan_ready" {"model_initialized"} else {"waiting_for_initial_or_next_model_plan"},"paper_only":true,"financial_execution_requires_accepted_plan":true});
+        let initialization = serde_json::json!({"stage":if self.p.halted {"halted_requires_review"} else if !history_admitted {"waiting_for_history"} else if self.planner_status["pending_attempt"].is_string() {"pi_decision_in_progress"} else if entry_status=="model_plan_ready" {"model_initialized"} else {"waiting_for_initial_or_next_model_plan"},"paper_only":true,"financial_execution_requires_accepted_plan":true});
         let updater_status = crate::update::dashboard_status();
         let owner_activity = if self.event_config.is_some() {
             super::super::decision_owner::activity_analytics(&self.db, c, &self.p).ok()
@@ -2096,7 +1842,7 @@ impl<'a> Controller<'a> {
             self.display_catalog_status = status;
         }
         let (research_library, experiment_lifecycle, owner_review_status) =
-            self.research_views(now, session_end_ms);
+            self.research_views(now);
         // One completion sample owns as_of_ms, the heartbeat and both research
         // projections. Request time in the dashboard API never renews it.
         let completed_at_ms = millis();
@@ -2157,7 +1903,6 @@ impl<'a> Controller<'a> {
     fn research_views(
         &self,
         now: i64,
-        session_end_ms: Option<i64>,
     ) -> (
         Option<serde_json::Value>,
         serde_json::Value,
@@ -2178,21 +1923,10 @@ impl<'a> Controller<'a> {
             research_library,
             &experiment_lifecycle,
         );
-        let owner_review_status = self
-            .event_config
-            .as_ref()
-            .map(|cfg| match session_end_ms {
-                Some(session_end_ms) => {
-                    super::super::supervisor::review_status(c, cfg, &self.p, now, session_end_ms)
-                }
-                None => serde_json::json!({
-                    "version":1,
-                    "status":"unavailable",
-                    "reason":"controller_session_end_unavailable",
-                    "activation_authorized":false
-                }),
-            })
-            .unwrap_or_else(|| serde_json::json!({"version":1,"status":"disabled"}));
+        let owner_review_status = serde_json::json!({
+            "status": if self.reported { "pi_review_after_seal" } else { "awaiting_close" },
+            "activation_authorized":false
+        });
         (research_library, experiment_lifecycle, owner_review_status)
     }
 
@@ -2204,10 +1938,6 @@ impl<'a> Controller<'a> {
         research_operational: super::super::supervisor::ResearchOperational,
     ) -> Result<serde_json::Value> {
         let c = &self.config;
-        let current_selection = self
-            .event_config
-            .as_ref()
-            .and_then(|cfg| super::super::supervisor::current_selection_binding(c, cfg));
         let operational_health = super::super::operational_health::capture(
             completed_at_ms,
             super::super::supervisor::operational_status_with_research(
@@ -2221,7 +1951,7 @@ impl<'a> Controller<'a> {
                 ),
                 supervisor_charged_calls,
                 Some(research_operational),
-                current_selection.as_deref(),
+                None,
             ),
             c.calendar_coverage_at(day)?,
             crate::alert::transport_status(&c.account, &c.session.to_string(), completed_at_ms),

@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS lane_message_events(
 );";
 
 /// Trading results delivered per decision turn; the rest wait for the next.
+#[cfg(test)]
 pub(crate) const MAX_TRADING_UPDATES: usize = 4;
 const MAX_QUESTION_CHARS: usize = 1_000;
 const MAX_SUMMARY_CHARS: usize = 600;
@@ -521,6 +522,9 @@ pub(crate) fn post_request(
 }
 
 /// Undelivered research results for one trading turn: summary and refs only.
+/// The pi lane delivers its own updates, so only the historical supervisor
+/// tests read this projection.
+#[cfg(test)]
 pub(crate) fn trading_updates(c: &Config, now: i64) -> Result<Vec<LaneMessage>> {
     let db = open(&c.directory)?;
     list(
@@ -542,6 +546,9 @@ pub(crate) fn update_fact(message: &LaneMessage) -> Value {
 
 /// Mark updates delivered once the trading turn that rendered them is durable.
 /// A crash before this re-delivers the same message ids once (at-least-once).
+/// Only the historical supervisor tests still exercise this write path; the pi
+/// lanes mark delivery through their own request journal.
+#[cfg(test)]
 pub(crate) fn mark_delivered(c: &Config, ids: &[String], turn_id: &str, now: i64) -> Result<()> {
     if ids.is_empty() {
         return Ok(());

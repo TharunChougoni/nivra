@@ -1,15 +1,25 @@
 //! Sealed post-close evidence for the owner's session review. Financial
 //! reports, rollover and protection remain independent.
+// Sealed evidence is only consumed by the offline supervisor review tests; the
+// pi cutover removed every live caller of this write path.
+#[cfg(test)]
 use super::*;
+#[cfg(test)]
 use nivra_core::{execution::Portfolio, postclose as contract};
+#[cfg(test)]
 use serde_json::{Value, json};
+#[cfg(test)]
 // Evidence bounds stay at the values sealed reviews were built with.
 const MAX_FILL_EVIDENCE: usize = 128;
+#[cfg(test)]
 const MAX_PLANNER_EVIDENCE_ROWS: usize = 24;
+#[cfg(test)]
 const MAX_TICK_EVIDENCE_ROWS: usize = 48;
+#[cfg(test)]
 fn account(c: &Config) -> String {
     digest(format!("upstox\0{}", c.account).as_bytes())
 }
+#[cfg(test)]
 fn decode<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T> {
     if raw.len() > 1_000_000 {
         return Err("postclose_journal_bound".into());
@@ -18,6 +28,7 @@ fn decode<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T> {
         raw.as_bytes(),
     )?)?)
 }
+#[cfg(test)]
 pub(crate) fn seal_evidence(
     db: &Connection,
     c: &Config,

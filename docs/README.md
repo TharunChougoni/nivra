@@ -15,8 +15,8 @@ start.
 | [Architecture](ARCHITECTURE.md) | Crate boundaries, runtime flow, durable state and lane separation |
 | [Operations](OPERATIONS.md) | Configuration, startup, recovery, releases and operator safety procedures |
 | [Strategy](STRATEGY.md) | Paper mandate, execution gates, fees and Nifty option scope |
-| [Model Harness](MODEL_HARNESS.md) | Digest/owner roles, tools, budgets, trust boundaries and limits |
-| [pi agent lanes](AGENT.md) | Opt-in pi service: protocol, tool bridge, lanes, budgets and VM install |
+| [Model Harness](MODEL_HARNESS.md) | Lane tool boundary, evidence, budgets, archives and the retained offline-replay mechanics |
+| [pi agent lanes](AGENT.md) | Current pi service: protocol, lanes, tools, budgets, verification and operations |
 | [Dashboard](DASHBOARD.md) | Read-only API, React workspace and captured-data projections |
 | [Testing](TESTING.md) | Behavioral test strategy and the current gate |
 | [Development](DEVELOPMENT.md) | Build, release workflow and immutable-tag policy |

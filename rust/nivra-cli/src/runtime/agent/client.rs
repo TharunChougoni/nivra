@@ -405,10 +405,8 @@ impl AgentClient {
                     return Ok(TurnOutcome {
                         id,
                         lane: request.lane,
-                        status,
-                        error: error.or(aborted
-                            .filter(|_| status != TurnStatus::Ok)
-                            .map(str::to_owned)),
+                        status: aborted.map_or(status, |_| TurnStatus::Aborted),
+                        error: aborted.map(str::to_owned).or(error),
                         text: output.text,
                         usage,
                         model,

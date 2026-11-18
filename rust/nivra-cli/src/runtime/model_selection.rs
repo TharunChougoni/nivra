@@ -5,22 +5,26 @@
 //! so a model-only switch never rewrites the sealed policy, merges role charges
 //! or resets the persistent session. Requests are durable pending/active
 //! revisions; the controller promotes a pending revision only at a turn boundary.
-use super::{Config, digest, planner, rollover};
+#[cfg(test)]
+use super::rollover;
+use super::{Config, digest, planner};
+#[cfg(test)]
 use nivra_cli::lock::AdvisoryLock;
 use nivra_cli::native_transport::Transport;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use serde_json::{Value, json};
-use std::{
-    fs,
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
-    path::{Path, PathBuf},
-    process::ExitCode,
-};
+#[cfg(test)]
+use std::fs;
+#[cfg(test)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::path::PathBuf;
 
 pub(crate) const DEFAULT_PROFILE: &str = "default";
 const VERSION: u32 = 1;
 const MAX_BYTES: u64 = 65_536;
 const MAX_RECEIPTS: usize = 16;
+#[cfg(test)]
 const LOCK_WAIT_MS: u64 = 1_000;
 
 type SelectionResult<T> = std::result::Result<T, &'static str>;
@@ -36,9 +40,11 @@ pub(crate) struct Binding {
 }
 
 impl Binding {
+    #[cfg(test)]
     pub(crate) fn credential_sha256(&self) -> String {
         digest(self.model_config.as_os_str().as_encoded_bytes())
     }
+    #[cfg(test)]
     fn as_json(&self) -> Value {
         json!({
             "model_id": self.model_id,
@@ -101,40 +107,22 @@ struct Selection {
     receipts: Vec<Receipt>,
 }
 
-/// Operator-maintained runtime selection input. It contains only an admitted
-/// profile name; model bindings and credentials remain in the reviewed planner
-/// policy. Kept in its own file so it cannot alter the sealed paper config.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct SelectionConfig {
-    version: u32,
-    profile: String,
-}
-
-impl SelectionConfig {
-    fn load(path: &Path) -> SelectionResult<Self> {
-        let bytes =
-            crate::read_bounded(path, 4096).map_err(|_| "model_selection_config_unreadable")?;
-        let value: Self =
-            serde_json::from_slice(&bytes).map_err(|_| "model_selection_config_invalid")?;
-        if value.version != 1 {
-            return Err("model_selection_config_invalid");
-        }
-        Ok(value)
-    }
-}
-
 /// A validated active selection applied to one model turn.
 #[derive(Clone, Debug)]
 pub(crate) struct Resolved {
     pub(crate) revision: u64,
+    #[cfg(test)]
     pub(crate) profile: String,
+    #[cfg(test)]
     pub(crate) model: Binding,
+    #[cfg(test)]
     pub(crate) policy_sha256: String,
+    #[cfg(test)]
     pub(crate) applied_ms: i64,
 }
 
 impl Resolved {
+    #[cfg(test)]
     pub(crate) fn receipt(&self) -> Value {
         let mut value = self.model.as_json();
         value["revision"] = json!(self.revision);
@@ -145,6 +133,7 @@ impl Resolved {
     }
     /// Apply only model identity. Tools, budgets, timeouts and sandbox stay with
     /// the reviewed trigger policy.
+    #[cfg(test)]
     pub(crate) fn apply(&self, role: &mut planner::ModelRole) {
         role.model_id = self.model.model_id.clone();
         role.transport = self.model.transport;
@@ -156,6 +145,7 @@ fn state_path(c: &Config) -> PathBuf {
     c.directory.join("model/model-selection.json")
 }
 
+#[cfg(test)]
 fn lock_path(c: &Config) -> PathBuf {
     c.directory.join("model/model-selection.lock")
 }
@@ -172,6 +162,7 @@ fn fresh(c: &Config) -> SelectionResult<Selection> {
     })
 }
 
+#[cfg(test)]
 fn lock(c: &Config) -> SelectionResult<AdvisoryLock> {
     use std::time::{Duration, Instant};
     let path = lock_path(c);
@@ -238,6 +229,7 @@ fn load(c: &Config) -> SelectionResult<Selection> {
     Ok(state)
 }
 
+#[cfg(test)]
 fn save(c: &Config, state: &Selection) -> SelectionResult<()> {
     let value = serde_json::to_value(state).map_err(|_| "model_selection_unwritable")?;
     rollover::atomic(&state_path(c), &value).map_err(|_| "model_selection_unwritable")
@@ -313,6 +305,7 @@ fn validate_owner_binding(
     Ok(model)
 }
 
+#[cfg(test)]
 fn profile_json(cfg: &planner::PlannerConfig) -> Value {
     let Some(orchestrator) = cfg.orchestrator.as_ref() else {
         return json!({"profiles": [], "admitted": []});
@@ -328,6 +321,7 @@ fn profile_json(cfg: &planner::PlannerConfig) -> Value {
     })
 }
 
+#[cfg(test)]
 fn active_json(active: &Option<Active>) -> Value {
     match active {
         Some(active) => json!({
@@ -344,6 +338,7 @@ fn active_json(active: &Option<Active>) -> Value {
     }
 }
 
+#[cfg(test)]
 fn pending_json(pending: &Option<Pending>) -> Value {
     match pending {
         Some(pending) => json!({
@@ -361,6 +356,7 @@ fn pending_json(pending: &Option<Pending>) -> Value {
 }
 
 /// Show configured, admitted, active and pending models without changing state.
+#[cfg(test)]
 pub(crate) fn show(c: &Config, cfg: &planner::PlannerConfig) -> SelectionResult<Value> {
     let state = load(c)?;
     let configured = profile_json(cfg);
@@ -381,6 +377,7 @@ pub(crate) fn show(c: &Config, cfg: &planner::PlannerConfig) -> SelectionResult<
 
 /// Request an admitted profile for the next orchestrator turn. The request is
 /// durable and serialized by revision; it never changes the sealed policy.
+#[cfg(test)]
 pub(crate) fn request(
     c: &Config,
     cfg: &planner::PlannerConfig,
@@ -493,6 +490,7 @@ pub(crate) fn request(
     }))
 }
 
+#[cfg(test)]
 fn truncate_receipts(state: &mut Selection) {
     if state.receipts.len() > MAX_RECEIPTS {
         let excess = state.receipts.len() - MAX_RECEIPTS;
@@ -503,6 +501,7 @@ fn truncate_receipts(state: &mut Selection) {
 /// Apply a pending revision at an idle turn boundary. A pending profile that is
 /// no longer admitted or no longer matches its exact binding is refused; the
 /// last valid active selection is retained and the refusal is durable.
+#[cfg(test)]
 pub(crate) fn promote(
     c: &Config,
     cfg: &planner::PlannerConfig,
@@ -580,345 +579,20 @@ pub(crate) fn resolve(
     }
     Ok(Some(Resolved {
         revision: active.revision,
+        #[cfg(test)]
         profile: active.profile,
+        #[cfg(test)]
         model,
+        #[cfg(test)]
         policy_sha256: active.policy_sha256,
+        #[cfg(test)]
         applied_ms: active.applied_ms,
     }))
-}
-
-pub(super) fn load_current(path: &Path) -> SelectionResult<(Config, planner::PlannerConfig)> {
-    let bytes = crate::read_bounded(path, MAX_BYTES).map_err(|_| "config_unreadable")?;
-    let paper: Config = serde_json::from_slice(&bytes).map_err(|_| "config_invalid")?;
-    let current = rollover::current(&paper).map_err(|_| "model_selection_session_unavailable")?;
-    let planner_path = current
-        .planner_config
-        .as_deref()
-        .ok_or("model_selection_planner_missing")?;
-    let cfg = planner::PlannerConfig::load_for_session(planner_path, current.session)
-        .map_err(|_| "model_selection_policy_invalid")?;
-    Ok((current, cfg))
-}
-
-pub(super) fn same_path(a: &Path, b: &Path) -> bool {
-    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
-    }
-}
-
-#[derive(clap::Subcommand)]
-pub(crate) enum Commands {
-    /// Read host and session state without a model call.
-    Status {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Queue one read-only question through the controller's aside slot.
-    Ask {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        question: String,
-        #[arg(long)]
-        json: bool,
-        #[arg(long)]
-        request_id: Option<String>,
-        #[arg(long)]
-        idempotency_key: Option<String>,
-        #[arg(long)]
-        ttl_ms: Option<i64>,
-    },
-    /// Enqueue one explicitly requested, expiring owner instruction.
-    Instruct {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        text: String,
-        /// `review_only` or `decision_context`; never an execution authority.
-        #[arg(long)]
-        scope: String,
-        /// Exact current session reported by `agent status`.
-        #[arg(long)]
-        expect_session: String,
-        /// Exact current instruction revision reported by `agent status`.
-        #[arg(long)]
-        expect_revision: u64,
-        #[arg(long)]
-        json: bool,
-        #[arg(long)]
-        request_id: Option<String>,
-        #[arg(long)]
-        idempotency_key: Option<String>,
-        #[arg(long)]
-        ttl_ms: Option<i64>,
-    },
-    /// Poll one durable request id without resubmitting it.
-    Result {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        request_id: String,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Cancel only that question or instruction, never the trading instance.
-    Cancel {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        request_id: String,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Inspect or request the orchestrator model binding.
-    Model {
-        #[command(subcommand)]
-        command: ModelCommands,
-    },
-}
-
-#[derive(clap::Subcommand)]
-pub(crate) enum ModelCommands {
-    /// Show configured, active and pending orchestrator models.
-    Show {
-        #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Request an admitted model profile for the next orchestrator turn.
-    Set {
-        #[arg(long)]
-        config: PathBuf,
-        /// Profile name from the policy's admitted list, or `default`.
-        #[arg(long)]
-        model: String,
-        #[arg(long)]
-        json: bool,
-        /// Refuse if the durable selection revision has changed.
-        #[arg(long)]
-        expect_revision: Option<u64>,
-        #[arg(long)]
-        request_id: Option<String>,
-    },
-    /// Reload a versioned profile-name selection file through the same durable
-    /// selection validator used by `set`.
-    Reload {
-        #[arg(long)]
-        config: PathBuf,
-        /// Versioned JSON runtime selection file: {"version":1,"profile":"NAME"}.
-        #[arg(long)]
-        selection_config: PathBuf,
-        #[arg(long)]
-        json: bool,
-        #[arg(long)]
-        expect_revision: Option<u64>,
-        #[arg(long)]
-        request_id: Option<String>,
-    },
-}
-
-pub(crate) fn run(command: Commands) -> ExitCode {
-    let (result, prefix) = match command {
-        Commands::Status { config, json } => (
-            super::agent_cli::status_entry(&config, json),
-            "agent_refused",
-        ),
-        Commands::Ask {
-            config,
-            question,
-            json,
-            request_id,
-            idempotency_key,
-            ttl_ms,
-        } => (
-            super::agent_cli::ask_entry(
-                &config,
-                &question,
-                request_id.as_deref(),
-                idempotency_key.as_deref(),
-                ttl_ms,
-                json,
-            ),
-            "agent_refused",
-        ),
-        Commands::Instruct {
-            config,
-            text,
-            scope,
-            expect_session,
-            expect_revision,
-            json,
-            request_id,
-            idempotency_key,
-            ttl_ms,
-        } => (
-            super::agent_cli::instruct_entry(
-                &config,
-                &text,
-                &scope,
-                &expect_session,
-                expect_revision,
-                request_id.as_deref(),
-                idempotency_key.as_deref(),
-                ttl_ms,
-                json,
-            ),
-            "agent_refused",
-        ),
-        Commands::Result {
-            config,
-            request_id,
-            json,
-        } => (
-            super::agent_cli::result_entry(&config, &request_id, json),
-            "agent_refused",
-        ),
-        Commands::Cancel {
-            config,
-            request_id,
-            json,
-        } => (
-            super::agent_cli::cancel_entry(&config, &request_id, json),
-            "agent_refused",
-        ),
-        Commands::Model { command } => (
-            match command {
-                ModelCommands::Show { config, json } => show_entry(&config, json),
-                ModelCommands::Set {
-                    config,
-                    model,
-                    json,
-                    expect_revision,
-                    request_id,
-                } => set_entry(
-                    &config,
-                    &model,
-                    expect_revision,
-                    request_id.as_deref(),
-                    json,
-                ),
-                ModelCommands::Reload {
-                    config,
-                    selection_config,
-                    json,
-                    expect_revision,
-                    request_id,
-                } => reload_entry(
-                    &config,
-                    &selection_config,
-                    expect_revision,
-                    request_id.as_deref(),
-                    json,
-                ),
-            },
-            "model_selection_refused",
-        ),
-    };
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(reason) => {
-            eprintln!("{prefix}: {reason}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
-fn show_entry(path: &Path, json_out: bool) -> SelectionResult<()> {
-    let (c, cfg) = load_current(path)?;
-    let value = show(&c, &cfg)?;
-    if json_out {
-        println!(
-            "{}",
-            serde_json::to_string(&value).map_err(|_| "model_selection_unwritable")?
-        );
-    } else {
-        let active = &value["active"];
-        println!(
-            "session={} revision={} active={} pending={}",
-            value["session"].as_str().unwrap_or_default(),
-            value["revision"].as_u64().unwrap_or_default(),
-            active["profile"].as_str().unwrap_or(DEFAULT_PROFILE),
-            value["pending"]["profile"].as_str().unwrap_or("-")
-        );
-    }
-    Ok(())
-}
-
-fn set_entry(
-    path: &Path,
-    model: &str,
-    expect_revision: Option<u64>,
-    request_id: Option<&str>,
-    json_out: bool,
-) -> SelectionResult<()> {
-    let (c, cfg) = load_current(path)?;
-    let value = request(&c, &cfg, model, expect_revision, request_id)?;
-    if json_out {
-        println!(
-            "{}",
-            serde_json::to_string(&value).map_err(|_| "model_selection_unwritable")?
-        );
-    } else {
-        println!(
-            "status={} revision={} profile={} applies=next_idle_turn",
-            value["status"].as_str().unwrap_or_default(),
-            value["revision"].as_u64().unwrap_or_default(),
-            value["pending"]["profile"].as_str().unwrap_or(model)
-        );
-    }
-    Ok(())
-}
-
-/// Queue the profile named by the versioned runtime selection file. The profile
-/// resolves against the currently referenced reviewed planner config; reload
-/// does not alter that policy and applies only at the next idle turn boundary.
-fn reload_entry(
-    path: &Path,
-    selection_path: &Path,
-    expect_revision: Option<u64>,
-    request_id: Option<&str>,
-    json_out: bool,
-) -> SelectionResult<()> {
-    let value = reload_from_config(path, selection_path, expect_revision, request_id)?;
-    if json_out {
-        println!(
-            "{}",
-            serde_json::to_string(&value).map_err(|_| "model_selection_unwritable")?
-        );
-    } else {
-        let profile = value["pending"]["profile"]
-            .as_str()
-            .or_else(|| value["active"]["profile"].as_str())
-            .unwrap_or("unknown");
-        println!(
-            "status={} revision={} profile={} applies=next_idle_turn",
-            value["status"].as_str().unwrap_or_default(),
-            value["revision"].as_u64().unwrap_or_default(),
-            profile,
-        );
-    }
-    Ok(())
-}
-
-fn reload_from_config(
-    path: &Path,
-    selection_path: &Path,
-    expect_revision: Option<u64>,
-    request_id: Option<&str>,
-) -> SelectionResult<Value> {
-    let (c, cfg) = load_current(path)?;
-    let selection = SelectionConfig::load(selection_path)?;
-    request(&c, &cfg, &selection.profile, expect_revision, request_id)
 }
 
 #[cfg(test)]
 pub(crate) fn exercise() {
     use super::planner::PlannerConfig;
-    super::agent_cli::exercise();
     let dir = tempfile::tempdir().unwrap();
     let mut c = super::tests::config(dir.path());
     c.session = "2026-10-24".parse().unwrap();
@@ -1106,78 +780,6 @@ pub(crate) fn exercise() {
             .validate_models()
             .is_err()
     );
-    // A versioned runtime selection file carries only a profile name. Reload
-    // loads the actual paper and planner config files, then uses the same
-    // validator/receipt path as `set` without changing the sealed policy hash.
-    let supervisor_prompt = dir.path().join("supervisor.md");
-    fs::write(&supervisor_prompt, "fixture").unwrap();
-    let planner_path = dir.path().join("reviewed-planner.json");
-    fs::write(&planner_path, serde_json::to_vec(&cfg).unwrap()).unwrap();
-    let paper_path = dir.path().join("paper.json");
-    let mut paper_value = serde_json::to_value(&c).unwrap();
-    paper_value["planner_config"] = json!(planner_path);
-    fs::write(&paper_path, serde_json::to_vec(&paper_value).unwrap()).unwrap();
-    let selection_path = dir.path().join("model-selection-config.json");
-    fs::write(
-        &selection_path,
-        serde_json::to_vec(&json!({"version": 1, "profile": "grok-4.7"})).unwrap(),
-    )
-    .unwrap();
-    let policy_hash = policy_sha256(&cfg).unwrap();
-    let loaded_policy = load_current(&paper_path).unwrap().1;
-    assert_eq!(policy_sha256(&loaded_policy).unwrap(), policy_hash);
-    let reloaded =
-        reload_from_config(&paper_path, &selection_path, Some(6), Some("reload-grok")).unwrap();
-    assert_eq!(reloaded["status"], "pending");
-    assert_eq!(reloaded["pending"]["profile"], "grok-4.7");
-    assert_eq!(reloaded["pending"]["model_id"], "grok-4.7");
-    assert_eq!(
-        promote(&c, &cfg, 5_000).unwrap().unwrap()["status"],
-        "applied"
-    );
-
-    // Reload back in the opposite direction using the same durable file path.
-    fs::write(
-        &selection_path,
-        serde_json::to_vec(&json!({"version": 1, "profile": "default"})).unwrap(),
-    )
-    .unwrap();
-    let reloaded = reload_from_config(
-        &paper_path,
-        &selection_path,
-        Some(7),
-        Some("reload-default"),
-    )
-    .unwrap();
-    assert_eq!(reloaded["status"], "pending");
-    assert_eq!(reloaded["pending"]["profile"], "default");
-    assert_eq!(
-        promote(&c, &cfg, 6_000).unwrap().unwrap()["status"],
-        "applied"
-    );
-    assert_eq!(resolve(&c, &cfg).unwrap().unwrap().profile, DEFAULT_PROFILE);
-
-    // Invalid versions and unadmitted names fail before request mutation.
-    let revision = show(&c, &cfg).unwrap()["revision"].as_u64().unwrap();
-    fs::write(
-        &selection_path,
-        serde_json::to_vec(&json!({"version": 2, "profile": "grok-4.7"})).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(
-        reload_from_config(&paper_path, &selection_path, None, None).unwrap_err(),
-        "model_selection_config_invalid"
-    );
-    fs::write(
-        &selection_path,
-        serde_json::to_vec(&json!({"version": 1, "profile": "missing"})).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(
-        reload_from_config(&paper_path, &selection_path, None, None).unwrap_err(),
-        "model_selection_not_admitted"
-    );
-    assert_eq!(show(&c, &cfg).unwrap()["revision"], revision);
     let mut relative = changed.clone();
     relative
         .orchestrator
@@ -1195,27 +797,6 @@ pub(crate) fn exercise() {
             .validate_models()
             .is_err()
     );
-
-    // CLI load path: without a current.json pointer the config's own session is
-    // used, and show/set operate on the same durable revision.
-    fs::write(dir.path().join("supervisor.md"), b"standing role").unwrap();
-    let planner_path = dir.path().join("planner.json");
-    fs::write(&planner_path, serde_json::to_vec(&cfg).unwrap()).unwrap();
-    let mut paper = c.clone();
-    paper.session = "2026-10-24".parse().unwrap();
-    paper.planner_config = Some(planner_path.clone());
-    let paper_path = dir.path().join("paper.json");
-    let mut paper_value = serde_json::to_value(&paper).unwrap();
-    // The runtime never re-serializes operator-only paths; write them explicitly.
-    paper_value["planner_config"] = json!(planner_path);
-    fs::write(&paper_path, serde_json::to_vec(&paper_value).unwrap()).unwrap();
-    show_entry(&paper_path, true).unwrap();
-    set_entry(&paper_path, "grok-4.7", Some(8), Some("cli-1"), true).unwrap();
-    assert_eq!(
-        promote(&c, &cfg, 10_000).unwrap().unwrap()["active"]["profile"],
-        "grok-4.7"
-    );
-    assert_eq!(resolve(&c, &cfg).unwrap().unwrap().revision, 9);
 
     // Decision-owner prerequisites are reported by the same validator used at
     // load. The durable authority transition is checked at controller startup.
