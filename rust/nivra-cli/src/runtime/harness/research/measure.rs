@@ -116,36 +116,6 @@ pub(crate) fn measurement_content_hash(maturation: &Value) -> Option<String> {
     nivra_cli::candidate_execution::observation_artifact_sha256(&content).ok()
 }
 
-/// Build the independent-episode measurement for one verified observation.
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn measure_observation(
-    c: &Config,
-    cfg: &PlannerConfig,
-    task: &jobs::CandidateTaskRecord,
-    result: &crate::runtime::harness::research::CandidateResultV1,
-    maturation: Option<&Value>,
-    source_result: Option<&Value>,
-    now: i64,
-) -> Value {
-    measure_observation_with_status(
-        c,
-        cfg,
-        task,
-        result,
-        maturation,
-        source_result,
-        if source_result.is_some() {
-            "verified"
-        } else {
-            "not_recorded"
-        },
-        None,
-        false,
-        now,
-    )
-}
-
 /// Same measurement with an explicit lifecycle-read status. A missing/corrupt
 /// ledger is UNAVAILABLE, distinct from the authoritative "no measurement yet"
 /// (`not_matured`) of a readable ledger.

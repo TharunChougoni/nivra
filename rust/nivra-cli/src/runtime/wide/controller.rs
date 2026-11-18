@@ -110,12 +110,10 @@ struct Controller<'a> {
     loop_generation: u64,
     owner_research_status: serde_json::Value,
     owner_research_worker: harness::OwnerResearchRuntime,
-    scorer_status: serde_json::Value,
     /// pi lanes, when the planner has an `agent` block.
     agent: Option<super::super::agent::service::LaneService>,
     /// The built-in ranking the last rank pass produced, best first.
     live_ranking: Vec<super::super::agent::Ranked>,
-    supervisor_config_fallback: Option<planner::PlannerConfig>,
     event_config_reason: Option<&'static str>,
     event_config: Option<planner::PlannerConfig>,
     p: Portfolio,
@@ -306,7 +304,6 @@ impl<'a> Controller<'a> {
             None => (None, None),
         };
         let event_config_reason = agent.is_none().then_some("pi_paper_authority_unavailable");
-        let supervisor_config_fallback = None;
         if c.prior_config.is_none() || c.legacy_directory.is_some() {
             persist(&mut db, c, &p, millis(), None, None, "wide_reconciled")?;
         }
@@ -428,11 +425,9 @@ impl<'a> Controller<'a> {
             loop_generation: 0,
             owner_research_status: serde_json::json!({"status":"disabled"}),
             owner_research_worker: harness::OwnerResearchRuntime::default(),
-            scorer_status: serde_json::json!({"status":"awaiting_close"}),
             // The research lane's own slot (#237): never shared with trading turns.
             agent,
             live_ranking: Vec::new(),
-            supervisor_config_fallback,
             event_config_reason,
             event_config,
             p,
@@ -511,7 +506,6 @@ impl<'a> Controller<'a> {
             status,
             active,
             history_admitted,
-            session_end_ms,
             research_context_unavailable,
         )?;
         thread::sleep(Duration::from_millis(interval_ms));
@@ -1608,7 +1602,6 @@ impl<'a> Controller<'a> {
         self.reported = false;
         self.read_failure = None;
         self.planner_status = serde_json::json!({"status":"disabled_no_plan"});
-        self.scorer_status = serde_json::json!({"status":"awaiting_close"});
         self.owner_research_status = if self.config.planner_config.is_some() {
             serde_json::json!({
                 "status":"unavailable",
@@ -1622,7 +1615,6 @@ impl<'a> Controller<'a> {
             agent.stop();
         }
         self.live_ranking.clear();
-        self.supervisor_config_fallback = None;
         let policy = load_pi_policy(&self.config);
         match attach_agent(&mut self.db, &self.config, &mut self.p, policy)? {
             Some((cfg, agent)) => {
@@ -1698,8 +1690,7 @@ impl<'a> Controller<'a> {
         Ok(())
     }
 
-    /// Returns the supervisor's charged call count from the usage projection.
-    fn refresh_planner_status(&mut self) -> Result<Option<u64>> {
+    fn refresh_planner_status(&mut self) -> Result<()> {
         let c = &self.config;
         let execution = match execution_projection(&self.db) {
             Ok(rows) => rows,
@@ -1711,10 +1702,7 @@ impl<'a> Controller<'a> {
         if let Some(events) = match redecision::status(&self.db, c) {
             Ok(status) => status,
             Err(_) => {
-                self.supervisor_config_fallback = self
-                    .event_config
-                    .take()
-                    .or(self.supervisor_config_fallback.take());
+                self.event_config = None;
                 self.event_config_reason = Some("planner_authority_invalid");
                 planner_incident(&mut self.db, c, &mut self.p, millis())?;
                 Some(serde_json::json!({"status":"planner_authority_invalid_recovery_required"}))
@@ -1739,7 +1727,7 @@ impl<'a> Controller<'a> {
         self.planner_status["authority"] = serde_json::json!("pi");
         self.planner_status["calls_used"] =
             serde_json::to_value(super::super::agent::read_spend(c).ok())?;
-        Ok(None)
+        Ok(())
     }
 
     fn entry_status(&self) -> &'static str {
@@ -1801,11 +1789,10 @@ impl<'a> Controller<'a> {
         mut status: String,
         active: bool,
         history_admitted: bool,
-        session_end_ms: Option<i64>,
         research_context_unavailable: bool,
     ) -> Result<u64> {
         let Now { now, day, .. } = t;
-        let supervisor_charged_calls = self.refresh_planner_status()?;
+        self.refresh_planner_status()?;
         if self.p.halted {
             status = "risk_halted_protective_exits_only".into();
         }
@@ -1841,19 +1828,10 @@ impl<'a> Controller<'a> {
         if let Some(status) = super::super::instrument_display::status(&self.instrument_catalog) {
             self.display_catalog_status = status;
         }
-        let (research_library, experiment_lifecycle, owner_review_status) =
-            self.research_views(now);
+        let (research_library, experiment_lifecycle) = self.research_views(now);
         // One completion sample owns as_of_ms, the heartbeat and both research
         // projections. Request time in the dashboard API never renews it.
         let completed_at_ms = millis();
-        let (owner_research, research_operational) = super::super::supervisor::research_projection(
-            c,
-            self.event_config.as_ref(),
-            self.event_config_reason,
-            &self.p,
-            completed_at_ms,
-            session_end_ms,
-        );
         self.loop_generation = self
             .loop_generation
             .checked_add(1)
@@ -1871,24 +1849,17 @@ impl<'a> Controller<'a> {
             c.idle_poll_interval_ms
         };
         let research_context_status = research_context_status(research_context_unavailable);
-        let mut v_json = serde_json::json!({"research_library":research_library,"experiment_lifecycle":experiment_lifecycle,"instrument_display":self.display_catalog_status,"paper_only":true,"live_enabled":LIVE_ENABLED,"account":c.account,"authorized_session":c.session,"next_session_config":c.next_sessions(day)?,"policy":self.p.policy,"model_led":self.p.model_led,"strategy_decision":rollover::published_decision(c),"status":status,"as_of_ms":completed_at_ms,"universe_size":self.universe.as_ref().map(|u|u.instruments.len()),"universe_exclusions":self.universe.as_ref().map(|u|&u.exclusions),"security_ready":self.universe.is_some(),"scanned_count":scanned_count,"pending_count":self.universe.as_ref().map(|u|u.instruments.len().saturating_sub(scanned_count as usize)),"market_feed":self.feed_health,"oldest_scan_age_ms":oldest,"screen_reasons":reasons,"discovery":discovery_status,"ranking":self.scan.ranking.iter().take(10).collect::<Vec<_>>(),"capital":self.p.allocation()?,"planner":self.planner_status,"nifty_options":self.option_status,"scorer_trigger":self.scorer_status,"research_tasks":self.owner_research_status,"activity_attribution":owner_activity,"retention":self.retention_status,"readiness":self.readiness_status,"history_preparation":self.history_status,"model_initialization":initialization,"model_status":"model-led","entry_status":entry_status,"realised_net_pnl_by_fill":self.p.realised_net_pnl(),"portfolio":self.p,"read_failure_reason":self.read_failure,"fee_policy":format!("SIMULATION_ONLY: {}", serde_json::to_string(&self.p.costs.clone().ok_or("paper_costs_required")?)?),"updater":updater_status});
+        let mut v_json = serde_json::json!({"research_library":research_library,"experiment_lifecycle":experiment_lifecycle,"instrument_display":self.display_catalog_status,"paper_only":true,"live_enabled":LIVE_ENABLED,"account":c.account,"authorized_session":c.session,"next_session_config":c.next_sessions(day)?,"policy":self.p.policy,"model_led":self.p.model_led,"strategy_decision":rollover::published_decision(c),"status":status,"as_of_ms":completed_at_ms,"universe_size":self.universe.as_ref().map(|u|u.instruments.len()),"universe_exclusions":self.universe.as_ref().map(|u|&u.exclusions),"security_ready":self.universe.is_some(),"scanned_count":scanned_count,"pending_count":self.universe.as_ref().map(|u|u.instruments.len().saturating_sub(scanned_count as usize)),"market_feed":self.feed_health,"oldest_scan_age_ms":oldest,"screen_reasons":reasons,"discovery":discovery_status,"ranking":self.scan.ranking.iter().take(10).collect::<Vec<_>>(),"capital":self.p.allocation()?,"planner":self.planner_status,"nifty_options":self.option_status,"research_tasks":self.owner_research_status,"activity_attribution":owner_activity,"retention":self.retention_status,"readiness":self.readiness_status,"history_preparation":self.history_status,"model_initialization":initialization,"model_status":"model-led","entry_status":entry_status,"realised_net_pnl_by_fill":self.p.realised_net_pnl(),"portfolio":self.p,"read_failure_reason":self.read_failure,"fee_policy":format!("SIMULATION_ONLY: {}", serde_json::to_string(&self.p.costs.clone().ok_or("paper_costs_required")?)?),"updater":updater_status});
         if let Some(agent) = &self.agent {
             v_json["agent"] = agent.status();
         }
-        v_json["owner_review"] = owner_review_status;
-        v_json["owner_research"] = owner_research;
         v_json["research_context"] = research_context_status;
         v_json["controller_heartbeat"] = super::super::operational_health::heartbeat(
             completed_at_ms,
             interval_ms,
             self.loop_generation,
         );
-        v_json["operational_health"] = self.operational_health(
-            day,
-            completed_at_ms,
-            supervisor_charged_calls,
-            research_operational,
-        )?;
+        v_json["operational_health"] = self.operational_health(day, completed_at_ms)?;
         if c.index_feeds.enabled {
             // Additive, non-tradeable index context; cash fields stay unchanged.
             v_json["index_feeds"] = self.index_context.json();
@@ -1899,15 +1870,8 @@ impl<'a> Controller<'a> {
         Ok(interval_ms)
     }
 
-    /// Research library, experiment lifecycle and owner review projections.
-    fn research_views(
-        &self,
-        now: i64,
-    ) -> (
-        Option<serde_json::Value>,
-        serde_json::Value,
-        serde_json::Value,
-    ) {
+    /// Research library and experiment lifecycle projections.
+    fn research_views(&self, now: i64) -> (Option<serde_json::Value>, serde_json::Value) {
         let c = &self.config;
         let research_library = self.event_config.as_ref().map(|cfg|
             super::super::experiment_ledger::research::library(c, cfg)
@@ -1923,36 +1887,17 @@ impl<'a> Controller<'a> {
             research_library,
             &experiment_lifecycle,
         );
-        let owner_review_status = serde_json::json!({
-            "status": if self.reported { "pi_review_after_seal" } else { "awaiting_close" },
-            "activation_authorized":false
-        });
-        (research_library, experiment_lifecycle, owner_review_status)
+        (research_library, experiment_lifecycle)
     }
 
     fn operational_health(
         &self,
         day: NaiveDate,
         completed_at_ms: i64,
-        supervisor_charged_calls: Option<u64>,
-        research_operational: super::super::supervisor::ResearchOperational,
     ) -> Result<serde_json::Value> {
         let c = &self.config;
         let operational_health = super::super::operational_health::capture(
             completed_at_ms,
-            super::super::supervisor::operational_status_with_research(
-                &c.directory,
-                &c.session.to_string(),
-                completed_at_ms,
-                super::super::supervisor::supervisor_config(
-                    self.event_config.as_ref(),
-                    self.supervisor_config_fallback.as_ref(),
-                    self.event_config_reason,
-                ),
-                supervisor_charged_calls,
-                Some(research_operational),
-                None,
-            ),
             c.calendar_coverage_at(day)?,
             crate::alert::transport_status(&c.account, &c.session.to_string(), completed_at_ms),
         );

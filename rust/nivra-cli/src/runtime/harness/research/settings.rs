@@ -487,56 +487,6 @@ pub(crate) fn open_queue_for_owner(
     Ok(db)
 }
 
-/// Read-only access for handoff carry. It neither creates queue/authority files
-/// nor lazily adds scoped tables; missing legacy additions remain unavailable.
-pub(crate) fn open_queue_for_carry(
-    settings: &ResearchSettings,
-    authority: &Path,
-) -> Result<Connection> {
-    settings.validate()?;
-    if !authority.is_absolute() || !settings.queue.is_file() {
-        return Err("research_queue_unavailable".into());
-    }
-    let pin = settings.queue.with_extension("identity.json");
-    let anchor = authority.join(format!(
-        "research-queue-{}.json",
-        digest(settings.queue.as_os_str().as_encoded_bytes())
-    ));
-    let lock_path = settings.queue.with_extension("lock");
-    let owner = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(lock_path)?;
-    owner.try_lock_exclusive()?;
-    let _owner = AdvisoryLock::new(owner);
-    let metadata = fs::symlink_metadata(&settings.queue)?;
-    let identity: Value = serde_json::from_slice(
-        &crate::read_bounded(&pin, 4096).map_err(|_| "research_queue_identity_invalid")?,
-    )?;
-    let bound: Value = serde_json::from_slice(
-        &crate::read_bounded(&anchor, 4096).map_err(|_| "research_original_binding_missing")?,
-    )?;
-    if !metadata.is_file()
-        || metadata.nlink() != 1
-        || metadata.mode() & 0o777 != 0o600
-        || identity["device"] != metadata.dev()
-        || identity["inode"] != metadata.ino()
-        || bound != identity
-    {
-        return Err("research_queue_identity_changed".into());
-    }
-    let db = Connection::open_with_flags(
-        &settings.queue,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
-            | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
-    )?;
-    db.busy_timeout(Duration::from_millis(50))?;
-    drop(_owner);
-    Ok(db)
-}
-
 /// Strictly read-only predecessor queue access for cross-session continuation.
 /// It verifies the same ownership pin/anchor and file identity but never opens
 /// or locks the predecessor lock file, so the original queue's bytes, rows,

@@ -243,31 +243,6 @@ pub(crate) fn read_verified_candidate_result(
     Ok(Some(result))
 }
 
-/// Read the original terminal failure receipt for a non-succeeded candidate.
-/// This is evidence only: it never launches, reconciles, cancels or replays the
-/// unit, and an unknown/running task is not evidence.
-pub(crate) fn read_candidate_stopped_failure(
-    db: &mut Connection,
-    task_id: &str,
-    revision: u32,
-) -> Result<Option<CandidateStopped>> {
-    let task =
-        jobs::load_candidate(db, task_id, revision).map_err(|_| "candidate_result_unverified")?;
-    if task.status == jobs::TaskState::Succeeded || !task_state_terminal(task.status) {
-        return Ok(None);
-    }
-    let launch = read_launch(db, &task)?;
-    let Some(stopped) = read_stopped(db, &launch)? else {
-        return Ok(None);
-    };
-    if stopped.cause == jobs::CandidateStopCause::Succeeded
-        || stopped.outcome == CandidateStopOutcome::Succeeded
-    {
-        return Ok(None);
-    }
-    Ok(Some(stopped))
-}
-
 /// Load and FULLY verify the original AUTHORING task A pinned by an observation
 /// target. The target is host-derived, but it is not trusted on its own: the
 /// exact task/revision/candidate/lifecycle/result/policy/runtime/source/params

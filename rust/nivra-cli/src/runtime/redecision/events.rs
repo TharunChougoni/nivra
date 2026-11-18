@@ -121,18 +121,6 @@ pub(crate) fn enqueue_exit_review(
     )?;
     Ok(())
 }
-pub(crate) fn enqueue_supervisor_wake(db: &Connection, binding: &str, now: i64) -> Result<()> {
-    if !exists(db)? {
-        return Ok(());
-    }
-    let id = digest(format!("supervisor-wake:{binding}:{now}").as_bytes());
-    let body = json!({"id":id,"kind":"recheck","reason":"supervisor_wake","observed_ms":now,"session_binding":binding});
-    db.execute(
-        "INSERT INTO planner_event_log VALUES(?,?,?,?)",
-        rusqlite::params![id, now, body.to_string(), PlannerLogPhase::Pending.as_str()],
-    )?;
-    Ok(())
-}
 /// The logged reason for a digest: startup, idle_interval, a scanner trigger, or the event kind.
 pub(crate) fn trigger_reason(trigger: &Value) -> String {
     match trigger["kind"].as_str() {

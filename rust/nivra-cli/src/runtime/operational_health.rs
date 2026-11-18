@@ -107,227 +107,6 @@ pub(crate) const ALERT_OUTBOX_ROW_SCOPE: &str = "current_outbox_rows_not_retaine
 pub(crate) const ALERT_OUTBOX_DEAD_SCOPE: &str =
     "current_outbox_quarantined_rows_not_delivery_window";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum SupervisorStatus {
-    Idle,
-    Pending,
-    Parked,
-    Unknown,
-    Disabled,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum SupervisorStateSource {
-    Present,
-    Missing,
-    OtherSession,
-    Malformed,
-    Unreadable,
-    NotConfigured,
-}
-
-/// Whether the controller actually loaded the planner policy. `unavailable`
-/// means a configured policy could not be loaded or its usage/authority
-/// projection failed; it is not the same as a genuinely absent configuration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum SupervisorConfigSource {
-    Configured,
-    Unavailable,
-    NotConfigured,
-}
-
-/// Checked pending-turn source. Unavailable sources must never read as idle.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum SupervisorPendingSource {
-    Missing,
-    NoPending,
-    Pending,
-    Corrupt,
-    Incomplete,
-    Unreadable,
-    Oversize,
-    NonRegular,
-    Symlink,
-    NotChecked,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct BackoffSettings {
-    pub(crate) configured_ms: i64,
-    pub(crate) retry_limit: u32,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct SupervisorParked {
-    pub(crate) reason: Option<&'static str>,
-    pub(crate) reason_known: bool,
-    pub(crate) at_ms: i64,
-    pub(crate) budget_at_park: Option<u32>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct SupervisorBudget {
-    pub(crate) configured_daily_calls: Option<u32>,
-    pub(crate) charged_calls: Option<u64>,
-    pub(crate) charged_calls_scope: &'static str,
-    pub(crate) parked_at_calls: Option<u32>,
-    pub(crate) exhausted: Option<bool>,
-    pub(crate) exhausted_scope: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct SupervisorContext {
-    pub(crate) reason: Option<&'static str>,
-    pub(crate) reason_known: bool,
-    pub(crate) incomplete_reason: Option<&'static str>,
-    pub(crate) request_bytes: Option<u64>,
-    pub(crate) max_request_bytes: u64,
-    pub(crate) at_ms: i64,
-    pub(crate) retries: u32,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct SupervisorCompaction {
-    pub(crate) reason: Option<&'static str>,
-    pub(crate) reason_known: bool,
-    pub(crate) at_ms: i64,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct SupervisorBackoff {
-    pub(crate) configured_ms: Option<i64>,
-    pub(crate) retry_limit: Option<u32>,
-    pub(crate) enforced: Option<bool>,
-    pub(crate) enforced_scope: &'static str,
-    pub(crate) active: Option<bool>,
-    pub(crate) active_scope: &'static str,
-    pub(crate) earliest_retry_at_ms: Option<i64>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct SupervisorLastRun {
-    pub(crate) at_ms: i64,
-    pub(crate) age_ms: Option<i64>,
-    pub(crate) runs: u32,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct SupervisorPending {
-    pub(crate) kind: &'static str,
-    pub(crate) started_at_ms: i64,
-    pub(crate) age_ms: Option<i64>,
-}
-
-/// Captured read-only research projection. `as_of_ms` is the controller loop
-/// snapshot time; an API request never renews it.
-#[derive(Debug, Serialize)]
-pub(crate) struct SupervisorResearch {
-    pub(crate) config: SupervisorConfigSource,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) config_reason: Option<&'static str>,
-    pub(crate) enabled: Option<bool>,
-    pub(crate) due: Option<bool>,
-    pub(crate) state: Option<&'static str>,
-    pub(crate) reason: Option<&'static str>,
-    pub(crate) evidence_id: Option<String>,
-    pub(crate) evidence_count: Option<usize>,
-    pub(crate) cutoff_ms: Option<i64>,
-    pub(crate) deferred_until_ms: Option<i64>,
-    pub(crate) pending_source: SupervisorPendingSource,
-    pub(crate) pending: Option<SupervisorPending>,
-    pub(crate) as_of_ms: i64,
-}
-
-/// Optional owner failure backoff. Its scope is owner model turns only; host
-/// protection, review and lifecycle work continue.
-#[derive(Debug, Serialize)]
-pub(crate) struct SupervisorOwnerFailureBackoff {
-    pub(crate) configured_ms: Option<i64>,
-    pub(crate) enforced_scope: &'static str,
-    pub(crate) active: Option<bool>,
-    pub(crate) earliest_retry_at_ms: Option<i64>,
-    pub(crate) owner_failures: Option<u32>,
-    pub(crate) last_owner_failure_ms: Option<i64>,
-}
-
-/// Explicit aside request state. The question is never exposed here.
-#[derive(Debug, Serialize)]
-pub(crate) struct SupervisorAside {
-    pub(crate) requested: bool,
-    pub(crate) id: Option<String>,
-    pub(crate) deferred_reason: Option<&'static str>,
-    pub(crate) deferred_until_ms: Option<i64>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct SupervisorOperationalStatus {
-    pub(crate) status: SupervisorStatus,
-    pub(crate) config: SupervisorConfigSource,
-    pub(crate) config_reason: Option<&'static str>,
-    pub(crate) config_scope: &'static str,
-    pub(crate) state: SupervisorStateSource,
-    pub(crate) enabled: Option<bool>,
-    pub(crate) parked: Option<SupervisorParked>,
-    pub(crate) budget: SupervisorBudget,
-    pub(crate) context: Option<SupervisorContext>,
-    pub(crate) compaction: Option<SupervisorCompaction>,
-    pub(crate) backoff: SupervisorBackoff,
-    pub(crate) last_completed_run: Option<SupervisorLastRun>,
-    pub(crate) pending_source: SupervisorPendingSource,
-    pub(crate) pending_scope: &'static str,
-    pub(crate) pending: Option<SupervisorPending>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) research: Option<SupervisorResearch>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) owner_failure_backoff: Option<SupervisorOwnerFailureBackoff>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) aside: Option<SupervisorAside>,
-}
-
-impl SupervisorOperationalStatus {
-    pub(crate) fn disabled() -> Self {
-        Self {
-            status: SupervisorStatus::Disabled,
-            config: SupervisorConfigSource::NotConfigured,
-            config_reason: None,
-            config_scope: "loaded_policy_or_static_failure_code",
-            state: SupervisorStateSource::NotConfigured,
-            enabled: None,
-            parked: None,
-            budget: SupervisorBudget {
-                configured_daily_calls: None,
-                charged_calls: None,
-                charged_calls_scope: "provider_usage_projection_not_turn_runs",
-                parked_at_calls: None,
-                exhausted: None,
-                exhausted_scope: "authoritative_current_session_parked_state_only",
-            },
-            context: None,
-            compaction: None,
-            backoff: SupervisorBackoff {
-                configured_ms: None,
-                retry_limit: None,
-                enforced: None,
-                enforced_scope: "current_session_context_exhaustion_only",
-                active: None,
-                active_scope: "authoritative_current_session_state_only",
-                earliest_retry_at_ms: None,
-            },
-            last_completed_run: None,
-            pending_source: SupervisorPendingSource::NotChecked,
-            pending_scope: "checked_bounded_session_log",
-            pending: None,
-            research: None,
-            owner_failure_backoff: None,
-            aside: None,
-        }
-    }
-}
-
 #[derive(Debug, Serialize)]
 pub(crate) struct CalendarCoverage {
     pub(crate) source: String,
@@ -462,21 +241,18 @@ impl AlertTransportStatus {
 pub(crate) struct OperationalHealth {
     pub(crate) version: u32,
     pub(crate) captured_at_ms: i64,
-    pub(crate) supervisor: SupervisorOperationalStatus,
     pub(crate) calendar: CalendarCoverage,
     pub(crate) alert_transport: AlertTransportStatus,
 }
 
 pub(crate) fn capture(
     captured_at_ms: i64,
-    supervisor: SupervisorOperationalStatus,
     calendar: CalendarCoverage,
     alert_transport: AlertTransportStatus,
 ) -> OperationalHealth {
     OperationalHealth {
-        version: 1,
+        version: 2,
         captured_at_ms,
-        supervisor,
         calendar,
         alert_transport,
     }

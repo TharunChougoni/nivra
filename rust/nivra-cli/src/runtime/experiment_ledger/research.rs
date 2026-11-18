@@ -215,17 +215,3 @@ pub(crate) fn library(c: &Config, cfg: &super::super::planner::PlannerConfig) ->
     Ok(json!({"status":"ready","items":items,"truncated":truncated,
         "source":"original_research_candidate_ledger","activation_authorized":false}))
 }
-
-#[cfg(test)]
-pub(crate) fn snapshot(c: &Config) -> Result<(Vec<Value>, Vec<Value>)> {
-    let db = open(c)?;
-    let read = |table: &str| -> Result<Vec<Value>> {
-        let mut query = db.prepare(&format!("SELECT body FROM {table} ORDER BY candidate_id"))?;
-        let rows = query.query_map([], |row| row.get::<_, String>(0))?;
-        rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
-    };
-    Ok((
-        read("research_candidates")?,
-        read("research_candidate_outcomes")?,
-    ))
-}

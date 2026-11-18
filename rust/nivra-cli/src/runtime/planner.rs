@@ -38,7 +38,7 @@ mod usage;
 #[cfg(test)]
 pub(crate) use usage::call_guarded;
 pub(crate) use usage::{
-    CallGuard, attempt_failed, bucket_tokens, budget_status, call_guarded_as, checked_reservations,
+    CallGuard, attempt_failed, budget_status, call_guarded_as, checked_reservations,
     prepare_review_usage, preview_guard, require_usage, usage_directory, usage_lock, usage_path,
 };
 #[cfg(test)]

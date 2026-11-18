@@ -640,12 +640,6 @@ fn compact_projection_ranks_rounds_and_drops_allowlist() {
     );
     assert_eq!(kept["allowlist"], json!([1]));
 }
-#[test]
-fn directive_and_supervisor_contracts() {
-    let mut chains = vec![("directives", super::super::directives::exercise as fn())];
-    chains.extend(super::super::supervisor::exercise_chains());
-    super::super::supervisor::run_named(&chains);
-}
 use super::*;
 use nivra_core::execution::ExitIntent;
 

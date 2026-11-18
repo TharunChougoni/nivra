@@ -1,35 +1,5 @@
 use super::*;
 
-/// Enqueue one owner-scoped task. All execution authority and resource limits
-/// come from the host registration and the captured decision turn.
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn owner_task_enqueue(
-    c: &Config,
-    cfg: &PlannerConfig,
-    model_id: &str,
-    model_revision: u64,
-    parent_turn_id: &str,
-    task_key: &str,
-    goal: &str,
-    analysis_id: &str,
-    dataset_id: &str,
-    now: i64,
-) -> Result<Value> {
-    owner_task_enqueue_with_evidence(
-        c,
-        cfg,
-        model_id,
-        model_revision,
-        parent_turn_id,
-        task_key,
-        goal,
-        analysis_id,
-        dataset_id,
-        now,
-        None,
-    )
-}
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn owner_task_enqueue_with_evidence(
     c: &Config,

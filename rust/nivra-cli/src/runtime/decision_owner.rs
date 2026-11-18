@@ -48,7 +48,6 @@ pub(crate) struct Claim {
 pub(crate) struct Work {
     pub claim: Claim,
     pub facts: Value,
-    pub bundle: Value,
 }
 
 pub(crate) struct Context<'a> {
@@ -426,11 +425,7 @@ pub(crate) fn queued(
         "selection_provenance":selected_version(&base),
         "research_tasks":claim.research_tasks,
         "research_tasks_truncated":claim.research_tasks_truncated});
-    Ok(Some(Work {
-        claim,
-        facts,
-        bundle: base["input"].clone(),
-    }))
+    Ok(Some(Work { claim, facts }))
 }
 
 #[cfg(test)]
@@ -1182,7 +1177,4 @@ pub(crate) fn activity_analytics(
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-pub(crate) use tests::{
-    exercise, exercise_instrument, interruption_fixture, interruption_switch_fixture,
-    owner_fixture_config,
-};
+pub(crate) use tests::{exercise, owner_fixture_config};

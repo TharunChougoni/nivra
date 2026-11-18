@@ -622,14 +622,6 @@ impl experiment_ledger::lifecycle::ContinuationBody for ValidatedContinuation {
     }
 }
 
-/// Test-only writer for the ledger idempotency/identity contract. Production
-/// code has no unchecked writer; tamper tests may also use direct SQL.
-#[cfg(test)]
-pub(crate) fn record_continuation_test(directory: &Path, body: &Value, now: i64) -> Result<Value> {
-    let token = ValidatedContinuation(body.clone());
-    experiment_ledger::lifecycle::record_continuation(directory, &token, now)
-}
-
 /// The ONLY production continuation writer. It re-derives the body's full
 /// source context BEFORE the first INSERT, so a forged body with a correct
 /// self-hash and a valid source exit quote cannot poison an empty table.

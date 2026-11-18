@@ -25,13 +25,6 @@ pub(crate) use research::{
     status as research_status, tick_owner_tasks as research_tick_owner_tasks,
     validate_files as validate_research_files,
 };
-/// Legacy supervisor handoff helpers: the pi lane carries research state itself,
-/// so only the historical replay tests still call these.
-#[cfg(test)]
-pub(crate) use research::{
-    adopt_carried_research as research_adopt_carried, carry_state as research_carry_state,
-};
-
 pub(crate) const DATA_OWNER_PROMPT: &str =
     include_str!("../../../../packaging/rust/prompts/data_owner.md");
 pub(crate) const SCORER_PROMPT: &str = include_str!("../../../../packaging/rust/prompts/scorer.md");

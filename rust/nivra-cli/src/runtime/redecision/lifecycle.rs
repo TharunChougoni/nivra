@@ -36,15 +36,9 @@ pub(crate) fn reserve(
     if state.last_started_ms.is_some_and(|last| now < last) {
         return Err("planner_event_clock_reversed".into());
     }
-    let supervisor_wake =
-        super::super::supervisor::take_wake(&c.directory, &c.session.to_string(), now, 60_000);
-    if supervisor_wake {
-        enqueue_supervisor_wake(&tx, &state.binding, now)?;
-    }
-    if !supervisor_wake
-        && state
-            .last_started_ms
-            .is_some_and(|last| now - last < settings.cooldown_ms)
+    if state
+        .last_started_ms
+        .is_some_and(|last| now - last < settings.cooldown_ms)
     {
         return Ok(None);
     }

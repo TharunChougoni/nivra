@@ -38,7 +38,6 @@ mod session;
 pub(crate) mod setup;
 mod strategy_results;
 pub mod subscription_plan;
-mod supervisor;
 mod transcript;
 mod web;
 mod web_tools;
