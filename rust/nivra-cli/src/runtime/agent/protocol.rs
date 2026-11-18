@@ -20,6 +20,8 @@ pub(crate) enum ToAgent<'a> {
         lane: Lane,
         session: &'a SessionRef,
         model: &'a ModelSpec,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fallback: Option<&'a ModelSpec>,
         trigger: &'a Value,
         brief: &'a Value,
         tools: &'a [Value],
@@ -62,6 +64,29 @@ pub(crate) struct Usage {
     pub calls: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ModelRef {
+    pub provider: String,
+    pub id: String,
+}
+
+/// The agent moved a turn from the lane's primary model to its fallback.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Fallback {
+    pub from: ModelRef,
+    pub to: ModelRef,
+    pub reason: FallbackReason,
+    pub error: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum FallbackReason {
+    Quota,
+    Auth,
+    Rejected,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct TurnOutput {
     pub text: String,
@@ -100,6 +125,8 @@ pub(crate) enum FromAgent {
         provider: String,
         session_file: Option<String>,
         prompt_sha256: String,
+        #[serde(default)]
+        fallback: Option<Box<Fallback>>,
     },
     Error {
         v: u32,

@@ -438,6 +438,11 @@ impl<'a> LaneRunner<'a> {
                     .into_owned(),
             },
             model,
+            // The offline fake answers every turn; it never needs a fallback.
+            fallback: match self.model_override {
+                Some(_) => None,
+                None => lane_settings.fallback.clone(),
+            },
             trigger: trigger.clone(),
             brief,
             tools: lane_definitions(self.cfg, lane, requests_served)?,
@@ -478,13 +483,26 @@ impl<'a> LaneRunner<'a> {
             .mode(0o600)
             .open(archive.join("events.ndjson"))?
             .write_all(&events)?;
-        self.journal(&crate::runtime::transcript::redact(&json!({
+        let mut line = json!({
             "turn_id":id,"lane":lane,"trigger":trigger,"at_ms":now,
             "status":outcome.status,"error":outcome.error,"model":outcome.model,"provider":outcome.provider,
             "usage":outcome.usage,"session_file":outcome.session_file,"prompt_sha256":outcome.prompt_sha256,
             "tool_calls":outcome.tool_calls,"plan":plan,"elapsed_ms":outcome.elapsed_ms,
             "restarts":self.agent.restarts(),"text_sha256":digest(outcome.text.as_bytes())
-        })))?;
+        });
+        if let Some(fallback) = &outcome.fallback {
+            line["fallback"] = json!(fallback);
+            eprintln!(
+                "agent_fallback turn={id} lane={} from={}/{} to={}/{} reason={}",
+                lane.as_str(),
+                fallback.from.provider,
+                fallback.from.id,
+                fallback.to.provider,
+                fallback.to.id,
+                json!(fallback.reason).as_str().unwrap_or_default(),
+            );
+        }
+        self.journal(&crate::runtime::transcript::redact(&line))?;
         Ok(LaneTurn { outcome, plan })
     }
 

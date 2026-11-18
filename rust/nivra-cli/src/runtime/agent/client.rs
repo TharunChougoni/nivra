@@ -1,5 +1,5 @@
 //! One long-lived agent process, driven over its stdin/stdout.
-use super::protocol::{FromAgent, SessionRef, ToAgent, TurnStatus, Usage, VERSION};
+use super::protocol::{Fallback, FromAgent, SessionRef, ToAgent, TurnStatus, Usage, VERSION};
 use super::{AgentSettings, Lane, ModelSpec};
 use crate::runtime::Result;
 use serde::Serialize;
@@ -33,6 +33,7 @@ pub(crate) struct TurnRequest {
     pub lane: Lane,
     pub session: SessionRef,
     pub model: ModelSpec,
+    pub fallback: Option<ModelSpec>,
     pub trigger: Value,
     pub brief: Value,
     pub tools: Vec<Value>,
@@ -68,6 +69,7 @@ pub(crate) struct TurnOutcome {
     pub provider: String,
     pub session_file: Option<String>,
     pub prompt_sha256: String,
+    pub fallback: Option<Fallback>,
     pub tool_calls: Vec<ToolCallRecord>,
     pub events: Vec<Value>,
     pub elapsed_ms: u128,
@@ -87,6 +89,7 @@ struct Partial {
     usage: Usage,
     events: Vec<Value>,
     tool_calls: Vec<ToolCallRecord>,
+    fallback: Option<Fallback>,
 }
 
 impl Partial {
@@ -99,6 +102,31 @@ impl Partial {
             self.charge(&event["usage"]);
         }
         charged
+    }
+    /// Accept the agent's switch to the lane fallback only if it names this
+    /// turn's primary and fallback and no tool call was served yet.
+    fn switch(&mut self, request: &TurnRequest, event: &Value) -> bool {
+        let Ok(fallback) = serde_json::from_value::<Fallback>(event.clone()) else {
+            return false;
+        };
+        let accepted = self.fallback.is_none()
+            && self.tool_calls.is_empty()
+            && same(&request.model, &fallback.from)
+            && request
+                .fallback
+                .as_ref()
+                .is_some_and(|to| same(to, &fallback.to));
+        if accepted {
+            self.fallback = Some(fallback);
+        }
+        accepted
+    }
+    /// The model the turn ran on last.
+    fn model<'a>(&'a self, request: &'a TurnRequest) -> (&'a str, &'a str) {
+        match &self.fallback {
+            Some(fallback) => (&fallback.to.provider, &fallback.to.id),
+            None => (&request.model.provider, &request.model.id),
+        }
     }
     fn charge(&mut self, usage: &Value) {
         let count = |field: &str| usage[field].as_u64().unwrap_or(0);
@@ -282,11 +310,12 @@ impl AgentClient {
                 status: TurnStatus::Error,
                 error: Some(error.to_string()),
                 text: String::new(),
+                model: partial.model(request).1.to_owned(),
+                provider: partial.model(request).0.to_owned(),
                 usage: partial.usage,
-                model: request.model.id.clone(),
-                provider: request.model.provider.clone(),
                 session_file: None,
                 prompt_sha256: String::new(),
+                fallback: partial.fallback,
                 tool_calls: partial.tool_calls,
                 events: partial.events,
                 elapsed_ms: started.elapsed().as_millis(),
@@ -311,6 +340,7 @@ impl AgentClient {
             lane: request.lane,
             session: &request.session,
             model: &request.model,
+            fallback: request.fallback.as_ref(),
             trigger: &request.trigger,
             brief: &request.brief,
             tools: &request.tools,
@@ -383,6 +413,18 @@ impl AgentClient {
                     });
                 }
                 FromAgent::Event { turn_id, event, .. } if turn_id == request.id => {
+                    if event["kind"] == "fallback"
+                        && !partial.switch(request, &event)
+                        && aborted.is_none()
+                    {
+                        self.send(&ToAgent::Abort {
+                            v: VERSION,
+                            turn_id: &request.id,
+                            reason: "agent_fallback_refused",
+                        })?;
+                        aborted = Some("agent_fallback_refused");
+                        deadline = Instant::now() + ABORT_GRACE;
+                    }
                     if partial.record(&event) {
                         host.usage(&partial.usage);
                     }
@@ -400,19 +442,33 @@ impl AgentClient {
                     provider,
                     session_file,
                     prompt_sha256,
+                    fallback,
                     ..
                 } if id == request.id => {
+                    // The result must name the model the accepted switch (or
+                    // its absence) implies; anything else is never committed.
+                    let unreported = fallback.as_deref() != partial.fallback.as_ref()
+                        || partial.model(request) != (provider.as_str(), model.as_str());
+                    let (status, error) = match aborted {
+                        Some(reason) => (TurnStatus::Aborted, Some(reason.to_owned())),
+                        None if unreported => (
+                            TurnStatus::Error,
+                            Some("agent_fallback_unreported".to_owned()),
+                        ),
+                        None => (status, error),
+                    };
                     return Ok(TurnOutcome {
                         id,
                         lane: request.lane,
-                        status: aborted.map_or(status, |_| TurnStatus::Aborted),
-                        error: aborted.map(str::to_owned).or(error),
+                        status,
+                        error,
                         text: output.text,
                         usage,
                         model,
                         provider,
                         session_file,
                         prompt_sha256,
+                        fallback: partial.fallback.take(),
                         tool_calls: std::mem::take(&mut partial.tool_calls),
                         events: std::mem::take(&mut partial.events),
                         elapsed_ms: started.elapsed().as_millis(),
@@ -572,4 +628,8 @@ impl Agent {
             None => Ok(()),
         }
     }
+}
+
+fn same(spec: &ModelSpec, model: &super::protocol::ModelRef) -> bool {
+    spec.provider == model.provider && spec.id == model.id
 }
