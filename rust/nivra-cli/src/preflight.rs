@@ -24,16 +24,22 @@ fn absolute(path: &Path) -> Result<PathBuf, &'static str> {
     fs::canonicalize(path).map_err(|_| "preflight_path_unavailable")
 }
 fn grants(text: &str, home: &str) -> Result<Vec<PathBuf>, &'static str> {
-    text.split_whitespace()
-        .map(|word| {
-            let word = word.trim_start_matches(['-', '+']);
-            let expanded = word.replace("%h", home);
-            if expanded.contains('%') || expanded.contains(['"', '\'']) {
-                return Err("preflight_unit_syntax_unsupported");
-            }
-            absolute(Path::new(&expanded))
-        })
-        .collect()
+    let mut granted = Vec::new();
+    for word in text.split_whitespace() {
+        // systemd ignores a `-` entry whose path does not exist; it grants nothing.
+        let optional = word.starts_with('-');
+        let word = word.trim_start_matches(['-', '+']);
+        let expanded = word.replace("%h", home);
+        if expanded.contains('%') || expanded.contains(['"', '\'']) {
+            return Err("preflight_unit_syntax_unsupported");
+        }
+        match absolute(Path::new(&expanded)) {
+            Ok(path) => granted.push(path),
+            Err("preflight_path_unavailable") if optional => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(granted)
 }
 fn inspect(config: &Path, unit: Option<&Path>) -> Result<(), &'static str> {
     let paths: Paths =
@@ -164,6 +170,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(inspect(&config, Some(&unit)), Ok(()));
+        // A missing optional entry grants nothing; a missing required one refuses.
+        let missing = root.join("absent-research");
+        fs::write(
+            &unit,
+            format!(
+                "[Service]\nReadWritePaths={}\nReadWritePaths=-{}\n",
+                root.display(),
+                missing.display()
+            ),
+        )
+        .unwrap();
+        assert_eq!(inspect(&config, Some(&unit)), Ok(()));
+        fs::write(
+            &unit,
+            format!(
+                "[Service]\nReadWritePaths={} {}\n",
+                root.display(),
+                missing.display()
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            inspect(&config, Some(&unit)),
+            Err("preflight_path_unavailable")
+        );
         fs::write(&unit, "[Service]\nReadWritePaths=/tmp\nReadWritePaths=\n").unwrap();
         assert_eq!(
             inspect(&config, Some(&unit)),
