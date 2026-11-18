@@ -8,9 +8,12 @@ mock transport and do not contact a live feed.
 [Standard REST limits](https://upstox.com/developer/api-documentation/rate-limiting/)
 are **50 requests/second, 500/minute and 2,000/30 minutes**, per API/user. The
 [full quote endpoint](https://upstox.com/developer/api-documentation/get-full-market-quote/)
-accepts up to **500 keys/request**. Nivra deliberately retains its original
-shared read journal and stricter **5/s, 120/min, 1,500/30-minute** local caps and
-200-key request ceiling. Failed reservations/requests are never refunded.
+accepts up to **500 keys/request**. Nivra counts every read in its own journal
+scope against local caps of **45/s, 450/min, 1,800/30-minute**, 90% of the
+published limits. Because the provider enforces limits per API, pooling all reads
+under one cap keeps each API below its own limit. Nivra keeps its 200-key request
+ceiling. One prior-session daily refresh of the 2,746-instrument universe is one
+request per instrument, so the half-hour cap bounds it at roughly 46 minutes. Failed reservations/requests are never refunded.
 
 The [normal V3 feed limits](https://upstox.com/developer/api-documentation/v3/get-market-data-feed/)
 are **2 connections/user**. Single-category subscription ceilings: LTPC **5,000**,

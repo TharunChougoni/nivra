@@ -108,14 +108,14 @@ these same defaults apply. This advisory setting is excluded from runtime
 identity serialization; existing sealed and hashed formats are unchanged.
 
 Historical requests leave `history_download.reserve_half_hour_reads` (default 300)
-unused by history within the shared 1,500-read rolling 30-minute journal window.
+unused by history within the shared 1,800-read rolling 30-minute journal window.
 Other consumers can use that headroom; it is not a guarantee of availability,
 and the shared per-second and per-minute caps still apply. Denied historical
 reservations wait under the existing bounded retry and deadline settings.
 
 History also leaves `reserve_second_reads` (default 2, range 0–4) and
 `reserve_minute_reads` (default 30, range 0–119) in the corresponding shared
-windows. Ordinary operational reads retain the full existing 5/second,
-120/minute and 1,500/half-hour caps. These reserves apply only to history
+windows. Ordinary operational reads retain the full 45/second, 450/minute and
+1,800/half-hour caps. These reserves apply only to history
 admission, are omitted from serialized configuration at their defaults, and
 never erase reservations or guarantee availability against other readers.

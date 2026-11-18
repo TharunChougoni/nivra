@@ -378,6 +378,14 @@ fn reserve_history(c: &Config, now: i64) -> Result<()> {
     )
 }
 
+/// Local read caps per window (seconds, requests) for this application's own
+/// journal scope. https://upstox.com/developer/api-documentation/rate-limiting/
+/// lists historical candles under Other Standard APIs at 50/s, 500/min and
+/// 2000/30min, enforced per API and per user, and warns that exceeding them may
+/// suspend access. Every read in the scope counts here, whichever API it uses, so
+/// 90% of each published limit stays below every single API's own limit.
+pub(crate) const READ_QUOTA_CAPS: [(f64, u32); 3] = [(1., 45), (60., 450), (1800., 1800)];
+
 fn reserve_with_history_headroom(c: &Config, now: i64, headroom: [u32; 3]) -> Result<()> {
     // Existing account journal only. Missing file is never created. Failed HTTP
     // still consumes the reservation; windows expire (1s/60s/1800s). There is no
@@ -408,13 +416,7 @@ fn reserve_with_history_headroom(c: &Config, now: i64, headroom: [u32; 3]) -> Re
     if latest.is_some_and(|t| t > time) {
         return Err(Fail::new("read_clock_backwards").into());
     }
-    // https://upstox.com/developer/api-documentation/rate-limiting/ lists
-    // historical candles under Other Standard APIs: 50/s, 500/min, 2000/30min.
-    // Preserve the original shared journal's stricter local caps (5/120/1500).
-    for ((seconds, cap), reserved) in [(1., 5), (60., 120), (1800., 1500)]
-        .into_iter()
-        .zip(headroom)
-    {
+    for ((seconds, cap), reserved) in READ_QUOTA_CAPS.into_iter().zip(headroom) {
         let n: i64 = tx
             .query_row(
                 "SELECT count(*) FROM read_requests WHERE scope=? AND at>?",
@@ -422,7 +424,7 @@ fn reserve_with_history_headroom(c: &Config, now: i64, headroom: [u32; 3]) -> Re
                 |r| r.get(0),
             )
             .map_err(|_| Fail::new("read_journal_unreadable"))?;
-        let limit = cap - i64::from(reserved);
+        let limit = i64::from(cap) - i64::from(reserved);
         if n >= limit {
             let code = match seconds as i64 {
                 1 => "read_quota_wait_per_second",
@@ -646,7 +648,7 @@ mod tests {
         c.read_journal_device = metadata.dev();
         c.read_journal_inode = metadata.ino();
         // Inject the reservation clock without transport or credential access.
-        for _ in 0..5 {
+        for _ in 0..READ_QUOTA_CAPS[0].1 {
             reserve(&c, 10_000).unwrap();
         }
         let error = reserve(&c, 10_000).unwrap_err();
@@ -658,7 +660,7 @@ mod tests {
             db.query_row("SELECT count(*) FROM read_requests", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            6
+            i64::from(READ_QUOTA_CAPS[0].1) + 1
         );
     }
     #[test]
@@ -674,7 +676,7 @@ mod tests {
         c.history_download.reserve_half_hour_reads = 2;
         // Seed the original shared journal with older reservations outside the
         // short windows, but inside the 30-minute window.
-        for _ in 0..1498 {
+        for _ in 0..READ_QUOTA_CAPS[2].1 - 2 {
             db.execute(
                 "INSERT INTO read_requests(scope,at) VALUES(?,?)",
                 rusqlite::params![c.read_scope, 1.0],
@@ -694,8 +696,18 @@ mod tests {
         );
         reserve_history(&c, 1_801_000).unwrap();
         for (window, capacity, reserved, code) in [
-            (1.0, 5usize, 2usize, "read_quota_wait_per_second"),
-            (60.0, 120, 30, "read_quota_wait_per_minute"),
+            (
+                1.0,
+                READ_QUOTA_CAPS[0].1 as usize,
+                2usize,
+                "read_quota_wait_per_second",
+            ),
+            (
+                60.0,
+                READ_QUOTA_CAPS[1].1 as usize,
+                30,
+                "read_quota_wait_per_minute",
+            ),
         ] {
             let root = tempfile::tempdir().unwrap();
             let mut c = super::super::tests::config(root.path());

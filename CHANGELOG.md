@@ -1,5 +1,16 @@
 # Source snapshot
 
+## 0.11.1 — 2026-11-18
+
+Raise the local Upstox read caps from the retired shared-journal values
+(5/s, 120/min, 1,500/30 min) to 90% of the published per-API, per-user limits
+(45/s, 450/min, 1,800/30 min). The journal now serves only this application.
+The half-hour cap bounds the daily prior-session history refresh, one request per
+instrument, so the refresh is about 20% shorter and fits the 08:00–09:10 window
+with more margin. Preflight now skips a `-`-prefixed optional `ReadWritePaths`
+entry whose path is absent, as systemd does, so the packaged unit's optional
+research staging path no longer fails every start on a host without it.
+
 ## 0.11.0 — 2026-11-18
 
 Stop losing paper trading days to lifecycle edge cases. A stop signal is now a
