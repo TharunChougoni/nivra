@@ -1,5 +1,41 @@
 # Source snapshot
 
+## 0.11.0 — 2026-11-18
+
+Stop losing paper trading days to lifecycle edge cases. A stop signal is now a
+typed shutdown kind decided once. Only an explicit `nivra stop --config
+PAPER_CONFIG --confirm-paper-review` makes the next stop an operator stop. That
+command writes a private request bound to the account and active session, and the
+controller consumes it on SIGTERM, or it stops the book directly when no
+controller is running. Every other stop is a service stop: `systemctl --user
+restart`, the updater's stop, a host shutdown. A service stop cancels workers and
+retires an in-flight planner attempt as failed
+`service_shutdown_interrupted_no_replay` with its charges preserved and no sticky
+block. It records the `service_shutdown` tick and leaves the book open, so the
+same dated session continues on restart. A crash also continues the session as
+before. Operator-stopped books still need a reviewed `resume`, and halted books
+stay halted. Procedures that end in `resume` now start with `nivra stop`.
+
+A controller that first comes up after 09:15 IST still starts the day's session.
+An eligible predecessor seal rolls over until the 15:00 IST late-start cutoff
+instead of the 09:15 gate, and a first-ever book configured for today starts the
+same way. A session adopted after the history cutoff runs one immediate history
+preparation with the same quota journal and validation. Carried holdings are
+protected as soon as the session is adopted. The readiness disposition and the
+stale-feed anchor follow a late start.
+
+The updater's health check now refuses an open book that comes back
+operator-stopped, unless the update used `--operator-stopped`, and its guard
+defers such a book. The forced `market_open_flat` restart, and every other forced
+restart, now continues the same session as documented. The planned-restart
+notice is written before the controller stops, so its service-stop alert is the
+informational `planned_restart`. A service stop during pre-open preparation
+records the cancelled attempt as retryable instead of leaving it interrupted.
+
+Upgrading from 0.10.x: the installed updater still runs the old binary's stop,
+which operator-stops an open book. Update outside market hours, or `resume` the
+book after the update.
+
 ## 0.10.4 — 2026-11-17
 
 Fix #14. The orchestrator's `request_research` tool was declared strict but did
