@@ -56,6 +56,10 @@ impl fmt::Display for SealVerdict {
     }
 }
 
+/// Last IST minute (15:00) at which a controller may still adopt the day's
+/// session, from a sealed predecessor or as a first-ever book.
+pub(crate) const LATE_START_CUTOFF_MINUTE: u32 = 900;
+
 /// Dashboard / preview status for whether the next session may roll.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PreviewStatus {
@@ -100,11 +104,13 @@ impl PreviewStatus {
     }
 
     /// Advance from a completed review. Anything other than an eligible seal
-    /// stays blocked; an eligible seal after the 09:15 IST pre-open minute
-    /// waits for the next session instead of demanding inspection.
+    /// stays blocked. An eligible seal rolls over from pre-open through the
+    /// late-start cutoff; only after it does the day wait for the next session.
     pub(crate) fn from_review(verdict: Option<SealVerdict>, minute_of_day: u32) -> Self {
         match verdict {
-            Some(SealVerdict::EligibleToSeal) if minute_of_day >= 555 => Self::MissedPreopenIdle,
+            Some(SealVerdict::EligibleToSeal) if minute_of_day >= LATE_START_CUTOFF_MINUTE => {
+                Self::MissedPreopenIdle
+            }
             Some(SealVerdict::EligibleToSeal) => Self::RolloverReady,
             _ => Self::RolloverBlocked,
         }

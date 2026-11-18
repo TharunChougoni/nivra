@@ -937,7 +937,9 @@ pub(super) use history::{
     HISTORY_ATTEMPT_INTERRUPTED, HISTORY_ATTEMPT_RECOVERED, HISTORY_RECOVERY_RECEIPT_KIND,
     history_recovery_receipt_path,
 };
-pub(super) use history::{HistoryAttempts, history_attempt_window, history_recover};
+pub(super) use history::{
+    HistoryAttempts, history_attempt_window, history_recover, late_preparation_due,
+};
 
 fn load_daily_volumes(c: &Config, instruments: &[Instrument], now: i64, scan: &mut Scanner) {
     // Persisted scanner values may belong to an older session; always clear them.
@@ -945,7 +947,9 @@ fn load_daily_volumes(c: &Config, instruments: &[Instrument], now: i64, scan: &m
         sample.avg_daily_volume = None;
         sample.avg_daily_volume_sessions = None;
     }
-    let Ok(request) = preparation_request(c, instruments, now) else {
+    let Ok(request) =
+        preparation_request(c, instruments, now, preparation::PreparationWindow::PreOpen)
+    else {
         return;
     };
     let report = preparation::coverage_report(
@@ -965,7 +969,7 @@ fn load_daily_volumes(c: &Config, instruments: &[Instrument], now: i64, scan: &m
 }
 
 fn recovered_history_status(c: &Config, instruments: &[Instrument], now: i64) -> serde_json::Value {
-    match preparation_request(c, instruments, now) {
+    match preparation_request(c, instruments, now, preparation::PreparationWindow::PreOpen) {
         Ok(request) => serde_json::to_value(preparation::coverage_report(
             &request.history_root,
             instruments,
@@ -984,9 +988,9 @@ pub(super) fn preparation_request(
     c: &Config,
     instruments: &[Instrument],
     now: i64,
+    window: preparation::PreparationWindow,
 ) -> Result<preparation::PreparationRequest> {
-    let target = local(now).date_naive();
-    let (session, previous) = c.next_sessions(target)?;
+    let (session, previous) = c.next_sessions(local(now).date_naive())?;
     if session != c.session {
         return Err("history_preparation_session_mismatch".into());
     }
@@ -1005,12 +1009,7 @@ pub(super) fn preparation_request(
         return Err("history_preparation_calendar_coverage".into());
     }
     dates.reverse();
-    let deadline = DateTime::parse_from_rfc3339(&format!(
-        "{session}T{:02}:{:02}:00+05:30",
-        c.history_preparation_cutoff_minute / 60,
-        c.history_preparation_cutoff_minute % 60
-    ))?
-    .timestamp_millis();
+    let deadline = window.deadline_ms(c, session, now)?;
     Ok(preparation::PreparationRequest {
         config: c.clone(),
         instruments: instruments.to_vec(),
@@ -1021,6 +1020,7 @@ pub(super) fn preparation_request(
             .history_directory
             .clone()
             .ok_or("history_directory_required")?,
+        window,
         deadline_ms: deadline,
     })
 }
@@ -1035,8 +1035,10 @@ pub(super) fn readiness_snapshot(
         .as_str()
         .and_then(|s| s.parse::<NaiveDate>().ok());
     let disposition = if let Some(day) = target.filter(|d| *d > c.session) {
+        // Judge the next session at its pre-open, or now once that has passed,
+        // so a late start reads ready and a passed late-start cutoff reads missed.
         let at = DateTime::parse_from_rfc3339(&format!("{day}T08:30:00+05:30"))
-            .map(|v| v.timestamp_millis());
+            .map(|v| v.timestamp_millis().max(now));
         match at.ok().and_then(|at| rollover::preview(c, at).ok()) {
             Some(v) => serde_json::json!({"status":v["status"],"reason":v["review"]["status"]}),
             None => {

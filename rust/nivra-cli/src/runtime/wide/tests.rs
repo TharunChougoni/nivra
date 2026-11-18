@@ -2226,6 +2226,56 @@ fn failed_history_attempt_retries_with_delay_and_session_bound() {
         cfg.session.succ_opt().unwrap(),
         cfg.history_preparation_start_minute
     ));
+    // A session adopted after the cutoff gets one immediate attempt until the
+    // late-start cutoff; any attempt already started for it rules that out.
+    let late = cfg.execution.session_start_minute + 75;
+    let fresh = HistoryAttempts::default();
+    assert!(late_preparation_due(&cfg, cfg.session, late, &fresh));
+    assert!(late_preparation_due(
+        &cfg,
+        cfg.session,
+        cfg.history_preparation_cutoff_minute,
+        &fresh
+    ));
+    assert!(!late_preparation_due(
+        &cfg,
+        cfg.session,
+        cfg.history_preparation_cutoff_minute - 1,
+        &fresh
+    ));
+    assert!(!late_preparation_due(&cfg, cfg.session, 900, &fresh));
+    assert!(!late_preparation_due(
+        &cfg,
+        cfg.session.succ_opt().unwrap(),
+        late,
+        &fresh
+    ));
+    assert!(!late_preparation_due(&cfg, cfg.session, late, &attempts));
+    let window = preparation::PreparationWindow::LateStart;
+    let at = DateTime::parse_from_rfc3339("2026-10-16T10:30:00+05:30")
+        .unwrap()
+        .timestamp_millis();
+    let length =
+        i64::from(cfg.history_preparation_cutoff_minute - cfg.history_preparation_start_minute)
+            * 60_000;
+    assert_eq!(
+        window.deadline_ms(&cfg, cfg.session, at).unwrap(),
+        at + length
+    );
+    let near_close = DateTime::parse_from_rfc3339("2026-10-16T14:59:00+05:30")
+        .unwrap()
+        .timestamp_millis();
+    let close = DateTime::parse_from_rfc3339("2026-10-16T15:30:00+05:30")
+        .unwrap()
+        .timestamp_millis();
+    assert_eq!(
+        window.deadline_ms(&cfg, cfg.session, near_close).unwrap(),
+        close
+    );
+    cfg.history_directory = Some(fixture.path().join("history"));
+    let request = preparation_request(&cfg, &[instrument(1)], at, window).unwrap();
+    assert_eq!(request.target_session, cfg.session);
+    assert_eq!(request.deadline_ms, at + length);
     cfg.history_preparation_failed_retry_ms = 0;
     assert!(cfg.validate().is_err());
 }
@@ -2601,7 +2651,13 @@ fn prepared_daily_volume_requires_minimum_genuine_sessions() {
     c.history_directory = Some(dir.path().join("history"));
     fs::create_dir(c.history_directory.as_ref().unwrap()).unwrap();
     let instruments = vec![instrument(1), instrument(2), instrument(3)];
-    let request = preparation_request(&c, &instruments, start()).unwrap();
+    let request = preparation_request(
+        &c,
+        &instruments,
+        start(),
+        preparation::PreparationWindow::PreOpen,
+    )
+    .unwrap();
     assert_eq!(c.history_avg_daily_volume_min_sessions, 10);
     for (instrument, count) in instruments.iter().zip([21, 9]) {
         let rows: Vec<_> = request
@@ -2675,7 +2731,13 @@ fn resume_preflight_requires_flat_paper_operator_stop() {
     c.history_directory = Some(dir.path().join("history"));
     fs::create_dir(c.history_directory.as_ref().unwrap()).unwrap();
     let instruments = vec![instrument(1)];
-    let request = preparation_request(&c, &instruments, start()).unwrap();
+    let request = preparation_request(
+        &c,
+        &instruments,
+        start(),
+        preparation::PreparationWindow::PreOpen,
+    )
+    .unwrap();
     let rows: Vec<_> = request
         .required_sessions
         .iter()

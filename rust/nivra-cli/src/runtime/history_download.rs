@@ -336,7 +336,12 @@ pub fn backfill_entry(path: &Path) -> ExitCode {
         c.validate()?;
         data::verify_journal(&c)?;
         let instruments = wide::history_instruments(&c)?;
-        let request = wide::preparation_request(&c, &instruments, millis())?;
+        let request = wide::preparation_request(
+            &c,
+            &instruments,
+            millis(),
+            super::preparation::PreparationWindow::PreOpen,
+        )?;
         let start = *request
             .required_sessions
             .first()

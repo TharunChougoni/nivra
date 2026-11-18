@@ -23,8 +23,60 @@ pub struct PreparationRequest {
     /// Exactly the reviewed trading sessions whose daily bars qualify readiness.
     pub required_sessions: Vec<NaiveDate>,
     pub history_root: PathBuf,
-    /// Absolute Unix milliseconds; normally 09:10 IST on target_session.
+    pub window: PreparationWindow,
+    /// Absolute Unix milliseconds, bounded by `window`.
     pub deadline_ms: i64,
+}
+
+/// When a preparation attempt runs relative to the configured pre-open cutoff.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreparationWindow {
+    /// The configured pre-open window; acquisition ends at the cutoff.
+    PreOpen,
+    /// A session adopted after the cutoff runs one attempt right away. It keeps
+    /// the pre-open window's length and never runs past the session end.
+    LateStart,
+}
+
+impl PreparationWindow {
+    /// Whether an attempt may start at `minute` (IST minute of day).
+    pub fn admits(self, c: &Config, minute: u32) -> bool {
+        match self {
+            Self::PreOpen => (c.history_preparation_start_minute
+                ..c.history_preparation_cutoff_minute)
+                .contains(&minute),
+            Self::LateStart => (c.history_preparation_cutoff_minute
+                ..super::phases::LATE_START_CUTOFF_MINUTE)
+                .contains(&minute),
+        }
+    }
+
+    /// The latest acquisition deadline for an attempt started at `now`.
+    pub fn deadline_ms(self, c: &Config, session: NaiveDate, now: i64) -> Result<i64> {
+        let cutoff = session_minute_ms(session, c.history_preparation_cutoff_minute)?;
+        Ok(match self {
+            Self::PreOpen => cutoff,
+            Self::LateStart => {
+                let length = i64::from(
+                    c.history_preparation_cutoff_minute - c.history_preparation_start_minute,
+                ) * 60_000;
+                now.saturating_add(length)
+                    .min(session_minute_ms(session, c.execution.session_end_minute)?)
+            }
+        })
+    }
+}
+
+fn session_minute_ms(session: NaiveDate, minute: u32) -> Result<i64> {
+    Ok(session
+        .and_hms_opt(minute / 60, minute % 60, 0)
+        .ok_or("history_preparation_request")?
+        .and_local_timezone(
+            chrono::FixedOffset::east_opt(19_800).ok_or("history_preparation_request")?,
+        )
+        .single()
+        .ok_or("history_preparation_request")?
+        .timestamp_millis())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -306,37 +358,26 @@ pub struct PreparationWorker {
     cancel: Arc<AtomicBool>,
     join: Option<JoinHandle<CoverageReport>>,
     failed: CoverageReport,
+    deadline_ms: i64,
 }
 impl PreparationWorker {
     pub fn spawn(request: PreparationRequest) -> Result<Self> {
         let now = super::millis();
         let local_now = super::local(now);
-        let cutoff = request
-            .target_session
-            .and_hms_opt(
-                request.config.history_preparation_cutoff_minute / 60,
-                request.config.history_preparation_cutoff_minute % 60,
-                0,
-            )
-            .ok_or("history_preparation_request")?
-            .and_local_timezone(
-                chrono::FixedOffset::east_opt(19_800).ok_or("history_preparation_request")?,
-            )
-            .single()
-            .ok_or("history_preparation_request")?
-            .timestamp_millis();
+        let latest = request
+            .window
+            .deadline_ms(&request.config, request.target_session, now)?;
         if request.instruments.is_empty()
             || request.required_sessions.len() != request.config.daily_history_sessions
             || request.required_sessions.last() != Some(&request.previous_session)
             || request.required_sessions.windows(2).any(|w| w[0] >= w[1])
             || request.previous_session >= request.target_session
             || request.deadline_ms <= now
-            || request.deadline_ms > cutoff
+            || request.deadline_ms > latest
             || local_now.date_naive() != request.target_session
-            || (local_now.hour() * 60 + local_now.minute())
-                < request.config.history_preparation_start_minute
-            || (local_now.hour() * 60 + local_now.minute())
-                >= request.config.history_preparation_cutoff_minute
+            || !request
+                .window
+                .admits(&request.config, local_now.hour() * 60 + local_now.minute())
         {
             return Err("history_preparation_request".into());
         }
@@ -353,6 +394,7 @@ impl PreparationWorker {
         failed.failure = Some("history_worker_failed".into());
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = cancel.clone();
+        let deadline_ms = request.deadline_ms;
         let join = thread::Builder::new()
             .name("paper-history-preparation".into())
             .spawn(move || run(request, worker_cancel))?;
@@ -360,7 +402,12 @@ impl PreparationWorker {
             cancel,
             join: Some(join),
             failed,
+            deadline_ms,
         })
+    }
+
+    pub fn deadline_ms(&self) -> i64 {
+        self.deadline_ms
     }
 
     /// Returns the final report once, then `None` on all later polls.

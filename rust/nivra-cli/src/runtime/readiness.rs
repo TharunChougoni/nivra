@@ -280,7 +280,12 @@ pub fn entry(path: &Path, now_ms: i64) -> ExitCode {
             future.previous_session = current.next_sessions(target)?.1;
             let at = DateTime::parse_from_rfc3339(&format!("{target}T08:30:00+05:30"))?
                 .timestamp_millis();
-            let request = wide::preparation_request(&future, &instruments, at)?;
+            let request = wide::preparation_request(
+                &future,
+                &instruments,
+                at,
+                preparation::PreparationWindow::PreOpen,
+            )?;
             let coverage = preparation::coverage_report(
                 &request.history_root,
                 &instruments,

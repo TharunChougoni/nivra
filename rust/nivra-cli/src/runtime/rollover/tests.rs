@@ -331,13 +331,27 @@ fn halted_carry_reaches_protection_only_successor_and_clears_only_after_review()
     assert_eq!(plan["review"]["reason"], HALTED_CARRY_REASON);
     assert_eq!(plan["review"]["carried_positions"], 1);
     assert_eq!(plan["strategy_decision"]["carry_required"], true);
-    // After the pre-open window closes the same eligible review is a normal
-    // next-session wait, not a human-review blocker (#159).
+    // An eligible review still starts the session late, at 10:30 IST. Only
+    // after the 15:00 late-start cutoff is it a normal next-session wait, not
+    // a human-review blocker (#159).
     let late = monday + 2 * 60 * 60_000;
-    assert_eq!(preview(&c, late).unwrap()["status"], "missed_preopen_idle");
+    assert_eq!(preview(&c, late).unwrap()["status"], "rollover_ready");
+    let missed = monday + (6 * 60 + 35) * 60_000;
     assert_eq!(
-        idle_status(&c, local(late).date_naive(), late).unwrap(),
+        preview(&c, missed).unwrap()["status"],
         "missed_preopen_idle"
+    );
+    assert_eq!(
+        idle_status(&c, local(missed).date_naive(), missed).unwrap(),
+        "missed_preopen_idle"
+    );
+    assert!(advance(&c, missed).unwrap().is_none());
+    assert!(
+        !c.sessions_root
+            .as_ref()
+            .unwrap()
+            .join("current.json")
+            .exists()
     );
     record_review(&c).unwrap();
     // The honest blocked review seal is preserved, never rewritten.
@@ -1360,11 +1374,14 @@ fn overnight_rollover_carries_account_and_preserves_original_and_terminal_books(
     .unwrap();
     drop(db);
     let original = fs::read(c.directory.join("paper.sqlite")).unwrap();
-    let monday = DateTime::parse_from_rfc3339("2026-10-19T08:30:00+05:30")
+    // A controller first up at 10:30 IST still adopts the day's session and
+    // carries its holdings under protection.
+    let monday = DateTime::parse_from_rfc3339("2026-10-19T10:30:00+05:30")
         .unwrap()
         .timestamp_millis();
     assert_eq!(review(&c).unwrap()["carried_positions"], 1);
     let next = advance(&c, monday).unwrap().unwrap();
+    assert_eq!(next.session, "2026-10-19".parse().unwrap());
     // In-process rollover used to leave the successor without a scanner
     // journal; the first open-market checkpoint then crashed the controller.
     let next_db = open_book(&next).unwrap();

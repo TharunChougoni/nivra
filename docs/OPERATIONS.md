@@ -111,7 +111,8 @@ its committed current pointer under a root-wide writer lock.
 | --- | --- |
 | Pre-open | Validate calendar, predecessor/carry, dated metadata, model settings and history |
 | 08:00–09:10 | Optional prior-session daily-history preparation under original read quota |
-| Before 09:15 | Commit the next eligible session; missed preparation does not create a late replacement |
+| Before 15:00 | Commit the next eligible session. A session first committed after the preparation cutoff runs one immediate history preparation and protects carried holdings at once |
+| After 15:00 | An uncommitted session waits for the next trading date (`missed_preopen_idle`) |
 | 09:15–15:30 | Protect holdings, rotate scans, compile factual Luna digests and run persistent orchestrator decisions; independently validate paper fills |
 | Close | Seal/report actual cash, fees and unresolved/carried holdings; no forced 15:15 liquidation for model-led holdings |
 | After close, before 18:00 | Seal financial reporting; the optional owner review and scorer trigger run only when configured |
@@ -126,6 +127,27 @@ A service restart preserves the same dated book, stop/halt flags and original
 attempts. A normal model-led account carries actual cash/holdings across verified
 successors. Closed books are never resumed. No replacement intraday book, quota
 reset or automatic unhalt is a recovery procedure.
+
+### Late session start
+
+A controller that first comes up after 09:15 IST still starts the day's
+session: a fresh install, a restart after a long outage, or a predecessor that
+needed review before it could seal. An eligible predecessor seal, flat or
+carried under the unchanged carry rules, rolls over from pre-open until the
+late-start cutoff at 15:00 IST. A first-ever book whose configured session is
+today starts the same way. After 15:00 the day is `missed_preopen_idle` and the
+next trading date rolls over normally.
+
+Carried holdings get protection and exits as soon as the session is adopted.
+New entries still wait for prior-session history. When no preparation attempt
+exists for the session and the clock is past the configured cutoff, the
+controller runs one preparation immediately with the same read-quota journal and
+validation. Its acquisition deadline keeps the pre-open window's length and never
+passes the session end. A failed, partial or interrupted late attempt is never
+replayed; the read-only coverage check then decides whether entries are
+admitted. Readiness judges the next session at its 08:30 pre-open, or at the
+current time once that has passed. The two-second financial freshness gate and
+the archived quote receipt times are unchanged.
 
 The reviewed compiled 2026 NSE calendar is bounded; holidays and previous-session
 selection come from it. Unreviewed special hours/dates refuse. Calendar/source
@@ -183,8 +205,8 @@ nivra rollover --config PAPER_CONFIG --now 2026-10-28T09:00:00+05:30 --advance -
 requires `--confirm-paper-review`, takes the root controller lock before the
 selected source book controller lock, validates the config (live activation
 remains disabled), and requires `preview.status == rollover_ready`. Run it on the
-target session date before the 09:15 IST pre-open gate; the same clock rule as
-the controller applies. It advances at most one transition, from the session
+target session date before the 15:00 IST late-start cutoff; the same clock rule
+as the controller applies. It advances at most one transition, from the session
 committed in `current.json` to the `--now` session, and runs the same transition,
 closed-book and carry validation and the single rollover commit used by the
 controller, then prints JSON evidence containing `status`, source and target
@@ -916,7 +938,8 @@ A **closed, halted, model-led book still holding positions** cannot use
 protection-only recovery: the book is sealed, so in-session quotes and exits are
 already over, and rollover refuses halted books. Carry it into the next session
 with the reviewed halted-carry acceptance instead. Run it after the source close
-and before 09:15 IST on the next trading date, with the controller stopped:
+and before the 15:00 IST late-start cutoff on the next trading date, with the
+controller stopped:
 
 ```sh
 systemctl --user stop nivra-paper.service
@@ -948,7 +971,7 @@ fees and starts `halted=true`, `stopped=false`, `closed=false`, health
 held position continues under the frozen exit policy with fresh two-second
 quotes. Nothing unhalts automatically, and the source is never reopened,
 unstopped or replayed. If the controller is started instead of advancing, its
-first observation of the next trading date before 09:15 performs the same
+first observation of the next trading date before 15:00 performs the same
 reviewed rollover; the `--advance` step then returns `already_advanced` and
 changes nothing.
 
@@ -1034,7 +1057,8 @@ For a **closed, operator-stopped, non-halted model-led book with carried positio
 stop the controller and inspect its original report, review and recorded
 `operator_stopped` event. Keep the original config and seals. After installing a
 release containing this recovery, run the following on the next trading date,
-before 09:15 IST (the clock arguments sample the actual command time):
+before the 15:00 IST late-start cutoff (the clock arguments sample the actual
+command time):
 
 ```sh
 systemctl --user stop nivra-paper.service
@@ -2171,7 +2195,10 @@ least 21; planner feature
 lookbacks retain their existing schema and need at least 21 bars. Preparation uses
 `history_preparation_start_minute: 480` and
 `history_preparation_cutoff_minute: 550`, including its deadline/cancellation;
-start must precede cutoff and cutoff must be before 555 (09:15 IST).
+start must precede cutoff and cutoff must be before 555 (09:15 IST). A session
+adopted after the cutoff runs one late preparation whose deadline is the same
+window length from its start, capped at `session_end_minute`; the late-start
+cutoff is fixed at 900 (15:00 IST).
 
 ### Model archive retention
 

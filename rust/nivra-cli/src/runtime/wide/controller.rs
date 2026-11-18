@@ -688,7 +688,7 @@ impl<'a> Controller<'a> {
         let Now { now, day, m } = t;
         let c = &self.config;
         if let Some(worker) = self.history_worker.as_mut() {
-            if m >= c.history_preparation_cutoff_minute || day != c.session {
+            if now >= worker.deadline_ms() || day != c.session {
                 worker.cancel();
             }
             if let Some(report) = worker.poll() {
@@ -701,14 +701,20 @@ impl<'a> Controller<'a> {
                 self.volume_history_loaded = false;
             }
         }
+        let window = if history_attempt_window(c, day, m) && self.history_attempt.due(c, now) {
+            Some(preparation::PreparationWindow::PreOpen)
+        } else if late_preparation_due(c, day, m, &self.history_attempt) {
+            Some(preparation::PreparationWindow::LateStart)
+        } else {
+            None
+        };
         if c.history_preparation_enabled
-            && history_attempt_window(c, day, m)
-            && self.history_attempt.due(c, now)
+            && let Some(window) = window
             && self.history_worker.is_none()
             && let Some(u) = &self.universe
         {
             self.history_attempt.started(c, now)?;
-            let request = preparation_request(c, &u.instruments, now);
+            let request = preparation_request(c, &u.instruments, now, window);
             match request.and_then(preparation::PreparationWorker::spawn) {
                 Ok(worker) => {
                     self.history_worker = Some(worker);
@@ -1815,8 +1821,9 @@ impl<'a> Controller<'a> {
         }
         if active {
             let receipt = self.last_fresh_receipt;
-            // Start counting at today's open (or controller start), never count overnight.
-            let open = now - i64::from(m - 555) * 60_000;
+            // Start counting at today's configured open (or the first active pass
+            // after a late start or restart), never count overnight.
+            let open = now - i64::from(m.saturating_sub(c.execution.session_start_minute)) * 60_000;
             let since = self.stale_since.get_or_insert(now);
             if let Some(receipt) = receipt
                 .filter(|r| *r >= open && *r + nivra_core::market::MAX_FINANCIAL_AGE_MS > *since)
