@@ -8,7 +8,8 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { LaneAgent } from "../src/agent.js";
-import { FAKE_MODEL, FAKE_PROVIDER, type FakeScript, installFake } from "../src/fake.js";
+import { FAKE_FALLBACK_MODEL, FAKE_MODEL, FAKE_PROVIDER, type FakeScript, installFake } from "../src/fake.js";
+import { fallbackReason } from "../src/fallback.js";
 import { type JsonObject, type Outbound, PROTOCOL_VERSION, parseInbound, type ToolSpec, type TurnRequest } from "../src/protocol.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -168,6 +169,79 @@ test("an abort that arrives while the session opens stops the turn before any mo
   assert.equal(result.error, "agent_preempted");
   assert.equal(result.usage.calls, 0);
   assert.ok(!sent.some((message) => message.type === "event" && message.event.kind === "message"), "no model step ran");
+  agent.dispose();
+});
+
+test("only quota, auth and pre-output provider rejections qualify for the fallback", () => {
+  const cases: [string, boolean, string | undefined][] = [
+    ["You have hit your ChatGPT usage limit (plus plan). Try again in ~90 min.", true, "quota"],
+    ["insufficient_quota: You exceeded your current quota", true, "quota"],
+    ["429 Too Many Requests: rate limit exceeded", true, "quota"],
+    ["401 Unauthorized", true, "auth"],
+    ["403 Forbidden: usage_not_included", true, "auth"],
+    ["No API key found for provider mistral", false, "auth"],
+    ["400 The model is not available on your plan", true, "rejected"],
+    ["400 The model is not available on your plan", false, undefined],
+    ["503 Service Unavailable", true, undefined],
+    ["Request timed out", true, undefined],
+    ["fetch failed", true, undefined],
+    ["This model's maximum context length is 128000 tokens", true, undefined],
+  ];
+  for (const [error, answered, reason] of cases) assert.equal(fallbackReason(error, answered), reason, error);
+});
+
+test("a primary quota failure before any output reruns the turn once on the fallback from the same context", async () => {
+  const script: FakeScript = {
+    turns: [
+      { lane: "decision", steps: [{ text: "earlier turn" }] },
+      {
+        lane: "decision",
+        steps: [
+          { error: "insufficient_quota: You exceeded your current quota" },
+          { tool_calls: [{ name: "plan", args: { actions: [], stance: "hold", notes: "fallback" } }] },
+          { text: "Held on the fallback." },
+        ],
+      },
+    ],
+  };
+  const { dir, agent, sent, run } = await harness(script, (name) => ({ ok: true, output: { tool: name } }));
+  await run(turn("t0", "decision", dir));
+  const request = { ...turn("t1", "decision", dir), fallback: { provider: FAKE_PROVIDER, id: FAKE_FALLBACK_MODEL, thinking: "high" as const } };
+  const result = await run(request);
+  assert.equal(result.status, "ok", result.error);
+  assert.equal(result.model, FAKE_FALLBACK_MODEL);
+  assert.deepEqual(result.fallback, {
+    from: { provider: FAKE_PROVIDER, id: FAKE_MODEL },
+    to: { provider: FAKE_PROVIDER, id: FAKE_FALLBACK_MODEL },
+    reason: "quota",
+    error: "insufficient_quota: You exceeded your current quota",
+  });
+  const turnLines = sent.filter((message) => "turn_id" in message && message.turn_id === "t1");
+  const switched = turnLines.findIndex((message) => message.type === "event" && message.event.kind === "fallback");
+  const firstCall = turnLines.findIndex((message) => message.type === "tool_call");
+  assert.ok(switched >= 0 && switched < firstCall, "the switch is reported before any tool call");
+  const answered = turnLines.flatMap((message) => (message.type === "event" && message.event.kind === "message" ? [message.event.model] : []));
+  assert.deepEqual(answered, [FAKE_MODEL, FAKE_FALLBACK_MODEL, FAKE_FALLBACK_MODEL]);
+  assert.equal(result.usage.calls, 3);
+  const context = agent.contextMessages("decision");
+  assert.equal(context.filter((message) => message.role === "user").length, 2, "the earlier turn plus one copy of this brief");
+  assert.ok(!context.some((message) => message.role === "assistant" && message.stopReason === "error"), "the failed attempt left the context");
+  assert.ok(readFileSync(result.session_file!, "utf8").includes("insufficient_quota"), "the failed attempt stays in the session file");
+  agent.dispose();
+});
+
+test("no fallback once a tool ran in the turn", async () => {
+  const script: FakeScript = {
+    turns: [{ lane: "decision", steps: [{ tool_calls: [{ name: "portfolio", args: {} }] }, { error: "insufficient_quota: You exceeded your current quota" }] }],
+  };
+  const { dir, agent, sent, run } = await harness(script, (name) => ({ ok: true, output: { tool: name } }));
+  const request = { ...turn("t1", "decision", dir), fallback: { provider: FAKE_PROVIDER, id: FAKE_FALLBACK_MODEL } };
+  const result = await run(request);
+  assert.equal(result.status, "error");
+  assert.match(result.error ?? "", /insufficient_quota/);
+  assert.equal(result.model, FAKE_MODEL);
+  assert.equal(result.fallback, undefined);
+  assert.ok(!sent.some((message) => message.type === "event" && message.event.kind === "fallback"));
   agent.dispose();
 });
 

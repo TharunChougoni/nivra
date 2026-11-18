@@ -2,8 +2,8 @@ import { type AssistantMessage, fauxAssistantMessage, fauxProvider, fauxToolCall
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { JsonObject, Lane, TurnRequest } from "./protocol.js";
 
-/** One scripted model response: tool calls, or a final text answer. */
-export type FakeStep = { tool_calls: { name: string; args: JsonObject }[] } | { text: string };
+/** One scripted model response: tool calls, a final text answer, or a provider error. */
+export type FakeStep = { tool_calls: { name: string; args: JsonObject }[] } | { text: string } | { error: string };
 
 /** Turns are consumed in order per lane. Offline proof only; never a production provider. */
 export interface FakeScript {
@@ -12,9 +12,12 @@ export interface FakeScript {
 
 export const FAKE_PROVIDER = "fake";
 export const FAKE_MODEL = "scripted";
+/** A second scripted model, priced differently, for fallback checks. */
+export const FAKE_FALLBACK_MODEL = "scripted-fallback";
 
 function message(step: FakeStep): AssistantMessage {
   if ("text" in step) return fauxAssistantMessage(step.text);
+  if ("error" in step) return fauxAssistantMessage([], { stopReason: "error", errorMessage: step.error });
   return fauxAssistantMessage(
     step.tool_calls.map((call) => fauxToolCall(call.name, call.args)),
     { stopReason: "toolUse" },
@@ -25,7 +28,10 @@ function message(step: FakeStep): AssistantMessage {
 export function installFake(runtime: ModelRuntime, script: FakeScript): (turn: TurnRequest) => void {
   const faux = fauxProvider({
     provider: FAKE_PROVIDER,
-    models: [{ id: FAKE_MODEL, cost: { input: 1, output: 4, cacheRead: 0.1, cacheWrite: 1 } }],
+    models: [
+      { id: FAKE_MODEL, cost: { input: 1, output: 4, cacheRead: 0.1, cacheWrite: 1 } },
+      { id: FAKE_FALLBACK_MODEL, cost: { input: 2, output: 8, cacheRead: 0.2, cacheWrite: 2 } },
+    ],
   });
   runtime.registerNativeProvider(faux.provider);
   const remaining = [...script.turns];
