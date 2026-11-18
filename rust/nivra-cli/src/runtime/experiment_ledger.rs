@@ -163,7 +163,11 @@ fn open(c: &Config) -> Result<Connection> {
 }
 
 pub(super) fn open_directory(directory: &std::path::Path) -> Result<Connection> {
-    let file = file_path(directory);
+    open_file(&file_path(directory))
+}
+
+/// The ledger schema in a private SQLite file of the caller's choosing.
+pub(super) fn open_file(file: &std::path::Path) -> Result<Connection> {
     let parent = file.parent().ok_or("experiment_ledger_path_invalid")?;
     fs::DirBuilder::new()
         .recursive(true)
@@ -174,9 +178,9 @@ pub(super) fn open_directory(directory: &std::path::Path) -> Result<Connection> 
         | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
         | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
         | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW;
-    let db = Connection::open_with_flags(&file, flags)?;
+    let db = Connection::open_with_flags(file, flags)?;
     if !exists {
-        fs::set_permissions(&file, fs::Permissions::from_mode(0o600))?;
+        fs::set_permissions(file, fs::Permissions::from_mode(0o600))?;
     }
     db.execute_batch(SCHEMA)?;
     db.execute_batch(super::lane_queue::SCHEMA)?;

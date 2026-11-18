@@ -24,6 +24,8 @@ pub(crate) trait ToolHost {
         name: &str,
         args: &Value,
     ) -> std::result::Result<Value, String>;
+    /// The turn's usage so far, after each model request pi reports.
+    fn usage(&mut self, _usage: &Usage) {}
 }
 
 pub(crate) struct TurnRequest {
@@ -88,6 +90,16 @@ struct Partial {
 }
 
 impl Partial {
+    /// Charge one model request pi reported: an assistant message or a
+    /// compaction summary, so a crash before `turn_result` still pays for both.
+    fn record(&mut self, event: &Value) -> bool {
+        let charged = matches!(event["kind"].as_str(), Some("message" | "compaction_end"))
+            && event["usage"].is_object();
+        if charged {
+            self.charge(&event["usage"]);
+        }
+        charged
+    }
     fn charge(&mut self, usage: &Value) {
         let count = |field: &str| usage[field].as_u64().unwrap_or(0);
         self.usage.input += count("input");
@@ -141,6 +153,14 @@ impl AgentClient {
     pub(crate) fn spawn(settings: &AgentSettings, extra: &[std::ffi::OsString]) -> Result<Self> {
         let started = Instant::now();
         let mut command = Command::new(&settings.node);
+        // Nothing inherited: no provider keys or cloud credentials reach pi
+        // unless the owner names them in `pass_env`.
+        command.env_clear().env("HOME", &settings.agent_dir);
+        for name in std::iter::once("PATH").chain(settings.pass_env.iter().map(String::as_str)) {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
         command
             .arg(&settings.entry)
             .arg("--agent-dir")
@@ -298,7 +318,10 @@ impl AgentClient {
         let mut deadline = started + allowance.timeout;
         let mut aborted: Option<&'static str> = None;
         loop {
-            let calls = spent.calls + partial.usage.calls;
+            if aborted.is_some() && Instant::now() >= deadline {
+                return Err("agent_turn_unresponsive".into());
+            }
+            let calls = spent.calls.saturating_add(partial.usage.calls);
             let cost_usd = spent.cost_usd + partial.usage.cost_usd;
             if aborted.is_none() {
                 let reason = if Instant::now() >= deadline {
@@ -321,9 +344,6 @@ impl AgentClient {
                 }
             }
             let Some(message) = self.next(POLL)? else {
-                if aborted.is_some() && Instant::now() >= deadline {
-                    return Err("agent_turn_unresponsive".into());
-                }
                 continue;
             };
             match message {
@@ -363,8 +383,8 @@ impl AgentClient {
                     });
                 }
                 FromAgent::Event { turn_id, event, .. } if turn_id == request.id => {
-                    if event["kind"] == "message" {
-                        partial.charge(&event["usage"]);
+                    if partial.record(&event) {
+                        host.usage(&partial.usage);
                     }
                     if partial.events.len() < MAX_EVENTS {
                         partial.events.push(event);
@@ -407,7 +427,18 @@ impl AgentClient {
                             .push(json!({"kind":"protocol_error","error":error}));
                     }
                 }
-                _ => return Err("agent_protocol_invalid".into()),
+                // A late line from an earlier, already settled turn. It is
+                // recorded and dropped; its tool call is never served.
+                FromAgent::ToolCall { turn_id, .. }
+                | FromAgent::Event { turn_id, .. }
+                | FromAgent::TurnResult { id: turn_id, .. } => {
+                    if partial.events.len() < MAX_EVENTS {
+                        partial
+                            .events
+                            .push(json!({"kind":"stale_line","turn_id":turn_id}));
+                    }
+                }
+                FromAgent::Ready { .. } => return Err("agent_protocol_invalid".into()),
             }
         }
     }
@@ -435,6 +466,112 @@ impl Drop for AgentClient {
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
             let _ = child.wait();
+        }
+    }
+}
+
+/// Turn errors after which the process is not trusted with another turn.
+const FATAL: [&str; 4] = [
+    "agent_exited",
+    "agent_turn_unresponsive",
+    "agent_protocol_invalid",
+    "agent_protocol_version",
+];
+const RESTART_MIN_MS: i64 = 1_000;
+const RESTART_MAX_MS: i64 = 60_000;
+
+pub(crate) type Spawner = Box<dyn FnMut() -> Result<AgentClient> + Send>;
+
+/// The agent process under supervision. A process that dies, hangs or breaks
+/// the protocol is killed and started again after a bounded backoff; the turn
+/// it was serving ends as an error and is never sent again.
+pub(crate) struct Agent {
+    spawn: Spawner,
+    client: Option<AgentClient>,
+    failures: u32,
+    retry_at_ms: i64,
+}
+
+impl Agent {
+    pub(crate) fn new(spawn: Spawner) -> Self {
+        Self {
+            spawn,
+            client: None,
+            failures: 0,
+            retry_at_ms: 0,
+        }
+    }
+
+    pub(crate) fn pid(&self) -> Option<u32> {
+        self.client.as_ref().and_then(AgentClient::pid)
+    }
+
+    pub(crate) fn restarts(&self) -> u32 {
+        self.failures
+    }
+
+    /// When a stopped process may start again; `None` while one runs.
+    pub(crate) fn retry_at_ms(&self) -> Option<i64> {
+        self.client.is_none().then_some(self.retry_at_ms)
+    }
+
+    fn fail(&mut self, now_ms: i64) {
+        self.client = None;
+        self.failures = self.failures.saturating_add(1);
+        let backoff = RESTART_MIN_MS
+            .saturating_mul(1 << self.failures.saturating_sub(1).min(6))
+            .min(RESTART_MAX_MS);
+        self.retry_at_ms = now_ms.saturating_add(backoff);
+    }
+
+    /// The running process, started first when there is none and the backoff
+    /// after the last failure has passed.
+    pub(crate) fn client(&mut self, now_ms: i64) -> Result<&mut AgentClient> {
+        if self.client.is_none() {
+            if now_ms < self.retry_at_ms {
+                return Err("agent_restart_backoff".into());
+            }
+            match (self.spawn)() {
+                Ok(client) => self.client = Some(client),
+                Err(error) => {
+                    self.fail(now_ms);
+                    return Err(error);
+                }
+            }
+        }
+        self.client
+            .as_mut()
+            .ok_or_else(|| "agent_unavailable".into())
+    }
+
+    pub(crate) fn run_turn(
+        &mut self,
+        now_ms: i64,
+        request: &TurnRequest,
+        host: &mut dyn ToolHost,
+        spent: &Usage,
+        allowance: Allowance,
+        preempt: &dyn Fn() -> bool,
+    ) -> Result<TurnOutcome> {
+        let outcome = self
+            .client(now_ms)?
+            .run_turn(request, host, spent, allowance, preempt)?;
+        if outcome
+            .error
+            .as_deref()
+            .is_some_and(|error| FATAL.contains(&error))
+        {
+            self.fail(now_ms);
+        } else {
+            self.failures = 0;
+        }
+        Ok(outcome)
+    }
+
+    pub(crate) fn shutdown(mut self) -> Result<()> {
+        match self.client.take() {
+            Some(client) => client.shutdown(),
+            None => Ok(()),
         }
     }
 }

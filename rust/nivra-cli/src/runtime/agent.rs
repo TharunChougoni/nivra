@@ -6,13 +6,19 @@ use super::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod brief;
 pub(crate) mod check;
 mod client;
 mod lanes;
 mod protocol;
+mod requests;
+pub(crate) mod service;
 mod tools;
+mod triggers;
+pub(crate) mod turn_cli;
 
-pub(crate) use client::AgentClient;
+pub(crate) use client::{Agent, AgentClient};
+pub(crate) use triggers::{Ranked, TriggerSettings};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -66,6 +72,22 @@ fn default_max_tool_calls() -> usize {
     40
 }
 
+/// What a validated decision plan may do.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AgentMode {
+    /// Plans are validated and journalled, never executed. The harness keeps
+    /// trading unchanged.
+    #[default]
+    Shadow,
+}
+
+impl AgentMode {
+    fn is_shadow(&self) -> bool {
+        *self == Self::Shadow
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentSettings {
@@ -79,6 +101,14 @@ pub(crate) struct AgentSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompts: Option<PathBuf>,
     pub lanes: BTreeMap<Lane, LaneSettings>,
+    #[serde(default, skip_serializing_if = "AgentMode::is_shadow")]
+    pub mode: AgentMode,
+    /// Environment variable names passed to the agent, such as a key that
+    /// `models.json` reads. Nothing else is inherited besides `PATH`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pass_env: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triggers: Option<TriggerSettings>,
 }
 
 impl AgentSettings {
@@ -96,12 +126,24 @@ impl AgentSettings {
                     && lane.daily_cost_usd > 0.0
                     && (1_000..=3_600_000).contains(&lane.turn_timeout_ms)
                     && (1..=200).contains(&lane.max_tool_calls)
-            });
+            })
+            && self.pass_env.len() <= 16
+            && self.pass_env.iter().all(|name| {
+                (1..=64).contains(&name.len())
+                    && name
+                        .bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+                    && !matches!(name.as_str(), "PATH" | "HOME")
+            })
+            && self.triggers.as_ref().is_none_or(TriggerSettings::validate);
         if ok {
             Ok(())
         } else {
             Err("agent_settings_invalid".into())
         }
+    }
+    pub(crate) fn triggers(&self) -> TriggerSettings {
+        self.triggers.clone().unwrap_or_default()
     }
     pub(crate) fn lane(&self, lane: Lane) -> Result<&LaneSettings> {
         self.lanes

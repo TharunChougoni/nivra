@@ -309,7 +309,7 @@ fn candidate_observation_enabled(cfg: &PlannerConfig) -> bool {
         .is_some_and(|observation| observation.enabled)
 }
 
-fn candidate_tools_enabled(cfg: &PlannerConfig) -> bool {
+pub(super) fn candidate_tools_enabled(cfg: &PlannerConfig) -> bool {
     cfg.research_tools.as_ref().is_some_and(|settings| {
         settings.admission_limits.is_some()
             && settings
@@ -547,9 +547,9 @@ fn owner_task_id_ok(value: &str) -> bool {
 #[serde(deny_unknown_fields)]
 pub(super) struct OwnerResearchEnqueueArgs {
     pub(super) task_key: String,
-    goal: String,
-    analysis_id: String,
-    dataset_id: String,
+    pub(super) goal: String,
+    pub(super) analysis_id: String,
+    pub(super) dataset_id: String,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -883,8 +883,10 @@ pub(super) fn research_quote_capture(
         .ok_or("harness_quote_capture_disabled")?;
     settings.validate()?;
     let keys = keys.into_iter().collect::<std::collections::BTreeSet<_>>();
+    // The archive source is the book directory (universe and journal), as
+    // for candidate maturity; never the journal file itself.
     let archived = super::super::paper_replay::candidate_quotes(
-        &c.directory.join("paper.sqlite"),
+        &c.directory,
         c.session,
         &keys,
         from_ms,
@@ -1153,13 +1155,15 @@ pub(super) fn checked_call_with(
 /// Every call-time tool this configuration enables, under its existing name
 /// and schema, for the pi agent bridge. The harness's config gates apply; the
 /// bridge narrows the set per lane.
-pub(crate) fn bridge_definitions(cfg: &PlannerConfig) -> Result<Vec<Value>> {
+pub(crate) fn bridge_definitions(cfg: &PlannerConfig, lane_requests: bool) -> Result<Vec<Value>> {
     let limits = cfg.effective_tools();
     let mut tools = configured_definitions_with("digest", &[], true, &limits)?;
     let candidate = candidate_tools_enabled(cfg);
     let web = cfg.web_tools.as_ref().filter(|web| web.enabled);
+    let analysis = cfg.research_tools.is_some();
     let owner = OwnerTools {
-        research: cfg.research_tools.is_some(),
+        // Status, result and cancel also answer the pi lanes' own requests.
+        research: analysis || lane_requests,
         research_turn: false,
         quote_capture: quote_capture_enabled(cfg),
         candidate,
@@ -1173,7 +1177,7 @@ pub(crate) fn bridge_definitions(cfg: &PlannerConfig) -> Result<Vec<Value>> {
         web: web.is_some(),
         web_search: web.is_some_and(|settings| settings.search_available()),
         web_news: web.is_some_and(|settings| settings.news_available()),
-        research_request: super::super::lane_queue::lane_settings(cfg).is_some(),
+        research_request: lane_requests,
     };
     tools.extend(call_tool_definitions(
         "supervisor",
@@ -1182,5 +1186,6 @@ pub(crate) fn bridge_definitions(cfg: &PlannerConfig) -> Result<Vec<Value>> {
         &limits,
         owner,
     )?);
+    tools.retain(|tool| analysis || tool["name"] != "research_task_enqueue");
     Ok(tools)
 }

@@ -232,6 +232,8 @@ enum Command {
     /// Offline pi agent check: one decision turn, its research request and the
     /// next decision turn against the scripted fake provider; never trades.
     AgentCheck(runtime::agent::check::Args),
+    /// Inspect the brief or run one shadow pi turn against the current book.
+    AgentTurn(runtime::agent::turn_cli::Args),
     /// Quick offline binary/storage self-check; never opens a session.
     SelfCheck {
         #[arg(long)]
@@ -663,6 +665,7 @@ fn main() -> ExitCode {
             }
         }
         Command::AgentCheck(args) => runtime::agent::check::run(args),
+        Command::AgentTurn(args) => runtime::agent::turn_cli::run(args),
         Command::SelfCheck { expected_version } => self_check(expected_version.as_deref()),
         Command::MemoryCheck { evidence } => memory_check(&evidence),
         Command::Retention {

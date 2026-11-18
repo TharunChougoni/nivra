@@ -124,11 +124,14 @@ impl WorkspaceRefV1 {
     }
 }
 /// Research turns may only write notes/skills. Decision turns keep the existing
-/// notes/skills/reports/data/journal scope.
+/// notes/skills/reports/data/journal scope. The pi research lane writes like a
+/// research turn and may also run and install owner-allowlisted tools, both in
+/// the no-network sandbox.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WorkspaceScope {
     Decision,
     Research,
+    ResearchSandbox,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -509,7 +512,7 @@ fn write_file(
 ) -> Result<Value> {
     let allowed = match scope {
         WorkspaceScope::Decision => write_allowed,
-        WorkspaceScope::Research => research_write_allowed,
+        WorkspaceScope::Research | WorkspaceScope::ResearchSandbox => research_write_allowed,
     };
     put_file(root, settings, path, text, allowed)
 }

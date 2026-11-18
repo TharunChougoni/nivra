@@ -1,15 +1,14 @@
 # pi agent lanes
 
 Paper only. This guide describes the opt-in pi agent service on the
-`pi-harness` branch. [pi](https://github.com/earendil-works/pi) owns every model
-call: providers, sessions, compaction and cost. Rust keeps market data, the
-scanner, the book, fills, freshness, quotas, budgets, plan validation and the
-sandbox. Without a `planner.agent` block no agent process starts and the
-existing [model harness](MODEL_HARNESS.md) runs unchanged.
+`pi-harness` branch. [pi](https://github.com/earendil-works/pi) owns provider
+calls, sessions, compaction, and usage for its three lanes. Rust owns market
+data, the scanner, the book, fills, freshness, quotas, budgets, plan
+validation, and the sandbox.
 
-Phase 1 delivers the service, the protocol, the tool bridge, the lanes and an
-offline end-to-end check. The controller does not yet start lane turns from
-market events; that wiring is Phase 2.
+Add a `planner.agent` block to enable shadow turns. The existing model
+harness retains paper decision authority. The pi decision lane journals
+validated proposals for comparison. [Model harness](MODEL_HARNESS.md)
 
 ## How it fits together
 
@@ -87,26 +86,19 @@ table row makes it available to pi with no Node change.
 research for itself. A call to a tool outside the lane returns
 `agent_tool_not_in_lane` before any executor runs.
 
-Every call goes through `checked_call_with` (strict arguments, call id, size),
-a durable claim file and the existing executor, and its result is archived under
-`model/agent/turns/<turn>/`. The turn binds the bundle the existing authority
-checks read: decision turns use the decision binding; research and review turns
-use the research binding, narrowed by their allowlists.
-
-Today's executors still refuse some lane and tool pairs. The bridge reaches
-them and returns their reason code:
-
-| Tools | Lanes | Reason | Unblocked by |
-| --- | --- | --- | --- |
-| `analysis`, `research_status`, `research_result`, `research_cancel` | all | `harness_owner_research_scope_invalid`: these need a durable owner claim that pi turns do not hold | Phase 2 decision claims |
-| `run`, `install` | research | `workspace_research_scope_invalid` | Phase 4 research sandbox |
-| `search`, `fetch`, `news` | research | `harness_web_tools_scope_invalid` | a reviewed web policy for research |
+Rust validates each tool's arguments and writes a durable claim before any
+tool effect. The tool result is archived under `model/agent/turns/<turn>/`.
+Registered analysis requires a reviewed analysis and dataset. Workspace runs
+and installs require their corresponding allowlist entries. Web tools use the
+configured web policy. Tools that depend on missing evidence or artifacts
+return their executor's reason code.
 
 `plan` returns `{status:"validated", verdicts, execution_authorized:false}`.
 Each verdict carries the existing per-action reason (`accepted`,
 `action_allowlist`, …). A schema failure returns an error such as
 `planner_json_invalid`, and the model may submit again. A validated plan is a
-proposal; Phase 1 records it in the turn journal and executes nothing.
+proposal. The last attempt in a turn supersedes earlier attempts, including
+when validation refuses it.
 
 ## Lanes and sessions
 
@@ -114,13 +106,14 @@ proposal; Phase 1 records it in the turn journal and executes nothing.
   `research_updates`, the research answers not yet delivered. They are marked
   delivered once the turn completes.
 - **Research**: answers queued `research` requests. Rust claims each request
-  in the existing lane queue (`lane_queue`), runs one research turn with the
-  question as the brief, stores the answer at
+  in `model/agent/requests.sqlite`, runs a research turn with the question
+  in its brief, stores the answer at
   `model/agent/research/<request>.json`, posts a bounded `research_result`
   message for the next decision brief and marks the request done. A failed or
   pre-empted turn fails the request; the decision lane may ask again.
-- **Review**: reads the session after close and returns memory text. Its
-  trigger (`seal`) is Phase 2 work.
+- **Review.** The session seal requests one review turn. Its text is saved
+  as memory for that book and can trigger a research agenda. Carrying the
+  memory into a new session directory is pending.
 
 Each lane has its own system prompt (`agent/prompts/<lane>.md`, condensed from
 the orchestrator, research and review prompts) and one pi session per session
@@ -128,8 +121,9 @@ date under `model/agent/pi/<lane>/`. pi persists the session as JSONL,
 continues it across turns and agent restarts, and compacts it when the context
 fills. A changed tool set reopens the same session file.
 
-The existing `lane_queue` is reused as is. The `owner_tasks` research
-scheduler is not: its turns run on the old harness.
+The pi queue uses the same message format as the existing lane queue and a
+separate database. The `owner_tasks` scheduler continues to serve the
+existing harness.
 
 ## Budgets and scheduling
 
@@ -146,6 +140,15 @@ scheduler is not: its turns run on the old harness.
 - Every turn appends a line to `model/agent/turns.ndjson`: trigger, status,
   model, provider, usage, tool calls, the validated plan and the pi session
   file.
+
+The controller records fired, dispatched, deferred, and skipped triggers in
+`model/agent/triggers.ndjson`. Decision triggers include position risk,
+fill batches, candidates that persist across distinct ranking passes, and
+scheduled checks. Rust merges queued triggers and gives decision turns
+priority. The research lane can wake for a request, quiet period, or review
+agenda. Ranker drift requires paired live and backtest measurements from the
+promoted-ranker registry, which is pending. Shadow proposals are in
+`model/agent/plans.ndjson`.
 
 ## Configuration
 
@@ -169,13 +172,17 @@ scheduler is not: its turns run on the old harness.
 
 All paths are absolute. `agent_dir` holds pi's `auth.json` (subscription
 OAuth tokens, API keys) and optional `models.json`; only the agent process
-reads it. Optional fields: `prompts` (a directory with `decision.md`,
-`research.md`, `review.md`), `turn_timeout_ms` (default 180000) and
-`max_tool_calls` (default 40).
+reads it. The `prompts` setting can point to a directory with `decision.md`,
+`research.md`, and `review.md`. Use `pass_env` to allowlist environment
+variables that pi needs for a configured provider. Each lane can override
+`turn_timeout_ms` (default 180000) and `max_tool_calls` (default 40).
+The optional `triggers` object has `decision`, `research`, and `review`
+settings. Decision defaults include a top-five shortlist, two distinct
+ranking passes, and a 15-minute cooldown.
 
 Switching models is a config change: edit a lane's `provider` and `id`.
-There is no automatic fallback. To fall back to DeepSeek, change the lane's
-model to `deepseek`; pi resolves it on the next turn and keeps the session.
+To switch to DeepSeek, change the lane's model and reload the controller
+through its normal session procedure. Pi resumes the lane's session.
 
 ## Offline check
 
@@ -265,7 +272,8 @@ The service needs Node 22.19 or later. These steps do not start trading.
    ```
 
    Any other OpenAI-compatible endpoint goes in `/var/lib/nivra/pi/models.json`;
-   its key comes from the service environment:
+   Set its key in the service environment and add the variable name to
+   `planner.agent.pass_env`.
 
    ```json
    { "providers": { "my-endpoint": {
@@ -284,5 +292,15 @@ The service needs Node 22.19 or later. These steps do not start trading.
    Change `lanes.decision.model` from `openai-codex`/`gpt-6.1-sol` to
    `deepseek`/`deepseek-v4-pro` to switch; nothing else changes.
 
-A live decision turn on the VM needs the Phase 2 controller wiring or a
-dedicated live-turn command; neither exists yet.
+## Inspect or run one shadow turn
+
+Use `--dry` to inspect the brief and published tools from the current book.
+
+```sh
+nivra agent-turn --config PAPER_CONFIG.json --lane decision --dry
+```
+
+With the controller stopped, omit `--dry` to call the configured provider
+once. The command acquires the controller lock, charges the lane's daily
+budget, and records any decision plan as a shadow proposal. Decision turns
+require current-session evidence during the configured trading window.

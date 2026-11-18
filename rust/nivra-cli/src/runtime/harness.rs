@@ -10,7 +10,7 @@ use std::os::unix::fs::DirBuilderExt;
 mod tools;
 pub(crate) use tools::*;
 mod bridge;
-pub(crate) use bridge::{Bridge, failure_reason};
+pub(crate) use bridge::{Bridge, LaneGrant, LaneRequests, failure_reason};
 mod bundle;
 use bundle::*;
 mod failure_window;

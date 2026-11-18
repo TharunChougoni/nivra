@@ -263,30 +263,37 @@ pub(super) fn checkpoint_scanner(db: &Connection, s: &Scanner) -> Result<()> {
     )?;
     Ok(())
 }
-pub(super) fn load_wide(db: &mut Connection, c: &Config) -> Result<Portfolio> {
+/// The book's persisted portfolio, reconciled; `None` before the first persist.
+/// Reads only, so a read-only view of the live book can use it.
+pub(super) fn stored_portfolio(db: &Connection, c: &Config) -> Result<Option<Portfolio>> {
     let record: Option<(String, String)> = db
         .query_row("SELECT binding,body FROM state WHERE id=1", [], |r| {
             Ok((r.get(0)?, r.get(1)?))
         })
         .optional()?;
-    let expected_binding = book_binding(c)?;
-    if let Some((binding, _)) = &record
-        && binding != &expected_binding
-    {
-        if super::cost_policy_only_change(c, db, binding) {
+    let Some((binding, body)) = record else {
+        return Ok(None);
+    };
+    if binding != book_binding(c)? {
+        if super::cost_policy_only_change(c, db, &binding) {
             return Err("paper_cost_policy_changed".into());
         }
         return Err("state_binding_changed".into());
     }
-    if let Some((_, body)) = record {
-        let mut p: Portfolio = serde_json::from_str(&body)?;
-        p.settings = c.execution.clone();
-        p.reconcile()?;
-        if c.paper_costs.is_none() || c.paper_costs != p.costs {
-            return Err("paper_cost_policy_changed".into());
-        }
+    let mut p: Portfolio = serde_json::from_str(&body)?;
+    p.settings = c.execution.clone();
+    p.reconcile()?;
+    if c.paper_costs.is_none() || c.paper_costs != p.costs {
+        return Err("paper_cost_policy_changed".into());
+    }
+    Ok(Some(p))
+}
+
+pub(super) fn load_wide(db: &mut Connection, c: &Config) -> Result<Portfolio> {
+    if let Some(p) = stored_portfolio(db, c)? {
         return Ok(p);
     }
+    let expected_binding = book_binding(c)?;
     let carry = c.directory.join("carry-over.json");
     if carry.exists() {
         let value: serde_json::Value = serde_json::from_slice(

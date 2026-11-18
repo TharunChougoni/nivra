@@ -1,0 +1,619 @@
+//! The controller's side of the pi lanes. Each scan cycle feeds the trigger
+//! engine; a due lane turn runs on one worker thread that owns the agent
+//! process, so the controller loop never waits on a model. A decision plan is
+//! journalled as a proposal, with no execution authority.
+use super::brief::{self, Brief, Facts, SessionFacts};
+use super::client::{Agent, AgentClient};
+use super::lanes::{self, LaneRunner, TurnContext};
+use super::protocol::{TurnStatus, Usage};
+use super::requests::Requests;
+use super::tools::PlanAttempt;
+use super::triggers::{
+    Observation, Phase, Ranked, Trigger, TriggerEngine, TriggerKind, ranker_registry,
+};
+use super::{AgentMode, AgentSettings, Lane};
+use crate::runtime::planner::{self, Backend, ModelRole, PlannerConfig};
+use crate::runtime::{Config, Result, decision_evidence};
+use nivra_core::execution::{Instrument, Portfolio, Scanner};
+use nivra_core::feature_store::FeatureStore;
+use serde_json::{Value, json};
+use std::collections::BTreeMap;
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, channel, sync_channel};
+use std::thread::JoinHandle;
+
+const CONTEXT_RETRY_MS: i64 = 5_000;
+
+/// Serves intraday context from the controller's frozen evidence snapshot.
+/// It never calls a model: pi owns every model call.
+pub(crate) struct LaneBackend(pub Option<decision_evidence::Snapshot>);
+
+impl Backend for LaneBackend {
+    fn call(&mut self, _role: &ModelRole, _prompt: &str) -> Result<String> {
+        Err("agent_backend_has_no_model".into())
+    }
+    fn intraday_context(&mut self, keys: &[String], at: i64) -> Option<Result<Value>> {
+        self.0.as_ref().map(|snapshot| snapshot.read(keys, at))
+    }
+}
+
+/// The live ranking from a discovery projection: its prospects, best first,
+/// scored by the selected strategy or else the sampled move in bps.
+pub(crate) fn ranking(projection: &Value) -> Vec<Ranked> {
+    projection["prospects"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            Some(Ranked {
+                instrument_key: row["instrument_key"].as_str()?.to_owned(),
+                score: row["strategy_score"]
+                    .as_f64()
+                    .or_else(|| row["sample_change_bps"].as_f64())
+                    .filter(|score| score.is_finite())?,
+            })
+        })
+        .collect()
+}
+
+/// Everything one scan cycle offers the lanes.
+pub(crate) struct Cycle<'a> {
+    pub c: &'a Config,
+    pub cfg: &'a PlannerConfig,
+    pub now: i64,
+    pub minute: u32,
+    pub sealed: bool,
+    pub portfolio: &'a Portfolio,
+    pub instruments: &'a [Instrument],
+    pub ranking: &'a [Ranked],
+    pub ranked_at: i64,
+    pub decision_ready: bool,
+    pub scanner: &'a Scanner,
+    pub store: &'a FeatureStore,
+    pub index: Option<Value>,
+}
+
+struct Job {
+    c: Config,
+    cfg: PlannerConfig,
+    work: Work,
+}
+
+struct Work {
+    lane: Lane,
+    triggers: Vec<Trigger>,
+    brief: Brief,
+    context: TurnContext,
+}
+
+/// One finished job, as the controller settles it.
+pub(crate) struct Done {
+    pub lane: Lane,
+    pub triggers: Vec<Trigger>,
+    pub turns: Vec<Value>,
+    pub plan: Option<(String, PlanAttempt)>,
+    pub review: Option<String>,
+    pub error: Option<String>,
+    /// The agent is restarting; the batch may run again from this time.
+    pub retry_at_ms: Option<i64>,
+}
+
+pub(crate) struct LaneService {
+    mode: AgentMode,
+    settings: AgentSettings,
+    engine: TriggerEngine,
+    jobs: Option<SyncSender<Job>>,
+    done: Receiver<Done>,
+    worker: Option<JoinHandle<()>>,
+    preempt: Arc<AtomicBool>,
+    busy: Option<Lane>,
+    hold_until_ms: i64,
+    agenda: Option<String>,
+    status: Value,
+}
+
+fn append(c: &Config, file: &str, line: &Value) -> Result<()> {
+    let root = lanes::root(c);
+    lanes::private_dir(&root)?;
+    let mut out = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(root.join(file))?;
+    writeln!(out, "{line}")?;
+    Ok(out.sync_all()?)
+}
+
+fn primary(triggers: &[Trigger]) -> Value {
+    let first = triggers.first();
+    json!({"kind":first.map(|t| t.kind),"reason":first.map(|t| t.reason.as_str()),"triggers":triggers})
+}
+
+fn turn_summary(turn: &lanes::LaneTurn) -> Value {
+    json!({"turn_id":turn.outcome.id,"lane":turn.outcome.lane,"status":turn.outcome.status,
+        "error":turn.outcome.error,"usage":turn.outcome.usage,"model":turn.outcome.model,
+        "provider":turn.outcome.provider,"tool_calls":turn.outcome.tool_calls.len(),
+        "elapsed_ms":turn.outcome.elapsed_ms})
+}
+
+/// Run one job on the worker's agent. Research batches answer every queued
+/// request; any other research trigger gets one turn about its task.
+fn run(runner: &mut LaneRunner<'_>, job: &mut Work) -> Done {
+    let trigger = primary(&job.triggers);
+    let mut done = Done {
+        lane: job.lane,
+        triggers: job.triggers.clone(),
+        turns: Vec::new(),
+        plan: None,
+        review: None,
+        error: None,
+        retry_at_ms: None,
+    };
+    let result = (|| -> Result<()> {
+        match job.lane {
+            Lane::Decision => {
+                let turn = runner.decision(trigger, job.brief.clone(), &mut job.context)?;
+                done.turns.push(turn_summary(&turn));
+                if let Some(plan) = turn.plan {
+                    done.plan = Some((turn.outcome.id.clone(), plan));
+                }
+            }
+            Lane::Research => {
+                if job.triggers.iter().any(|t| t.kind == TriggerKind::Request) {
+                    for turn in runner.research_requests(&trigger, &job.brief, &mut job.context)? {
+                        done.turns.push(turn_summary(&turn));
+                    }
+                }
+                if job.triggers.iter().any(|t| t.kind != TriggerKind::Request)
+                    && !runner.preempt.load(Ordering::Acquire)
+                {
+                    let turn = runner.turn(
+                        Lane::Research,
+                        trigger.clone(),
+                        json!(job.brief.render()?),
+                        &mut job.context,
+                    )?;
+                    done.turns.push(turn_summary(&turn));
+                }
+            }
+            Lane::Review => {
+                let turn = runner.review(trigger, &job.brief, &mut job.context)?;
+                done.turns.push(turn_summary(&turn));
+                if turn.outcome.status == TurnStatus::Ok {
+                    let text = crate::runtime::transcript::redact(&json!(turn.outcome.text));
+                    done.review = text.as_str().map(str::to_owned);
+                }
+            }
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let reason = error.to_string();
+        if reason == "agent_restart_backoff" {
+            done.retry_at_ms = runner.agent.retry_at_ms();
+        }
+        done.error = Some(reason);
+    }
+    done
+}
+
+fn work(
+    settings: AgentSettings,
+    preempt: Arc<AtomicBool>,
+    jobs: Receiver<Job>,
+    out: std::sync::mpsc::Sender<Done>,
+) {
+    let spawn_settings = settings.clone();
+    let mut agent = Agent::new(Box::new(move || AgentClient::spawn(&spawn_settings, &[])));
+    let clock = crate::runtime::millis;
+    for job in jobs {
+        let Job { c, cfg, mut work } = job;
+        let mut runner = LaneRunner::new(&mut agent, &settings, &c, &cfg, &clock);
+        runner.preempt = preempt.clone();
+        let done = run(&mut runner, &mut work);
+        drop(runner);
+        if out.send(done).is_err() {
+            break;
+        }
+    }
+    let _ = agent.shutdown();
+}
+
+impl LaneService {
+    /// `None` without a `planner.agent` block: no agent process, no triggers.
+    pub(crate) fn start(cfg: &PlannerConfig) -> Option<Self> {
+        let settings = cfg.agent.clone()?;
+        let (jobs, inbox) = sync_channel(1);
+        let (out, done) = channel();
+        let preempt = Arc::new(AtomicBool::new(false));
+        let worker_settings = settings.clone();
+        let worker_preempt = preempt.clone();
+        let worker = std::thread::Builder::new()
+            .name("nivra-agent-lanes".into())
+            .spawn(move || work(worker_settings, worker_preempt, inbox, out))
+            .ok()?;
+        Some(Self {
+            mode: settings.mode,
+            engine: TriggerEngine::new(settings.triggers()),
+            settings,
+            jobs: Some(jobs),
+            done,
+            worker: Some(worker),
+            preempt,
+            busy: None,
+            hold_until_ms: 0,
+            agenda: None,
+            status: json!({"status":"idle"}),
+        })
+    }
+
+    pub(crate) fn status(&self) -> Value {
+        self.status.clone()
+    }
+
+    fn spent(&self, c: &Config) -> BTreeMap<Lane, Usage> {
+        lanes::spend(c)
+    }
+
+    fn fraction(&self, lane: Lane, spent: &BTreeMap<Lane, Usage>) -> f64 {
+        let Ok(settings) = self.settings.lane(lane) else {
+            return 1.0;
+        };
+        let used = spent.get(&lane).cloned().unwrap_or_default();
+        (used.calls as f64 / settings.daily_calls as f64)
+            .max(used.cost_usd / settings.daily_cost_usd)
+            .clamp(0.0, 1.0)
+    }
+
+    /// One scan cycle: settle a finished turn, evaluate triggers and start the
+    /// next due turn. Lane failures are journalled; they never stop trading.
+    pub(crate) fn tick(&mut self, cycle: &Cycle<'_>) -> Result<()> {
+        let c = cycle.c;
+        match self.done.try_recv() {
+            Ok(done) => self.settle(cycle, done)?,
+            Err(TryRecvError::Disconnected) if self.busy.is_some() => {
+                self.busy = None;
+                self.status = json!({"status":"unavailable","reason":"agent_worker_exited"});
+            }
+            Err(_) => {}
+        }
+        let spent = self.spent(c);
+        let mut held = brief::held(cycle.portfolio);
+        held.retain(|position| {
+            cycle
+                .portfolio
+                .positions
+                .get(&position.instrument_key)
+                .is_some_and(|position| {
+                    cycle
+                        .now
+                        .checked_sub(position.marked_at)
+                        .is_some_and(|age| {
+                            (0..=nivra_core::market::MAX_FINANCIAL_AGE_MS).contains(&age)
+                        })
+                })
+        });
+        let in_session = crate::runtime::local(cycle.now).date_naive() == c.session;
+        let phase = if (in_session && cycle.decision_ready) || cycle.sealed {
+            Phase::at(
+                cycle.minute,
+                c.execution.session_start_minute,
+                self.engine.settings().decision.pre_close_minute,
+                c.execution.session_end_minute,
+                cycle.sealed,
+            )
+        } else {
+            Phase::Closed
+        };
+        let research = self.settings.lanes.contains_key(&Lane::Research);
+        let requests = if research {
+            Requests::new(c, &self.engine.settings().research)
+                .queued(cycle.now, 1)?
+                .len()
+        } else {
+            0
+        };
+        let rankers = ranker_registry();
+        let fired = self.engine.observe(&Observation {
+            now: cycle.now,
+            minute: cycle.minute,
+            open_minute: c.execution.session_start_minute,
+            phase,
+            held: &held,
+            fills: cycle.portfolio.fills.len(),
+            ranking: cycle.ranking,
+            ranked_at: cycle.ranked_at,
+            decision_spent: self.fraction(Lane::Decision, &spent),
+            research_budget_left: research && self.fraction(Lane::Research, &spent) < 1.0,
+            requests_queued: requests,
+            rankers: &rankers,
+        });
+        for trigger in &fired {
+            append(
+                c,
+                "triggers.ndjson",
+                &json!({"event":"fired","lane":trigger.kind.lane(),"trigger":trigger}),
+            )?;
+        }
+        if self.busy.is_some_and(|lane| lane != Lane::Decision)
+            && phase.trading()
+            && self.fraction(Lane::Decision, &spent) < 1.0
+            && self.engine.decision_waiting()
+            && (!cycle.ranking.is_empty()
+                || !held.is_empty()
+                || fired.iter().any(|t| t.kind == TriggerKind::Fill))
+        {
+            self.preempt.store(true, Ordering::Release);
+        }
+        if self.busy.is_none() && cycle.now >= self.hold_until_ms {
+            self.dispatch(cycle, &held, phase, &spent)?;
+        }
+        Ok(())
+    }
+
+    fn skip(&self, c: &Config, lane: Lane, triggers: &[Trigger], reason: &str) -> Result<()> {
+        append(
+            c,
+            "triggers.ndjson",
+            &json!({"event":"skipped","lane":lane,"reason":reason,"triggers":triggers}),
+        )
+    }
+
+    fn dispatch(
+        &mut self,
+        cycle: &Cycle<'_>,
+        held: &[super::triggers::Held],
+        phase: Phase,
+        spent: &BTreeMap<Lane, Usage>,
+    ) -> Result<()> {
+        let c = cycle.c;
+        let Some((lane, triggers)) = self.engine.next() else {
+            return Ok(());
+        };
+        let Ok(settings) = self.settings.lane(lane) else {
+            return self.skip(c, lane, &triggers, "agent_lane_not_configured");
+        };
+        let p = cycle.portfolio;
+        if lane == Lane::Decision {
+            if !phase.trading() || p.halted || p.stopped || p.closed {
+                return self.skip(c, lane, &triggers, "agent_book_not_trading");
+            }
+            if cycle.ranking.is_empty()
+                && held.is_empty()
+                && !triggers
+                    .iter()
+                    .any(|trigger| trigger.kind == TriggerKind::Fill)
+            {
+                return self.skip(c, lane, &triggers, "agent_no_eligible_evidence");
+            }
+        }
+        if self.fraction(lane, spent) >= 1.0 {
+            return self.skip(c, lane, &triggers, "agent_budget_exhausted");
+        }
+        let Some(jobs) = self.jobs.as_ref() else {
+            return self.skip(c, lane, &triggers, "agent_worker_unavailable");
+        };
+        let context = match self.context(cycle) {
+            Ok(context) => context,
+            Err(error) => {
+                self.hold_until_ms = cycle.now.saturating_add(CONTEXT_RETRY_MS);
+                let entry = json!({"event":"deferred","lane":lane,"at_ms":cycle.now,
+                    "reason":crate::runtime::harness::failure_reason(error.as_ref()),
+                    "retry_at_ms":self.hold_until_ms,"triggers":triggers});
+                self.engine.requeue(lane, triggers);
+                return append(c, "triggers.ndjson", &entry);
+            }
+        };
+        if lane == Lane::Review && !self.claim_review(c)? {
+            return self.skip(c, lane, &triggers, "agent_review_already_ran");
+        }
+        let memory = lanes::memory(c).map(|(_, text)| text);
+        let facts = Facts {
+            session: SessionFacts {
+                date: c.session.to_string(),
+                phase,
+                minute: cycle.minute,
+                now_ms: cycle.now,
+            },
+            portfolio: p,
+            ranking: cycle.ranking,
+            memory: memory.as_deref(),
+            execution: "shadow_never_executed",
+        };
+        let used = spent.get(&lane).cloned().unwrap_or_default();
+        let budget = brief::budget(
+            lane,
+            &used,
+            settings.daily_calls,
+            settings.daily_cost_usd,
+            self.engine.entry_bar(self.fraction(Lane::Decision, spent)),
+        );
+        let consumes_agenda = lane == Lane::Research
+            && triggers
+                .iter()
+                .any(|trigger| trigger.kind == TriggerKind::Agenda);
+        let task = match lane {
+            Lane::Research if consumes_agenda => {
+                json!({"kind":"agenda","review":self.agenda})
+            }
+            Lane::Research => json!({"kind":triggers[0].kind}),
+            Lane::Review => json!({"kind":"review","session":c.session.to_string()}),
+            Lane::Decision => Value::Null,
+        };
+        let brief = Brief::build(&facts, budget, task, &triggers);
+        let job = Job {
+            c: c.clone(),
+            cfg: cycle.cfg.clone(),
+            work: Work {
+                lane,
+                triggers: triggers.clone(),
+                brief,
+                context,
+            },
+        };
+        self.preempt.store(false, Ordering::Release);
+        match jobs.try_send(job) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                self.engine.requeue(lane, triggers);
+                return Ok(());
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                self.jobs = None;
+                return self.skip(c, lane, &triggers, "agent_worker_unavailable");
+            }
+        }
+        if consumes_agenda {
+            self.agenda = None;
+        }
+        if lane == Lane::Decision {
+            self.engine.decision_started(cycle.now, held, cycle.ranking);
+        }
+        self.busy = Some(lane);
+        self.status = json!({"status":"running","lane":lane,"since_ms":cycle.now,"triggers":triggers.len(),"mode":self.mode});
+        append(
+            c,
+            "triggers.ndjson",
+            &json!({"event":"dispatched","lane":lane,"at_ms":cycle.now,"triggers":triggers}),
+        )
+    }
+
+    /// The seal runs one review per session date, never again after a crash.
+    fn claim_review(&self, c: &Config) -> Result<bool> {
+        let marker = lanes::root(c).join("review-claimed.json");
+        let session = json!(c.session.to_string());
+        let claimed = crate::read_bounded(&marker, 256)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+        if claimed.as_ref() == Some(&session) {
+            return Ok(false);
+        }
+        lanes::private_dir(&lanes::root(c))?;
+        crate::runtime::rollover::atomic(&marker, &session)?;
+        Ok(true)
+    }
+
+    fn context(&self, cycle: &Cycle<'_>) -> Result<TurnContext> {
+        let (bundle, _) = planner::call_time_input(
+            cycle.c,
+            cycle.cfg,
+            cycle.portfolio,
+            cycle.instruments,
+            &|| cycle.now,
+        )?;
+        let snapshot = cycle
+            .cfg
+            .decision_evidence
+            .as_ref()
+            .map(|settings| {
+                decision_evidence::Snapshot::capture(
+                    settings,
+                    cycle.c.session,
+                    cycle.now,
+                    cycle.instruments,
+                    cycle.scanner,
+                    cycle.store,
+                    cycle.index.clone(),
+                )
+            })
+            .transpose()?;
+        Ok(TurnContext {
+            bundle,
+            backend: Box::new(LaneBackend(snapshot)),
+            portfolio: cycle.portfolio.clone(),
+            instruments: cycle.instruments.to_vec(),
+            web: Box::new(crate::runtime::web_tools::Network),
+        })
+    }
+
+    fn settle(&mut self, cycle: &Cycle<'_>, done: Done) -> Result<()> {
+        let c = cycle.c;
+        self.busy = None;
+        self.preempt.store(false, Ordering::Release);
+        if let Some(retry_at) = done.retry_at_ms {
+            self.hold_until_ms = retry_at;
+            self.engine.requeue(done.lane, done.triggers.clone());
+        }
+        if let Some(text) = &done.review {
+            self.agenda = Some(text.chars().take(4_000).collect());
+            self.engine.push(Trigger::new(
+                TriggerKind::Agenda,
+                "review_agenda",
+                cycle.now,
+            ));
+        }
+        let plan = done.plan.as_ref().map(|(turn_id, attempt)| {
+            let status = match attempt {
+                PlanAttempt::Validated { .. } => "shadow_not_executed",
+                PlanAttempt::Refused { .. } => "refused_by_validation",
+            };
+            crate::runtime::transcript::redact(&json!({"status":status,"record":{
+                "turn_id":turn_id,"mode":self.mode,"at_ms":cycle.now,"attempt":attempt
+            }}))
+        });
+        self.status = json!({"status":"idle","last":{"lane":done.lane,"turns":done.turns,
+            "error":done.error,"plan":plan,"settled_ms":cycle.now},"mode":self.mode});
+        if let Some(plan) = plan {
+            append(c, "plans.ndjson", &plan)?;
+        }
+        Ok(())
+    }
+
+    /// Abort a running turn and wait for the worker to shut down its agent.
+    pub(crate) fn stop(mut self) {
+        self.jobs = None;
+        self.preempt.store(true, Ordering::Release);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_review_waits_for_context_before_claiming_the_seal() {
+        let dir = tempfile::tempdir().unwrap();
+        let (c, mut cfg) = crate::runtime::decision_owner::owner_fixture_config(dir.path());
+        cfg.agent = Some(super::super::tests::settings(10, 1.0));
+        cfg.decision_evidence = Some(decision_evidence::Settings {
+            max_age_ms: 0,
+            ..Default::default()
+        });
+        let mut service = LaneService::start(&cfg).unwrap();
+        let portfolio = crate::runtime::tests::test_portfolio();
+        let scanner = Scanner::default();
+        let store = FeatureStore::new(Default::default()).unwrap();
+        let cycle = Cycle {
+            c: &c,
+            cfg: &cfg,
+            now: 20_000,
+            minute: 930,
+            sealed: true,
+            portfolio: &portfolio,
+            instruments: &[],
+            ranking: &[],
+            ranked_at: 0,
+            decision_ready: false,
+            scanner: &scanner,
+            store: &store,
+            index: None,
+        };
+
+        service.tick(&cycle).unwrap();
+
+        assert!(service.busy.is_none());
+        assert!(!lanes::root(&c).join("review-claimed.json").exists());
+        assert_eq!(service.engine.next().unwrap().0, Lane::Review);
+        let journal = std::fs::read_to_string(lanes::root(&c).join("triggers.ndjson")).unwrap();
+        let deferred: Value = serde_json::from_str(journal.lines().last().unwrap()).unwrap();
+        assert_eq!(deferred["event"], "deferred");
+        assert_eq!(deferred["retry_at_ms"], cycle.now + CONTEXT_RETRY_MS);
+        service.stop();
+    }
+}

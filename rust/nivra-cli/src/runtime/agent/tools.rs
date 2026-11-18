@@ -1,10 +1,12 @@
 //! The generic tool bridge: pi-facing names, their Rust executors and lanes.
 use super::Lane;
 use super::client::ToolHost;
+use super::protocol::Usage;
 use crate::runtime::Result;
 use crate::runtime::harness::{Bridge, bridge_definitions, failure_reason};
 use crate::runtime::planner::{self, PlannerConfig};
 use nivra_core::execution::{Instrument, Portfolio};
+use serde::Serialize;
 use serde_json::{Value, json};
 
 const D: Lane = Lane::Decision;
@@ -27,9 +29,10 @@ const fn tool(name: &'static str, rust: &'static str, lanes: &'static [Lane]) ->
     }
 }
 
-/// One table maps every pi name to its Rust executor, so renaming the Rust
-/// internals later is mechanical. `research` stays out of the research lane:
-/// a research turn may not queue research for itself.
+/// One table maps every pi name to its Rust executor and the lanes that may
+/// call it, so renaming the Rust internals later is mechanical. `research`
+/// stays out of the research lane: a research turn may not queue research for
+/// itself. Writes, runs, installs and backtests belong to the research lane.
 pub(crate) const TOOLS: &[BridgeTool] = &[
     tool("evidence", "read_evidence", &[D, R, V]),
     tool("snapshot", "get_market_snapshot", &[D, R, V]),
@@ -108,9 +111,14 @@ fn plan_definition() -> Value {
 }
 
 /// The lane's tools as pi custom-tool specs: the existing Rust schema and
-/// description under the pi name, for every tool this config enables.
-pub(crate) fn lane_definitions(cfg: &PlannerConfig, lane: Lane) -> Result<Vec<Value>> {
-    let rust = bridge_definitions(cfg)?;
+/// description under the pi name, for every tool this config enables and the
+/// lane can serve. `requests` is true when a research lane answers requests.
+pub(crate) fn lane_definitions(
+    cfg: &PlannerConfig,
+    lane: Lane,
+    requests: bool,
+) -> Result<Vec<Value>> {
+    let rust = bridge_definitions(cfg, requests)?;
     Ok(TOOLS
         .iter()
         .filter(|tool| tool.lanes.contains(&lane))
@@ -125,28 +133,54 @@ pub(crate) fn lane_definitions(cfg: &PlannerConfig, lane: Lane) -> Result<Vec<Va
         .collect())
 }
 
+/// The last `plan` submitted in a turn. A refused plan supersedes an earlier
+/// validated one: the turn's answer is its last attempt.
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub(crate) enum PlanAttempt {
+    Validated { plan: Value, verdicts: Value },
+    Refused { plan: Value, error: String },
+}
+
+type UsageCheckpoint<'a> = Box<dyn FnMut(&Usage) + 'a>;
+
 /// Serves one lane turn: the lane allowlist first, then the existing Rust
 /// validation and executor, or the existing plan validation for `plan`.
 pub(crate) struct LaneHost<'a> {
     pub lane: Lane,
     pub bridge: Bridge<'a>,
     pub plan_inputs: Option<(&'a Portfolio, &'a [Instrument])>,
-    /// The last plan Rust validated in this turn, with its verdicts.
-    pub plan: Option<Value>,
+    pub plan: Option<PlanAttempt>,
+    /// Called with the turn's usage so far, so a crash still charges it.
+    pub on_usage: Option<UsageCheckpoint<'a>>,
 }
 
 impl LaneHost<'_> {
     fn plan(&mut self, args: &Value) -> std::result::Result<Value, String> {
         let (portfolio, instruments) = self.plan_inputs.ok_or("agent_plan_unavailable")?;
-        let verdicts = planner::validate(&args.to_string(), portfolio, instruments)
-            .map_err(|error| failure_reason(error.as_ref()))?;
-        self.plan = Some(json!({"plan":args,"verdicts":verdicts}));
-        Ok(json!({
-            "status":"validated",
-            "verdicts":verdicts,
-            "execution_authorized":false,
-            "note":"A validated plan is a proposal. The host decides execution against a fresh quote."
-        }))
+        match planner::validate(&args.to_string(), portfolio, instruments) {
+            Ok(verdicts) => {
+                let verdicts = json!(verdicts);
+                self.plan = Some(PlanAttempt::Validated {
+                    plan: args.clone(),
+                    verdicts: verdicts.clone(),
+                });
+                Ok(json!({
+                    "status":"validated",
+                    "verdicts":verdicts,
+                    "execution_authorized":false,
+                    "note":"A validated plan is a proposal. The host decides execution against a fresh quote."
+                }))
+            }
+            Err(error) => {
+                let error = failure_reason(error.as_ref());
+                self.plan = Some(PlanAttempt::Refused {
+                    plan: args.clone(),
+                    error: error.clone(),
+                });
+                Err(error)
+            }
+        }
     }
 }
 
@@ -164,6 +198,11 @@ impl ToolHost for LaneHost<'_> {
         match tool.rust {
             Some(rust) => self.bridge.call(call_id, rust, args),
             None => self.plan(args),
+        }
+    }
+    fn usage(&mut self, usage: &Usage) {
+        if let Some(record) = self.on_usage.as_mut() {
+            record(usage);
         }
     }
 }

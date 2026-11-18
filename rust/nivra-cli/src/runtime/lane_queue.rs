@@ -77,6 +77,7 @@ pub(crate) enum TransitionReason {
     Interrupted,
     Expired,
     SessionEnded,
+    Cancelled,
 }
 
 macro_rules! text_enum {
@@ -96,6 +97,7 @@ text_enum!(MessageState { Queued => "queued", Running => "running", Done => "don
 text_enum!(TransitionReason {
     Posted => "posted", Claimed => "claimed", Completed => "completed", Delivered => "delivered",
     TurnFailed => "turn_failed", Interrupted => "interrupted", Expired => "expired", SessionEnded => "session_ended",
+    Cancelled => "cancelled",
 });
 
 impl MessageState {
@@ -237,6 +239,14 @@ pub(crate) fn message_id(session: &str, kind: MessageKind, key: &str) -> String 
 
 pub(crate) fn open(directory: &std::path::Path) -> Result<Connection> {
     let db = super::experiment_ledger::open_directory(directory)?;
+    db.busy_timeout(BUSY_TIMEOUT)?;
+    Ok(db)
+}
+
+/// A queue in its own file, for a lane set that must not share messages with
+/// the harness lanes.
+pub(crate) fn open_file(file: &std::path::Path) -> Result<Connection> {
+    let db = super::experiment_ledger::open_file(file)?;
     db.busy_timeout(BUSY_TIMEOUT)?;
     Ok(db)
 }

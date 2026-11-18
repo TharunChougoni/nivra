@@ -1,11 +1,14 @@
 //! `nivra agent-check`: one offline decision turn, its research request and
 //! the next decision turn, end to end through the real agent process against
 //! pi's scripted fake provider. No model network, no book, no trading.
+use super::brief::{self, Brief, Facts, SessionFacts};
 use super::lanes::{LaneRunner, TurnContext};
 use super::protocol::TurnStatus;
-use super::{AgentClient, AgentSettings, ModelSpec};
+use super::triggers::{Phase, Trigger, TriggerKind};
+use super::{Agent, AgentClient, AgentSettings, Lane, ModelSpec};
 use crate::runtime::planner::{Backend, ModelRole, PlannerConfig};
-use crate::runtime::{Config, Result, lane_queue, millis};
+use crate::runtime::web_tools::{HttpResponse, Transport};
+use crate::runtime::{Config, Result, millis};
 use nivra_core::execution::{Instrument, Portfolio};
 use nivra_core::finance::Amount;
 use serde::Deserialize;
@@ -36,21 +39,77 @@ struct Fixture {
     script: Value,
     #[serde(default)]
     snapshot: Option<Value>,
+    #[serde(default)]
+    intraday: Option<Value>,
 }
 
-/// Serves only the fixture's frozen quote snapshot; never a model.
-pub(crate) struct FixtureBackend(pub Option<Value>);
+/// Serves only the fixture's frozen quote snapshot and intraday context;
+/// never a model.
+#[derive(Default)]
+pub(crate) struct FixtureBackend {
+    pub snapshot: Option<Value>,
+    pub intraday: Option<Value>,
+}
 
 impl Backend for FixtureBackend {
     fn call(&mut self, _role: &ModelRole, _prompt: &str) -> Result<String> {
         Err("agent_check_backend_has_no_model".into())
     }
     fn snapshot(&mut self, _bundle: &Value, keys: &[String], _at: i64) -> Option<Result<Value>> {
-        self.0.clone().map(|mut snapshot| {
+        self.snapshot.clone().map(|mut snapshot| {
             snapshot["requested_keys"] = json!(keys);
             Ok(snapshot)
         })
     }
+    fn intraday_context(&mut self, keys: &[String], _at: i64) -> Option<Result<Value>> {
+        self.intraday.clone().map(|mut context| {
+            context["requested_keys"] = json!(keys);
+            Ok(context)
+        })
+    }
+}
+
+/// The offline check makes no outbound call: every web request is refused.
+pub(crate) struct RefusingWeb;
+
+impl Transport for RefusingWeb {
+    fn get(
+        &mut self,
+        _url: &str,
+        _headers: &[(&str, String)],
+        _timeout_ms: u64,
+        _max_bytes: u64,
+    ) -> std::result::Result<HttpResponse, String> {
+        Err("agent_check_no_network".into())
+    }
+}
+
+/// A brief over fixture facts, for offline turns.
+pub(crate) fn fixture_brief(
+    c: &Config,
+    portfolio: &nivra_core::execution::Portfolio,
+    lane: Lane,
+    task: Value,
+    triggers: &[Trigger],
+) -> Brief {
+    let facts = Facts {
+        session: SessionFacts {
+            date: c.session.to_string(),
+            phase: Phase::Open,
+            minute: c.execution.session_start_minute,
+            now_ms: millis(),
+        },
+        portfolio,
+        ranking: &[],
+        memory: None,
+        execution: "shadow_never_executed",
+    };
+    Brief::build(
+        &facts,
+        brief::budget(lane, &Default::default(), 0, 0.0, (0.0, 0)),
+        task,
+        triggers,
+    )
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
@@ -90,9 +149,12 @@ fn check(args: &Args) -> Result<(bool, Value)> {
     let script = scratch.join("script.json");
     std::fs::write(&script, serde_json::to_vec(&fixture.script)?)?;
 
-    let mut client = AgentClient::spawn(&settings, &["--fake".into(), script.into()])?;
-    let pid = client.pid().ok_or("agent_spawn_failed")?;
-    let ready = client.ready.clone();
+    let spawn_settings = settings.clone();
+    let mut agent = Agent::new(Box::new(move || {
+        AgentClient::spawn(&spawn_settings, &["--fake".into(), script.clone().into()])
+    }));
+    let ready = agent.client(millis())?.ready.clone();
+    let pid = agent.pid().ok_or("agent_spawn_failed")?;
     let idle = memory_kb(pid);
     let mut portfolio = Portfolio::new();
     portfolio.costs = c.paper_costs.clone();
@@ -100,27 +162,41 @@ fn check(args: &Args) -> Result<(bool, Value)> {
     let instruments: Vec<Instrument> = serde_json::from_value(fixture.bundle["allowlist"].clone())?;
     let mut context = TurnContext {
         bundle: fixture.bundle,
-        backend: Box::new(FixtureBackend(fixture.snapshot)),
-        portfolio,
+        backend: Box::new(FixtureBackend {
+            snapshot: fixture.snapshot,
+            intraday: fixture.intraday,
+        }),
+        portfolio: portfolio.clone(),
         instruments,
-        web: Box::new(crate::runtime::web_tools::Network),
+        web: Box::new(RefusingWeb),
     };
     let clock = millis;
-    let mut runner = LaneRunner::new(&mut client, &settings, &c, &cfg, &clock);
+    let mut runner = LaneRunner::new(&mut agent, &settings, &c, &cfg, &clock);
     runner.model_override = Some(ModelSpec {
         provider: "fake".into(),
         id: "scripted".into(),
         thinking: Some("off".into()),
     });
-    let trigger = json!({"kind":"schedule","reason":"agent-check"});
-    let first = runner.decision(trigger.clone(), fixture.facts.clone(), &mut context)?;
-    let research = runner.research_requests(&mut context)?;
-    let delivered_before = lane_queue::trading_updates(&c, millis())?.len();
-    let second = runner.decision(trigger, fixture.facts, &mut context)?;
-    let delivered_after = lane_queue::trading_updates(&c, millis())?.len();
+    let open = [Trigger::new(TriggerKind::Schedule, "agent_check", millis())];
+    let trigger = json!({"kind":"schedule","reason":"agent-check","triggers":open});
+    let brief = |lane| fixture_brief(&c, &portfolio, lane, fixture.facts.clone(), &open);
+    let first = runner.decision(trigger.clone(), brief(Lane::Decision), &mut context)?;
+    let request = [Trigger::new(
+        TriggerKind::Request,
+        "decision_request",
+        millis(),
+    )];
+    let research = runner.research_requests(
+        &json!({"kind":"request","triggers":request}),
+        &fixture_brief(&c, &portfolio, Lane::Research, Value::Null, &request),
+        &mut context,
+    )?;
+    let delivered_before = runner.requests.updates(millis())?.len();
+    let second = runner.decision(trigger, brief(Lane::Decision), &mut context)?;
+    let delivered_after = runner.requests.updates(millis())?.len();
     let busy = memory_kb(pid);
     drop(runner);
-    client.shutdown()?;
+    agent.shutdown()?;
 
     let summary = |turn: &super::lanes::LaneTurn| {
         json!({
@@ -128,12 +204,15 @@ fn check(args: &Args) -> Result<(bool, Value)> {
             "error":turn.outcome.error,"elapsed_ms":turn.outcome.elapsed_ms,"usage":turn.outcome.usage,
             "model":turn.outcome.model,"provider":turn.outcome.provider,
             "tool_calls":turn.outcome.tool_calls,"events":turn.outcome.events.len(),
-            "plan_verdicts":turn.plan.as_ref().map(|plan| plan["verdicts"].clone()),
+            "plan":turn.plan,
             "session_file":turn.outcome.session_file,
         })
     };
     let ok = first.outcome.status == TurnStatus::Ok
-        && first.plan.is_some()
+        && matches!(
+            first.plan,
+            Some(super::tools::PlanAttempt::Validated { .. })
+        )
         && first
             .outcome
             .tool_calls

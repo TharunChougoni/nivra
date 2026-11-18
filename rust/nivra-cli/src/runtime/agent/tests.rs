@@ -1,3 +1,4 @@
+use super::brief::{self, Brief, Facts, SessionFacts};
 use super::check::FixtureBackend;
 use super::lanes::{LaneRunner, TurnContext};
 use super::protocol::TurnStatus;
@@ -113,12 +114,15 @@ fn lane_settings(daily_calls: u64, daily_cost_usd: f64) -> LaneSettings {
     }
 }
 
-fn settings(daily_calls: u64, daily_cost_usd: f64) -> AgentSettings {
+pub(super) fn settings(daily_calls: u64, daily_cost_usd: f64) -> AgentSettings {
     AgentSettings {
         node: "/usr/bin/node".into(),
         entry: "/opt/nivra/agent/dist/src/main.js".into(),
         agent_dir: "/var/lib/nivra/pi".into(),
         prompts: None,
+        mode: AgentMode::Shadow,
+        pass_env: Vec::new(),
+        triggers: None,
         lanes: Lane::ALL
             .into_iter()
             .map(|lane| (lane, lane_settings(daily_calls, daily_cost_usd)))
@@ -153,7 +157,14 @@ fn all_tools(dir: &std::path::Path) -> (Config, planner::PlannerConfig) {
             lane: Some(Default::default()),
         }),
     });
-    cfg.workspace = Some(serde_json::from_value(json!({"enabled":true})).unwrap());
+    let install_hash = crate::runtime::digest(b"print(1)");
+    cfg.workspace = Some(
+        serde_json::from_value(json!({
+            "enabled":true,
+            "install_allowlist":[{"name":"scan.py","sha256":install_hash}]
+        }))
+        .unwrap(),
+    );
     cfg.web_tools = Some(
         serde_json::from_value(json!({"enabled":true,"provider":"searxng",
             "search_url":"https://search.example.test/search","news_feeds":["https://news.example.test/feed"],
@@ -241,12 +252,44 @@ fn context(cash: &str) -> TurnContext {
     TurnContext {
         instruments: serde_json::from_value(bundle["allowlist"].clone()).unwrap(),
         bundle,
-        backend: Box::new(FixtureBackend(Some(
-            json!({"quotes":[],"execution_authorized":false}),
-        ))),
+        backend: Box::new(FixtureBackend {
+            snapshot: Some(json!({"quotes":[],"execution_authorized":false})),
+            intraday: Some(json!({"instruments":[]})),
+        }),
         portfolio,
         web: Box::new(FakeWeb),
     }
+}
+
+fn fixture_agent(client: AgentClient) -> Agent {
+    let mut client = Some(client);
+    Agent::new(Box::new(move || {
+        client.take().ok_or_else(|| "fixture_agent_exited".into())
+    }))
+}
+
+fn fixture_brief(context: &TurnContext, now_ms: i64) -> Brief {
+    Brief::build(
+        &Facts {
+            session: SessionFacts {
+                date: "2026-10-16".into(),
+                phase: triggers::Phase::Open,
+                minute: 600,
+                now_ms,
+            },
+            portfolio: &context.portfolio,
+            ranking: &[],
+            memory: None,
+            execution: "shadow_never_executed",
+        },
+        brief::budget(Lane::Decision, &Default::default(), 100, 10.0, (0.0, 5)),
+        Value::Null,
+        &[],
+    )
+}
+
+fn read_brief(turn: &Value) -> Value {
+    serde_json::from_str(turn["brief"].as_str().unwrap()).unwrap()
 }
 
 fn args(name: &str) -> Value {
@@ -293,22 +336,15 @@ fn every_lane_tool_round_trips_through_the_bridge() {
     let (c, cfg) = all_tools(dir.path());
     let settings = settings(100, 10.0);
     let clock = || 1_760_600_000_000_i64;
-    // Each tool's observable answer from its existing Rust executor. The
-    // refusals are today's executor policy, not the bridge: owner research
-    // tasks need a durable owner claim that pi turns do not hold yet, and the
-    // research binding refuses workspace run/install and the web tools.
-    let expected = |lane: Lane, name: &str| -> std::result::Result<(), &'static str> {
-        match (lane, name) {
-            (_, "intraday") => Err("decision_evidence_unavailable"),
-            (_, "analysis" | "research_status" | "research_result" | "research_cancel") => {
-                Err("harness_owner_research_scope_invalid")
-            }
-            (_, "run" | "install") => Err("workspace_research_scope_invalid"),
-            (_, "quotes") => Err("scorer_snapshots_unavailable"),
-            (_, "backtest_status" | "backtest_result" | "backtest_cancel") => {
-                Err("research_queue_unavailable")
-            }
-            (Lane::Research, "search" | "fetch" | "news") => Err("harness_web_tools_scope_invalid"),
+    // Without registered jobs or captured quotes the executors return their
+    // resource-specific errors. Lane authority and schema validation run first.
+    let expected = |name: &str| -> std::result::Result<(), &'static str> {
+        match name {
+            "analysis" => Err("research_unregistered_alias"),
+            "research_status" | "research_result" | "research_cancel" | "backtest_status"
+            | "backtest_result" | "backtest_cancel" => Err("research_queue_unavailable"),
+            "run" => Err("workspace_run_not_allowlisted"),
+            "quotes" => Err("scorer_snapshots_unavailable"),
             _ => Ok(()),
         }
     };
@@ -321,7 +357,7 @@ fn every_lane_tool_round_trips_through_the_bridge() {
     .unwrap();
     let mut mismatches = Vec::new();
     for lane in Lane::ALL {
-        let published: Vec<String> = lane_definitions(&cfg, lane)
+        let published: Vec<String> = lane_definitions(&cfg, lane, true)
             .unwrap()
             .iter()
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
@@ -335,7 +371,7 @@ fn every_lane_tool_round_trips_through_the_bridge() {
             published, allowlist,
             "{lane:?} registers its whole allowlist"
         );
-        let (mut client, peer) = connect(|peer| {
+        let (client, peer) = connect(|peer| {
             let (id, turn) = peer.turn();
             let mut replies = Vec::new();
             for tool in turn["tools"].as_array().unwrap() {
@@ -353,7 +389,8 @@ fn every_lane_tool_round_trips_through_the_bridge() {
             replies
         });
         let mut context = context("5000");
-        let mut runner = LaneRunner::new(&mut client, &settings, &c, &cfg, &clock);
+        let mut agent = fixture_agent(client);
+        let mut runner = LaneRunner::new(&mut agent, &settings, &c, &cfg, &clock);
         let turn = runner
             .turn(lane, json!({"kind":"test"}), json!({}), &mut context)
             .unwrap();
@@ -367,7 +404,7 @@ fn every_lane_tool_round_trips_through_the_bridge() {
                 Some(true) => Ok(()),
                 _ => Err(reply["error"].as_str().unwrap_or_default().to_owned()),
             };
-            if observed != expected(lane, &name).map_err(str::to_owned) {
+            if observed != expected(&name).map_err(str::to_owned) {
                 mismatches.push(format!("{lane:?} {name}: {observed:?}"));
             }
         }
@@ -386,9 +423,9 @@ fn request_research_reaches_a_research_turn_and_the_next_decision_brief() {
     let settings = settings(100, 10.0);
     let clock = || 1_760_600_000_000_i64;
     let question = "Does the gap fade survive costs?";
-    let (mut client, peer) = connect(move |peer| {
+    let (client, peer) = connect(move |peer| {
         let (decision, brief) = peer.turn();
-        assert_eq!(brief["brief"]["research_updates"], json!([]));
+        assert_eq!(read_brief(&brief)["research_updates"], json!([]));
         let queued = peer.call(&decision, "research", args("research"));
         let refused = peer.call(&decision, "plan", json!({"actions":[],"stance":"x"}));
         let unlisted = peer.call(&decision, "plan", json!({"actions":[{"instrument_key":"NSE_EQ|Z","side":"buy","rupees":"100","units":null,"max_price":"10","rationale":"x","exit_intent":{"target":null,"stop":null,"time":null}}],"stance":"x","notes":"y"}));
@@ -396,7 +433,7 @@ fn request_research_reaches_a_research_turn_and_the_next_decision_brief() {
         peer.finish(&decision, "ok", "asked research", 4, 0.03);
         let (research, brief) = peer.turn();
         assert_eq!(brief["lane"], "research");
-        assert_eq!(brief["brief"]["question"], question);
+        assert_eq!(read_brief(&brief)["task"]["question"], question);
         assert!(
             brief["tools"]
                 .as_array()
@@ -406,18 +443,27 @@ fn request_research_reaches_a_research_turn_and_the_next_decision_brief() {
         );
         peer.finish(&research, "ok", "Gap fades only before costs.", 2, 0.02);
         let (next, brief) = peer.turn();
-        let updates = brief["brief"]["research_updates"].clone();
+        let updates = read_brief(&brief)["research_updates"].clone();
+        assert_eq!(peer.call(&next, "plan", args("plan"))["ok"], true);
+        assert_eq!(
+            peer.call(&next, "plan", json!({"actions":[]}))["error"],
+            "planner_json_invalid"
+        );
         peer.finish(&next, "ok", "holding", 1, 0.01);
         (queued, refused, unlisted, plan, updates)
     });
     let mut context = context("5000");
-    let mut runner = LaneRunner::new(&mut client, &settings, &c, &cfg, &clock);
+    let mut agent = fixture_agent(client);
+    let mut runner = LaneRunner::new(&mut agent, &settings, &c, &cfg, &clock);
+    let brief = fixture_brief(&context, clock());
     let first = runner
-        .decision(json!({"kind":"schedule"}), json!("open"), &mut context)
+        .decision(json!({"kind":"schedule"}), brief.clone(), &mut context)
         .unwrap();
-    let research = runner.research_requests(&mut context).unwrap();
+    let research = runner
+        .research_requests(&json!({"kind":"request"}), &brief, &mut context)
+        .unwrap();
     let next = runner
-        .decision(json!({"kind":"fill"}), json!("after"), &mut context)
+        .decision(json!({"kind":"fill"}), brief.clone(), &mut context)
         .unwrap();
     let (queued, refused, unlisted, plan, updates) = peer.join().unwrap();
 
@@ -428,19 +474,26 @@ fn request_research_reaches_a_research_turn_and_the_next_decision_brief() {
         "action_allowlist"
     );
     assert_eq!(plan["output"]["verdicts"][0]["reason"], "accepted");
-    assert_eq!(first.plan.unwrap()["verdicts"][0]["units"], 9);
+    let tools::PlanAttempt::Validated { verdicts, .. } = first.plan.unwrap() else {
+        panic!("the final plan should validate");
+    };
+    assert_eq!(verdicts[0]["units"], 9);
     assert_eq!(research.len(), 1);
     assert_eq!(updates.as_array().unwrap().len(), 1);
     assert_eq!(updates[0]["kind"], "research_result");
     assert_eq!(updates[0]["request_id"], queued["output"]["request_id"]);
     assert_eq!(updates[0]["summary"], "Gap fades only before costs.");
     assert_eq!(next.outcome.status, TurnStatus::Ok);
-    let db = lane_queue::open(&c.directory).unwrap();
+    assert!(matches!(
+        next.plan,
+        Some(tools::PlanAttempt::Refused { .. })
+    ));
+    let db = lane_queue::open_file(&c.directory.join("model/agent/requests.sqlite")).unwrap();
     let request = lane_queue::load(&db, queued["output"]["request_id"].as_str().unwrap())
         .unwrap()
         .unwrap();
     assert_eq!(request.state, MessageState::Done);
-    assert!(lane_queue::trading_updates(&c, clock()).unwrap().is_empty());
+    assert!(runner.requests.updates(clock()).unwrap().is_empty());
     let artifact = c
         .directory
         .join("model")
@@ -470,6 +523,9 @@ fn budgets_preemption_and_agent_exit_stop_turns() {
     let (c, cfg) = all_tools(dir.path());
     let settings = settings(10, 1.0);
     assert!(settings.validate().is_ok());
+    let mut activation = serde_json::to_value(&settings).unwrap();
+    activation["mode"] = json!("paper");
+    assert!(serde_json::from_value::<AgentSettings>(activation).is_err());
     let mut unbounded = settings.clone();
     unbounded
         .lanes
@@ -483,7 +539,7 @@ fn budgets_preemption_and_agent_exit_stop_turns() {
     // Without the block, policy bytes stay what deployed books hashed.
     assert!(serde_json::to_value(&cfg).unwrap().get("agent").is_none());
     let clock = || 1_760_600_000_000_i64;
-    let (mut client, peer) = connect(|peer| {
+    let (client, peer) = connect(|peer| {
         let (id, _) = peer.turn();
         peer.message(&id, 0.6);
         peer.message(&id, 0.6);
@@ -496,7 +552,8 @@ fn budgets_preemption_and_agent_exit_stop_turns() {
         (abort, preempted)
     });
     let mut context = context("5000");
-    let mut runner = LaneRunner::new(&mut client, &settings, &c, &cfg, &clock);
+    let mut agent = fixture_agent(client);
+    let mut runner = LaneRunner::new(&mut agent, &settings, &c, &cfg, &clock);
     let spent = runner
         .turn(Lane::Decision, json!({}), json!({}), &mut context)
         .unwrap();
@@ -506,29 +563,28 @@ fn budgets_preemption_and_agent_exit_stop_turns() {
         .err()
         .unwrap();
     assert_eq!(refused.to_string(), "agent_budget_exhausted");
-    lane_queue::post_request(
-        &c,
-        &cfg,
-        "decision-1",
-        "Is the gap real?",
-        Vec::new(),
-        clock(),
-    )
-    .unwrap();
+    use crate::runtime::harness::LaneRequests;
+    runner
+        .requests
+        .post("decision-1", "Is the gap real?", Vec::new(), clock())
+        .unwrap();
+    let brief = fixture_brief(&context, clock());
     // A decision trigger arrives while the research turn runs.
     let preempt = runner.preempt.clone();
     let waiting = std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(100));
         preempt.store(true, Ordering::Release);
     });
-    let research = runner.research_requests(&mut context).unwrap();
+    let research = runner
+        .research_requests(&json!({"kind":"request"}), &brief, &mut context)
+        .unwrap();
     waiting.join().unwrap();
     let (abort, preempted) = peer.join().unwrap();
     assert_eq!(abort["type"], "abort");
     assert_eq!(abort["reason"], "agent_budget_exhausted");
     assert_eq!(preempted["reason"], "agent_preempted");
     assert_eq!(research[0].outcome.status, TurnStatus::Aborted);
-    let db = lane_queue::open(&c.directory).unwrap();
+    let db = lane_queue::open_file(&c.directory.join("model/agent/requests.sqlite")).unwrap();
     let failed = lane_queue::list(
         &db,
         &c.session.to_string(),
@@ -546,11 +602,12 @@ fn budgets_preemption_and_agent_exit_stop_turns() {
     drop(runner);
     // An agent that dies mid-turn ends the turn with an error, not a hang,
     // and what pi already reported stays charged.
-    let (mut client, peer) = connect(|peer| {
+    let (client, peer) = connect(|peer| {
         let (id, _) = peer.turn();
         peer.message(&id, 0.25);
     });
-    let mut runner = LaneRunner::new(&mut client, &settings, &c, &cfg, &clock);
+    let mut agent = fixture_agent(client);
+    let mut runner = LaneRunner::new(&mut agent, &settings, &c, &cfg, &clock);
     let exited = runner
         .turn(Lane::Review, json!({}), json!({}), &mut context)
         .unwrap();

@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 mod live;
 mod turn;
 pub(crate) use turn::produce;
-pub(super) use turn::produce_clocked;
+pub(super) use turn::{call_time_input, produce_clocked};
 // Preserve the historical crate path for all internal consumers.
 #[allow(unused_imports)]
 pub(crate) use turn::produce_for;

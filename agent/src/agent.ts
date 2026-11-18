@@ -80,9 +80,14 @@ function bridgeCallId(raw: string, seen: Set<string>): string {
   return id;
 }
 
+/** Stable facts first and the trigger last, so a cached prefix survives the most turns. */
 function briefText(turn: TurnRequest): string {
   const brief = typeof turn.brief === "string" ? turn.brief : JSON.stringify(turn.brief, null, 1);
-  return `Trigger: ${JSON.stringify(turn.trigger)}\n\nBrief:\n${brief}`;
+  return `Brief:\n${brief}\n\nTrigger: ${JSON.stringify(turn.trigger)}`;
+}
+
+function usageFields(usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: { total: number } }): JsonObject {
+  return { input: usage.input, output: usage.output, cache_read: usage.cacheRead, cache_write: usage.cacheWrite, cost_usd: usage.cost.total };
 }
 
 function resourceLoader(systemPrompt: string): ResourceLoader {
@@ -244,14 +249,7 @@ export class LaneAgent {
           tool_calls: toolCalls,
           provider: message.provider,
           model: message.model,
-          usage: {
-            input: message.usage.input,
-            output: message.usage.output,
-            cache_read: message.usage.cacheRead,
-            cache_write: message.usage.cacheWrite,
-            reasoning: message.usage.reasoning ?? null,
-            cost_usd: message.usage.cost.total,
-          },
+          usage: { ...usageFields(message.usage), reasoning: message.usage.reasoning ?? null },
           error: message.errorMessage ?? null,
         });
         return;
@@ -274,6 +272,8 @@ export class LaneAgent {
           will_retry: event.willRetry,
           tokens_before: event.result?.tokensBefore ?? null,
           tokens_after: event.result?.estimatedTokensAfter ?? null,
+          // Rust charges this to the lane even if the agent dies before turn_result.
+          usage: event.result?.usage ? usageFields(event.result.usage) : null,
           error: event.errorMessage ?? null,
         });
         return;
@@ -331,6 +331,12 @@ export class LaneAgent {
       session = await this.laneSession(request, model);
       if (session.model?.provider !== model.provider || session.model?.id !== model.id) await session.setModel(model);
       if (request.model.thinking && session.thinkingLevel !== request.model.thinking) session.setThinkingLevel(request.model.thinking);
+      // An abort that arrived while the session was being opened has no
+      // running prompt to cancel; honour it before any model call.
+      if (turn.abortReason !== undefined) {
+        result("aborted", "", turn.usage, turn.abortReason, session);
+        return;
+      }
       const active = session;
       unsubscribe = active.subscribe((event) => this.event(turn, event));
       this.options.beforeTurn?.(request);

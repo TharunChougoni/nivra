@@ -149,6 +149,28 @@ test("an unknown model is refused without a model call", async () => {
   agent.dispose();
 });
 
+test("an abort that arrives while the session opens stops the turn before any model call", async () => {
+  const script: FakeScript = { turns: [{ lane: "decision", steps: [{ text: "should never run" }] }] };
+  const { dir, agent, sent } = await harness(script, () => ({ ok: true, output: {} }));
+  const request = turn("t1", "decision", dir);
+  const done = new Promise<Extract<Outbound, { type: "turn_result" }>>((resolve) => {
+    const poll = () => {
+      const result = sent.find((message) => message.type === "turn_result");
+      if (result) resolve(result as Extract<Outbound, { type: "turn_result" }>);
+      else setTimeout(poll, 5);
+    };
+    poll();
+  });
+  agent.handle(request);
+  agent.handle({ type: "abort", turn_id: "t1", reason: "agent_preempted" });
+  const result = await done;
+  assert.equal(result.status, "aborted");
+  assert.equal(result.error, "agent_preempted");
+  assert.equal(result.usage.calls, 0);
+  assert.ok(!sent.some((message) => message.type === "event" && message.event.kind === "message"), "no model step ran");
+  agent.dispose();
+});
+
 test("the stdio service speaks the protocol end to end", async () => {
   const dir = mkdtempSync(join(tmpdir(), "nivra-agent-wire-"));
   const scriptFile = join(dir, "script.json");

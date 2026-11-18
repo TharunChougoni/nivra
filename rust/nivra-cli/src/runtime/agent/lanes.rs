@@ -1,13 +1,16 @@
-//! Lane turns: binding, budgets, journal and the research request loop.
-use super::client::{AgentClient, Allowance, TurnOutcome, TurnRequest};
+//! Lane turns: grants, budgets, journal and the research request loop.
+use super::brief::Brief;
+use super::client::{Agent, Allowance, TurnOutcome, TurnRequest};
 use super::protocol::{SessionRef, TurnStatus, Usage};
-use super::tools::{LaneHost, lane_definitions};
-use super::{AgentSettings, Lane};
-use crate::runtime::harness::Bridge;
-use crate::runtime::lane_queue::{self, MessageBody, MessageKind, MessageState, TransitionReason};
+use super::requests::Requests;
+use super::tools::{LaneHost, PlanAttempt, lane_definitions};
+use super::{AgentSettings, Lane, ModelSpec};
+use crate::runtime::harness::{Bridge, LaneGrant};
+use crate::runtime::lane_queue::{MessageBody, TransitionReason};
 use crate::runtime::orchestrator_model::Trigger;
 use crate::runtime::planner::{Backend, CallGuard, PlannerConfig, preview_guard};
 use crate::runtime::web_tools::Transport;
+use crate::runtime::workspace::WorkspaceScope;
 use crate::runtime::{Config, Result, digest, rollover};
 use nivra_core::execution::{Instrument, Portfolio};
 use serde::{Deserialize, Serialize};
@@ -22,33 +25,133 @@ use std::time::Duration;
 
 const MAX_SUMMARY_CHARS: usize = 600;
 const MAX_REQUESTS_PER_PASS: usize = 4;
+const MAX_MEMORY_CHARS: usize = 8_000;
 
-/// What a lane turn's tools read. The controller builds it in Phase 2;
+/// What a lane turn's tools read. The controller builds it from its own state;
 /// agent-check and tests build it from fixtures.
 pub(crate) struct TurnContext {
-    /// Frozen evidence the read tools serve, without a lane binding.
+    /// Frozen evidence the read tools serve.
     pub bundle: Value,
-    pub backend: Box<dyn Backend>,
+    pub backend: Box<dyn Backend + Send>,
     pub portfolio: Portfolio,
     pub instruments: Vec<Instrument>,
     /// HTTP for the web tools; tests pass a fake so no socket opens.
-    pub web: Box<dyn Transport>,
+    pub web: Box<dyn Transport + Send>,
+}
+
+/// A turn's usage so far, kept until the turn settles. An entry whose process
+/// is gone was cut off by a crash and is charged once.
+#[derive(Clone, Serialize, Deserialize)]
+struct InFlight {
+    lane: Lane,
+    pid: u32,
+    usage: Usage,
 }
 
 #[derive(Default, Serialize, Deserialize)]
 struct Spend {
     date: String,
     lanes: BTreeMap<Lane, Usage>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    in_flight: BTreeMap<String, InFlight>,
 }
 
-/// A finished turn plus the plan Rust validated in it, if any.
+/// Today's lane spend in `model/agent/usage.json`. The controller's worker
+/// and `nivra agent-turn` may both charge it, so every change is a locked
+/// read-modify-write.
+struct Ledger {
+    path: PathBuf,
+    date: String,
+}
+
+impl Ledger {
+    fn new(c: &Config) -> Self {
+        Self {
+            path: root(c).join("usage.json"),
+            date: c.session.to_string(),
+        }
+    }
+
+    fn read(&self) -> Result<Spend> {
+        let spend = match std::fs::read(&self.path) {
+            Ok(bytes) => {
+                serde_json::from_slice::<Spend>(&bytes).map_err(|_| "agent_usage_corrupt")?
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Spend::default(),
+            Err(error) => return Err(error.into()),
+        };
+        Ok(if spend.date == self.date {
+            spend
+        } else {
+            Spend {
+                date: self.date.clone(),
+                ..Spend::default()
+            }
+        })
+    }
+
+    /// Apply one change under the ledger lock. Crashed turns are charged
+    /// first, so no reader sees an allowance that forgot them.
+    fn update<T>(&self, change: impl FnOnce(&mut Spend) -> T) -> Result<T> {
+        let parent = self.path.parent().ok_or("agent_usage_path")?;
+        private_dir(parent)?;
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .mode(0o600)
+            .open(parent.join("usage.lock"))?;
+        fs2::FileExt::lock_exclusive(&lock)?;
+        let mut spend = self.read()?;
+        let crashed: Vec<String> = spend
+            .in_flight
+            .iter()
+            .filter(|(_, turn)| !Path::new(&format!("/proc/{}", turn.pid)).exists())
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in crashed {
+            if let Some(turn) = spend.in_flight.remove(&id) {
+                add(spend.lanes.entry(turn.lane).or_default(), &turn.usage);
+            }
+        }
+        let value = change(&mut spend);
+        rollover::atomic(&self.path, &serde_json::to_value(&spend)?)?;
+        Ok(value)
+    }
+
+    fn spent(&self, lane: Lane) -> Result<Usage> {
+        self.update(|spend| spend.lanes.get(&lane).cloned().unwrap_or_default())
+    }
+
+    fn checkpoint(&self, turn_id: &str, lane: Lane, usage: &Usage) -> Result<()> {
+        self.update(|spend| {
+            spend.in_flight.insert(
+                turn_id.to_owned(),
+                InFlight {
+                    lane,
+                    pid: std::process::id(),
+                    usage: usage.clone(),
+                },
+            );
+        })
+    }
+
+    fn settle(&self, turn_id: &str, lane: Lane, usage: &Usage) -> Result<()> {
+        self.update(|spend| {
+            spend.in_flight.remove(turn_id);
+            add(spend.lanes.entry(lane).or_default(), usage);
+        })
+    }
+}
+
+/// A finished turn plus the last plan it submitted, if any.
 pub(crate) struct LaneTurn {
     pub outcome: TurnOutcome,
-    pub plan: Option<Value>,
+    pub plan: Option<PlanAttempt>,
 }
 
 pub(crate) struct LaneRunner<'a> {
-    pub client: &'a mut AgentClient,
+    pub agent: &'a mut Agent,
     pub settings: &'a AgentSettings,
     pub c: &'a Config,
     pub cfg: &'a PlannerConfig,
@@ -56,11 +159,12 @@ pub(crate) struct LaneRunner<'a> {
     /// Set while a decision turn waits; a running research or review turn yields.
     pub preempt: Arc<AtomicBool>,
     /// Overrides every lane's model, for offline checks against the fake provider.
-    pub model_override: Option<super::ModelSpec>,
+    pub model_override: Option<ModelSpec>,
+    pub requests: Requests,
     sequence: u64,
 }
 
-fn private_dir(path: &Path) -> Result<()> {
+pub(crate) fn private_dir(path: &Path) -> Result<()> {
     Ok(std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
@@ -76,14 +180,17 @@ fn add(total: &mut Usage, usage: &Usage) {
     total.calls += usage.calls;
 }
 
+fn bounded(text: &str, max: usize) -> String {
+    text.chars()
+        .filter(|ch| !ch.is_control() || matches!(ch, '\n' | '\t'))
+        .take(max)
+        .collect()
+}
+
 /// A queued research answer must fit the lane message bounds and stay free of
 /// credential-shaped text; anything else is left to the artifact.
-fn summary(text: &str) -> String {
-    let bounded: String = text
-        .chars()
-        .filter(|ch| !ch.is_control() || matches!(ch, '\n' | '\t'))
-        .take(MAX_SUMMARY_CHARS)
-        .collect();
+pub(crate) fn summary(text: &str) -> String {
+    let bounded = bounded(text, MAX_SUMMARY_CHARS);
     if bounded.trim().is_empty() {
         "The research turn returned no text.".into()
     } else if crate::runtime::transcript::redact(&json!(bounded)).as_str() != Some(&bounded) {
@@ -93,51 +200,54 @@ fn summary(text: &str) -> String {
     }
 }
 
+pub(crate) fn root(c: &Config) -> PathBuf {
+    c.directory.join("model").join("agent")
+}
+
+/// The review memory the next decision brief carries: the last review's text.
+pub(crate) fn memory(c: &Config) -> Option<(String, String)> {
+    let bytes = crate::read_bounded(&root(c).join("memory.json"), 64_000).ok()?;
+    let memory: Value = serde_json::from_slice(&bytes).ok()?;
+    Some((
+        memory["session"].as_str()?.to_owned(),
+        memory["text"].as_str()?.to_owned(),
+    ))
+}
+
+fn model_id(model: &ModelSpec) -> String {
+    format!("{}/{}", model.provider, model.id)
+        .chars()
+        .take(128)
+        .collect()
+}
+
 impl<'a> LaneRunner<'a> {
     pub(crate) fn new(
-        client: &'a mut AgentClient,
+        agent: &'a mut Agent,
         settings: &'a AgentSettings,
         c: &'a Config,
         cfg: &'a PlannerConfig,
         clock: &'a dyn Fn() -> i64,
     ) -> Self {
         Self {
-            client,
+            agent,
             settings,
             c,
             cfg,
             clock,
             preempt: Arc::new(AtomicBool::new(false)),
             model_override: None,
+            requests: Requests::new(c, &settings.triggers().research),
             sequence: 0,
         }
     }
 
     fn root(&self) -> PathBuf {
-        self.c.directory.join("model").join("agent")
-    }
-
-    fn load_spend(&self) -> Result<Spend> {
-        let path = self.root().join("usage.json");
-        let date = self.c.session.to_string();
-        let spend = match std::fs::read(&path) {
-            Ok(bytes) => {
-                serde_json::from_slice::<Spend>(&bytes).map_err(|_| "agent_usage_corrupt")?
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Spend::default(),
-            Err(error) => return Err(error.into()),
-        };
-        Ok(if spend.date == date {
-            spend
-        } else {
-            Spend {
-                date,
-                lanes: BTreeMap::new(),
-            }
-        })
+        root(self.c)
     }
 
     fn journal(&self, line: &Value) -> Result<()> {
+        private_dir(&self.root())?;
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -147,8 +257,26 @@ impl<'a> LaneRunner<'a> {
         Ok(file.sync_all()?)
     }
 
-    /// Run one lane turn. The bundle gets the lane binding the existing tool
-    /// authority checks read; usage is charged to the lane's daily allowance.
+    fn next_id(&mut self, lane: Lane) -> String {
+        self.sequence += 1;
+        format!(
+            "{}-{}-{}-{}",
+            lane.as_str(),
+            (self.clock)(),
+            std::process::id(),
+            self.sequence
+        )
+    }
+
+    fn model(&self, lane: Lane) -> Result<ModelSpec> {
+        Ok(self
+            .model_override
+            .clone()
+            .unwrap_or(self.settings.lane(lane)?.model.clone()))
+    }
+
+    /// Run one lane turn. The lane grants its tools' authority; usage is
+    /// charged to the lane's daily allowance as pi reports it.
     pub(crate) fn turn(
         &mut self,
         lane: Lane,
@@ -156,24 +284,23 @@ impl<'a> LaneRunner<'a> {
         brief: Value,
         context: &mut TurnContext,
     ) -> Result<LaneTurn> {
+        let id = self.next_id(lane);
+        self.turn_as(id, lane, trigger, brief, context)
+    }
+
+    fn turn_as(
+        &mut self,
+        id: String,
+        lane: Lane,
+        trigger: Value,
+        brief: Value,
+        context: &mut TurnContext,
+    ) -> Result<LaneTurn> {
         let now = (self.clock)();
-        self.sequence += 1;
-        let id = format!("{}-{now}-{}", lane.as_str(), self.sequence);
-        let lane_settings = self.settings.lane(lane)?;
-        private_dir(&self.root())?;
-        let mut spend = self.load_spend()?;
-        let spent = spend.lanes.get(&lane).cloned().unwrap_or_default();
-        let mut bundle = context.bundle.clone();
-        if lane == Lane::Decision {
-            bundle["trigger"]["kind"] = json!("decision");
-            bundle["summary"]["host_decision"] = json!({"turn_id":id});
-        } else {
-            // Review reads through the research binding, narrowed by its allowlist.
-            bundle["trigger"]["kind"] = json!("research");
-            bundle["summary"]["owner_task"] = json!({"kind":"research"});
-            bundle["summary"]["turn_id"] = json!(id);
-            bundle["summary"]["research_id"] = json!(id);
-        }
+        let lane_settings = self.settings.lane(lane)?.clone();
+        let ledger = Ledger::new(self.c);
+        let spent = ledger.spent(lane)?;
+        let model = self.model(lane)?;
         let role = self.cfg.role(Trigger::Supervisor);
         let guard = CallGuard {
             invocation_id: Some(&id),
@@ -182,22 +309,39 @@ impl<'a> LaneRunner<'a> {
             ..preview_guard()
         };
         let archive = self.root().join("turns").join(&id);
+        let checkpoints = Ledger::new(self.c);
+        let (turn_id, model_id) = (id.clone(), model_id(&model));
+        let requests_served =
+            lane == Lane::Decision && self.settings.lanes.contains_key(&Lane::Research);
         let mut host = LaneHost {
             lane,
             bridge: Bridge::new(
                 self.c,
                 self.cfg,
                 &role,
-                &bundle,
+                &context.bundle,
                 context.backend.as_mut(),
                 &guard,
                 &archive,
                 &id,
+                LaneGrant {
+                    workspace: match lane {
+                        Lane::Research => WorkspaceScope::ResearchSandbox,
+                        Lane::Decision | Lane::Review => WorkspaceScope::Decision,
+                    },
+                    model_id: &model_id,
+                    requests: &self.requests,
+                },
                 context.web.as_mut(),
             )?,
             plan_inputs: (lane == Lane::Decision)
                 .then_some((&context.portfolio, context.instruments.as_slice())),
             plan: None,
+            on_usage: Some(Box::new(move |usage: &Usage| {
+                // A failed checkpoint only loses crash accounting; the turn's
+                // final usage is still charged when it settles.
+                let _ = checkpoints.checkpoint(&turn_id, lane, usage);
+            })),
         };
         let request = TurnRequest {
             id: id.clone(),
@@ -211,13 +355,10 @@ impl<'a> LaneRunner<'a> {
                     .to_string_lossy()
                     .into_owned(),
             },
-            model: self
-                .model_override
-                .clone()
-                .unwrap_or_else(|| lane_settings.model.clone()),
+            model,
             trigger: trigger.clone(),
             brief,
-            tools: lane_definitions(self.cfg, lane)?,
+            tools: lane_definitions(self.cfg, lane, requests_served)?,
         };
         let allowance = Allowance {
             calls: lane_settings.daily_calls,
@@ -226,13 +367,13 @@ impl<'a> LaneRunner<'a> {
             timeout: Duration::from_millis(lane_settings.turn_timeout_ms),
         };
         let preempt = self.preempt.clone();
-        let yields = lane != Lane::Decision;
         let result = self
-            .client
-            .run_turn(&request, &mut host, &spent, allowance, &|| {
-                yields && preempt.load(Ordering::Acquire)
+            .agent
+            .run_turn(now, &request, &mut host, &spent, allowance, &|| {
+                preempt.load(Ordering::Acquire)
             });
         let plan = host.plan.take();
+        drop(host);
         let outcome = match result {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -240,76 +381,71 @@ impl<'a> LaneRunner<'a> {
                 return Err(error);
             }
         };
-        add(spend.lanes.entry(lane).or_default(), &outcome.usage);
-        rollover::atomic(
-            &self.root().join("usage.json"),
-            &serde_json::to_value(&spend)?,
-        )?;
+        ledger.settle(&id, lane, &outcome.usage)?;
         let mut events = Vec::new();
         for event in &outcome.events {
-            events.extend_from_slice(serde_json::to_string(event)?.as_bytes());
+            events.extend_from_slice(
+                serde_json::to_string(&crate::runtime::transcript::redact(event))?.as_bytes(),
+            );
             events.push(b'\n');
         }
+        private_dir(&archive)?;
         std::fs::OpenOptions::new()
             .create_new(true)
             .write(true)
             .mode(0o600)
             .open(archive.join("events.ndjson"))?
             .write_all(&events)?;
-        self.journal(&json!({
+        self.journal(&crate::runtime::transcript::redact(&json!({
             "turn_id":id,"lane":lane,"trigger":trigger,"at_ms":now,
             "status":outcome.status,"error":outcome.error,"model":outcome.model,"provider":outcome.provider,
             "usage":outcome.usage,"session_file":outcome.session_file,"prompt_sha256":outcome.prompt_sha256,
             "tool_calls":outcome.tool_calls,"plan":plan,"elapsed_ms":outcome.elapsed_ms,
-            "text_sha256":digest(outcome.text.as_bytes())
-        }))?;
+            "restarts":self.agent.restarts(),"text_sha256":digest(outcome.text.as_bytes())
+        })))?;
         Ok(LaneTurn { outcome, plan })
     }
 
-    /// A decision turn whose brief carries undelivered research answers; they
+    /// A decision turn. Its brief carries undelivered research answers; they
     /// are marked delivered once the turn completed.
     pub(crate) fn decision(
         &mut self,
         trigger: Value,
-        facts: Value,
+        mut brief: Brief,
         context: &mut TurnContext,
     ) -> Result<LaneTurn> {
         let now = (self.clock)();
-        let updates = if lane_queue::lane_settings(self.cfg).is_some() {
-            lane_queue::trading_updates(self.c, now)?
+        let updates = if self.settings.lanes.contains_key(&Lane::Research) {
+            self.requests.updates(now)?
         } else {
             Vec::new()
         };
-        let brief = json!({
-            "facts":facts,
-            "research_updates":updates.iter().map(lane_queue::update_fact).collect::<Vec<_>>()
-        });
-        let turn = self.turn(Lane::Decision, trigger, brief, context)?;
+        brief.research_updates = updates
+            .iter()
+            .map(crate::runtime::lane_queue::update_fact)
+            .collect();
+        let turn = self.turn(Lane::Decision, trigger, json!(brief.render()?), context)?;
         if turn.outcome.status == TurnStatus::Ok {
             let ids: Vec<String> = updates.into_iter().map(|update| update.id).collect();
-            lane_queue::mark_delivered(self.c, &ids, &turn.outcome.id, (self.clock)())?;
+            self.requests
+                .mark_delivered(&ids, &turn.outcome.id, (self.clock)())?;
         }
         Ok(turn)
     }
 
     /// Answer queued research requests, one research turn each. A finished
-    /// turn posts its summary for the next decision brief; a failed or
-    /// pre-empted turn fails the request, which the decision lane may repeat.
-    pub(crate) fn research_requests(&mut self, context: &mut TurnContext) -> Result<Vec<LaneTurn>> {
-        let lane = lane_queue::lane_settings(self.cfg).ok_or("research_lane_disabled")?;
-        let (ttl_ms, max_open) = (lane.request_ttl_ms, lane.max_open_requests);
-        let session = self.c.session.to_string();
-        let mut db = lane_queue::open(&self.c.directory)?;
+    /// turn posts its answer for the next decision brief; any other ending
+    /// fails the request, which is never run again. Requests a crashed pass
+    /// left running are failed first.
+    pub(crate) fn research_requests(
+        &mut self,
+        trigger: &Value,
+        brief: &Brief,
+        context: &mut TurnContext,
+    ) -> Result<Vec<LaneTurn>> {
         let now = (self.clock)();
-        lane_queue::expire(&mut db, &session, now)?;
-        let queued = lane_queue::list(
-            &db,
-            &session,
-            &[MessageKind::ResearchRequest],
-            MessageState::Queued,
-            now,
-            MAX_REQUESTS_PER_PASS,
-        )?;
+        self.requests.recover(now)?;
+        let queued = self.requests.queued(now, MAX_REQUESTS_PER_PASS)?;
         let mut turns = Vec::new();
         for request in queued {
             if self.preempt.load(Ordering::Acquire) {
@@ -318,71 +454,86 @@ impl<'a> LaneRunner<'a> {
             let MessageBody::ResearchRequest { question, refs } = &request.body else {
                 continue;
             };
-            let claim = format!("research-claim-{}", request.id);
-            if !lane_queue::transition(
-                &mut db,
-                &request.id,
-                MessageState::Queued,
-                MessageState::Running,
-                TransitionReason::Claimed,
-                Some(&claim),
-                (self.clock)(),
-            )? {
+            let id = self.next_id(Lane::Research);
+            if !self.requests.claim(&request.id, &id, (self.clock)())? {
                 continue;
             }
-            let trigger = json!({"kind":"request","reason":"decision lane research request","request_id":request.id});
-            let brief = json!({"request_id":request.id,"question":question,"refs":refs});
-            let turn = self.turn(Lane::Research, trigger, brief, context);
+            let mut brief = brief.clone();
+            brief.task =
+                json!({"kind":"request","request_id":request.id,"question":question,"refs":refs});
+            let turn = brief.render().and_then(|text| {
+                self.turn_as(id, Lane::Research, trigger.clone(), json!(text), context)
+            });
             let at = (self.clock)();
             match turn {
                 Ok(turn) if turn.outcome.status == TurnStatus::Ok => {
-                    let artifact = format!("agent/research/{}.json", request.id);
-                    let path = self.c.directory.join("model").join(&artifact);
-                    private_dir(path.parent().ok_or("agent_research_path")?)?;
-                    rollover::atomic(
-                        &path,
-                        &json!({"request_id":request.id,"question":question,"turn_id":turn.outcome.id,
-                            "text":turn.outcome.text,"usage":turn.outcome.usage,"model":turn.outcome.model}),
-                    )?;
-                    let body = MessageBody::ResearchResult {
-                        request_id: Some(request.id.clone()),
-                        research_id: turn.outcome.id.clone(),
-                        summary: summary(&turn.outcome.text),
-                        artifact_ref: artifact,
-                        output_sha256: digest(turn.outcome.text.as_bytes()),
-                    };
-                    lane_queue::post(&mut db, &session, &request.id, &body, at, ttl_ms, max_open)?;
-                    lane_queue::transition(
-                        &mut db,
-                        &request.id,
-                        MessageState::Running,
-                        MessageState::Done,
-                        TransitionReason::Completed,
-                        Some(&turn.outcome.id),
+                    let answered = self.requests.answer(
+                        &request,
+                        &turn.outcome.id,
+                        &turn.outcome.text,
+                        &json!(turn.outcome.usage),
                         at,
-                    )?;
+                    );
+                    if answered.is_err() {
+                        self.requests
+                            .fail(&request.id, TransitionReason::TurnFailed, at)?;
+                    }
                     turns.push(turn);
                 }
-                other => {
-                    let reason = match &other {
-                        Ok(turn) if turn.outcome.error.as_deref() == Some("agent_preempted") => {
-                            TransitionReason::Interrupted
-                        }
-                        _ => TransitionReason::TurnFailed,
+                Ok(turn) => {
+                    let reason = if turn.outcome.error.as_deref() == Some("agent_preempted") {
+                        TransitionReason::Interrupted
+                    } else {
+                        TransitionReason::TurnFailed
                     };
-                    lane_queue::transition(
-                        &mut db,
-                        &request.id,
-                        MessageState::Running,
-                        MessageState::Failed,
-                        reason,
-                        None,
-                        at,
-                    )?;
-                    turns.extend(other.ok());
+                    self.requests.fail(&request.id, reason, at)?;
+                    turns.push(turn);
+                }
+                Err(error) => {
+                    self.requests
+                        .fail(&request.id, TransitionReason::TurnFailed, at)?;
+                    return if turns.is_empty() {
+                        Err(error)
+                    } else {
+                        Ok(turns)
+                    };
                 }
             }
         }
         Ok(turns)
     }
+
+    /// A review turn after the seal. Its text becomes the memory the next
+    /// decision brief carries.
+    pub(crate) fn review(
+        &mut self,
+        trigger: Value,
+        brief: &Brief,
+        context: &mut TurnContext,
+    ) -> Result<LaneTurn> {
+        let turn = self.turn(Lane::Review, trigger, json!(brief.render()?), context)?;
+        if turn.outcome.status == TurnStatus::Ok && !turn.outcome.text.trim().is_empty() {
+            let text = crate::runtime::transcript::redact(&json!(bounded(
+                &turn.outcome.text,
+                MAX_MEMORY_CHARS
+            )));
+            rollover::atomic(
+                &self.root().join("memory.json"),
+                &json!({"session":self.c.session.to_string(),"turn_id":turn.outcome.id,"text":text}),
+            )?;
+        }
+        Ok(turn)
+    }
+}
+
+/// Today's spend per lane for the controller's budget reads, counting turns
+/// still in flight. Read only.
+pub(crate) fn spend(c: &Config) -> BTreeMap<Lane, Usage> {
+    let Ok(mut spend) = Ledger::new(c).read() else {
+        return BTreeMap::new();
+    };
+    for turn in spend.in_flight.values() {
+        add(spend.lanes.entry(turn.lane).or_default(), &turn.usage);
+    }
+    spend.lanes
 }

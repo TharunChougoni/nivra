@@ -116,6 +116,10 @@ struct Controller<'a> {
     aside_worker: Option<super::super::supervisor::Worker>,
     supervisor_worker: Option<super::super::supervisor::Worker>,
     event_worker: Option<redecision::Worker>,
+    /// pi lanes, when the planner has an `agent` block.
+    agent: Option<super::super::agent::service::LaneService>,
+    /// The built-in ranking the last rank pass produced, best first.
+    live_ranking: Vec<super::super::agent::Ranked>,
     event_mode: bool,
     supervisor_config_fallback: Option<planner::PlannerConfig>,
     event_config_reason: Option<&'static str>,
@@ -432,6 +436,10 @@ impl<'a> Controller<'a> {
             aside_worker: None,
             supervisor_worker: None,
             event_worker: None,
+            agent: event_config
+                .as_ref()
+                .and_then(super::super::agent::service::LaneService::start),
+            live_ranking: Vec::new(),
             event_mode,
             supervisor_config_fallback,
             event_config_reason,
@@ -495,6 +503,7 @@ impl<'a> Controller<'a> {
             self.scorer_tick(now);
         }
         self.owner_research(now, research_context_unavailable);
+        self.agent_tick(t, active && history_admitted && self.universe.is_some());
         if t.day > self.config.session {
             match self.rollover(t)? {
                 Advance::Adopted => return Ok(Flow::Continue),
@@ -565,6 +574,48 @@ impl<'a> Controller<'a> {
         }
     }
 
+    /// Feed this pass to the pi lanes. A lane failure is reported and never
+    /// stops the controller: protection and fills stay deterministic.
+    fn agent_tick(&mut self, t: Now, decision_ready: bool) {
+        let (Some(agent), Some(cfg)) = (self.agent.as_mut(), self.event_config.as_ref()) else {
+            return;
+        };
+        let Ok(store) = self.feature_store.lock() else {
+            return;
+        };
+        let rank_max_age = cfg
+            .discovery
+            .as_ref()
+            .map_or(0, |settings| settings.max_scan_age_ms);
+        let ranking = if t.now.saturating_sub(self.last_rank).max(0) <= rank_max_age {
+            self.live_ranking.as_slice()
+        } else {
+            &[]
+        };
+        let cycle = super::super::agent::service::Cycle {
+            c: &self.config,
+            cfg,
+            now: t.now,
+            minute: t.m,
+            sealed: self.reported && t.day >= self.config.session,
+            portfolio: &self.p,
+            instruments: &self.tradable,
+            ranking,
+            ranked_at: self.last_rank,
+            decision_ready,
+            scanner: &self.scan,
+            store: &store,
+            index: self
+                .config
+                .index_feeds
+                .enabled
+                .then(|| self.index_context.json()),
+        };
+        if let Err(error) = agent.tick(&cycle) {
+            eprintln!("agent_lanes_failed reason={}", failure_code(error.as_ref()));
+        }
+    }
+
     /// Cancel workers, then settle the book for an operator or service stop.
     fn stop(mut self, now: i64) -> Result<()> {
         let mut intent = shutdown::intent(&self.config, now);
@@ -577,6 +628,9 @@ impl<'a> Controller<'a> {
         drop(self.supervisor_worker.take());
         drop(self.aside_worker.take());
         self.research_lane.stop();
+        if let Some(agent) = self.agent.take() {
+            agent.stop();
+        }
         let in_flight = self.event_worker.take().map(|worker| {
             worker
                 .cancel
@@ -1362,6 +1416,9 @@ impl<'a> Controller<'a> {
                 ),
                 None => projection,
             };
+            if self.agent.is_some() {
+                self.live_ranking = super::super::agent::service::ranking(&projection);
+            }
             let fresh_count = projection["fresh_count"].as_u64().unwrap_or(0);
             let fraction = settings
                 .market_feed
@@ -1774,6 +1831,10 @@ impl<'a> Controller<'a> {
             } else {
                 None
             };
+        if let Some(agent) = self.agent.take() {
+            agent.stop();
+        }
+        self.live_ranking.clear();
         self.supervisor_config_fallback = None;
         self.p.settings.exit_policy = self
             .event_config
@@ -1804,6 +1865,10 @@ impl<'a> Controller<'a> {
                 true
             }
         };
+        self.agent = self
+            .event_config
+            .as_ref()
+            .and_then(super::super::agent::service::LaneService::start);
         Ok(())
     }
 
@@ -2057,6 +2122,9 @@ impl<'a> Controller<'a> {
         };
         let research_context_status = research_context_status(research_context_unavailable);
         let mut v_json = serde_json::json!({"research_library":research_library,"experiment_lifecycle":experiment_lifecycle,"instrument_display":self.display_catalog_status,"paper_only":true,"live_enabled":LIVE_ENABLED,"account":c.account,"authorized_session":c.session,"next_session_config":c.next_sessions(day)?,"policy":self.p.policy,"model_led":self.p.model_led,"strategy_decision":rollover::published_decision(c),"status":status,"as_of_ms":completed_at_ms,"universe_size":self.universe.as_ref().map(|u|u.instruments.len()),"universe_exclusions":self.universe.as_ref().map(|u|&u.exclusions),"security_ready":self.universe.is_some(),"scanned_count":scanned_count,"pending_count":self.universe.as_ref().map(|u|u.instruments.len().saturating_sub(scanned_count as usize)),"market_feed":self.feed_health,"oldest_scan_age_ms":oldest,"screen_reasons":reasons,"discovery":discovery_status,"ranking":self.scan.ranking.iter().take(10).collect::<Vec<_>>(),"capital":self.p.allocation()?,"planner":self.planner_status,"nifty_options":self.option_status,"scorer_trigger":self.scorer_status,"research_tasks":self.owner_research_status,"activity_attribution":owner_activity,"retention":self.retention_status,"readiness":self.readiness_status,"history_preparation":self.history_status,"model_initialization":initialization,"model_status":"model-led","entry_status":entry_status,"realised_net_pnl_by_fill":self.p.realised_net_pnl(),"portfolio":self.p,"read_failure_reason":self.read_failure,"fee_policy":format!("SIMULATION_ONLY: {}", serde_json::to_string(&self.p.costs.clone().ok_or("paper_costs_required")?)?),"updater":updater_status});
+        if let Some(agent) = &self.agent {
+            v_json["agent"] = agent.status();
+        }
         v_json["owner_review"] = owner_review_status;
         v_json["owner_research"] = owner_research;
         v_json["research_context"] = research_context_status;
