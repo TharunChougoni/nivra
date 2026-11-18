@@ -81,6 +81,10 @@ bounds and role validation. `planner.rs` reexports the existing paths;
 `planner/turn.rs` owns turn execution. Serialized role configuration and budget
 semantics are unchanged.
 
+`runtime/agent/` owns the opt-in pi agent service (`planner.agent`, absent by
+default): the JSONL client, the lane runner and budgets, and the tool bridge
+that serves pi's calls through the harness executors. See [pi agent lanes](AGENT.md).
+
 `runtime/web_tools/` owns the opt-in orchestrator web search/fetch/news tools:
 configuration, public-HTTPS URL policy, bounded provider reads, per-run
 budget and the session `model/web-tools.ndjson` call record. It has no broker

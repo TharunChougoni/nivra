@@ -41,6 +41,21 @@ jobs:
       - name: Run dashboard tests
         run: npm test --prefix rust/nivra-cli/src/runtime/web/v2
 
+  agent-js:
+    name: pi agent tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install, build and test the agent
+        run: |
+          npm ci --prefix agent
+          npm run build --prefix agent
+          npm test --prefix agent
+
   rust-fmt-clippy:
     name: Rust fmt + clippy
     runs-on: ubuntu-24.04

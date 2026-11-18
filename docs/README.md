@@ -16,6 +16,7 @@ start.
 | [Operations](OPERATIONS.md) | Configuration, startup, recovery, releases and operator safety procedures |
 | [Strategy](STRATEGY.md) | Paper mandate, execution gates, fees and Nifty option scope |
 | [Model Harness](MODEL_HARNESS.md) | Digest/owner roles, tools, budgets, trust boundaries and limits |
+| [pi agent lanes](AGENT.md) | Opt-in pi service: protocol, tool bridge, lanes, budgets and VM install |
 | [Dashboard](DASHBOARD.md) | Read-only API, React workspace and captured-data projections |
 | [Testing](TESTING.md) | Behavioral test strategy and the current gate |
 | [Development](DEVELOPMENT.md) | Build, release workflow and immutable-tag policy |

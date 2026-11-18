@@ -9,6 +9,9 @@ provider response alone never establishes a fill.
 | Digest | Configured `digest` profile (normally `gpt-6-luna` / `openai_codex`) | Current factual evidence, coverage, gaps and provenance; no trade decision or veto |
 | Orchestrator | Reviewed configured model/transport profile | Persistent paper action, size, holding and exit decisions; research and registered workers |
 
+The opt-in [pi agent lanes](AGENT.md) run decision, research and review turns
+on pi with the same tool executors; without `planner.agent` nothing here changes.
+
 Standing prompts combine the host objective with `data_owner.md` for Luna and
 `orchestrator.md` for the owner, subject to explicit reviewed prompt overrides.
 Evidence, search and prior output are lower-trust content. The objective retains
