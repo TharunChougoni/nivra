@@ -80,7 +80,7 @@ fn turn(args: &Args) -> Result<(bool, Value)> {
         None => Vec::new(),
     };
     let triggers = [Trigger::new(TriggerKind::Schedule, "agent_turn", now)];
-    let memory = lanes::memory(&c).map(|(_, text)| text);
+    let memory = lanes::memory(&c, lane);
     let facts = Facts {
         session: SessionFacts {
             date: c.session.to_string(),
@@ -96,7 +96,7 @@ fn turn(args: &Args) -> Result<(bool, Value)> {
         },
         portfolio: &portfolio,
         ranking: &live,
-        memory: memory.as_deref(),
+        memory: memory.as_ref(),
         execution: "shadow_never_executed",
     };
     let lane_settings = settings.lane(lane)?;
@@ -144,6 +144,11 @@ fn turn(args: &Args) -> Result<(bool, Value)> {
     {
         return Err("agent_no_eligible_evidence".into());
     }
+    if lane == Lane::Review
+        && (!portfolio.closed || !lanes::sealed_review_source(&c, &c.directory, c.session))
+    {
+        return Err("agent_review_requires_sealed_report".into());
+    }
     let (bundle, _) = planner::call_time_input(&c, &cfg, &portfolio, &instruments, &|| now)?;
     let mut context = TurnContext {
         bundle,
@@ -168,7 +173,17 @@ fn turn(args: &Args) -> Result<(bool, Value)> {
             json!(brief.render()?),
             &mut context,
         )?],
-        Lane::Review => vec![runner.review(trigger, &brief, &mut context)?],
+        Lane::Review => {
+            if spent.calls >= lane_settings.daily_calls
+                || spent.cost_usd >= lane_settings.daily_cost_usd
+            {
+                return Err("agent_budget_exhausted".into());
+            }
+            if !lanes::claim_review(&c)? {
+                return Err("agent_review_already_ran".into());
+            }
+            vec![runner.review(trigger, &brief, &mut context)?]
+        }
     };
     drop(runner);
     agent.shutdown()?;

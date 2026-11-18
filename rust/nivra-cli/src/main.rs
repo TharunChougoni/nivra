@@ -234,6 +234,8 @@ enum Command {
     AgentCheck(runtime::agent::check::Args),
     /// Inspect the brief or run one shadow pi turn against the current book.
     AgentTurn(runtime::agent::turn_cli::Args),
+    /// Summarize recorded pi shadow decisions and the sealed paper session.
+    AgentShadowReport(runtime::agent::shadow_report::Args),
     /// Quick offline binary/storage self-check; never opens a session.
     SelfCheck {
         #[arg(long)]
@@ -666,6 +668,7 @@ fn main() -> ExitCode {
         }
         Command::AgentCheck(args) => runtime::agent::check::run(args),
         Command::AgentTurn(args) => runtime::agent::turn_cli::run(args),
+        Command::AgentShadowReport(args) => runtime::agent::shadow_report::run(args),
         Command::SelfCheck { expected_version } => self_check(expected_version.as_deref()),
         Command::MemoryCheck { evidence } => memory_check(&evidence),
         Command::Retention {

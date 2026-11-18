@@ -379,10 +379,10 @@ fn every_lane_tool_round_trips_through_the_bridge() {
                 replies.push((name.to_owned(), peer.call(&id, name, args(name))));
             }
             // A tool from outside the lane is refused before any executor.
-            let foreign = if turn["lane"] == "decision" {
-                "write"
-            } else {
-                "plan"
+            let foreign = match turn["lane"].as_str().unwrap() {
+                "decision" => "write",
+                "review" => "run",
+                _ => "plan",
             };
             replies.push(("foreign".into(), peer.call(&id, foreign, json!({}))));
             peer.finish(&id, "ok", "done", 1, 0.0);
@@ -411,6 +411,164 @@ fn every_lane_tool_round_trips_through_the_bridge() {
         assert_eq!(turn.plan.is_some(), lane == Lane::Decision);
     }
     assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn research_lane_writes_and_runs_a_scores_only_ranker() {
+    use crate::runtime::workspace::{self, WorkspaceOp, WorkspaceScope};
+
+    let dir = tempfile::tempdir().unwrap();
+    let (c, mut cfg) = all_tools(dir.path());
+    cfg.workspace.as_mut().unwrap().network = true;
+    std::fs::write(
+        c.planner_config.as_ref().unwrap(),
+        serde_json::to_vec(&cfg).unwrap(),
+    )
+    .unwrap();
+    let workspace = cfg.workspace.as_ref().unwrap();
+    let script = "scripts/net_edge.py";
+    let root = workspace::ensure(&c.directory, workspace).unwrap();
+    let canary = c.directory.join("ranker-fixture.py");
+    std::fs::write(&canary, "print('{}')\n").unwrap();
+
+    let host_net = std::fs::read_link("/proc/self/ns/net").unwrap();
+    let host_net = host_net.to_str().unwrap();
+    let source = format!(
+        r#"import json, os, resource, sys
+
+assert os.readlink("/proc/self/ns/net") != {host_net:?}
+assert resource.getrlimit(resource.RLIMIT_AS)[0] <= 256 * 1024 * 1024
+with open(sys.argv[1]) as data:
+    features = json.load(data)
+print(json.dumps({{key: row["market_relative_bps"] - row["spread_bps"]
+                  for key, row in features.items()}}))
+"#
+    );
+    for scope in [WorkspaceScope::Decision, WorkspaceScope::Research] {
+        assert_eq!(
+            workspace::execute_scoped(
+                &c.directory,
+                workspace,
+                scope,
+                WorkspaceOp::Write {
+                    path: script.into(),
+                    text: source.clone(),
+                },
+            )
+            .unwrap_err()
+            .to_string(),
+            "workspace_write_refused"
+        );
+    }
+    let features = json!({
+        "NSE_EQ|A": {"market_relative_bps": 30, "spread_bps": 2.5},
+        "NSE_EQ|B": {"market_relative_bps": 10, "spread_bps": 5.5}
+    });
+    let run = WorkspaceOp::Run {
+        script: script.into(),
+        input: Some(features.clone()),
+        input_path: None,
+    };
+    let script_dir = root.join("scripts");
+    let (client, peer) = connect(move |peer| {
+        let (id, turn) = peer.turn();
+        assert_eq!(turn["lane"], "research");
+        let write = |peer: &mut Peer, path, text: &str| {
+            peer.call(&id, "write", json!({"path":path,"text":text}))
+        };
+        let run = |peer: &mut Peer, script, input: Value, input_path: Value| {
+            peer.call(
+                &id,
+                "run",
+                json!({"script":script,"input":input,"input_path":input_path}),
+            )
+        };
+        let written = write(peer, script, &source);
+        assert_eq!(written["ok"], true, "{written}");
+        assert_eq!(written["output"]["execution_authorized"], false);
+        std::fs::write(script_dir.join("net_edge.params.json"), "{}").unwrap();
+        let input = json!(features.to_string());
+        let scored = run(peer, script, input.clone(), Value::Null);
+        assert_eq!(scored["ok"], true, "{scored}");
+        assert_eq!(
+            scored["output"]["scores"],
+            json!({"NSE_EQ|A":27.5,"NSE_EQ|B":4.5})
+        );
+        assert_eq!(
+            scored["output"]["source_sha256"],
+            written["output"]["sha256"]
+        );
+        assert_eq!(scored["output"]["execution_authorized"], false);
+        assert_eq!(scored["output"]["evidence_only"], true);
+
+        for path in ["scripts/sub/rank.py", "scripts/rank.txt"] {
+            assert_eq!(
+                write(peer, path, &source)["error"],
+                "workspace_write_refused"
+            );
+        }
+        assert_eq!(
+            write(peer, "scripts/../tools/rank.py", &source)["error"],
+            "workspace_path_escape"
+        );
+        assert_eq!(
+            run(peer, script, Value::Null, json!("notes/features.json"))["error"],
+            "workspace_run_ranker_input_required"
+        );
+        for invalid in [
+            json!("{}"),
+            json!("{\"x\":3}"),
+            json!("{\"x\":{},\"x\":{}}"),
+        ] {
+            assert_eq!(
+                run(peer, script, invalid, Value::Null)["error"],
+                "workspace_run_input_invalid"
+            );
+        }
+        std::os::unix::fs::symlink(&canary, script_dir.join("linked.py")).unwrap();
+        assert_eq!(
+            run(peer, "scripts/linked.py", input.clone(), Value::Null)["error"],
+            "workspace_symlink"
+        );
+        assert_eq!(
+            write(peer, "scripts/linked.py", &source)["error"],
+            "workspace_symlink"
+        );
+        let foreign = "scripts/foreign.py";
+        assert_eq!(write(peer, foreign, "print('{\"outside\":1}')")["ok"], true);
+        assert_eq!(
+            run(peer, foreign, input, Value::Null)["error"],
+            "workspace_run_output_invalid"
+        );
+        peer.finish(&id, "ok", "Ranked both instruments.", 1, 0.0);
+    });
+    let clock = || 1_760_600_000_000_i64;
+    let settings = settings(100, 10.0);
+    let mut agent = fixture_agent(client);
+    let mut runner = LaneRunner::new(&mut agent, &settings, &c, &cfg, &clock);
+    let turn = runner
+        .turn(
+            Lane::Research,
+            json!({"kind":"test"}),
+            json!({}),
+            &mut context("5000"),
+        )
+        .unwrap();
+    assert_eq!(turn.outcome.status, TurnStatus::Ok);
+    peer.join().unwrap();
+    let mut workspace = cfg.workspace.unwrap();
+    workspace.run_allowlist.push(script.into());
+    for (scope, expected) in [
+        (WorkspaceScope::Decision, "workspace_run_not_allowlisted"),
+        (WorkspaceScope::Research, "workspace_research_scope_invalid"),
+    ] {
+        assert_eq!(
+            workspace::execute_scoped(&c.directory, &workspace, scope, run.clone())
+                .unwrap_err()
+                .to_string(),
+            expected
+        );
+    }
 }
 
 /// Failure modes: a research request that never reaches a research turn, an
@@ -618,4 +776,68 @@ fn budgets_preemption_and_agent_exit_stop_turns() {
         serde_json::from_slice(&std::fs::read(c.directory.join("model/agent/usage.json")).unwrap())
             .unwrap();
     assert_eq!(spent["lanes"]["review"]["cost_usd"], 0.25);
+}
+
+#[test]
+fn next_decision_receives_only_the_sealed_predecessor_review() {
+    let dir = tempfile::tempdir().unwrap();
+    let original = dir.path().join("original");
+    std::fs::create_dir(&original).unwrap();
+    let (prior, cfg) = crate::runtime::decision_owner::owner_fixture_config(&original);
+    let mut successor = prior.clone();
+    successor.session = "2026-10-19".parse().unwrap();
+    successor.previous_session = prior.session;
+    successor.directory = successor.sessions_root.as_ref().unwrap().join("2026-10-19");
+    successor.legacy_directory = Some(original.clone());
+
+    assert!(lanes::claim_review(&prior).unwrap());
+    assert!(!lanes::claim_review(&prior).unwrap());
+
+    let settings = settings(10, 1.0);
+    let clock = || 1_760_600_000_000_i64;
+    let memory_text = "Wait for confirmed depth after the open.";
+    let (client, peer) = connect(move |peer| {
+        let (id, request) = peer.turn();
+        assert_eq!(request["lane"], "review");
+        peer.finish(&id, "ok", memory_text, 1, 0.01);
+    });
+    let mut agent = fixture_agent(client);
+    let mut context = context("5000");
+    let brief = fixture_brief(&context, clock());
+    let review = LaneRunner::new(&mut agent, &settings, &prior, &cfg, &clock)
+        .review(json!({"kind":"seal"}), &brief, &mut context)
+        .unwrap();
+    peer.join().unwrap();
+
+    assert!(lanes::memory(&successor, Lane::Decision).is_none());
+    let mut report = json!({"session":prior.session,"account":prior.account,"broker":"upstox",
+        "paper_only":true,"live_enabled":false,"portfolio":{"closed":true}});
+    let path = original.join("report.json");
+    std::fs::write(&path, report.to_string()).unwrap();
+
+    let turn_id = review.outcome.id;
+    let expected = json!({"session":prior.session,"turn_id":turn_id,"text":memory_text});
+    let (client, peer) = connect(move |peer| {
+        let (id, request) = peer.turn();
+        assert_eq!(request["lane"], "decision");
+        assert_eq!(read_brief(&request)["memory"], expected);
+        peer.finish(&id, "ok", "Using the prior review", 1, 0.01);
+    });
+    let mut agent = fixture_agent(client);
+    let mut first_brief = brief;
+    first_brief.session.date = successor.session.to_string();
+    first_brief.memory = lanes::memory(&successor, Lane::Decision);
+    LaneRunner::new(&mut agent, &settings, &successor, &cfg, &clock)
+        .decision(json!({"kind":"schedule"}), first_brief, &mut context)
+        .unwrap();
+    peer.join().unwrap();
+
+    report["account"] = json!("different-paper-book");
+    std::fs::write(&path, report.to_string()).unwrap();
+    assert!(lanes::memory(&successor, Lane::Decision).is_none());
+
+    report["account"] = json!(prior.account);
+    std::fs::write(&path, report.to_string()).unwrap();
+    successor.previous_session = "2026-10-15".parse().unwrap();
+    assert!(lanes::memory(&successor, Lane::Decision).is_none());
 }

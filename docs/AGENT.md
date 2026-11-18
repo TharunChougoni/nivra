@@ -89,8 +89,12 @@ research for itself. A call to a tool outside the lane returns
 Rust validates each tool's arguments and writes a durable claim before any
 tool effect. The tool result is archived under `model/agent/turns/<turn>/`.
 Registered analysis requires a reviewed analysis and dataset. Workspace runs
-and installs require their corresponding allowlist entries. Web tools use the
-configured web policy. Tools that depend on missing evidence or artifacts
+and installs require their corresponding allowlist entries. The research lane
+can also write scores-only Python rankers under `scripts/<name>.py`. To run one,
+pass its path and a bounded JSON object of per-instrument features as inline
+`input`. Rust runs pi research scripts with network access disabled and returns
+advisory scores with the hash of the source it ran. Web tools use the configured
+web policy. Tools that depend on missing evidence or artifacts
 return their executor's reason code.
 
 `plan` returns `{status:"validated", verdicts, execution_authorized:false}`.
@@ -111,9 +115,12 @@ when validation refuses it.
   `model/agent/research/<request>.json`, posts a bounded `research_result`
   message for the next decision brief and marks the request done. A failed or
   pre-empted turn fails the request; the decision lane may ask again.
-- **Review.** The session seal requests one review turn. Its text is saved
-  as memory for that book and can trigger a research agenda. Carrying the
-  memory into a new session directory is pending.
+- **Review.** The session seal requests one review turn. Its redacted text is
+  saved as memory for that book and can trigger a research agenda. The next
+  trading session reads it from the calendar's immediate predecessor. Rust
+  verifies the predecessor's closed paper report and account. The decision
+  brief includes the review's session, turn ID, and text so the model can
+  cite the source in its plan notes.
 
 Each lane has its own system prompt (`agent/prompts/<lane>.md`, condensed from
 the orchestrator, research and review prompts) and one pi session per session
@@ -304,3 +311,23 @@ With the controller stopped, omit `--dry` to call the configured provider
 once. The command acquires the controller lock, charges the lane's daily
 budget, and records any decision plan as a shadow proposal. Decision turns
 require current-session evidence during the configured trading window.
+Review turns require a sealed report and share the controller's one-attempt
+claim for that session.
+
+## Compare a shadow session
+
+Run the evidence report against the paper runtime configuration after the
+session closes.
+
+```sh
+nivra agent-shadow-report --config PAPER_CONFIG.json
+```
+
+The report matches controller dispatches, decision turns, and settled plans.
+It shows observed open and pre-close coverage, rejected actions, missing
+receipts, and the matched session seal. It excludes manual turns from
+controller coverage. The legacy plan counts require a checkpointed book.
+Pi's recorded usage is in USD and the legacy estimate is in INR.
+
+Use the report to inspect the session exit criteria. It cannot establish
+continuous controller or feed availability between recorded events.

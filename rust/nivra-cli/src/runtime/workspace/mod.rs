@@ -17,6 +17,7 @@ use std::{
 const SCANNER_PY: &str = include_str!("../../../../../strategies/cost_aware_momentum.py");
 const SCANNER_PARAMS: &str =
     include_str!("../../../../../strategies/cost_aware_momentum.params.json");
+const MAX_RANKER_INPUT_BYTES: usize = 65_536;
 const README: &str = r#"# Orchestrator workspace
 
 This directory belongs to the persistent paper decision owner. Files here are
@@ -29,14 +30,15 @@ Layout:
 - `notes/` persistent notes across turns
 - `skills/` standing procedures the owner writes for itself
 - `tools/` files installed only when name and sha256 match the reviewed allowlist
+- `scripts/` Python rankers written and run by the pi research lane
 - `data/` bounded input JSON the owner prepares for a script
 - `reports/` advisory output the owner chooses to keep
 - `journal/` workspace notes, not the trading book journal
 
-Write only under `notes/`, `skills/`, `reports/`, `data/` and `journal/`.
-Run only allowlisted scripts. They execute in the resource-limited sandbox; the
-network is disabled unless the reviewed `workspace.network` setting is explicitly
-enabled. Scanner scores are advisory rankings, not orders.
+The decision owner can write under `notes/`, `skills/`, `reports/`, `data/` and
+`journal/` and run reviewed scripts. The pi research lane can write notes,
+skills and `scripts/<name>.py` and run its rankers with explicit inline features.
+Its sandbox always disables network access. All scores are advisory.
 "#;
 
 fn default_root() -> PathBuf {
@@ -125,8 +127,8 @@ impl WorkspaceRefV1 {
 }
 /// Research turns may only write notes/skills. Decision turns keep the existing
 /// notes/skills/reports/data/journal scope. The pi research lane writes like a
-/// research turn and may also run and install owner-allowlisted tools, both in
-/// the no-network sandbox.
+/// research turn, can write Python rankers, may run rankers and allowlisted
+/// scripts in the no-network sandbox, and may install hash-allowlisted files.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WorkspaceScope {
     Decision,
@@ -347,8 +349,13 @@ pub(crate) fn parse_tool(name: &str, args: Value) -> Result<WorkspaceOp> {
             // Legacy archived calls may contain an object; new strict calls use
             // a string so arbitrary script keys never become free-form schemas.
             if let Some(Value::String(text)) = &a.input {
-                a.input =
-                    Some(serde_json::from_str(text).map_err(|_| "workspace_run_input_invalid")?);
+                let ranker = normalize_rel(&a.script).is_ok_and(|rel| ranker_script(&rel));
+                let decoded = if ranker {
+                    nivra_core::native::decode_bounded(text.as_bytes(), MAX_RANKER_INPUT_BYTES).ok()
+                } else {
+                    serde_json::from_str(text).ok()
+                };
+                a.input = Some(decoded.ok_or("workspace_run_input_invalid")?);
             }
             if a.input.as_ref().is_some_and(|value| !value.is_object()) {
                 return Err("workspace_run_input_invalid".into());
@@ -398,7 +405,14 @@ pub(crate) fn execute_scoped(
             script,
             input,
             input_path,
-        } => run_script(&root, settings, &script, input, input_path.as_deref()),
+        } => run_script(
+            &root,
+            settings,
+            scope,
+            &script,
+            input,
+            input_path.as_deref(),
+        ),
         WorkspaceOp::Install { name, text } => install_tool(&root, settings, &name, &text),
     }
 }
@@ -510,11 +524,11 @@ fn write_file(
     path: &str,
     text: &str,
 ) -> Result<Value> {
-    let allowed = match scope {
-        WorkspaceScope::Decision => write_allowed,
-        WorkspaceScope::Research | WorkspaceScope::ResearchSandbox => research_write_allowed,
-    };
-    put_file(root, settings, path, text, allowed)
+    put_file(root, settings, path, text, |rel| match scope {
+        WorkspaceScope::Decision => write_allowed(rel),
+        WorkspaceScope::Research => research_write_allowed(rel),
+        WorkspaceScope::ResearchSandbox => research_write_allowed(rel) || ranker_script(rel),
+    })
 }
 
 fn put_file(
@@ -553,6 +567,7 @@ fn put_file(
 fn run_script(
     root: &Path,
     settings: &WorkspaceSettings,
+    scope: WorkspaceScope,
     script: &str,
     input: Option<Value>,
     input_path: Option<&str>,
@@ -561,6 +576,17 @@ fn run_script(
         return Err("workspace_run_input_ambiguous".into());
     }
     let rel = normalize_rel(script)?;
+    let mut sandbox = sandbox_config(settings);
+    if scope == WorkspaceScope::ResearchSandbox {
+        sandbox.network = false;
+    }
+    if ranker_script(&rel) {
+        if scope != WorkspaceScope::ResearchSandbox {
+            return Err("workspace_run_not_allowlisted".into());
+        }
+        sandbox.memory_mb = sandbox.memory_mb.min(256);
+        return run_ranker(root, settings, &sandbox, &rel, input);
+    }
     let allowed = settings.run_allowlist.iter().any(|entry| {
         normalize_rel(entry)
             .ok()
@@ -607,10 +633,68 @@ fn run_script(
     } else {
         params_source = json!("input");
     }
-    let scores = nivra_sandbox::score_source(&sandbox_config(settings), &source, &features)
-        .map_err(sandbox_error)?;
+    score_script(&sandbox, &rel, &source, &features, params_source)
+}
+
+fn run_ranker(
+    root: &Path,
+    settings: &WorkspaceSettings,
+    sandbox: &ScorerSandboxConfig,
+    rel: &Path,
+    input: Option<Value>,
+) -> Result<Value> {
+    let Some(Value::Object(rows)) = input else {
+        return Err("workspace_run_ranker_input_required".into());
+    };
+    if rows.is_empty()
+        || rows.iter().any(|(key, row)| {
+            key == "params" || key.chars().any(char::is_control) || !row.is_object()
+        })
+    {
+        return Err("workspace_run_input_invalid".into());
+    }
+    let features = map_features(rows);
+    if serde_json::to_vec(&features)?.len() > MAX_RANKER_INPUT_BYTES {
+        return Err("workspace_run_input_invalid".into());
+    }
+
+    let path = resolve(root, rel, true)?;
+    ensure_private_dir(root, &root.join("scripts"))?;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|_| "workspace_run_missing")?;
+    let meta = file.metadata().map_err(|_| "workspace_run_missing")?;
+    if !meta.is_file() || meta.nlink() != 1 {
+        return Err("workspace_not_file".into());
+    }
+    if meta.uid() != current_uid() || meta.mode() & 0o077 != 0 {
+        return Err("workspace_permissions".into());
+    }
+    let limit = settings.max_file_bytes.min(settings.max_write_bytes);
+    let mut source = Vec::new();
+    file.take(limit + 1)
+        .read_to_end(&mut source)
+        .map_err(|_| "workspace_run_missing")?;
+    if source.len() as u64 > limit {
+        return Err("workspace_file_too_large".into());
+    }
+    let mut result = score_script(sandbox, rel, &source, &features, Value::Null)?;
+    result["source_sha256"] = json!(digest(&source));
+    Ok(result)
+}
+
+fn score_script(
+    sandbox: &ScorerSandboxConfig,
+    rel: &Path,
+    source: &[u8],
+    features: &nivra_sandbox::Features,
+    params_source: Value,
+) -> Result<Value> {
+    let scores = nivra_sandbox::score_source(sandbox, source, features).map_err(sandbox_error)?;
     Ok(json!({
-        "script": rel_display(&rel),
+        "script": rel_display(rel),
         "status": "ok",
         "scores": scores,
         "score_count": scores.len(),
@@ -696,6 +780,10 @@ fn research_write_allowed(rel: &Path) -> bool {
         return false;
     };
     matches!(first.to_str(), Some("notes" | "skills")) && components.next().is_some()
+}
+
+fn ranker_script(rel: &Path) -> bool {
+    rel.parent() == Some(Path::new("scripts")) && rel.extension().is_some_and(|ext| ext == "py")
 }
 
 pub(crate) fn normalize_rel(path: &str) -> Result<PathBuf> {

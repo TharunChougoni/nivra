@@ -12,6 +12,7 @@ use crate::runtime::planner::{Backend, CallGuard, PlannerConfig, preview_guard};
 use crate::runtime::web_tools::Transport;
 use crate::runtime::workspace::WorkspaceScope;
 use crate::runtime::{Config, Result, digest, rollover};
+use chrono::NaiveDate;
 use nivra_core::execution::{Instrument, Portfolio};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -204,14 +205,95 @@ pub(crate) fn root(c: &Config) -> PathBuf {
     c.directory.join("model").join("agent")
 }
 
-/// The review memory the next decision brief carries: the last review's text.
-pub(crate) fn memory(c: &Config) -> Option<(String, String)> {
-    let bytes = crate::read_bounded(&root(c).join("memory.json"), 64_000).ok()?;
-    let memory: Value = serde_json::from_slice(&bytes).ok()?;
-    Some((
-        memory["session"].as_str()?.to_owned(),
-        memory["text"].as_str()?.to_owned(),
-    ))
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct ReviewMemory {
+    pub session: NaiveDate,
+    pub turn_id: String,
+    pub text: String,
+}
+
+pub(crate) fn sealed_review_source(c: &Config, directory: &Path, session: NaiveDate) -> bool {
+    #[derive(Deserialize)]
+    struct Report {
+        account: String,
+        session: NaiveDate,
+        broker: String,
+        paper_only: bool,
+        live_enabled: bool,
+        portfolio: Closed,
+    }
+
+    #[derive(Deserialize)]
+    struct Closed {
+        closed: bool,
+    }
+
+    let report = crate::read_bounded(&directory.join("report.json"), 16_000_000)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Report>(&bytes).ok());
+    report.is_some_and(|report| {
+        report.account == c.account
+            && report.session == session
+            && report.broker == "upstox"
+            && report.paper_only
+            && !report.live_enabled
+            && report.portfolio.closed
+    })
+}
+
+pub(crate) fn claim_review(c: &Config) -> Result<bool> {
+    let directory = root(c);
+    private_dir(&directory)?;
+    let marker = directory.join("review-claimed.json");
+    let mut file = match std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(marker)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    serde_json::to_writer(&mut file, &c.session)?;
+    file.sync_all()?;
+    std::fs::File::open(&directory)?.sync_all()?;
+    Ok(true)
+}
+
+fn read_memory(c: &Config, directory: &Path, session: NaiveDate) -> Option<ReviewMemory> {
+    let path = directory.join("model/agent/memory.json");
+    let bytes = crate::read_bounded(&path, 64_000).ok()?;
+    let mut memory: ReviewMemory = serde_json::from_slice(&bytes).ok()?;
+    if memory.session != session
+        || !memory.turn_id.starts_with("review-")
+        || !super::super::model_history::valid_id(&memory.turn_id)
+        || !sealed_review_source(c, directory, session)
+    {
+        return None;
+    }
+    let safe = crate::runtime::transcript::redact(&json!(bounded(&memory.text, MAX_MEMORY_CHARS)));
+    memory.text = safe.as_str()?.to_owned();
+    (!memory.text.trim().is_empty()).then_some(memory)
+}
+
+pub(crate) fn memory(c: &Config, lane: Lane) -> Option<ReviewMemory> {
+    if lane == Lane::Research
+        && let Some(memory) = read_memory(c, &c.directory, c.session)
+    {
+        return Some(memory);
+    }
+    let prior = c.previous_session;
+    if prior >= c.session {
+        return None;
+    }
+    let dated = rollover::root(c)
+        .ok()
+        .map(|root| root.join(prior.to_string()));
+    dated
+        .as_deref()
+        .and_then(|directory| read_memory(c, directory, prior))
+        .or_else(|| read_memory(c, c.legacy_directory.as_deref()?, prior))
 }
 
 fn model_id(model: &ModelSpec) -> String {

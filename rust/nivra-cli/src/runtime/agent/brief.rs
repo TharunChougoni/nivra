@@ -2,6 +2,7 @@
 //! controller state. Fields serialize in declaration order with the content
 //! that changes least first, and every list is bounded.
 use super::Lane;
+use super::lanes::ReviewMemory;
 use super::protocol::Usage;
 use super::triggers::{Held, Phase, Ranked, Trigger};
 use crate::runtime::Result;
@@ -10,7 +11,6 @@ use nivra_core::finance::Price;
 use serde::Serialize;
 use serde_json::Value;
 
-const MAX_MEMORY_CHARS: usize = 8_000;
 const MAX_FILLS: usize = 10;
 const MAX_POSITIONS: usize = 20;
 const MAX_RANKING: usize = 20;
@@ -21,7 +21,7 @@ pub(crate) const MAX_BRIEF_BYTES: usize = 96_000;
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct Brief {
     /// The last review's memory text, carried into the next session.
-    pub memory: Option<String>,
+    pub memory: Option<ReviewMemory>,
     pub session: SessionFacts,
     pub book: BookFacts,
     pub budget: BudgetFacts,
@@ -139,7 +139,7 @@ pub(crate) struct Facts<'a> {
     pub session: SessionFacts,
     pub portfolio: &'a Portfolio,
     pub ranking: &'a [Ranked],
-    pub memory: Option<&'a str>,
+    pub memory: Option<&'a ReviewMemory>,
     pub execution: &'static str,
 }
 
@@ -217,9 +217,7 @@ impl Brief {
             })
             .collect();
         Self {
-            memory: facts
-                .memory
-                .map(|text| text.chars().take(MAX_MEMORY_CHARS).collect()),
+            memory: facts.memory.cloned(),
             session: facts.session.clone(),
             book: BookFacts {
                 cash: p.cash.to_string(),

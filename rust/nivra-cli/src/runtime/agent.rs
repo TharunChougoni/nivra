@@ -13,6 +13,7 @@ mod lanes;
 mod protocol;
 mod requests;
 pub(crate) mod service;
+pub(crate) mod shadow_report;
 mod tools;
 mod triggers;
 pub(crate) mod turn_cli;

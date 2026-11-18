@@ -126,7 +126,12 @@ pub(crate) fn lane_definitions(
             None => Some(plan_definition()),
             Some(name) => rust.iter().find(|definition| definition["name"] == name).map(
                 |definition| {
-                    json!({"name":tool.name,"description":definition["description"],"parameters":definition["parameters"]})
+                    let description = match tool.name {
+                        "write" => json!("Write UTF-8 notes or skills, or author a Python ranker at scripts/<name>.py."),
+                        "run" => json!("Run a Python ranker at scripts/<name>.py in the no-network sandbox. Supply input as a JSON object encoded as a string, with one feature object per instrument key, and set input_path to null. Read the JSON from sys.argv[1] and print one JSON object mapping input instrument keys to finite scores. Reviewed allowlisted scripts also run offline and may use a workspace input_path or sibling params. All scores are advisory evidence."),
+                        _ => definition["description"].clone(),
+                    };
+                    json!({"name":tool.name,"description":description,"parameters":definition["parameters"]})
                 },
             ),
         })

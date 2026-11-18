@@ -407,10 +407,10 @@ impl LaneService {
                 return append(c, "triggers.ndjson", &entry);
             }
         };
-        if lane == Lane::Review && !self.claim_review(c)? {
+        if lane == Lane::Review && !lanes::claim_review(c)? {
             return self.skip(c, lane, &triggers, "agent_review_already_ran");
         }
-        let memory = lanes::memory(c).map(|(_, text)| text);
+        let memory = lanes::memory(c, lane);
         let facts = Facts {
             session: SessionFacts {
                 date: c.session.to_string(),
@@ -420,7 +420,7 @@ impl LaneService {
             },
             portfolio: p,
             ranking: cycle.ranking,
-            memory: memory.as_deref(),
+            memory: memory.as_ref(),
             execution: "shadow_never_executed",
         };
         let used = spent.get(&lane).cloned().unwrap_or_default();
@@ -479,21 +479,6 @@ impl LaneService {
             "triggers.ndjson",
             &json!({"event":"dispatched","lane":lane,"at_ms":cycle.now,"triggers":triggers}),
         )
-    }
-
-    /// The seal runs one review per session date, never again after a crash.
-    fn claim_review(&self, c: &Config) -> Result<bool> {
-        let marker = lanes::root(c).join("review-claimed.json");
-        let session = json!(c.session.to_string());
-        let claimed = crate::read_bounded(&marker, 256)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-        if claimed.as_ref() == Some(&session) {
-            return Ok(false);
-        }
-        lanes::private_dir(&lanes::root(c))?;
-        crate::runtime::rollover::atomic(&marker, &session)?;
-        Ok(true)
     }
 
     fn context(&self, cycle: &Cycle<'_>) -> Result<TurnContext> {
