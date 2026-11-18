@@ -594,10 +594,16 @@ fn updater_adopts_closed_carried_book_only_outside_market_hours() {
     p.closed = false;
     rewrite_book(&c, &p);
     assert!(!update_safe(&path, close).unwrap());
+    assert!(!update_book(&path).unwrap().open_stopped);
+    // Only an open operator-stopped book is one a plain restart cannot continue.
+    p.stopped = true;
+    rewrite_book(&c, &p);
+    assert!(update_book(&path).unwrap().open_stopped);
     p = book.clone();
     p.stopped = true;
     rewrite_book(&c, &p);
     assert!(!update_safe(&path, close).unwrap());
+    assert!(!update_book(&path).unwrap().open_stopped);
     p = book.clone();
     p.model_led = false;
     rewrite_book(&c, &p);

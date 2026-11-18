@@ -197,8 +197,13 @@ impl Host for Fake {
         self.health_checks
             .push(fs::read_link(self.home.join("nivra-current")).unwrap());
         if self.fail_next_health {
+            // The restarted controller reports its open book operator-stopped.
             self.fail_next_health = false;
-            Err("fake_unhealthy")
+            paper_health_at(
+                br#"{"paper_only":true,"live_enabled":false,"status":"stopped_operator_review_required","as_of_ms":1000000,"book":{"stopped":true,"closed":false}}"#,
+                "v0.6.0",
+                1_000_000,
+            )
         } else {
             paper_health_at(
                 br#"{"paper_only":true,"live_enabled":false,"status":"scanning","as_of_ms":1000000,"portfolio":{},"account":{}}"#,
@@ -691,6 +696,29 @@ fn update_decision_verifies_and_defers_then_activates_or_rolls_back() {
     ] {
         assert!(paper_health_at(bad, "v0.6.0", now).is_err());
     }
+    let stopped = br#"{"paper_only":true,"live_enabled":false,"status":"stopped_operator_review_required","as_of_ms":1000000,"book":{"stopped":true,"closed":false}}"#;
+    assert_eq!(
+        paper_health_at(stopped, "v0.6.0", now),
+        Err("update_health_book_operator_stopped")
+    );
+    // A closed book stopped before its seal rolls over normally; it is not refused.
+    let sealed = br#"{"paper_only":true,"live_enabled":false,"status":"idle","as_of_ms":1000000,"book":{"stopped":true,"closed":true}}"#;
+    assert!(paper_health_at(sealed, "v0.6.0", now).is_ok());
+    let mut probes = 0;
+    assert_eq!(
+        poll_health(
+            Duration::from_secs(60),
+            || Ok(0),
+            || {
+                probes += 1;
+                paper_health_at(stopped, "v0.6.0", now)
+            },
+            || Duration::ZERO,
+            |_| {},
+        ),
+        Err("update_health_book_operator_stopped")
+    );
+    assert_eq!(probes, 1);
     for ready_after in [3, 30, 31] {
         let elapsed = std::cell::Cell::new(Duration::ZERO);
         let mut attempts = 0;
@@ -865,6 +893,12 @@ fn update_decision_verifies_and_defers_then_activates_or_rolls_back() {
         };
         let evidence_bytes = fs::read(stage.join(marker)).unwrap();
         let evidence: serde_json::Value = serde_json::from_slice(&evidence_bytes).unwrap();
+        if fail {
+            assert_eq!(
+                evidence["recovery"]["cause"],
+                "update_health_book_operator_stopped"
+            );
+        }
         assert_eq!(evidence["previous"], old.to_str().unwrap());
         assert_eq!(evidence["new"], stage.to_str().unwrap());
         let artifacts: Vec<_> = [

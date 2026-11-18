@@ -1160,6 +1160,8 @@ pub(crate) struct BookAdmission {
     pub open_positions: u64,
     pub pending_orders: u64,
     pub halted: bool,
+    /// An open session book that an operator stopped; a restart keeps it stopped.
+    pub open_stopped: bool,
     pub flat_safe: bool,
     pub stopped_safe: bool,
     /// A closed, settled model-led book already carrying positions. The
@@ -1175,7 +1177,7 @@ pub(super) fn update_book(path: &Path) -> Result<BookAdmission> {
     mandate.validate()?;
     let c = current(&c)?;
     let (db, body) = bound_state(&c)?;
-    let (open, _stopped, halted, closed) = book_flags(&body)?;
+    let (open, stopped, halted, closed) = book_flags(&body)?;
     let portfolio = serde_json::from_str::<Portfolio>(&body).ok();
     let pending = portfolio
         .as_ref()
@@ -1200,6 +1202,7 @@ pub(super) fn update_book(path: &Path) -> Result<BookAdmission> {
         open_positions: open,
         pending_orders: pending,
         halted,
+        open_stopped: stopped && !closed,
         flat_safe: open == 0 && closed && !halted,
         // Carried holdings are allowed because the book is preserved and the
         // controller stays stopped until an explicit resume. A closed flat book

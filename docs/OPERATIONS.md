@@ -1573,10 +1573,12 @@ configuration path (replace `UPDATER_CONFIG`):
 nivra update --tag vX.Y.Z --config UPDATER_CONFIG
 ```
 
-Operator-stopped deploy (inside the blackout or with carried holdings): stop the paper
-service, then
+Operator-stopped deploy (inside the blackout or with carried holdings): request the
+operator stop, stop the paper service, then deploy:
 
 ```
+nivra stop --config PAPER_CONFIG --confirm-paper-review
+systemctl --user stop nivra-paper.service
 nivra update --tag vX.Y.Z --operator-stopped --confirm-paper-review --config UPDATER_CONFIG
 ```
 
@@ -1623,9 +1625,14 @@ explicit forced deploy (`--force-unwatched-window`) accepts a bounded restart
 window for that exposure, but never bypasses a risk halt, hold, identity,
 integrity or preflight check. The same explicit flag also admits a **flat**
 in-session book (no positions and no pending orders, not halted and not an
-operator-stopped book) with reason `market_open_flat`: the original book is
-preserved and the same session resumes after the health-checked restart. A
-halted or operator-stopped book still defers. A forced activation records
+operator-stopped book) with reason `market_open_flat`. The updater's stop is a
+service stop, so for every forced reason the original book is preserved and the
+same session continues after the health-checked restart. Health refuses an open
+book that comes back operator-stopped (`update_health_book_operator_stopped`,
+without waiting out the health budget), which rolls the activation back. A
+halted book still defers, and an open operator-stopped book defers with
+`deferred_operator_stopped_book_requires_operator_stopped_update` unless the
+update uses `--operator-stopped`. A forced activation records
 `unwatched` (`started_at`, `stopped_at`, `duration_ms`, `reason`, `forced:true`)
 in the transaction receipt and logs the same record; the window is never hidden.
 `--operator-stopped` remains the separate path that leaves the controller

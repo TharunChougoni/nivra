@@ -211,6 +211,11 @@ pub(crate) fn paper_health_at(body: &[u8], tag: &str, now_ms: i64) -> Result<()>
     }
     let view: serde_json::Value =
         serde_json::from_slice(body).map_err(|_| "update_dashboard_health_failed")?;
+    // The updater's own stop is a service stop, so an open book that comes back
+    // operator-stopped was not continued; only `--operator-stopped` keeps it so.
+    if view["book"]["stopped"] == true && view["book"]["closed"] == false {
+        return Err("update_health_book_operator_stopped");
+    }
     // Genuine older v1 health snapshots have as_of_ms but no heartbeat.
     // Timestamp-less fixtures cannot establish controller liveness.
     if crate::runtime::operational_health::controller_liveness(&view, now_ms).status
@@ -249,8 +254,9 @@ pub(crate) fn poll_health(
         if service()? != restarts {
             return Err("update_service_unhealthy");
         }
-        if result.is_ok() {
-            return Ok(());
+        // A stopped book stays stopped until a reviewed resume; waiting cannot help.
+        if matches!(result, Ok(()) | Err("update_health_book_operator_stopped")) {
+            return result;
         }
         let remaining = budget.saturating_sub(elapsed());
         if remaining.is_zero() {
@@ -434,6 +440,13 @@ impl Host for RealHost {
             // Unknown book state never authorises a restart with open exposure.
             return Ok(Admission::Deferred("deferred_book_unreadable"));
         };
+        if book.open_stopped {
+            // A restart would bring the book back still stopped and fail health;
+            // the reviewed `--operator-stopped` deploy is the path for it.
+            return Ok(Admission::Deferred(
+                "deferred_operator_stopped_book_requires_operator_stopped_update",
+            ));
+        }
         let open = book.open_positions > 0;
         let pending = book.pending_orders > 0;
         // The NSE calendar decides whether the exchange is closed; an unreadable
@@ -477,9 +490,9 @@ impl Host for RealHost {
         }
         if market {
             // A reviewed forced activation may take the bounded restart window even
-            // for a flat in-session book: no exposure is open, the original book is
-            // preserved, and the same session resumes after the health-checked
-            // restart. A halted or operator-stopped book still defers.
+            // for a flat in-session book: the updater's stop is a service stop, so
+            // the same session continues after the restart and health refuses a
+            // book that comes back operator-stopped. A halted book still defers.
             if force && !book.halted && !book.stopped_safe {
                 return Ok(Admission::Forced("market_open_flat"));
             }
