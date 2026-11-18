@@ -1,0 +1,112 @@
+{
+  "paper": {
+    "account": "agent-check",
+    "session": "2026-10-16",
+    "previous_session": "2026-10-15",
+    "calendar_source": "NSE/CMTR/71775",
+    "directory": "/replaced/by/agent-check",
+    "token_file": "/agent-check/not-read",
+    "dashboard_token_file": "/agent-check/not-read-dashboard",
+    "read_journal": "/agent-check/not-read-journal",
+    "read_scope": "upstox-market-agent-check",
+    "read_journal_device": 0,
+    "read_journal_inode": 0,
+    "strategy": "model_planner_v1",
+    "capital": "100000",
+    "paper_costs": {
+      "per_order": "0.01",
+      "buy_bps": "5",
+      "sell_bps": "7",
+      "slippage_bps": "5",
+      "rounding_increment": "0.01"
+    }
+  },
+  "planner": {
+    "enabled": true,
+    "orchestrator": {
+      "enabled": true,
+      "model": { "model_id": "agent-check", "transport": "direct_oauth" },
+      "triggers": { "supervisor": { "enabled": true, "prompt": "prompts/supervisor.md" } }
+    },
+    "owner_tasks": {
+      "version": 1,
+      "research": {
+        "enabled": true,
+        "cutoff_minute": 1020,
+        "max_evidence": 4,
+        "lane": {
+          "max_tool_turns": 8,
+          "timeout_ms": 600000,
+          "max_turns_per_session": 6,
+          "max_calls_per_session": 48,
+          "max_tokens_per_session": 2000000,
+          "min_interval_ms": 900000,
+          "during_market": true,
+          "max_open_requests": 4,
+          "request_ttl_ms": 3600000
+        }
+      }
+    }
+  },
+  "bundle": {
+    "session": "2026-10-16",
+    "allowlist": [
+      { "key": "NSE_EQ|INE002A01018", "symbol": "RELIANCE", "series": "EQ", "tick": "0.05" },
+      { "key": "NSE_EQ|INE040A01034", "symbol": "HDFCBANK", "series": "EQ", "tick": "0.05" }
+    ],
+    "discovery": {
+      "prospects": [
+        { "instrument_key": "NSE_EQ|INE002A01018", "symbol": "RELIANCE", "sample_change_bps": 42.5, "bid": "2480.10", "ask": "2480.30", "bid_units": 120, "ask_units": 90, "quote_age_ms": 400, "screening_age_ms": 900, "observed_ms": 1760586000000, "screening_reason": "move" },
+        { "instrument_key": "NSE_EQ|INE040A01034", "symbol": "HDFCBANK", "sample_change_bps": -12.0, "bid": "1650.00", "ask": "1650.20", "bid_units": 300, "ask_units": 280, "quote_age_ms": 500, "screening_age_ms": 950, "observed_ms": 1760586000000, "screening_reason": "move" }
+      ],
+      "market_median_bps": 4.0
+    },
+    "historical_features": [
+      { "instrument": { "key": "NSE_EQ|INE002A01018", "symbol": "RELIANCE", "series": "EQ", "tick": "0.05" }, "history_as_of": "2026-10-15", "history_current": true, "return_20d": 0.061, "liquidity": "4100000000" },
+      { "instrument": { "key": "NSE_EQ|INE040A01034", "symbol": "HDFCBANK", "series": "EQ", "tick": "0.05" }, "history_as_of": "2026-10-15", "history_current": true, "return_20d": -0.018, "liquidity": "3900000000" }
+    ],
+    "cash": "100000",
+    "positions": {},
+    "book_state": { "halted": false, "stopped": false, "closed": false },
+    "decision_history": { "luna": null, "grok": [], "advisory_memory": null },
+    "trigger": { "kind": "schedule", "reason": "agent-check", "observed_ms": 1760586000000 }
+  },
+  "cash": "100000",
+  "facts": "Synthetic agent-check fixture. Session open; two allowlisted instruments; no holdings.",
+  "script": {
+    "turns": [
+      {
+        "lane": "decision",
+        "steps": [
+          { "tool_calls": [
+            { "name": "portfolio", "args": {} },
+            { "name": "prospects", "args": { "limit": 5, "sort": null } },
+            { "name": "rank", "args": { "sort_by": "return_20d", "order": "desc", "limit": 5, "min_liquidity": null } },
+            { "name": "features", "args": { "instrument_keys": ["NSE_EQ|INE002A01018"] } },
+            { "name": "session", "args": {} }
+          ] },
+          { "tool_calls": [ { "name": "research", "args": { "question": "Does a 40 bps opening move in RELIANCE persist after costs over the next hour?", "refs": null } } ] },
+          { "tool_calls": [ { "name": "plan", "args": {
+            "actions": [ { "instrument_key": "NSE_EQ|INE002A01018", "side": "buy", "rupees": "10000", "units": null, "max_price": "2481.00", "rationale": "Opening strength with liquidity; small paper size while research checks persistence.", "exit_intent": { "target": "2550.00", "stop": "2440.00", "time": null } } ],
+            "stance": "selective", "notes": "Waiting on research for follow-through." } } ] },
+          { "text": "Proposed one small RELIANCE buy; asked research whether the move persists." }
+        ]
+      },
+      {
+        "lane": "research",
+        "steps": [
+          { "tool_calls": [ { "name": "features", "args": { "instrument_keys": ["NSE_EQ|INE002A01018"] } }, { "name": "decisions", "args": { "limit": 2 } } ] },
+          { "text": "Fixture answer: one day of features cannot show persistence; 20-day return is +6.1% with high liquidity. Needs a multi-session backtest before relying on it." }
+        ]
+      },
+      {
+        "lane": "decision",
+        "steps": [
+          { "tool_calls": [ { "name": "portfolio", "args": {} } ] },
+          { "tool_calls": [ { "name": "plan", "args": { "actions": [], "stance": "hold", "notes": "Research says persistence is unproven; hold." } } ] },
+          { "text": "Read the research update; holding." }
+        ]
+      }
+    ]
+  }
+}

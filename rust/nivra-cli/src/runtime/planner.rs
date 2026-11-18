@@ -255,6 +255,10 @@ pub(crate) struct PlannerConfig {
     /// unchanged, exposes no web tool and makes no outbound call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_tools: Option<super::web_tools::WebToolsSettings>,
+    /// pi agent service lanes (decision, research, review). Omission keeps
+    /// deployed policy hashes unchanged and starts no agent process.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<super::agent::AgentSettings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision_evidence: Option<super::decision_evidence::Settings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -365,6 +369,7 @@ impl Default for PlannerConfig {
             research_tools: None,
             workspace: None,
             web_tools: None,
+            agent: None,
             decision_evidence: None,
             orchestrator: None,
             exit_policy: None,
@@ -486,6 +491,9 @@ impl PlannerConfig {
         let mut c: Self = serde_json::from_value(value).map_err(|_| "planner_config_invalid")?;
         c.validate_handoff_limit()?;
         if let Some(settings) = &c.decision_evidence {
+            settings.validate()?;
+        }
+        if let Some(settings) = &c.agent {
             settings.validate()?;
         }
         if c.effective_from.is_some() != c.previous_config.is_some()

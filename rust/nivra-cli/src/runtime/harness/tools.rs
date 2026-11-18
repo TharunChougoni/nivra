@@ -1149,3 +1149,38 @@ pub(super) fn checked_call_with(
     };
     Ok((id, tool))
 }
+
+/// Every call-time tool this configuration enables, under its existing name
+/// and schema, for the pi agent bridge. The harness's config gates apply; the
+/// bridge narrows the set per lane.
+pub(crate) fn bridge_definitions(cfg: &PlannerConfig) -> Result<Vec<Value>> {
+    let limits = cfg.effective_tools();
+    let mut tools = configured_definitions_with("digest", &[], true, &limits)?;
+    let candidate = candidate_tools_enabled(cfg);
+    let web = cfg.web_tools.as_ref().filter(|web| web.enabled);
+    let owner = OwnerTools {
+        research: cfg.research_tools.is_some(),
+        research_turn: false,
+        quote_capture: quote_capture_enabled(cfg),
+        candidate,
+        candidate_execution: candidate && candidate_execution_enabled(cfg),
+        candidate_observation: candidate && candidate_observation_enabled(cfg),
+        candidate_parent_ref: candidate,
+        workspace: cfg
+            .workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.enabled),
+        web: web.is_some(),
+        web_search: web.is_some_and(|settings| settings.search_available()),
+        web_news: web.is_some_and(|settings| settings.news_available()),
+        research_request: super::super::lane_queue::lane_settings(cfg).is_some(),
+    };
+    tools.extend(call_tool_definitions(
+        "supervisor",
+        &[],
+        false,
+        &limits,
+        owner,
+    )?);
+    Ok(tools)
+}

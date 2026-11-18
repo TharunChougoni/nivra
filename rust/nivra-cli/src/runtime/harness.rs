@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::DirBuilderExt;
 mod tools;
 pub(crate) use tools::*;
+mod bridge;
+pub(crate) use bridge::{Bridge, failure_reason};
 mod bundle;
 use bundle::*;
 mod failure_window;
