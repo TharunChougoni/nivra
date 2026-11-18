@@ -747,21 +747,45 @@ fn series_projects_receipt_bars_and_equity_without_volume() {
         "fixture_complete_bod",
     )
     .unwrap();
+    let reason = |bytes: &[u8], settings: &crate::runtime::instrument_display::Settings| {
+        let hash = crate::runtime::digest(bytes);
+        crate::runtime::instrument_display::project(
+            bytes, settings, &cash, 123456, &hash, "fixture",
+        )
+        .err()
+        .map(|error| error.to_string())
+    };
+    let gzip = |text: &[u8]| {
+        let mut zip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut zip, text).unwrap();
+        zip.finish().unwrap()
+    };
     let mut limited = settings.clone();
     limited.max_rows = 1;
-    assert!(
-        crate::runtime::instrument_display::project(
-            &bytes, &limited, &cash, 123456, &hash, "fixture"
-        )
-        .is_err()
+    assert_eq!(
+        reason(&bytes, &limited).unwrap(),
+        "instrument_display_row_limit"
     );
     limited = settings.clone();
     limited.max_decoded_bytes = 1;
-    assert!(
-        crate::runtime::instrument_display::project(
-            &bytes, &limited, &cash, 123456, &hash, "fixture"
-        )
-        .is_err()
+    assert_eq!(
+        reason(&bytes, &limited).unwrap(),
+        "instrument_display_decoded_limit"
+    );
+    // An early JSON error never hides an oversized decoded stream.
+    limited.max_decoded_bytes = 10_000;
+    let padded = gzip(format!("[] x{}", " ".repeat(20_000)).as_bytes());
+    assert_eq!(
+        reason(&padded, &limited).unwrap(),
+        "instrument_display_decoded_limit"
+    );
+    assert_eq!(
+        reason(&padded, &settings).unwrap(),
+        "instrument_display_json_invalid"
+    );
+    assert_eq!(
+        reason(b"not gzip", &settings).unwrap(),
+        "instrument_display_gzip_invalid"
     );
     assert!(
         crate::runtime::instrument_display::project(

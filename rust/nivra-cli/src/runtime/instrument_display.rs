@@ -9,7 +9,7 @@ use serde_json::{Value, json, value::RawValue};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::Read,
+    io::{self, Read},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     sync::{
         Arc, Mutex,
@@ -358,6 +358,21 @@ fn item(row: &Value, cash: &BTreeMap<String, &Value>, settings: &Settings) -> Op
     })
 }
 
+/// Counts decoded bytes and remembers a gzip failure, so streaming keeps the
+/// buffered parse's error order: gzip, then decoded size, then JSON.
+struct Decoded<R> {
+    inner: R,
+    bytes: u64,
+    failed: bool,
+}
+impl<R: Read> Read for Decoded<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf).inspect_err(|_| self.failed = true)?;
+        self.bytes += n as u64;
+        Ok(n)
+    }
+}
+
 pub(super) fn project(
     bytes: &[u8],
     settings: &Settings,
@@ -421,32 +436,38 @@ pub(super) fn project(
         .iter()
         .filter_map(|row| Some((row["instrument_key"].as_str()?.to_owned(), row)))
         .collect();
-    let decoder =
-        flate2::read::MultiGzDecoder::new(bytes).take(settings.max_decoded_bytes.saturating_add(1));
-    // A bounded decoded buffer makes limit exhaustion explicit, not a truncated successful parse.
-    let mut decoded = Vec::new();
-    decoder
-        .take(settings.max_decoded_bytes.saturating_add(1))
-        .read_to_end(&mut decoded)
-        .map_err(|_| "instrument_display_gzip_invalid")?;
-    if decoded.len() as u64 > settings.max_decoded_bytes {
+    // Stream rows out of the decoder instead of holding the ~44 MB decoded text.
+    let mut decoded = Decoded {
+        inner: flate2::read::MultiGzDecoder::new(bytes)
+            .take(settings.max_decoded_bytes.saturating_add(1)),
+        bytes: 0,
+        failed: false,
+    };
+    let parsed = {
+        let mut input = io::BufReader::new(&mut decoded);
+        let mut de = serde_json::Deserializer::from_reader(&mut input);
+        let parsed = serde::de::Deserializer::deserialize_seq(&mut de, Rows { settings, cash })
+            .and_then(|rows| de.end().map(|()| rows));
+        // Read to the end so the limit judges the whole stream, never a truncated successful parse.
+        let _ = io::copy(&mut input, &mut io::sink());
+        parsed
+    };
+    if decoded.failed {
+        return Err("instrument_display_gzip_invalid".into());
+    }
+    if decoded.bytes > settings.max_decoded_bytes {
         return Err("instrument_display_decoded_limit".into());
     }
-    let mut de = serde_json::Deserializer::from_slice(&decoded);
-    let (rows, seen, rejected) =
-        serde::de::Deserializer::deserialize_seq(&mut de, Rows { settings, cash }).map_err(
-            |error| {
-                if error
-                    .to_string()
-                    .starts_with("instrument_display_row_limit")
-                {
-                    "instrument_display_row_limit"
-                } else {
-                    "instrument_display_json_invalid"
-                }
-            },
-        )?;
-    de.end().map_err(|_| "instrument_display_json_invalid")?;
+    let (rows, seen, rejected) = parsed.map_err(|error| {
+        if error
+            .to_string()
+            .starts_with("instrument_display_row_limit")
+        {
+            "instrument_display_row_limit"
+        } else {
+            "instrument_display_json_invalid"
+        }
+    })?;
     let mut segments = BTreeMap::<String, usize>::new();
     let mut kinds = BTreeMap::<String, usize>::new();
     for row in &rows {
