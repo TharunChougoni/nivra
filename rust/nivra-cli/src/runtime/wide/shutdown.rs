@@ -57,6 +57,8 @@ pub(super) fn write_request(c: &Config, now: i64) -> Result<StopRequest> {
 pub(super) struct Intent {
     pub(super) kind: ShutdownKind,
     pub(super) request: serde_json::Value,
+    /// Disposition of a cancelled history preparation, when one was running.
+    pub(super) history: serde_json::Value,
 }
 
 /// Decide the shutdown kind. A request bound to this account, session and a
@@ -67,6 +69,7 @@ pub(super) fn intent(c: &Config, now: i64) -> Intent {
         return Intent {
             kind: ShutdownKind::Service,
             request: serde_json::json!({"status":"unavailable"}),
+            history: serde_json::Value::Null,
         };
     };
     match fs::symlink_metadata(&path) {
@@ -74,6 +77,7 @@ pub(super) fn intent(c: &Config, now: i64) -> Intent {
             return Intent {
                 kind: ShutdownKind::Service,
                 request: serde_json::json!({"status":"absent"}),
+                history: serde_json::Value::Null,
             };
         }
         _ => {}
@@ -109,6 +113,7 @@ pub(super) fn intent(c: &Config, now: i64) -> Intent {
             "request":parsed,
             "archived":archived.ok(),
         }),
+        history: serde_json::Value::Null,
     }
 }
 
@@ -176,6 +181,7 @@ pub(super) fn settle(
                 "shutdown":ShutdownKind::Service.as_str(),
                 "stopped":p.stopped,
                 "planner":planner,
+                "history_preparation":intent.history,
                 "stop_request":intent.request,
             });
             persist(

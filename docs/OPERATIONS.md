@@ -752,8 +752,12 @@ sessions root as evidence, never deleted. With no controller running,
 `nivra stop` takes both controller locks and stops the active open book directly;
 a closed book refuses with `stop_session_closed`.
 
-A service stop cancels workers and retires an in-flight planner attempt as
-failed `service_shutdown_interrupted_no_replay` with its charges preserved. It is
+A service stop cancels workers. A running history preparation gets up to five
+seconds to finish its cancellation; its attempt is then recorded `FAILED` and
+retried within the pre-open window under the normal attempt limit. One that does
+not finish stays interrupted for the reviewed `history-recover`. An in-flight
+planner attempt is retired as failed `service_shutdown_interrupted_no_replay`
+with its charges preserved. It is
 never replayed and leaves no sticky block. The book is not stopped. The tick
 `service_shutdown` records the planner disposition and any ignored request. The
 Stop alert reports `operator_stopped:false` and `shutdown:service` and is a

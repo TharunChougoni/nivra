@@ -468,6 +468,7 @@ pub(in crate::runtime) fn stop(c: &Config, confirm: bool, now: i64) -> Result<se
         let intent = shutdown::Intent {
             kind: shutdown::ShutdownKind::Operator,
             request: serde_json::json!({"status":"direct","controller_running":false}),
+            history: serde_json::Value::Null,
         };
         shutdown::settle(&mut db, c, &mut p, &intent, None, now)?;
     }

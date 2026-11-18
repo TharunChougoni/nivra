@@ -27,6 +27,8 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
     }
 }
 
+const HISTORY_CANCEL_WAIT: Duration = Duration::from_secs(5);
+
 enum Flow {
     Continue,
     /// A stop signal was observed in the pass sampled at `at`.
@@ -565,9 +567,12 @@ impl<'a> Controller<'a> {
 
     /// Cancel workers, then settle the book for an operator or service stop.
     fn stop(mut self, now: i64) -> Result<()> {
-        let intent = shutdown::intent(&self.config, now);
+        let mut intent = shutdown::intent(&self.config, now);
         if let Some(worker) = self.history_worker.take() {
             worker.cancel();
+            if intent.kind == shutdown::ShutdownKind::Service {
+                intent.history = self.settle_cancelled_history(worker);
+            }
         }
         drop(self.supervisor_worker.take());
         drop(self.aside_worker.take());
@@ -590,6 +595,30 @@ impl<'a> Controller<'a> {
         self.alerts.emit(Event::Stop, self.config.session, details);
         self.alerts.finish();
         Ok(())
+    }
+
+    /// A service stop waits briefly for the cancelled preparation so its attempt
+    /// is recorded failed, and retryable in the window, instead of left
+    /// interrupted for review. A worker that does not finish stays interrupted.
+    fn settle_cancelled_history(
+        &mut self,
+        mut worker: preparation::PreparationWorker,
+    ) -> serde_json::Value {
+        let deadline = std::time::Instant::now() + HISTORY_CANCEL_WAIT;
+        loop {
+            if let Some(report) = worker.poll() {
+                let recorded = serde_json::to_value(report).is_ok_and(|report| {
+                    self.history_attempt
+                        .completed(&self.config, millis(), &report)
+                        .is_ok()
+                });
+                return serde_json::json!({"cancelled":true,"attempt_completed":recorded});
+            }
+            if std::time::Instant::now() >= deadline {
+                return serde_json::json!({"cancelled":true,"attempt_completed":false});
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
     }
 
     fn prepare_universe(&mut self, t: Now) -> Result<()> {
