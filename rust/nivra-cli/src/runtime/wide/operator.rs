@@ -401,6 +401,7 @@ pub(in crate::runtime) fn resume(c: &Config, confirm: bool) -> Result<()> {
     tx.execute("UPDATE state SET body=? WHERE id=1", [&after])?;
     tx.execute("INSERT INTO ticks(at,receipt,body,event) VALUES(?,NULL,NULL,'operator_resume_confirmed_paper_review')", [millis()])?;
     tx.commit()?;
+    shutdown::supersede_request(c, millis())?;
     println!(
         "{}",
         serde_json::json!({
@@ -472,6 +473,7 @@ pub(in crate::runtime) fn stop(c: &Config, confirm: bool, now: i64) -> Result<se
         };
         shutdown::settle(&mut db, c, &mut p, &intent, None, now)?;
     }
+    shutdown::supersede_request(c, now)?;
     Ok(serde_json::json!({
         "paper_only":true,
         "live_enabled":LIVE_ENABLED,

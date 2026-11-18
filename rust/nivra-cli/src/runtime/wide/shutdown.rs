@@ -90,7 +90,12 @@ pub(super) fn intent(c: &Config, now: i64) -> Intent {
         Some(r) if r.account != c.account || r.session != c.session => {
             Err("stop_request_foreign_session")
         }
-        Some(r) if r.requested_at_ms > now || now - r.requested_at_ms > STOP_REQUEST_TTL_MS => {
+        // `now` was sampled at the start of the pass; a request written after
+        // that sample but before the signal is still current.
+        Some(r)
+            if r.requested_at_ms > now.max(millis())
+                || now - r.requested_at_ms > STOP_REQUEST_TTL_MS =>
+        {
             Err("stop_request_stale")
         }
         Some(_) => Ok(()),
@@ -114,6 +119,16 @@ pub(super) fn intent(c: &Config, now: i64) -> Intent {
             "archived":archived.ok(),
         }),
         history: serde_json::Value::Null,
+    }
+}
+
+/// Archive a pending request that an operator command has made moot, so a
+/// later service restart cannot consume it as an operator stop.
+pub(super) fn supersede_request(c: &Config, now: i64) -> Result<Option<String>> {
+    let path = request_path(c)?;
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        _ => archive(c, &path, now, "superseded").map(Some),
     }
 }
 

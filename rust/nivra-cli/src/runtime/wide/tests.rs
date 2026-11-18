@@ -2200,6 +2200,22 @@ fn failed_history_attempt_retries_with_delay_and_session_bound() {
     let mut attempts = HistoryAttempts::load(&cfg).unwrap();
     assert!(!attempts.due(&cfg, 109));
     assert!(attempts.due(&cfg, 110));
+    // A recorded late failure retries after the same delay instead of losing the day.
+    let late_minute = cfg.history_preparation_cutoff_minute + 30;
+    assert!(!late_preparation_due(
+        &cfg,
+        cfg.session,
+        late_minute,
+        109,
+        &attempts
+    ));
+    assert!(late_preparation_due(
+        &cfg,
+        cfg.session,
+        late_minute,
+        110,
+        &attempts
+    ));
     attempts.started(&cfg, 110).unwrap();
     attempts
         .completed(&cfg, 120, &serde_json::json!({"status":"FAILED"}))
@@ -2226,31 +2242,34 @@ fn failed_history_attempt_retries_with_delay_and_session_bound() {
         cfg.session.succ_opt().unwrap(),
         cfg.history_preparation_start_minute
     ));
-    // A session adopted after the cutoff gets one immediate attempt until the
-    // late-start cutoff; any attempt already started for it rules that out.
+    // A session adopted after the cutoff prepares immediately until the
+    // late-start cutoff; exhausted attempts rule out another one.
     let late = cfg.execution.session_start_minute + 75;
     let fresh = HistoryAttempts::default();
-    assert!(late_preparation_due(&cfg, cfg.session, late, &fresh));
+    assert!(late_preparation_due(&cfg, cfg.session, late, 0, &fresh));
     assert!(late_preparation_due(
         &cfg,
         cfg.session,
         cfg.history_preparation_cutoff_minute,
+        0,
         &fresh
     ));
     assert!(!late_preparation_due(
         &cfg,
         cfg.session,
         cfg.history_preparation_cutoff_minute - 1,
+        0,
         &fresh
     ));
-    assert!(!late_preparation_due(&cfg, cfg.session, 900, &fresh));
+    assert!(!late_preparation_due(&cfg, cfg.session, 900, 0, &fresh));
     assert!(!late_preparation_due(
         &cfg,
         cfg.session.succ_opt().unwrap(),
         late,
+        0,
         &fresh
     ));
-    assert!(!late_preparation_due(&cfg, cfg.session, late, &attempts));
+    assert!(!late_preparation_due(&cfg, cfg.session, late, 0, &attempts));
     let window = preparation::PreparationWindow::LateStart;
     let at = DateTime::parse_from_rfc3339("2026-10-16T10:30:00+05:30")
         .unwrap()

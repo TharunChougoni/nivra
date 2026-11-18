@@ -725,7 +725,7 @@ impl<'a> Controller<'a> {
         }
         let window = if history_attempt_window(c, day, m) && self.history_attempt.due(c, now) {
             Some(preparation::PreparationWindow::PreOpen)
-        } else if late_preparation_due(c, day, m, &self.history_attempt) {
+        } else if late_preparation_due(c, day, m, now, &self.history_attempt) {
             Some(preparation::PreparationWindow::LateStart)
         } else {
             None

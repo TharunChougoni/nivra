@@ -111,7 +111,7 @@ its committed current pointer under a root-wide writer lock.
 | --- | --- |
 | Pre-open | Validate calendar, predecessor/carry, dated metadata, model settings and history |
 | 08:00–09:10 | Optional prior-session daily-history preparation under original read quota |
-| Before 15:00 | Commit the next eligible session. A session first committed after the preparation cutoff runs one immediate history preparation and protects carried holdings at once |
+| Before 15:00 | Commit the next eligible session. A session first committed after the preparation cutoff prepares history immediately with the bounded retries and protects carried holdings at once |
 | After 15:00 | An uncommitted session waits for the next trading date (`missed_preopen_idle`) |
 | 09:15–15:30 | Protect holdings, rotate scans, compile factual Luna digests and run persistent orchestrator decisions; independently validate paper fills |
 | Close | Seal/report actual cash, fees and unresolved/carried holdings; no forced 15:15 liquidation for model-led holdings |
@@ -142,12 +142,12 @@ today starts the same way. After 15:00 the day is `missed_preopen_idle` and the
 next trading date rolls over normally.
 
 Carried holdings get protection and exits as soon as the session is adopted.
-New entries still wait for prior-session history. When no preparation attempt
-exists for the session and the clock is past the configured cutoff, the
-controller runs one preparation immediately with the same read-quota journal and
-validation. Its acquisition deadline keeps the pre-open window's length and never
-passes the session end. A failed, partial or interrupted late attempt is never
-replayed; the read-only coverage check then decides whether entries are
+New entries still wait for prior-session history. Past the configured cutoff,
+the controller prepares history immediately with the same read-quota journal,
+validation and bounded attempts as pre-open: a recorded failure retries after its
+delay until 15:00, and an attempt left in progress by a crash is never replayed.
+Each acquisition deadline keeps the pre-open window's length and never passes the
+session end. The read-only coverage check then decides whether entries are
 admitted. Readiness judges the next session at its 08:30 pre-open, or at the
 current time once that has passed. The two-second financial freshness gate and
 the archived quote receipt times are unchanged.

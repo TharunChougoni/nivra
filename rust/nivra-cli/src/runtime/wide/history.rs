@@ -450,17 +450,18 @@ pub(crate) fn history_attempt_window(c: &Config, day: NaiveDate, minute: u32) ->
             .contains(&minute)
 }
 
-/// A session adopted after the pre-open cutoff gets exactly one immediate
-/// preparation attempt. It is due only while no attempt has started for this
-/// session, so a failed, partial or interrupted late attempt is never replayed.
+/// A session adopted after the pre-open cutoff prepares history immediately and
+/// keeps the ordinary bounded retry rule until the late-start cutoff: a recorded
+/// failure retries after its delay, while an attempt left in progress by a crash
+/// is never replayed.
 pub(crate) fn late_preparation_due(
     c: &Config,
     day: NaiveDate,
     minute: u32,
+    now: i64,
     attempts: &HistoryAttempts,
 ) -> bool {
     day == c.session
-        && attempts.session != Some(c.session)
-        && c.history_preparation_max_attempts > 0
+        && attempts.due(c, now)
         && preparation::PreparationWindow::LateStart.admits(c, minute)
 }

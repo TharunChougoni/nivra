@@ -19,8 +19,9 @@ stay halted. Procedures that end in `resume` now start with `nivra stop`.
 A controller that first comes up after 09:15 IST still starts the day's session.
 An eligible predecessor seal rolls over until the 15:00 IST late-start cutoff
 instead of the 09:15 gate, and a first-ever book configured for today starts the
-same way. A session adopted after the history cutoff runs one immediate history
-preparation with the same quota journal and validation. Carried holdings are
+same way. A session adopted after the history cutoff prepares history immediately with the
+same quota journal, validation and bounded retries; a crash-interrupted attempt is
+never replayed. Carried holdings are
 protected as soon as the session is adopted. The readiness disposition and the
 stale-feed anchor follow a late start.
 
@@ -29,12 +30,15 @@ operator-stopped, unless the update used `--operator-stopped`, and its guard
 defers such a book. The forced `market_open_flat` restart, and every other forced
 restart, now continues the same session as documented. The planned-restart
 notice is written before the controller stops, so its service-stop alert is the
-informational `planned_restart`. A service stop during pre-open preparation
+informational `planned_restart`; it is written only after every step that can
+refuse the update. `resume` and a direct `nivra stop` archive a pending stop
+request, so a later service restart cannot consume it. A service stop during pre-open preparation
 records the cancelled attempt as retryable instead of leaving it interrupted.
 
 Upgrading from 0.10.x: the installed updater still runs the old binary's stop,
-which operator-stops an open book. Update outside market hours, or `resume` the
-book after the update.
+which operator-stops an open book. Update outside market hours and never force the
+0.10.x to 0.11.0 update while a session is open; otherwise `resume` the book after
+the update.
 
 ## 0.10.4 — 2026-11-17
 

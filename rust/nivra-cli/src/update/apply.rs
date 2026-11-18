@@ -903,9 +903,6 @@ pub(crate) fn apply_selected(
     // Activation failure restores `old`, so it must still run the reviewed
     // config. Refuse before pending, stop or swap rather than strand rollback.
     host.rollback_preflight(&old.join("nivra"))?;
-    if !keep_stopped {
-        host.plan_restart(&m.tag)?;
-    }
     // Preserve transaction evidence across interruption. Never automatically replay it.
     let unwatched_start = forced.map(|_| now_utc());
     let mut record = serde_json::json!({"previous":old,"new":stage});
@@ -922,6 +919,11 @@ pub(crate) fn apply_selected(
         false,
     )?;
     sync(&state)?;
+    // Mark the restart only once nothing before the stop can fail, so a refused
+    // update never relabels a later crash loop as planned.
+    if !keep_stopped && let Err(cause) = host.plan_restart(&m.tag) {
+        eprintln!("update_restart_marker_failed: {cause}");
+    }
     // No symlink changes while the old controller is still running.
     if let Err(cause) = host.stop() {
         eprintln!("update_stop_failed: {cause}");
