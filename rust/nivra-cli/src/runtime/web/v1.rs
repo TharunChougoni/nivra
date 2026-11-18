@@ -45,7 +45,7 @@ pub(crate) fn dispatch(
     stream_source: Option<&(PathBuf, String)>,
     features: Option<&Arc<Mutex<FeatureStore>>>,
     equity: Option<&Arc<Mutex<EquitySeries>>>,
-    instrument_catalog: Option<&Arc<Mutex<Option<serde_json::Value>>>>,
+    instrument_catalog: Option<&Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
 ) -> Response {
     match route {
         Ok(Route::Meta) => meta(head, view, settings),

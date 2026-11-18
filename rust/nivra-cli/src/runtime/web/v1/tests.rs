@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::instrument_display::Catalog;
 #[test]
 fn runs_endpoint_validates_filters_and_revalidates_index_data() {
     let dir = tempfile::tempdir().unwrap();
@@ -658,7 +659,7 @@ fn series_projects_receipt_bars_and_equity_without_volume() {
         "authorized_session":"2026-10-29","as_of_ms":1_760_000_000_000i64,
         "portfolio":{"cash":"5000","positions":{}}
     })));
-    let catalog = Arc::new(Mutex::new(Some(serde_json::json!({
+    let catalog = Arc::new(Mutex::new(Some(Catalog::new(serde_json::json!({
         "source":"validated_nse_eq_universe","segment":"NSE_EQ","series":"EQ",
         "file_date":"2026-10-29","session":"2026-10-29","received_at_ms":1_760_000_000_000i64,
         "source_hashes":{"nse_cm_security_sha256":"a","upstox_nse_bod_sha256":"b","upstox_suspended_bod_sha256":"c"},
@@ -666,7 +667,7 @@ fn series_projects_receipt_bars_and_equity_without_volume() {
             {"instrument_key":"NSE_EQ|INE00U801010","symbol":"FIXTURE","segment":"NSE_EQ","series":"EQ","tick":"0.05","tick_unit":"INR"},
             {"instrument_key":"NSE_EQ|INE00U801011","symbol":"FIXTURE2","segment":"NSE_EQ","series":"EQ","tick":"0.05","tick_unit":"INR"}
         ]
-    }))));
+    })))));
     let send = |path: &str| {
         dispatch_source_with(
             &format!(
@@ -735,7 +736,7 @@ fn series_projects_receipt_bars_and_equity_without_volume() {
     std::io::Write::write_all(&mut zip, &serde_json::to_vec(&raw).unwrap()).unwrap();
     let bytes = zip.finish().unwrap();
     let hash = crate::runtime::digest(&bytes);
-    let cash = catalog.lock().unwrap().as_ref().unwrap().clone();
+    let cash = catalog.lock().unwrap().as_ref().unwrap().cash.clone();
     let settings = crate::runtime::instrument_display::Settings::default();
     let display = crate::runtime::instrument_display::project(
         &bytes,
@@ -746,32 +747,45 @@ fn series_projects_receipt_bars_and_equity_without_volume() {
         "fixture_complete_bod",
     )
     .unwrap();
-    assert_eq!(display["rejected_rows"], 3);
-    assert_eq!(display["segments"]["BSE_EQ"], 1);
-    assert_eq!(
-        display["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|r| r["kind"] == "index")
-            .unwrap()["lot_size"],
-        serde_json::Value::Null
-    );
+    let reason = |bytes: &[u8], settings: &crate::runtime::instrument_display::Settings| {
+        let hash = crate::runtime::digest(bytes);
+        crate::runtime::instrument_display::project(
+            bytes, settings, &cash, 123456, &hash, "fixture",
+        )
+        .err()
+        .map(|error| error.to_string())
+    };
+    let gzip = |text: &[u8]| {
+        let mut zip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut zip, text).unwrap();
+        zip.finish().unwrap()
+    };
     let mut limited = settings.clone();
     limited.max_rows = 1;
-    assert!(
-        crate::runtime::instrument_display::project(
-            &bytes, &limited, &cash, 123456, &hash, "fixture"
-        )
-        .is_err()
+    assert_eq!(
+        reason(&bytes, &limited).unwrap(),
+        "instrument_display_row_limit"
     );
     limited = settings.clone();
     limited.max_decoded_bytes = 1;
-    assert!(
-        crate::runtime::instrument_display::project(
-            &bytes, &limited, &cash, 123456, &hash, "fixture"
-        )
-        .is_err()
+    assert_eq!(
+        reason(&bytes, &limited).unwrap(),
+        "instrument_display_decoded_limit"
+    );
+    // An early JSON error never hides an oversized decoded stream.
+    limited.max_decoded_bytes = 10_000;
+    let padded = gzip(format!("[] x{}", " ".repeat(20_000)).as_bytes());
+    assert_eq!(
+        reason(&padded, &limited).unwrap(),
+        "instrument_display_decoded_limit"
+    );
+    assert_eq!(
+        reason(&padded, &settings).unwrap(),
+        "instrument_display_json_invalid"
+    );
+    assert_eq!(
+        reason(b"not gzip", &settings).unwrap(),
+        "instrument_display_gzip_invalid"
     );
     assert!(
         crate::runtime::instrument_display::project(
@@ -785,14 +799,24 @@ fn series_projects_receipt_bars_and_equity_without_volume() {
         .is_err()
     );
     crate::runtime::instrument_display::storage_fixture(&bytes, &cash);
-    catalog.lock().unwrap().as_mut().unwrap()["display"] = display;
+    catalog.lock().unwrap().as_mut().unwrap().display = Some(Ok(display));
+    let body: serde_json::Value =
+        serde_json::from_slice(&send("/api/v1/instruments?scope=all&kind=index").body).unwrap();
+    assert_eq!(body["rejected_rows"], 3);
+    assert_eq!(body["segments"]["BSE_EQ"], 1);
+    assert_eq!(body["items"][0]["lot_size"], serde_json::Value::Null);
     let body: serde_json::Value =
         serde_json::from_slice(&send("/api/v1/instruments?scope=all&kind=future").body).unwrap();
     assert_eq!(body["total"], 1);
-    assert_eq!(body["items"][0]["lot_size"], "25");
-    assert_eq!(body["items"][0]["tick"], serde_json::Value::Null);
-    assert_eq!(body["items"][0]["provider_tick"], "5");
-    assert_eq!(body["items"][0]["cash_execution_verified"], false);
+    assert_eq!(
+        body["items"][0],
+        serde_json::json!({
+            "instrument_key":"NSE_FO|SYNTHETIC-F","symbol":"FIXTURE FUTURE","segment":"NSE_FO","exchange":"NSE",
+            "kind":"future","instrument_type":"FUT","underlying_key":"NSE_EQ|SYNTHETIC-U","underlying_symbol":null,
+            "expiry_ms":1800000000000i64,"strike":null,"lot_size":"25","provider_tick":"5","tick":null,"tick_unit":null,
+            "cash_execution_verified":false,"margin":null,"margin_reason":"margin_snapshot_not_captured","display_only":true
+        })
+    );
     assert_eq!(body["received_at_ms"], 123456);
     assert_eq!(body["execution_authority"], false);
     let body: serde_json::Value =

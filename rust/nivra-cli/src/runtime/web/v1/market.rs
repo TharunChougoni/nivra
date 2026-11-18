@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::instrument_display::Row;
 
 pub(crate) fn scanner(
     head: &str,
@@ -93,7 +94,7 @@ pub(crate) fn instruments(
     head: &str,
     query: router::Query,
     view: &Arc<Mutex<serde_json::Value>>,
-    catalog: Option<&Arc<Mutex<Option<serde_json::Value>>>>,
+    catalog: Option<&Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
 ) -> Response {
     let limit = match page_limit(&query, "limit", 100, 500) {
         Ok(limit) => limit,
@@ -118,52 +119,69 @@ pub(crate) fn instruments(
         return json_reply(head, unavailable(body, "universe_not_prepared"));
     };
     let scope = query.get("scope").unwrap_or("cash");
-    let catalog = match scope {
-        "cash" => catalog,
-        "all" => match catalog.get("display") {
-            Some(display) if display["unavailable"] != true => display,
-            Some(display) => {
-                return json_reply(
-                    head,
-                    unavailable(
-                        body,
-                        display["reason"]
-                            .as_str()
-                            .unwrap_or("instrument_display_unavailable"),
-                    ),
-                );
-            }
-            None => return json_reply(head, unavailable(body, "instrument_display_loading")),
-        },
+    let search = query.get("q").unwrap_or("").to_lowercase();
+    let wanted = |segment: Option<&str>, kind: &str, texts: [Option<&str>; 3]| {
+        query
+            .get("market_segment")
+            .is_none_or(|wanted| segment == Some(wanted))
+            && query.get("kind").is_none_or(|wanted| kind == wanted)
+            && (search.is_empty()
+                || texts
+                    .into_iter()
+                    .flatten()
+                    .any(|value| value.to_lowercase().contains(&search)))
+    };
+    let (summary, total, items) = match scope {
+        "cash" => {
+            let Some(items) = catalog.cash["items"].as_array() else {
+                return error("503 Service Unavailable", "instrument_catalog_invalid");
+            };
+            let (total, items) = page(
+                items.iter().filter(|row| {
+                    wanted(
+                        row["segment"].as_str(),
+                        row["kind"].as_str().unwrap_or("cash"),
+                        ["symbol", "instrument_key", "underlying_symbol"]
+                            .map(|key| row[key].as_str()),
+                    )
+                }),
+                offset,
+                limit,
+            );
+            (
+                std::borrow::Cow::Borrowed(&catalog.cash),
+                total,
+                items.into_iter().cloned().collect(),
+            )
+        }
+        "all" => {
+            let display = match &catalog.display {
+                Some(Ok(display)) => display,
+                Some(Err(reason)) => return json_reply(head, unavailable(body, reason)),
+                None => return json_reply(head, unavailable(body, "instrument_display_loading")),
+            };
+            let (total, rows) = page(
+                display.rows.iter().filter(|row| {
+                    wanted(
+                        Some(&row.segment),
+                        row.kind.unwrap_or("unknown"),
+                        [
+                            row.symbol.as_deref(),
+                            Some(&row.instrument_key),
+                            row.underlying_symbol.as_deref(),
+                        ],
+                    )
+                }),
+                offset,
+                limit,
+            );
+            let Ok(items) = rows.into_iter().map(|row| row.value()).collect() else {
+                return error("503 Service Unavailable", "instrument_catalog_invalid");
+            };
+            (std::borrow::Cow::Owned(display.summary()), total, items)
+        }
         _ => return error("400 Bad Request", "instrument_catalog_scope_invalid"),
     };
-    let Some(items) = catalog["items"].as_array() else {
-        return error("503 Service Unavailable", "instrument_catalog_invalid");
-    };
-    let search = query.get("q").unwrap_or("").to_lowercase();
-    let items = items
-        .iter()
-        .filter(|row| {
-            query
-                .get("market_segment")
-                .is_none_or(|segment| row["segment"] == segment)
-                && query.get("kind").is_none_or(|kind| {
-                    row["kind"]
-                        .as_str()
-                        .unwrap_or(if scope == "cash" { "cash" } else { "unknown" })
-                        == kind
-                })
-                && (search.is_empty()
-                    || ["symbol", "instrument_key", "underlying_symbol"]
-                        .iter()
-                        .any(|key| {
-                            row[*key]
-                                .as_str()
-                                .is_some_and(|value| value.to_lowercase().contains(&search))
-                        }))
-        })
-        .collect::<Vec<_>>();
-    let total = items.len();
     for key in [
         "source",
         "segment",
@@ -181,18 +199,11 @@ pub(crate) fn instruments(
         "margin_available",
         "coverage_kind",
     ] {
-        body[key] = catalog[key].clone();
+        body[key] = summary[key].clone();
     }
     body["scope"] = serde_json::json!(scope);
     body["total"] = serde_json::json!(total);
-    body["items"] = serde_json::json!(
-        items
-            .iter()
-            .skip(offset)
-            .take(limit)
-            .cloned()
-            .collect::<Vec<_>>()
-    );
+    body["items"] = serde_json::Value::Array(items);
     body["next"] = if offset.saturating_add(limit) < total {
         serde_json::json!(offset + limit)
     } else {
@@ -204,7 +215,7 @@ pub(crate) fn instrument_chain(
     head: &str,
     query: router::Query,
     view: &Arc<Mutex<serde_json::Value>>,
-    catalog: Option<&Arc<Mutex<Option<serde_json::Value>>>>,
+    catalog: Option<&Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
 ) -> Response {
     let limit = match page_limit(&query, "limit", 100, 500) {
         Ok(value) => value,
@@ -235,42 +246,29 @@ pub(crate) fn instrument_chain(
     let Ok(catalog) = catalog.lock() else {
         return error("503 Service Unavailable", "instrument_catalog_unavailable");
     };
-    let Some(display) = catalog.as_ref().and_then(|c| c.get("display")) else {
+    let Some(display) = catalog.as_ref().and_then(|c| c.display.as_ref()) else {
         return json_reply(head, unavailable(body, "instrument_display_loading"));
     };
-    if display["unavailable"] == true {
-        return json_reply(
-            head,
-            unavailable(
-                body,
-                display["reason"]
-                    .as_str()
-                    .unwrap_or("instrument_display_unavailable"),
-            ),
-        );
-    }
-    let Some(items) = display["items"].as_array() else {
-        return error("503 Service Unavailable", "instrument_catalog_invalid");
+    let display = match display {
+        Ok(display) => display,
+        Err(reason) => return json_reply(head, unavailable(body, reason)),
     };
-    let mut strikes = std::collections::BTreeMap::<
-        nivra_core::finance::Amount,
-        (Vec<&serde_json::Value>, Vec<&serde_json::Value>),
-    >::new();
+    let mut strikes =
+        std::collections::BTreeMap::<nivra_core::finance::Amount, (Vec<&Row>, Vec<&Row>)>::new();
     let mut futures = Vec::new();
     let mut unavailable_strikes = 0;
-    for row in items.iter().filter(|row| {
-        row["underlying_key"] == underlying
-            && row["expiry_ms"] == expiry
+    for row in display.rows.iter().filter(|row| {
+        row.underlying_key.as_deref() == Some(underlying)
+            && row.expiry_ms == Some(expiry)
             && query
                 .get("market_segment")
-                .is_none_or(|s| row["segment"] == s)
+                .is_none_or(|s| *row.segment == *s)
     }) {
-        match row["kind"].as_str() {
+        match row.kind {
             Some("future") => futures.push(row),
             Some(kind @ ("call" | "put")) => {
-                let Some(strike) = row["strike"]
-                    .as_str()
-                    .and_then(|s| nivra_core::finance::Amount::parse(s).ok())
+                let Some(strike) = row
+                    .strike
                     .filter(|v| *v > nivra_core::finance::Amount::ZERO)
                 else {
                     unavailable_strikes += 1;
@@ -287,10 +285,30 @@ pub(crate) fn instrument_chain(
         }
     }
     let total = strikes.len();
-    body["items"] = serde_json::json!(strikes.into_iter().skip(offset).take(limit).map(|(strike,(calls,puts))| serde_json::json!({
-        "strike":strike.to_string(), "call":if calls.len()==1 {Some(calls[0])} else {None}, "put":if puts.len()==1 {Some(puts[0])} else {None},
-        "ambiguous_call":calls.len()>1,"ambiguous_put":puts.len()>1
-    })).collect::<Vec<_>>());
+    let single = |rows: &[&Row]| match rows {
+        [row] => row.value().map(Some),
+        _ => Ok(None),
+    };
+    let items = strikes
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .map(|(strike, (calls, puts))| {
+            Ok(serde_json::json!({
+                "strike":strike.to_string(), "call":single(&calls)?, "put":single(&puts)?,
+                "ambiguous_call":calls.len()>1,"ambiguous_put":puts.len()>1
+            }))
+        })
+        .collect::<serde_json::Result<Vec<_>>>();
+    let futures_page = futures
+        .iter()
+        .take(limit)
+        .map(|row| row.value())
+        .collect::<serde_json::Result<Vec<_>>>();
+    let (Ok(items), Ok(futures_page)) = (items, futures_page) else {
+        return error("503 Service Unavailable", "instrument_catalog_invalid");
+    };
+    body["items"] = serde_json::Value::Array(items);
     body["total"] = serde_json::json!(total);
     body["next"] = if offset.saturating_add(limit) < total {
         serde_json::json!(offset + limit)
@@ -299,7 +317,8 @@ pub(crate) fn instrument_chain(
     };
     body["futures_total"] = serde_json::json!(futures.len());
     body["futures_truncated"] = serde_json::json!(futures.len() > limit);
-    body["futures"] = serde_json::json!(futures.into_iter().take(limit).collect::<Vec<_>>());
+    body["futures"] = serde_json::Value::Array(futures_page);
+    let summary = display.summary();
     for key in [
         "source",
         "source_hashes",
@@ -307,7 +326,7 @@ pub(crate) fn instrument_chain(
         "received_at_ms",
         "coverage_kind",
     ] {
-        body[key] = display[key].clone();
+        body[key] = summary[key].clone();
     }
     body["underlying_key"] = serde_json::json!(underlying);
     body["expiry_ms"] = serde_json::json!(expiry);
@@ -319,4 +338,17 @@ pub(crate) fn instrument_chain(
         "Captured BOD contract metadata only; missing legs, quotes and margins remain unknown. No execution admission."
     );
     json_reply(head, body)
+}
+
+/// Counts every match but keeps only the requested page.
+fn page<T>(rows: impl Iterator<Item = T>, offset: usize, limit: usize) -> (usize, Vec<T>) {
+    let mut total = 0;
+    let mut page = Vec::new();
+    for row in rows {
+        if total >= offset && page.len() < limit {
+            page.push(row);
+        }
+        total += 1;
+    }
+    (total, page)
 }

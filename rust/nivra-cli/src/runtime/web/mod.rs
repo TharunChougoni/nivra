@@ -273,7 +273,7 @@ fn dispatch_source_with(
     settings: &DashboardSettings,
     features: Option<&Arc<Mutex<FeatureStore>>>,
     equity: Option<&Arc<Mutex<EquitySeries>>>,
-    instrument_catalog: Option<&Arc<Mutex<Option<serde_json::Value>>>>,
+    instrument_catalog: Option<&Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
 ) -> Response {
     if values(head, "if-none-match").len() > 1 || values(head, "accept-encoding").len() > 1 {
         return if router::is_v1(head.lines().next().unwrap_or_default()) {
@@ -334,7 +334,7 @@ fn dispatch_inner(
     settings: &DashboardSettings,
     features: Option<&Arc<Mutex<FeatureStore>>>,
     equity: Option<&Arc<Mutex<EquitySeries>>>,
-    instrument_catalog: Option<&Arc<Mutex<Option<serde_json::Value>>>>,
+    instrument_catalog: Option<&Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
 ) -> Response {
     let line = head.split("\r\n").next().unwrap_or("");
     if !local_host(head, public_host) {
@@ -480,7 +480,7 @@ pub fn start(
     settings: DashboardSettings,
     features: Option<Arc<Mutex<FeatureStore>>>,
     equity: Option<Arc<Mutex<EquitySeries>>>,
-    instrument_catalog: Option<Arc<Mutex<Option<serde_json::Value>>>>,
+    instrument_catalog: Option<Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
 ) -> Result<()> {
     serve(
         token,
@@ -523,7 +523,7 @@ fn serve(
     history: Option<PathBuf>,
     features: Option<Arc<Mutex<FeatureStore>>>,
     equity: Option<Arc<Mutex<EquitySeries>>>,
-    instrument_catalog: Option<Arc<Mutex<Option<serde_json::Value>>>>,
+    instrument_catalog: Option<Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
 ) -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:8771")?;
     let sender = worker_pool(Arc::new(Ctx {
@@ -560,7 +560,7 @@ struct Ctx {
     history: Option<PathBuf>,
     features: Option<Arc<Mutex<FeatureStore>>>,
     equity: Option<Arc<Mutex<EquitySeries>>>,
-    instrument_catalog: Option<Arc<Mutex<Option<serde_json::Value>>>>,
+    instrument_catalog: Option<Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
     streams: Arc<AtomicUsize>,
     #[cfg(test)]
     event_feed: Option<Arc<v1::TestFeed>>,
