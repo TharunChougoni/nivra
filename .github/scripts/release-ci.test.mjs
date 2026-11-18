@@ -6,7 +6,7 @@ const sha = 'a'.repeat(40);
 const passed = { id: 100, run_number: 10, run_attempt: 2, head_sha: sha,
   event: 'push', head_branch: 'main', head_repository: { full_name: 'owner/repo' },
   status: 'completed', conclusion: 'success', html_url: 'https://example.test/run/100' };
-const jobs = ['Dashboard JS tests', 'Rust fmt + clippy', 'Rust tests'].map(name =>
+const jobs = ['Dashboard JS tests', 'pi agent tests', 'Rust fmt + clippy', 'Rust tests'].map(name =>
   ({ name, status: 'completed', conclusion: 'success' }));
 function verify(runs, jobRows = jobs, inProgressRunId, allowFailedAggregate = false) {
   const calls = [];
