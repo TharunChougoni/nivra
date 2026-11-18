@@ -796,6 +796,13 @@ fn a_fallback_switch_is_journalled_and_charged_but_refused_after_a_served_tool()
         settings.validate().is_err(),
         "a fallback must differ from the primary"
     );
+    let mut unknown_level = fallback.clone();
+    unknown_level.thinking = Some("max".into());
+    settings.lanes.get_mut(&Lane::Decision).unwrap().fallback = Some(unknown_level);
+    assert!(
+        settings.validate().is_err(),
+        "pi's agent accepts no other level"
+    );
     settings.lanes.get_mut(&Lane::Decision).unwrap().fallback = Some(fallback.clone());
     settings.validate().unwrap();
     let switch = json!({"kind":"fallback","from":{"provider":"openai-codex","id":"gpt-6.1-sol"},
