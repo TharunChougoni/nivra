@@ -411,7 +411,7 @@ pub(crate) trait Transport {
     ) -> std::result::Result<HttpResponse, String>;
 }
 
-struct Network;
+pub(crate) struct Network;
 impl Transport for Network {
     fn get(
         &mut self,
@@ -490,26 +490,6 @@ pub(crate) struct CallContext {
     pub run: String,
     pub turn: usize,
     pub call: String,
-}
-
-pub(crate) fn execute(
-    c: &super::Config,
-    settings: &WebToolsSettings,
-    budget: &mut WebToolBudget,
-    context: &CallContext,
-    op: WebToolOp,
-    now: i64,
-) -> Result<Value> {
-    let mut transport = Network;
-    execute_with(
-        &mut transport,
-        settings,
-        budget,
-        context,
-        op,
-        now,
-        Some(&c.directory.join("model")),
-    )
 }
 
 /// Execute one tool call and append its bounded record row. `log_dir` is the

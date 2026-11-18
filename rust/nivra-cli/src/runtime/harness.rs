@@ -1063,195 +1063,28 @@ pub(super) fn run_collect(
                     .open(path)?;
                 _claim.sync_all()?;
                 fs::File::open(&archive)?.sync_all()?;
-                let tool_name = match &tool {
-                    Tool::Evidence(_) => "read_evidence",
-                    Tool::Snapshot(_) => "get_market_snapshot",
-                    Tool::Features(_) => "get_instrument_features",
-                    Tool::Context(_) => "get_intraday_context",
-                    Tool::OwnerResearchEnqueue(_) => "research_task_enqueue",
-                    Tool::OwnerResearchStatus(_, _) => "research_task_status",
-                    Tool::OwnerResearchResult(_, _) => "research_task_result",
-                    Tool::OwnerResearchCancel(_, _) => "research_task_cancel",
-                    Tool::CandidateSubmit(_) => "candidate_submit",
-                    Tool::CandidateStatus(_, _) => "candidate_status",
-                    Tool::CandidateResult(_, _, _) => "candidate_result",
-                    Tool::CandidateCancel(_, _) => "candidate_cancel",
-                    Tool::QuoteCapture(_, _, _) => "research_quote_capture",
-                    Tool::ResearchRequest(_) => "request_research",
-                    Tool::Scanner(_, _) => "get_scanner_prospects",
-                    Tool::Ranking(_) => "rank_universe",
-                    Tool::Portfolio => "get_portfolio",
-                    Tool::History(_) => "get_recent_decisions",
-                    Tool::Session => "get_session_status",
-                    Tool::Workspace(op) => op.name(),
-                    Tool::Web(op) => op.name(),
-                };
+                let tool_name = tool_name(&tool);
                 let tool_started = std::time::Instant::now();
-                let result = match tool {
-                    Tool::Evidence(id) => Ok(json!({"evidence_id":id,"data":evidence(bundle,&id)})),
-                    Tool::Snapshot(keys) => match backend.snapshot(bundle, &keys, now()) {
-                        Some(result) => result,
-                        None => snapshot(c, bundle, &keys, &archive, &key),
+                let result = execute_tool(
+                    &mut ToolScope {
+                        c,
+                        cfg,
+                        name,
+                        role,
+                        bundle,
+                        backend: &mut *backend,
+                        guard,
+                        archive: &archive,
+                        web_budget: &mut web_budget,
+                        web_transport: &mut super::web_tools::Network,
+                        run_id,
+                        turn,
+                        tool_limits: &tool_limits,
                     },
-                    Tool::Features(keys) => instrument_features(bundle, &keys),
-                    Tool::Context(keys) => backend
-                        .intraday_context(&keys, now())
-                        .unwrap_or_else(|| Err("decision_evidence_unavailable".into())),
-                    Tool::OwnerResearchEnqueue(args) => owner_research_task(
-                        c,
-                        cfg,
-                        name,
-                        role,
-                        bundle,
-                        guard,
-                        OwnerResearchOperation::Enqueue(args),
-                        now(),
-                    ),
-                    Tool::OwnerResearchStatus(task_id, revision) => owner_research_task(
-                        c,
-                        cfg,
-                        name,
-                        role,
-                        bundle,
-                        guard,
-                        OwnerResearchOperation::Status(task_id, revision),
-                        now(),
-                    ),
-                    Tool::OwnerResearchResult(task_id, revision) => owner_research_task(
-                        c,
-                        cfg,
-                        name,
-                        role,
-                        bundle,
-                        guard,
-                        OwnerResearchOperation::Result(task_id, revision),
-                        now(),
-                    ),
-                    Tool::OwnerResearchCancel(task_id, revision) => owner_research_task(
-                        c,
-                        cfg,
-                        name,
-                        role,
-                        bundle,
-                        guard,
-                        OwnerResearchOperation::Cancel(task_id, revision),
-                        now(),
-                    ),
-                    Tool::CandidateSubmit(args) => owner_candidate_operation(
-                        c,
-                        cfg,
-                        name,
-                        role,
-                        bundle,
-                        guard,
-                        OwnerResearchOperation::CandidateSubmit(args),
-                        now(),
-                    ),
-                    Tool::CandidateStatus(task_id, revision) => owner_candidate_operation(
-                        c,
-                        cfg,
-                        name,
-                        role,
-                        bundle,
-                        guard,
-                        OwnerResearchOperation::CandidateStatus(task_id, revision),
-                        now(),
-                    ),
-                    Tool::CandidateResult(task_id, revision, observation_ref) => {
-                        owner_candidate_operation(
-                            c,
-                            cfg,
-                            name,
-                            role,
-                            bundle,
-                            guard,
-                            OwnerResearchOperation::CandidateResult(
-                                task_id,
-                                revision,
-                                observation_ref,
-                            ),
-                            now(),
-                        )
-                    }
-                    Tool::CandidateCancel(task_id, revision) => owner_candidate_operation(
-                        c,
-                        cfg,
-                        name,
-                        role,
-                        bundle,
-                        guard,
-                        OwnerResearchOperation::CandidateCancel(task_id, revision),
-                        now(),
-                    ),
-                    Tool::QuoteCapture(keys, from_ms, to_ms) => {
-                        if !owner_research_turn(cfg, name, bundle, guard) {
-                            Err("harness_owner_research_turn_scope_invalid".into())
-                        } else {
-                            research_quote_capture(c, cfg, keys, from_ms, to_ms, now())
-                        }
-                    }
-                    Tool::ResearchRequest(args) => {
-                        match (
-                            research_request_allowed(cfg, name, bundle, guard),
-                            guard.invocation_id,
-                        ) {
-                            (true, Some(turn_id)) => super::lane_queue::post_request(
-                                c,
-                                cfg,
-                                turn_id,
-                                &args.question,
-                                args.refs,
-                                now(),
-                            ),
-                            _ => Err("harness_research_request_scope_invalid".into()),
-                        }
-                    }
-                    Tool::Scanner(limit, sort) => scanner_prospects(bundle, limit, &sort),
-                    Tool::Ranking(args) => rank_universe(bundle, &args),
-                    Tool::Portfolio => Ok(portfolio_view(bundle, now(), tool_limits.fill_limit)),
-                    Tool::History(limit) => Ok(recent_decisions(bundle, limit)),
-                    Tool::Session => Ok(session_status(c, bundle, name, role, now())),
-                    Tool::Workspace(op) => {
-                        if !owner_workspace_tools_allowed(cfg, name, bundle, guard) {
-                            Err("harness_workspace_scope_invalid".into())
-                        } else {
-                            let scope = if owner_research_turn(cfg, name, bundle, guard) {
-                                super::workspace::WorkspaceScope::Research
-                            } else {
-                                super::workspace::WorkspaceScope::Decision
-                            };
-                            super::workspace::execute_scoped(
-                                &c.directory,
-                                cfg.workspace.as_ref().ok_or("harness_workspace_disabled")?,
-                                scope,
-                                op,
-                            )
-                        }
-                    }
-                    Tool::Web(op) => {
-                        if !owner_web_tools_allowed(cfg, name, bundle, guard) {
-                            Err("harness_web_tools_scope_invalid".into())
-                        } else if let Some(settings) =
-                            cfg.web_tools.as_ref().filter(|web| web.enabled)
-                        {
-                            super::web_tools::execute(
-                                c,
-                                settings,
-                                &mut web_budget,
-                                &super::web_tools::CallContext {
-                                    session: c.session.to_string(),
-                                    run: run_id.to_string(),
-                                    turn,
-                                    call: id.clone(),
-                                },
-                                op,
-                                now(),
-                            )
-                        } else {
-                            Err("harness_web_tools_disabled".into())
-                        }
-                    }
-                };
+                    &id,
+                    &key,
+                    tool,
+                );
                 let duration_ms = tool_started.elapsed().as_millis();
                 let mut failed = result.is_err();
                 let mut value = match result {
@@ -1464,3 +1297,220 @@ mod prompt_store_tests;
 mod call_time_tool_tests;
 #[cfg(test)]
 mod lane_tool_tests;
+
+/// Everything a call-time tool reads besides its own arguments.
+pub(crate) struct ToolScope<'a> {
+    pub c: &'a Config,
+    pub cfg: &'a PlannerConfig,
+    pub name: &'a str,
+    pub role: &'a ModelRole,
+    pub bundle: &'a Value,
+    pub backend: &'a mut dyn Backend,
+    pub guard: &'a CallGuard<'a>,
+    pub archive: &'a Path,
+    pub web_budget: &'a mut super::web_tools::WebToolBudget,
+    pub web_transport: &'a mut dyn super::web_tools::Transport,
+    pub run_id: &'a str,
+    pub turn: usize,
+    pub tool_limits: &'a ToolsSettings,
+}
+
+fn tool_name(tool: &Tool) -> &'static str {
+    match tool {
+        Tool::Evidence(_) => "read_evidence",
+        Tool::Snapshot(_) => "get_market_snapshot",
+        Tool::Features(_) => "get_instrument_features",
+        Tool::Context(_) => "get_intraday_context",
+        Tool::OwnerResearchEnqueue(_) => "research_task_enqueue",
+        Tool::OwnerResearchStatus(_, _) => "research_task_status",
+        Tool::OwnerResearchResult(_, _) => "research_task_result",
+        Tool::OwnerResearchCancel(_, _) => "research_task_cancel",
+        Tool::CandidateSubmit(_) => "candidate_submit",
+        Tool::CandidateStatus(_, _) => "candidate_status",
+        Tool::CandidateResult(_, _, _) => "candidate_result",
+        Tool::CandidateCancel(_, _) => "candidate_cancel",
+        Tool::QuoteCapture(_, _, _) => "research_quote_capture",
+        Tool::ResearchRequest(_) => "request_research",
+        Tool::Scanner(_, _) => "get_scanner_prospects",
+        Tool::Ranking(_) => "rank_universe",
+        Tool::Portfolio => "get_portfolio",
+        Tool::History(_) => "get_recent_decisions",
+        Tool::Session => "get_session_status",
+        Tool::Workspace(op) => op.name(),
+        Tool::Web(op) => op.name(),
+    }
+}
+
+/// Execute one validated call. `key` names the call's archive files.
+fn execute_tool(scope: &mut ToolScope<'_>, id: &str, key: &str, tool: Tool) -> Result<Value> {
+    let clock = DomainClock::new(scope.guard);
+    let now = || clock.wall_ms();
+    let (c, cfg, name, role, bundle, guard, tool_limits) = (
+        scope.c,
+        scope.cfg,
+        scope.name,
+        scope.role,
+        scope.bundle,
+        scope.guard,
+        scope.tool_limits,
+    );
+    match tool {
+        Tool::Evidence(id) => Ok(json!({"evidence_id":id,"data":evidence(bundle,&id)})),
+        Tool::Snapshot(keys) => match scope.backend.snapshot(bundle, &keys, now()) {
+            Some(result) => result,
+            None => snapshot(c, bundle, &keys, scope.archive, key),
+        },
+        Tool::Features(keys) => instrument_features(bundle, &keys),
+        Tool::Context(keys) => scope
+            .backend
+            .intraday_context(&keys, now())
+            .unwrap_or_else(|| Err("decision_evidence_unavailable".into())),
+        Tool::OwnerResearchEnqueue(args) => owner_research_task(
+            c,
+            cfg,
+            name,
+            role,
+            bundle,
+            guard,
+            OwnerResearchOperation::Enqueue(args),
+            now(),
+        ),
+        Tool::OwnerResearchStatus(task_id, revision) => owner_research_task(
+            c,
+            cfg,
+            name,
+            role,
+            bundle,
+            guard,
+            OwnerResearchOperation::Status(task_id, revision),
+            now(),
+        ),
+        Tool::OwnerResearchResult(task_id, revision) => owner_research_task(
+            c,
+            cfg,
+            name,
+            role,
+            bundle,
+            guard,
+            OwnerResearchOperation::Result(task_id, revision),
+            now(),
+        ),
+        Tool::OwnerResearchCancel(task_id, revision) => owner_research_task(
+            c,
+            cfg,
+            name,
+            role,
+            bundle,
+            guard,
+            OwnerResearchOperation::Cancel(task_id, revision),
+            now(),
+        ),
+        Tool::CandidateSubmit(args) => owner_candidate_operation(
+            c,
+            cfg,
+            name,
+            role,
+            bundle,
+            guard,
+            OwnerResearchOperation::CandidateSubmit(args),
+            now(),
+        ),
+        Tool::CandidateStatus(task_id, revision) => owner_candidate_operation(
+            c,
+            cfg,
+            name,
+            role,
+            bundle,
+            guard,
+            OwnerResearchOperation::CandidateStatus(task_id, revision),
+            now(),
+        ),
+        Tool::CandidateResult(task_id, revision, observation_ref) => owner_candidate_operation(
+            c,
+            cfg,
+            name,
+            role,
+            bundle,
+            guard,
+            OwnerResearchOperation::CandidateResult(task_id, revision, observation_ref),
+            now(),
+        ),
+        Tool::CandidateCancel(task_id, revision) => owner_candidate_operation(
+            c,
+            cfg,
+            name,
+            role,
+            bundle,
+            guard,
+            OwnerResearchOperation::CandidateCancel(task_id, revision),
+            now(),
+        ),
+        Tool::QuoteCapture(keys, from_ms, to_ms) => {
+            if !owner_research_turn(cfg, name, bundle, guard) {
+                Err("harness_owner_research_turn_scope_invalid".into())
+            } else {
+                research_quote_capture(c, cfg, keys, from_ms, to_ms, now())
+            }
+        }
+        Tool::ResearchRequest(args) => {
+            match (
+                research_request_allowed(cfg, name, bundle, guard),
+                guard.invocation_id,
+            ) {
+                (true, Some(turn_id)) => super::lane_queue::post_request(
+                    c,
+                    cfg,
+                    turn_id,
+                    &args.question,
+                    args.refs,
+                    now(),
+                ),
+                _ => Err("harness_research_request_scope_invalid".into()),
+            }
+        }
+        Tool::Scanner(limit, sort) => scanner_prospects(bundle, limit, &sort),
+        Tool::Ranking(args) => rank_universe(bundle, &args),
+        Tool::Portfolio => Ok(portfolio_view(bundle, now(), tool_limits.fill_limit)),
+        Tool::History(limit) => Ok(recent_decisions(bundle, limit)),
+        Tool::Session => Ok(session_status(c, bundle, name, role, now())),
+        Tool::Workspace(op) => {
+            if !owner_workspace_tools_allowed(cfg, name, bundle, guard) {
+                Err("harness_workspace_scope_invalid".into())
+            } else {
+                let scope = if owner_research_turn(cfg, name, bundle, guard) {
+                    super::workspace::WorkspaceScope::Research
+                } else {
+                    super::workspace::WorkspaceScope::Decision
+                };
+                super::workspace::execute_scoped(
+                    &c.directory,
+                    cfg.workspace.as_ref().ok_or("harness_workspace_disabled")?,
+                    scope,
+                    op,
+                )
+            }
+        }
+        Tool::Web(op) => {
+            if !owner_web_tools_allowed(cfg, name, bundle, guard) {
+                Err("harness_web_tools_scope_invalid".into())
+            } else if let Some(settings) = cfg.web_tools.as_ref().filter(|web| web.enabled) {
+                super::web_tools::execute_with(
+                    &mut *scope.web_transport,
+                    settings,
+                    &mut *scope.web_budget,
+                    &super::web_tools::CallContext {
+                        session: c.session.to_string(),
+                        run: scope.run_id.to_string(),
+                        turn: scope.turn,
+                        call: id.to_owned(),
+                    },
+                    op,
+                    now(),
+                    Some(&c.directory.join("model")),
+                )
+            } else {
+                Err("harness_web_tools_disabled".into())
+            }
+        }
+    }
+}
