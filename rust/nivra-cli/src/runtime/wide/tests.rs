@@ -2244,130 +2244,9 @@ fn resume_preflight_requires_flat_paper_operator_stop() {
     p.model_led = true;
     assert_eq!(resume_preflight(&p), Ok(()));
 }
-fn pending_model_recovery_preserves_charges_and_busy_is_not_a_halt() {
-    let d = tempfile::tempdir().unwrap();
-    let mut c = super::super::tests::config(d.path());
-    let cfg: planner::PlannerConfig=serde_json::from_value(serde_json::json!({"enabled":true,"digest":{"enabled":true,"model_id":"fixture","daily_call_budget":4},"orchestrator":{"enabled":true,"model":{"model_id":"grok-4.7"},"triggers":{"supervisor":{"prompt":concat!(env!("CARGO_MANIFEST_DIR"),"/../../packaging/rust/prompts/supervisor.md")}}},"events":{"enabled":true,"cooldown_ms":0,"max_pending":10,"policy":{"price_move_bps":100,"max_event_age_ms":300000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
-    let file = d.path().join("planner.json");
-    fs::write(&file, serde_json::to_vec(&cfg).unwrap()).unwrap();
-    c.planner_config = Some(file);
-    let mut db = open_book(&c).unwrap();
-    let mut p = load_wide(&mut db, &c).unwrap();
-    persist(&mut db, &c, &p, start(), None, None, "fixture").unwrap();
-    redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
-    let busy = AdvisoryLock::new(
-        fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(c.directory.join("model/usage.lock"))
-            .unwrap(),
-    );
-    busy.try_lock_exclusive().unwrap();
-    // A forked child shares the open file description until exec. Keep a
-    // duplicate descriptor alive across the release to model that window.
-    let inherited = busy.try_clone().unwrap();
-    assert_eq!(
-        usage_projection(&mut db, &c, &mut p, start()).unwrap()["status"],
-        "busy_retry_next_observation"
-    );
-    assert!(!p.halted);
-    drop(busy);
-    let mut settings = Some(cfg.clone());
-    let mut settings_fallback = None;
-    let mut settings_reason = None;
-    contain_event_error(
-        Err("planner_event_deadline_expired".into()),
-        &mut db,
-        &c,
-        &mut p,
-        &mut settings,
-        &mut settings_fallback,
-        &mut settings_reason,
-        start(),
-    )
-    .unwrap();
-    assert!(!p.halted && settings.is_some());
-    assert!(settings_fallback.is_none());
-    assert!(settings_reason.is_none());
-    let claim = redecision::pending_fixture(&mut db, &c, &p, start());
-    drop(inherited);
-    p.halted = true;
-    p.health = "planner_authority_invalid_recovery_required".into();
-    persist(
-        &mut db,
-        &c,
-        &p,
-        start(),
-        None,
-        None,
-        "planner_authority_invalid",
-    )
-    .unwrap();
-    assert_eq!(
-        last_halt_reason(&db).unwrap().0,
-        "planner_authority_invalid_recovery_required"
-    );
-    mark_operator_stopped(&mut p);
-    assert_eq!(p.health, "planner_authority_invalid_recovery_required");
-    // A shutdown that overwrites health keeps the recorded halt authoritative.
-    p.health = "operator_stopped".into();
-    persist(&mut db, &c, &p, start() + 1, None, None, "operator_stopped").unwrap();
-    assert_eq!(
-        last_halt_reason(&db).unwrap(),
-        (
-            "planner_authority_invalid_recovery_required".into(),
-            "state_transition"
-        )
-    );
-    drop(db);
-    planner_recover(&c, true).unwrap();
-    let db = open_book(&c).unwrap();
-    let row: String = db
-        .query_row(
-            "SELECT state FROM planner_attempt_log WHERE id=?",
-            [claim.id],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(row, "failed");
-    let mut db = open_book(&c).unwrap();
-    let recovered = load_wide(&mut db, &c).unwrap();
-    assert!(recovered.stopped && !recovered.halted);
-    // A newer financial halt must take precedence over that planner event,
-    // even if a later stop erased its health display.
-    let mut unrelated = recovered;
-    unrelated.halted = true;
-    unrelated.health = "daily_loss_tripwire".into();
-    persist(
-        &mut db,
-        &c,
-        &unrelated,
-        start() + 2,
-        None,
-        None,
-        "risk_halt",
-    )
-    .unwrap();
-    unrelated.health = "operator_stopped".into();
-    persist(
-        &mut db,
-        &c,
-        &unrelated,
-        start() + 3,
-        None,
-        None,
-        "operator_stopped",
-    )
-    .unwrap();
-    drop(db);
-    assert_eq!(
-        planner_recover(&c, true).unwrap_err().to_string(),
-        "planner_recover_halt_not_eligible_last_halt_not_planner_authority"
-    );
-}
 fn issue_137_planner_config(dir: &std::path::Path) -> (Config, planner::PlannerConfig) {
     let mut c = super::super::tests::config(dir);
-    let cfg: planner::PlannerConfig = serde_json::from_value(serde_json::json!({"enabled":true,"digest":{"enabled":true,"model_id":"fixture-model","daily_call_budget":8},"orchestrator":{"enabled":true,"model":{"model_id":"grok-4.7"},"triggers":{"supervisor":{"prompt":concat!(env!("CARGO_MANIFEST_DIR"),"/../../packaging/rust/prompts/supervisor.md")}}},"events":{"enabled":true,"cooldown_ms":0,"max_pending":10,"policy":{"price_move_bps":100,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
+    let cfg: planner::PlannerConfig = serde_json::from_value(serde_json::json!({"enabled":true,"agent":{"mode":"paper","node":"/usr/bin/node","entry":"/opt/nivra/agent/dist/src/main.js","agent_dir":"/var/lib/nivra/pi","lanes":{"decision":{"model":{"provider":"openai-codex","id":"gpt-6.1-sol"},"daily_calls":10,"daily_cost_usd":10.0,"turn_timeout_ms":10000,"max_tool_calls":40}}}})).unwrap();
     let file = dir.join("planner.json");
     fs::write(&file, serde_json::to_vec(&cfg).unwrap()).unwrap();
     c.planner_config = Some(file);
@@ -2375,9 +2254,8 @@ fn issue_137_planner_config(dir: &std::path::Path) -> (Config, planner::PlannerC
 }
 fn closed_flat_planner_halt_is_recovered_without_financial_change() {
     let d = tempfile::tempdir().unwrap();
-    let (c, cfg) = super::super::decision_owner::owner_fixture_config(d.path());
-    cfg.validate_decision_owner().unwrap();
-    assert!(cfg.role(Trigger::Supervisor).enabled);
+    let (c, cfg) = super::super::decision_owner::decision_fixture_config(d.path());
+    cfg.validate_decision_lane().unwrap();
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
@@ -2430,7 +2308,7 @@ fn closed_flat_planner_halt_is_recovered_without_financial_change() {
     // cannot silently retire it without the shared input proof.
     for block in [redecision::DATA_BLOCK, "planner_news_evidence_invalid"] {
         let d = tempfile::tempdir().unwrap();
-        let (c, cfg) = super::super::decision_owner::owner_fixture_config(d.path());
+        let (c, cfg) = super::super::decision_owner::decision_fixture_config(d.path());
         let mut db = open_book(&c).unwrap();
         let mut p = load_wide(&mut db, &c).unwrap();
         redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
@@ -2474,9 +2352,8 @@ fn closed_flat_planner_halt_is_recovered_without_financial_change() {
 }
 fn halted_model_led_book_enters_reviewed_protection_only_mode(corrected: bool) {
     let d = tempfile::tempdir().unwrap();
-    let (c, mut cfg) = super::super::decision_owner::owner_fixture_config(d.path());
-    cfg.validate_decision_owner().unwrap();
-    assert!(cfg.role(Trigger::Supervisor).enabled);
+    let (c, mut cfg) = super::super::decision_owner::decision_fixture_config(d.path());
+    cfg.validate_decision_lane().unwrap();
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
     p.model_led = true;
@@ -2486,7 +2363,7 @@ fn halted_model_led_book_enters_reviewed_protection_only_mode(corrected: bool) {
     );
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
     if corrected {
-        cfg.shortlist_n += 1;
+        cfg.max_handoff_instruments -= 1;
         fs::write(
             c.planner_config.as_ref().unwrap(),
             serde_json::to_vec(&cfg).unwrap(),
@@ -2596,18 +2473,12 @@ fn live_config_mismatch_suspends_planner_without_halting_the_book() {
     // Repointing the policy in memory
     // has that exact policy applied by the reviewed transition.
     let mut switched = cfg.clone();
-    switched.shortlist_n += 1;
+    switched.max_handoff_instruments -= 1;
     let out = d.path().join("planner.switched.json");
     fs::write(&out, serde_json::to_vec(&switched).unwrap()).unwrap();
     let mut applied = c.clone();
     applied.planner_config = Some(out.clone());
-    config_apply_with(
-        &applied,
-        true,
-        Some(serde_json::json!({"role":"orchestrator","profile":"sol-owner","model_id":"gpt-6.1-sol"})),
-        false,
-    )
-    .unwrap();
+    config_apply(&applied, true).unwrap();
     let mut db = open_book(&c).unwrap();
     assert!(!redecision::blocked(&db, &c).unwrap());
     let recovered = load_wide(&mut db, &c).unwrap();
@@ -2615,8 +2486,6 @@ fn live_config_mismatch_suspends_planner_without_halting_the_book() {
     assert_eq!(recovered.health, "operator_stopped");
     let applied_cfg = planner::PlannerConfig::load_for_session(&out, c.session).unwrap();
     assert!(redecision::config_current(&db, &applied_cfg).unwrap());
-    // An operator command that names the change records it on the audited
-    // config transition tick, beside the policy hashes.
     let body: String = db
         .query_row(
             "SELECT body FROM ticks WHERE event='operator_config_apply_confirmed_paper_review' ORDER BY id DESC LIMIT 1",
@@ -2625,9 +2494,6 @@ fn live_config_mismatch_suspends_planner_without_halting_the_book() {
         )
         .unwrap();
     let audit: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(audit["operator_command"]["role"], "orchestrator");
-    assert_eq!(audit["operator_command"]["profile"], "sol-owner");
-    assert_eq!(audit["operator_command"]["model_id"], "gpt-6.1-sol");
     assert_eq!(audit["stopped"], true);
 }
 fn planner_incident_never_halts_a_closed_book() {
@@ -2641,7 +2507,7 @@ fn planner_incident_never_halts_a_closed_book() {
     persist(&mut db, &c, &p, start(), None, None, "closed").unwrap();
     // A restart after a config edit must not turn a closed book into a
     // planner-authority halt.
-    cfg.events.as_mut().unwrap().cooldown_ms = 1;
+    cfg.max_handoff_instruments -= 1;
     fs::write(
         c.planner_config.as_ref().unwrap(),
         serde_json::to_vec(&cfg).unwrap(),
@@ -2664,9 +2530,8 @@ fn planner_incident_never_halts_a_closed_book() {
 }
 fn stopped_recovery_retires_interrupted_pending_claim_without_replay() {
     let d = tempfile::tempdir().unwrap();
-    let (c, cfg) = super::super::decision_owner::owner_fixture_config(d.path());
-    cfg.validate_decision_owner().unwrap();
-    assert!(cfg.role(Trigger::Supervisor).enabled);
+    let (c, cfg) = super::super::decision_owner::decision_fixture_config(d.path());
+    cfg.validate_decision_lane().unwrap();
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
@@ -2740,7 +2605,7 @@ fn archived_requests(c: &Config, label: &str) -> usize {
 }
 fn service_shutdown_continues_and_only_a_request_stops_the_book() {
     let d = tempfile::tempdir().unwrap();
-    let (c, cfg) = super::super::decision_owner::owner_fixture_config(d.path());
+    let (c, cfg) = super::super::decision_owner::decision_fixture_config(d.path());
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
@@ -2782,7 +2647,7 @@ fn service_shutdown_continues_and_only_a_request_stops_the_book() {
 
     // Retirement that cannot be proven exact fails closed behind the reviewed block.
     let failed = tempfile::tempdir().unwrap();
-    let (fc, fcfg) = super::super::decision_owner::owner_fixture_config(failed.path());
+    let (fc, fcfg) = super::super::decision_owner::decision_fixture_config(failed.path());
     let mut fdb = open_book(&fc).unwrap();
     let mut fp = load_wide(&mut fdb, &fc).unwrap();
     redecision::initialize(&mut fdb, &fc, &fp, Some(&fcfg), start()).unwrap();
@@ -2910,7 +2775,7 @@ fn hex_bytes(bytes: &[u8]) -> String {
 fn halted_owner_book(
     dir: &std::path::Path,
 ) -> (Config, planner::PlannerConfig, Connection, Portfolio) {
-    let (c, cfg) = super::super::decision_owner::owner_fixture_config(dir);
+    let (c, cfg) = super::super::decision_owner::decision_fixture_config(dir);
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
@@ -2959,7 +2824,7 @@ fn initialize_legacy_marked(
 /// block just because a claim is pending or the policy changed.
 fn startup_preserves_active_and_sticky_block() {
     let d = tempfile::tempdir().unwrap();
-    let (c, cfg) = super::super::decision_owner::owner_fixture_config(d.path());
+    let (c, cfg) = super::super::decision_owner::decision_fixture_config(d.path());
     let mut db = open_book(&c).unwrap();
     let p = load_wide(&mut db, &c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
@@ -3000,7 +2865,7 @@ fn startup_preserves_active_and_sticky_block() {
     assert_eq!(control["active"], "legacy-plan");
     assert_eq!(control["blocked"], "attempt_interrupted_no_replay");
     assert_eq!(control["pending"]["id"], claim.id);
-    assert_eq!(marker_receipt(&db).unwrap()["owner"], "orchestrator");
+    assert_eq!(marker_receipt(&db).unwrap()["owner"], "pi");
     assert_eq!(planner::usage(&c).unwrap(), usage);
     assert_eq!(
         db.query_row("SELECT count(*) FROM planner_plan", [], |r| r
@@ -3010,7 +2875,7 @@ fn startup_preserves_active_and_sticky_block() {
     );
     // A pending claim must not replace a stronger sticky data block.
     let d = tempfile::tempdir().unwrap();
-    let (c, cfg) = super::super::decision_owner::owner_fixture_config(d.path());
+    let (c, cfg) = super::super::decision_owner::decision_fixture_config(d.path());
     let mut db = open_book(&c).unwrap();
     let p = load_wide(&mut db, &c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
@@ -3031,7 +2896,7 @@ fn startup_preserves_active_and_sticky_block() {
 
     // A config edit must not replace the same sticky block or clear the head.
     let mut corrected = cfg.clone();
-    corrected.shortlist_n += 1;
+    corrected.max_handoff_instruments -= 1;
     fs::write(
         c.planner_config.as_ref().unwrap(),
         serde_json::to_vec(&corrected).unwrap(),
@@ -3092,7 +2957,7 @@ fn halted_recovery_requires_block_proof() {
 fn protection_only_retains_integrity_block() {
     for block in [redecision::DATA_BLOCK, "planner_news_evidence_invalid"] {
         let d = tempfile::tempdir().unwrap();
-        let (c, cfg) = super::super::decision_owner::owner_fixture_config(d.path());
+        let (c, cfg) = super::super::decision_owner::decision_fixture_config(d.path());
         let mut db = open_book(&c).unwrap();
         let mut p = load_wide(&mut db, &c).unwrap();
         p.model_led = true;
@@ -3184,7 +3049,7 @@ fn recovery_owner_receipt_compatibility() {
         "missing_row",
     ] {
         let d = tempfile::tempdir().unwrap();
-        let (c, mut cfg) = super::super::decision_owner::owner_fixture_config(d.path());
+        let (c, mut cfg) = super::super::decision_owner::decision_fixture_config(d.path());
         let mut db = open_book(&c).unwrap();
         let mut p = load_wide(&mut db, &c).unwrap();
         redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
@@ -3202,7 +3067,7 @@ fn recovery_owner_receipt_compatibility() {
         )
         .unwrap();
         if case == "corrected_owner" {
-            cfg.shortlist_n += 1;
+            cfg.max_handoff_instruments -= 1;
             fs::write(
                 c.planner_config.as_ref().unwrap(),
                 serde_json::to_vec(&cfg).unwrap(),
@@ -3281,7 +3146,7 @@ fn recovery_owner_receipt_compatibility() {
                 )
                 .unwrap();
             let receipt: serde_json::Value = serde_json::from_str(&raw).unwrap();
-            assert_eq!(receipt["owner"], "orchestrator");
+            assert_eq!(receipt["owner"], "pi");
             assert_eq!(
                 receipt["config_hash"],
                 digest(&planner::policy_bytes(&cfg).unwrap())
@@ -3292,7 +3157,7 @@ fn recovery_owner_receipt_compatibility() {
     // stay as regression checks: repair is an explicit offline command, so the
     // controller still refuses a stale marker until that command runs.
     let d = tempfile::tempdir().unwrap();
-    let (c, mut cfg) = super::super::decision_owner::owner_fixture_config(d.path());
+    let (c, mut cfg) = super::super::decision_owner::decision_fixture_config(d.path());
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
@@ -3310,7 +3175,7 @@ fn recovery_owner_receipt_compatibility() {
     )
     .unwrap();
     let prior = digest(&planner::policy_bytes(&cfg).unwrap());
-    cfg.shortlist_n += 1;
+    cfg.max_handoff_instruments -= 1;
     let current = digest(&planner::policy_bytes(&cfg).unwrap());
     fs::write(
         c.planner_config.as_ref().unwrap(),
@@ -3364,8 +3229,8 @@ fn recovery_owner_receipt_compatibility() {
     )
     .unwrap();
     drop(db);
-    let (owner_c, owner) = super::super::decision_owner::owner_fixture_config(d.path());
-    owner.validate_decision_owner().unwrap();
+    let (owner_c, owner) = super::super::decision_owner::decision_fixture_config(d.path());
+    owner.validate_decision_lane().unwrap();
     let recover_error = planner_recover(&owner_c, true).unwrap_err().to_string();
     let apply_error = config_apply(&owner_c, true).unwrap_err().to_string();
     eprintln!(
@@ -3383,7 +3248,7 @@ fn recovery_owner_receipt_compatibility() {
     persist(&mut db, &c, &p, start(), None, None, "operator_stopped").unwrap();
     let before = recovery_authority_snapshot(&db, &c);
     drop(db);
-    let (owner_c, _) = super::super::decision_owner::owner_fixture_config(d.path());
+    let (owner_c, _) = super::super::decision_owner::decision_fixture_config(d.path());
     assert_eq!(
         config_apply(&owner_c, true).unwrap_err().to_string(),
         "planner_authority_owner_invalid"
@@ -3411,7 +3276,6 @@ fn resume_clears_operator_stop_with_audit_when_flat() {
     halted_recovery_requires_block_proof();
     protection_only_retains_integrity_block();
     resume_resolves_active_session_book_and_keeps_safety_checks();
-    pending_model_recovery_preserves_charges_and_busy_is_not_a_halt();
     recovery_owner_receipt_compatibility();
     // Recovery success is owner-only.
     closed_flat_planner_halt_is_recovered_without_financial_change();
@@ -3479,7 +3343,7 @@ fn resume_clears_operator_stop_with_audit_when_flat() {
     // Recovery success is owner-only; the legacy Decide path is refused in
     // production and covered by the explicit gate cases.
     drop(db);
-    let (c, cfg) = super::super::decision_owner::owner_fixture_config(d.path());
+    let (c, cfg) = super::super::decision_owner::decision_fixture_config(d.path());
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
     assert!(p.model_led);
@@ -3824,7 +3688,7 @@ fn resume_resolves_active_session_book_and_keeps_safety_checks() {
         "operator_stopped",
     )
     .unwrap();
-    let cfg: planner::PlannerConfig = serde_json::from_value(serde_json::json!({"enabled":true,"digest":{"enabled":true,"model_id":"fixture-model","daily_call_budget":4},"orchestrator":{"enabled":true,"model":{"model_id":"grok-4.7"},"triggers":{"supervisor":{"prompt":concat!(env!("CARGO_MANIFEST_DIR"),"/../../packaging/rust/prompts/supervisor.md")}}},"events":{"enabled":true,"cooldown_ms":0,"max_pending":10,"policy":{"price_move_bps":100,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
+    let cfg: planner::PlannerConfig = serde_json::from_value(serde_json::json!({"enabled":true,"agent":{"mode":"paper","node":"/usr/bin/node","entry":"/opt/nivra/agent/dist/src/main.js","agent_dir":"/var/lib/nivra/pi","lanes":{"decision":{"model":{"provider":"openai-codex","id":"gpt-6.1-sol"},"daily_calls":10,"daily_cost_usd":10.0,"turn_timeout_ms":10000,"max_tool_calls":40}}}})).unwrap();
     redecision::initialize(&mut db, &active, &book, Some(&cfg), start()).unwrap();
     let authority: String = db
         .query_row(
@@ -3871,18 +3735,12 @@ fn resume_resolves_active_session_book_and_keeps_safety_checks() {
     let planner_path = d.path().join("planner.json");
     let mut edited = cfg.clone();
     edited.model_led = Some(true);
-    edited.usage_namespace = Some("usage".into());
-    edited.digest.daily_call_budget = 19;
+    edited.max_handoff_instruments -= 1;
     fs::write(&planner_path, serde_json::to_vec(&edited).unwrap()).unwrap();
     legacy.planner_config = Some(planner_path.clone());
-    let original_pin = fs::read(active.directory.join("model/usage-identity.json")).unwrap();
     assert!(config_apply(&legacy, false).is_err());
     drop(db);
     config_apply(&legacy, true).unwrap();
-    assert_eq!(
-        fs::read(active.directory.join("model/usage-identity.json")).unwrap(),
-        original_pin
-    );
     let active_config = rollover::current(&legacy).unwrap();
     let mut db = open_book(&active_config).unwrap();
     let applied = load_wide(&mut db, &active_config).unwrap();
@@ -3917,7 +3775,7 @@ fn resume_resolves_active_session_book_and_keeps_safety_checks() {
     )
     .unwrap();
     drop(db);
-    edited.shortlist_n += 1;
+    edited.max_handoff_instruments -= 1;
     fs::write(&planner_path, serde_json::to_vec(&edited).unwrap()).unwrap();
     assert_eq!(
         failure_code(resume(&legacy, true).unwrap_err().as_ref()),
@@ -4008,14 +3866,29 @@ fn resume_resolves_active_session_book_and_keeps_safety_checks() {
 /// leaves it after an accepted decision.
 fn activate_fixture_plan(db: &mut Connection, c: &Config, p: &Portfolio, plan: &serde_json::Value) {
     if redecision::active_plan(db, c).unwrap().is_none() {
-        let cfg: planner::PlannerConfig = serde_json::from_value(serde_json::json!({"enabled":true,"digest":{"enabled":true,"model_id":"fixture","daily_call_budget":2},"orchestrator":{"enabled":true,"model":{"model_id":"grok-4.7"},"triggers":{"supervisor":{"prompt":concat!(env!("CARGO_MANIFEST_DIR"),"/../../packaging/rust/prompts/supervisor.md")}}},"events":{"enabled":true,"cooldown_ms":0,"max_pending":20,"policy":{"price_move_bps":100,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
+        let cfg: planner::PlannerConfig = serde_json::from_value(serde_json::json!({"enabled":true,"agent":{"mode":"paper","node":"/usr/bin/node","entry":"/opt/nivra/agent/dist/src/main.js","agent_dir":"/var/lib/nivra/pi","lanes":{"decision":{"model":{"provider":"openai-codex","id":"gpt-6.1-sol"},"daily_calls":10,"daily_cost_usd":10.0,"turn_timeout_ms":10000,"max_tool_calls":40}}}})).unwrap();
         planner::prepare_review_usage(c).unwrap();
         ensure_actions(db).unwrap();
         redecision::initialize(db, c, p, Some(&cfg), start()).unwrap();
     }
+    let mut plan = plan.clone();
+    let id = plan["decision_id"].as_str().unwrap().to_owned();
+    let attempt = format!("fixture-attempt-{id}");
+    plan["decision_owner"] = serde_json::json!("pi");
+    plan["attempt_id"] = serde_json::json!(attempt);
+    let body = plan.to_string();
     db.execute(
         "INSERT INTO planner_plan VALUES(?,?)",
-        rusqlite::params![plan["decision_id"].as_str().unwrap(), plan.to_string()],
+        rusqlite::params![id, body],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO planner_attempt_log VALUES(?,?,'{}','planned',?)",
+        rusqlite::params![
+            attempt,
+            format!("fixture-event-{id}"),
+            serde_json::json!({"decision_id":id,"plan_sha256":digest(body.as_bytes())}).to_string()
+        ],
     )
     .unwrap();
     let control: String = db
@@ -4186,35 +4059,7 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
         .unwrap();
         assert_eq!(p.positions.len(), 1);
         assert_eq!(p.fills.len(), 1);
-        let cfg:planner::PlannerConfig=serde_json::from_value(serde_json::json!({"enabled":true,"digest":{"enabled":true,"model_id":"fixture","daily_call_budget":2},"orchestrator":{"enabled":true,"model":{"model_id":"grok-4.7"},"triggers":{"supervisor":{"prompt":concat!(env!("CARGO_MANIFEST_DIR"),"/../../packaging/rust/prompts/supervisor.md")}}},"events":{"enabled":true,"cooldown_ms":0,"max_pending":20,"policy":{"price_move_bps":100,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
-        let observation = |time, price| nivra_core::redecision::MarketObservation {
-            instrument: i.clone(),
-            quote: quote(time, price),
-            cumulative_volume: Some(100),
-            prior_close: None,
-            session_open: None,
-            exit_intent: p.positions.get(&i.key).and_then(|p| p.exit_intent.clone()),
-        };
-        redecision::observe(
-            &mut db,
-            &c,
-            &cfg,
-            &p,
-            &[observation(at + 500, 100)],
-            &[],
-            at + 500,
-        )
-        .unwrap();
-        redecision::observe(
-            &mut db,
-            &c,
-            &cfg,
-            &p,
-            &[observation(at + 1000, 102)],
-            &[],
-            at + 1000,
-        )
-        .unwrap();
+        let cfg:planner::PlannerConfig=serde_json::from_value(serde_json::json!({"enabled":true,"agent":{"mode":"paper","node":"/usr/bin/node","entry":"/opt/nivra/agent/dist/src/main.js","agent_dir":"/var/lib/nivra/pi","lanes":{"decision":{"model":{"provider":"openai-codex","id":"gpt-6.1-sol"},"daily_calls":10,"daily_cost_usd":10.0,"turn_timeout_ms":10000,"max_tool_calls":40}}}})).unwrap();
         let claim = redecision::pending_fixture(&mut db, &c, &p, at + 1000);
         assert_eq!(claim.predecessor.as_deref(), Some("fixture-predecessor"));
         if fault == "missing_control" {

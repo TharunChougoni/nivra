@@ -3,12 +3,6 @@ use nivra_cli::lock::AdvisoryLock;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-pub(crate) fn require_usage(c: &Config) -> Result<()> {
-    usage_directory(c, true)?;
-    usage(c)?;
-    Ok(())
-}
-
 pub(crate) fn prepare_review_usage(c: &Config) -> Result<()> {
     usage_directory(c, false)?;
     usage(c)?;
@@ -29,38 +23,8 @@ pub(crate) fn attempt_failed(journal: &Path, name: &str) -> Result<bool> {
     Ok(value["failed"].as_bool().unwrap_or(false))
 }
 
-/// Read-only budget view for the session-status tool. A missing journal means
-/// no calls have been reserved yet; any read failure is explicit unknown.
-pub(crate) fn budget_status(c: &Config, role_name: &str, role: &ModelRole) -> Value {
-    let budget = role.daily_call_budget as usize;
-    if usage_path(c).is_err() {
-        return json!({"status":"unknown","reason":"usage_namespace_unavailable","daily_call_budget":budget});
-    }
-    let used = match usage(c) {
-        Ok(counts) => counts[role_name].as_u64().unwrap_or(0) as usize,
-        Err(_) => {
-            return json!({"status":"unknown","reason":"usage_journal_unreadable","daily_call_budget":budget});
-        }
-    };
-    json!({
-        "status":"available",
-        "daily_call_budget":budget,
-        "used":used,
-        "remaining":budget.saturating_sub(used),
-        "budget_unit":role.budget_unit.as_deref().unwrap_or("request")
-    })
-}
 pub(crate) fn usage_path(c: &Config) -> Result<PathBuf> {
-    let cfg = c
-        .planner_config
-        .as_deref()
-        .map(|path| PlannerConfig::load_for_session(path, c.session))
-        .transpose()?;
-    Ok(c.directory.join("model").join(
-        cfg.as_ref()
-            .and_then(|c| c.usage_namespace.as_deref())
-            .unwrap_or("usage"),
-    ))
+    Ok(c.directory.join("model/usage"))
 }
 pub(crate) fn usage_directory(c: &Config, required: bool) -> Result<PathBuf> {
     use std::os::unix::fs::DirBuilderExt;
@@ -294,41 +258,9 @@ pub(crate) fn checked_reservations(
     c: &Config,
     journal: &Path,
 ) -> Result<BTreeMap<String, ReservationStamp>> {
-    let cfg = c
-        .planner_config
-        .as_deref()
-        .map(|path| PlannerConfig::load_for_session(path, c.session))
-        .transpose()?;
-    let derived = cfg
-        .as_ref()
-        .map(|cfg| {
-            let digest_role = cfg.role(Trigger::Digest);
-            let scorer_role = cfg.role(Trigger::Scorer);
-            let supervisor_role = cfg.role(Trigger::Supervisor);
-            [&digest_role, &scorer_role, &supervisor_role]
-                .into_iter()
-                .fold(0usize, |sum, role| {
-                    sum.saturating_add((role.daily_call_budget as usize).saturating_mul(
-                        if role.budget_unit.as_deref() == Some("event") {
-                            role.max_turns.unwrap_or(12)
-                        } else {
-                            1
-                        },
-                    ))
-                })
-                .max(4096)
-        })
-        .unwrap_or(4096);
-    let current = reservations(
-        journal,
-        cfg.as_ref()
-            .and_then(|c| c.usage_max_records)
-            .unwrap_or(derived),
-    )?;
-    let max_bytes = cfg
-        .as_ref()
-        .and_then(|c| c.usage_manifest_max_bytes)
-        .unwrap_or((derived as u64).saturating_mul(256).max(1_000_000));
+    const MAX_RECORDS: usize = 4096;
+    let current = reservations(journal, MAX_RECORDS)?;
+    let max_bytes = (MAX_RECORDS as u64).saturating_mul(256).max(1_000_000);
     let path = c.directory.join("model/usage-reservations.json");
     if !path.exists() {
         if !current.is_empty() {
@@ -362,7 +294,6 @@ pub(crate) struct CallGuard<'a> {
     pub(crate) deadline: Option<i64>,
     pub(crate) not_before: Option<i64>,
     pub(crate) configuration: Option<(&'a Config, &'a PlannerConfig)>,
-    pub(crate) invocation_id: Option<&'a str>,
     /// Actual observation wall clock. This is the only source for model-visible
     /// observation timestamps; it is never derived from an anchor plus elapsed.
     pub(crate) clock: &'a dyn Fn() -> i64,
@@ -454,7 +385,6 @@ pub(crate) fn preview_guard() -> CallGuard<'static> {
         deadline: None,
         not_before: None,
         configuration: None,
-        invocation_id: None,
         clock: &millis,
         duration: None,
         started_wall_ms: None,

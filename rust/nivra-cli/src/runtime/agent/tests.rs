@@ -135,28 +135,7 @@ fn all_tools(dir: &std::path::Path) -> (Config, planner::PlannerConfig) {
     use crate::runtime::harness::research::{
         CandidateComputeSettings, CandidateDataset, CandidateDatasetKind, ResearchSettings,
     };
-    use crate::runtime::owner_tasks::{
-        OwnerResearchQuoteCaptureSettings, OwnerResearchSettings, OwnerTasksSettings,
-        ReviewSettings,
-    };
-    let (c, mut cfg) = crate::runtime::decision_owner::owner_fixture_config(dir);
-    cfg.owner_tasks = Some(OwnerTasksSettings {
-        version: 1,
-        agenda: None,
-        review: ReviewSettings::default(),
-        research: Some(OwnerResearchSettings {
-            idle_trigger: None,
-            enabled: true,
-            cutoff_minute: 1020,
-            max_evidence: 4,
-            quote_capture: Some(OwnerResearchQuoteCaptureSettings {
-                enabled: true,
-                max_rows: 64,
-            }),
-            observation_capture: None,
-            lane: Some(Default::default()),
-        }),
-    });
+    let (c, mut cfg) = crate::runtime::decision_owner::decision_fixture_config(dir);
     let install_hash = crate::runtime::digest(b"print(1)");
     cfg.workspace = Some(
         serde_json::from_value(json!({
@@ -182,6 +161,10 @@ fn all_tools(dir: &std::path::Path) -> (Config, planner::PlannerConfig) {
             max_session_trials: 100,
         }),
         library_max_bytes: None,
+        quote_capture: Some(crate::runtime::harness::research::QuoteCaptureSettings {
+            enabled: true,
+            max_rows: 64,
+        }),
         candidate_compute: Some(CandidateComputeSettings {
             enabled: true,
             abi: "scorer_replay_v1".into(),
@@ -691,8 +674,6 @@ fn budgets_preemption_and_agent_exit_stop_turns() {
         unbounded.validate().is_err(),
         "a lane needs a positive call budget"
     );
-    // Without the block, policy bytes stay what deployed books hashed.
-    assert!(serde_json::to_value(&cfg).unwrap().get("agent").is_none());
     let clock = || 1_760_600_000_000_i64;
     let (client, peer) = connect(|peer| {
         let (id, _) = peer.turn();
@@ -780,7 +761,7 @@ fn next_decision_receives_only_the_sealed_predecessor_review() {
     let dir = tempfile::tempdir().unwrap();
     let original = dir.path().join("original");
     std::fs::create_dir(&original).unwrap();
-    let (prior, cfg) = crate::runtime::decision_owner::owner_fixture_config(&original);
+    let (prior, cfg) = crate::runtime::decision_owner::decision_fixture_config(&original);
     let mut successor = prior.clone();
     successor.session = "2026-10-19".parse().unwrap();
     successor.previous_session = prior.session;
@@ -840,18 +821,16 @@ fn next_decision_receives_only_the_sealed_predecessor_review() {
 }
 
 #[test]
-fn pi_paper_config_needs_no_legacy_model_and_refuses_one() {
-    let temp = tempfile::tempdir().unwrap();
+fn pi_paper_config_refuses_retired_model_keys() {
     let mut agent = settings(10, 1.0);
     agent.mode = AgentMode::Paper;
     let mut cfg = json!({"enabled":true,"agent":agent});
-    let parse =
-        |cfg: &Value| planner::PlannerConfig::parse(cfg.to_string().as_bytes(), temp.path());
+    let parse = |cfg: &Value| planner::PlannerConfig::parse(cfg.to_string().as_bytes());
     assert!(parse(&cfg).unwrap().uses_pi_paper());
 
     cfg["digest"] = json!({"enabled":true,"model_id":"retired","daily_call_budget":1});
     assert_eq!(
         parse(&cfg).err().unwrap().to_string(),
-        "pi_paper_legacy_model_config_refused"
+        "planner_config_invalid"
     );
 }

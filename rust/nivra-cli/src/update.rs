@@ -35,7 +35,6 @@ pub(crate) struct Manifest {
 /// The only SSH host alias accepted as release transport. The host migration
 /// (`nivra host-migrate`) is the one path that rebinds a retired remote.
 const REMOTE_ALIAS: &str = "github-nivra:";
-pub(crate) const CANONICAL_REMOTE: &str = "github-nivra:TharunChougoni/nivra.git";
 #[derive(Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 struct Config {
@@ -46,15 +45,6 @@ struct Config {
 }
 fn valid_remote(remote: &str) -> bool {
     remote.starts_with(REMOTE_ALIAS) && !remote.contains(char::is_whitespace)
-}
-/// Parse updater config bytes exactly as `update` does before any fetch.
-pub(crate) fn validate_config(bytes: &[u8]) -> Result<()> {
-    let config: Config =
-        serde_json::from_slice(bytes).map_err(|_| "invalid_update_configuration")?;
-    if !valid_remote(&config.remote) {
-        return Err("update_ssh_alias_required");
-    }
-    Ok(())
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Version(u32, u32, u32);

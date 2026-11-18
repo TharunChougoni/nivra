@@ -296,7 +296,7 @@ pub(crate) fn observation_status(c: &Config, cfg: &PlannerConfig, now: i64) -> V
         }));
     }
     let trials = super::super::carry::trial_fold(c, cfg);
-    let capture = super::super::capture::status(c, cfg, now);
+    let capture = json!({"enabled":false,"coverage":"disabled"});
     let (
         observation_refs,
         observation_refs_status,

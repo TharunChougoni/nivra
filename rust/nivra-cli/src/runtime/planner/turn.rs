@@ -1,6 +1,8 @@
 //! Digest turn production, bounded reuse, trigger envelopes and durable results.
 use super::*;
 
+/// Feature rows ranked into the brief before tools answer the rest.
+const SHORTLIST_N: usize = 200;
 /// The evidence every decision tool reads: features, discovery, mandate,
 /// book state, recent fills and session performance. Shared by the harness
 /// and the pi lanes so both serve the same facts.
@@ -11,11 +13,11 @@ pub(in crate::runtime) fn call_time_input(
     instruments: &[Instrument],
     clock: &dyn Fn() -> i64,
 ) -> Result<(Value, Value)> {
-    let (mut input, references) = bundle_with_references(c, p, instruments, cfg.shortlist_n)?;
+    let (mut input, references) = bundle_with_references(c, p, instruments, SHORTLIST_N)?;
     if let Some(settings) = &cfg.discovery {
         input["discovery"] = super::super::discovery::snapshot(c, instruments, settings, clock())?;
     }
-    input["paper_mandate"] = json!({"paper_only":true,"capital":c.allocation()?,"objective":super::super::harness::objective_for(cfg),"risk_caps":"none","overnight_holds_allowed":true,"operator_context":cfg.operator_context,"initialization":if cfg.uses_pi_paper() {"validated_universe_then_history_then_pi_decision_then_fresh_quote_execution"} else {"validated_universe_then_history_then_digest_then_orchestrator_then_fresh_quote_execution"}});
+    input["paper_mandate"] = json!({"paper_only":true,"capital":c.allocation()?,"risk_caps":"none","overnight_holds_allowed":true,"initialization":"validated_universe_then_history_then_pi_decision_then_fresh_quote_execution"});
     input["paper_mandate"]["products"] = if c.nifty_options.enabled {
         json!(["cash_equity", "nifty_option_long"])
     } else {

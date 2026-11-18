@@ -8,35 +8,6 @@ use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Claim {
-    pub version: u32,
-    pub id: String,
-    pub binding: String,
-    pub digest_id: String,
-    pub base_sha256: String,
-    pub portfolio_revision: String,
-    pub policy_sha256: String,
-    pub profile_sha256: Option<String>,
-    pub deadline_ms: i64,
-    pub turn_id: String,
-    pub model_id: String,
-    pub started_ms: i64,
-    /// This digest was scheduled by cadence rather than a material event.
-    #[serde(default)]
-    pub cadence: bool,
-    /// Host signature of the facts this digest delivered. Used to coalesce a
-    /// repeated cadence digest without inspecting model prose.
-    #[serde(default)]
-    pub facts_sha256: String,
-    /// Exact terminal research receipts carried by the source event.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub research_tasks: Vec<Value>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub research_tasks_truncated: bool,
-}
-
 pub(crate) struct Context<'a> {
     pub db: &'a mut Connection,
     pub portfolio: &'a Portfolio,
@@ -58,10 +29,6 @@ pub(super) fn retire_for_pi_cutover(db: &Connection, c: &Config) -> Result<()> {
         )?;
     }
     Ok(())
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
 }
 
 pub(crate) fn selected_version(base: &Value) -> Value {
@@ -99,16 +66,9 @@ pub(crate) fn selected_version(base: &Value) -> Value {
     Value::Null
 }
 
-pub(crate) fn in_window(c: &Config, cfg: &planner::PlannerConfig, now: i64) -> bool {
-    let start = cfg
-        .events
-        .as_ref()
-        .and_then(|s| s.decision_start_minute)
-        .map(u32::from)
-        .unwrap_or(c.execution.session_start_minute)
-        .max(c.execution.session_start_minute);
+pub(crate) fn in_window(c: &Config, now: i64) -> bool {
     local(now).date_naive() == c.session
-        && (start..c.execution.session_end_minute).contains(&minute(now))
+        && (c.execution.session_start_minute..c.execution.session_end_minute).contains(&minute(now))
 }
 
 pub(crate) fn supersede_plan_actions(
@@ -576,4 +536,4 @@ pub(crate) fn activity_analytics(
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-pub(crate) use tests::owner_fixture_config;
+pub(crate) use tests::decision_fixture_config;

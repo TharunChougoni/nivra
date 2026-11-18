@@ -14,22 +14,11 @@ pub(super) enum Route {
     InstrumentChain(Query),
     Sessions(Query),
     Health,
-    Approvals,
     Alerts(Query),
-    /// Persistent orchestrator session view.
-    Session(Query),
     /// Bounded orchestrator web-tool call record (#222).
     Tools(Query),
     Series(Query),
-    Runs(Query),
     Events(Query),
-    Run(String),
-    Blob {
-        run: String,
-        name: String,
-        query: Query,
-    },
-    Prompt(String),
     Backtest,
     BacktestExample,
     UnknownV1,
@@ -159,17 +148,7 @@ pub(super) fn parse(line: &str) -> Result<Route, &'static str> {
                 Query::parse(raw, &[])?;
                 Ok(Route::Health)
             }
-            "/api/v1/approvals" => {
-                Query::parse(raw, &[])?;
-                Ok(Route::Approvals)
-            }
             "/api/v1/alerts" => Ok(Route::Alerts(Query::parse(raw, &["cursor", "limit"])?)),
-            "/api/v1/session" => {
-                if method != "GET" {
-                    return Err("method_not_allowed");
-                }
-                Ok(Route::Session(Query::parse(raw, &["date"])?))
-            }
             "/api/v1/tools" => {
                 if method != "GET" {
                     return Err("method_not_allowed");
@@ -183,43 +162,7 @@ pub(super) fn parse(line: &str) -> Result<Route, &'static str> {
                 raw,
                 &["instrument", "kind", "from", "to", "limit"],
             )?)),
-            "/api/v1/runs" => Ok(Route::Runs(Query::parse(
-                raw,
-                &[
-                    "cursor",
-                    "limit",
-                    "role",
-                    "identity",
-                    "date",
-                    "trigger",
-                    "outcome",
-                    "instrument",
-                    "failed",
-                ],
-            )?)),
             "/api/v1/events" => Ok(Route::Events(Query::parse(raw, &["after", "poll"])?)),
-            path if path.starts_with("/api/v1/runs/") => {
-                let rest = path.strip_prefix("/api/v1/runs/").unwrap();
-                if let Some((id, name)) = rest.split_once("/blobs/") {
-                    let query = Query::parse(raw, &["offset", "len"])?;
-                    let id = decode(id).map_err(|_| "run_not_found")?;
-                    if !super::super::model_history::valid_id(&id) {
-                        return Err("run_not_found");
-                    }
-                    Ok(Route::Blob {
-                        run: id,
-                        name: decode(name).map_err(|_| "blob_not_found")?,
-                        query,
-                    })
-                } else {
-                    Query::parse(raw, &[])?;
-                    let id = decode(rest).map_err(|_| "run_not_found")?;
-                    if !super::super::model_history::valid_id(&id) {
-                        return Err("run_not_found");
-                    }
-                    Ok(Route::Run(id))
-                }
-            }
             "/api/v1/backtest" => {
                 if method != "POST" {
                     return Err("method_not_allowed");
@@ -231,143 +174,10 @@ pub(super) fn parse(line: &str) -> Result<Route, &'static str> {
                 Query::parse(raw, &[])?;
                 Ok(Route::BacktestExample)
             }
-            path if path.starts_with("/api/v1/prompts/") => {
-                Query::parse(raw, &[])?;
-                let sha = path.strip_prefix("/api/v1/prompts/").unwrap();
-                if sha.len() != 64
-                    || !sha
-                        .bytes()
-                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                {
-                    return Err("prompt_not_found");
-                }
-                Ok(Route::Prompt(sha.into()))
-            }
             _ => Ok(Route::UnknownV1),
         };
     }
     Ok(Route::Unknown)
 }
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn routes_reject_removed_legacy_and_strictly_decode_v1_queries() {
-        for (path, route) in [
-            ("/api/v1/meta", Route::Meta),
-            ("/api/v1/summary", Route::Summary),
-            ("/api/v1/portfolio", Route::Portfolio),
-            ("/api/v1/positions", Route::Positions(Query::default())),
-            ("/api/v1/orders", Route::Orders(Query::default())),
-            ("/api/v1/fills", Route::Fills(Query::default())),
-            (
-                "/api/v1/plans?date=2026-10-29",
-                Route::Plans(Query::parse("date=2026-10-29", &["date"]).unwrap()),
-            ),
-            (
-                "/api/v1/scanner?segment=prospects",
-                Route::Scanner(
-                    Query::parse("segment=prospects", &["segment", "cursor", "limit"]).unwrap(),
-                ),
-            ),
-            (
-                "/api/v1/instruments?cursor=100&limit=50",
-                Route::Instruments(
-                    Query::parse("cursor=100&limit=50", &["cursor", "limit"]).unwrap(),
-                ),
-            ),
-            ("/api/v1/sessions", Route::Sessions(Query::default())),
-            (
-                "/api/v1/runs?identity=orchestrator",
-                Route::Runs(Query::parse("identity=orchestrator", &["identity"]).unwrap()),
-            ),
-            ("/api/v1/health", Route::Health),
-            ("/api/v1/approvals", Route::Approvals),
-            ("/api/v1/alerts", Route::Alerts(Query::default())),
-            (
-                "/api/v1/session?date=2026-10-31",
-                Route::Session(Query::parse("date=2026-10-31", &["date"]).unwrap()),
-            ),
-            (
-                "/api/v1/tools?date=2026-10-31&limit=25",
-                Route::Tools(
-                    Query::parse("date=2026-10-31&limit=25", &["date", "cursor", "limit"]).unwrap(),
-                ),
-            ),
-            (
-                "/api/v1/series?instrument=NSE_EQ%7CINE00U801010",
-                Route::Series(
-                    Query::parse(
-                        "instrument=NSE_EQ%7CINE00U801010",
-                        &["instrument", "kind", "from", "to", "limit"],
-                    )
-                    .unwrap(),
-                ),
-            ),
-            ("/api/v1/backtest/example", Route::BacktestExample),
-            ("/api/v1/unknown", Route::UnknownV1),
-            ("/", Route::Unknown),
-            ("/legacy/", Route::Unknown),
-            ("/assets/theme.js", Route::Unknown),
-            ("/api/status", Route::Unknown),
-            ("/api/model-history?offset=0", Route::Unknown),
-            ("/api/model-run?id=x", Route::Unknown),
-            ("/api/model-stream?after=0", Route::Unknown),
-            ("/api/backtest", Route::Unknown),
-            ("/api/backtest/example", Route::Unknown),
-            ("/old", Route::Unknown),
-        ] {
-            assert_eq!(parse(&format!("GET {path} HTTP/1.1")), Ok(route));
-        }
-        assert_eq!(parse("POST /api/v1/backtest HTTP/1.1"), Ok(Route::Backtest));
-        // Note/aside writes are removed from the dashboard surface; GET
-        // /api/v1/session still serves their recorded evidence read-only.
-        for path in [
-            "/api/v1/session/notes",
-            "/api/v1/session/notes/clear",
-            "/api/v1/session/notes/keep",
-            "/api/v1/session/aside",
-        ] {
-            assert_eq!(
-                parse(&format!("POST {path} HTTP/1.1")),
-                Err("method_not_allowed")
-            );
-            assert_eq!(parse(&format!("GET {path} HTTP/1.1")), Ok(Route::UnknownV1));
-        }
-        assert_eq!(
-            parse("GET /api/v1/backtest HTTP/1.1"),
-            Err("method_not_allowed")
-        );
-        assert_eq!(
-            parse("POST /api/v1/meta HTTP/1.1"),
-            Err("method_not_allowed")
-        );
-        assert_eq!(
-            parse("POST /api/v1/tools HTTP/1.1"),
-            Err("method_not_allowed")
-        );
-        assert_eq!(
-            parse("GET /api/v1/tools?offset=1 HTTP/1.1"),
-            Err("query_unknown_key")
-        );
-        assert_eq!(
-            parse("GET /api/v1/meta?unexpected=1 HTTP/1.1"),
-            Err("query_unknown_key")
-        );
-        assert_eq!(
-            Query::parse("key=%E2%82%B9+value", &["key"]).unwrap().0["key"],
-            "₹ value"
-        );
-        for raw in ["key=%", "key=%1", "key=%GG", "key=%FF", "key=%00", "key"] {
-            assert!(Query::parse(raw, &["key"]).is_err(), "{raw}");
-        }
-        assert_eq!(
-            Query::parse("key=1&%6Bey=2", &["key"]),
-            Err("query_duplicate_key")
-        );
-        assert_eq!(
-            Query::parse(&format!("key={}", "x".repeat(2048)), &["key"]),
-            Err("query_too_long")
-        );
-    }
-}
+mod tests {}

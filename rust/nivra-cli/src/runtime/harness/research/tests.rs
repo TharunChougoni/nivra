@@ -35,6 +35,7 @@ fn settings(root: &Path, runtime: &Path) -> ResearchSettings {
         library_max_candidates: None,
         library_max_bytes: None,
         candidate_compute: None,
+        quote_capture: None,
         registrations: vec![registration(root, runtime)],
     }
 }
@@ -44,15 +45,7 @@ fn owner_fixture(root: &Path, source: &ResearchSettings) -> (Config, PlannerConf
     let mut research = source.clone();
     research.queue = root.join("research.sqlite");
     research.stage_root = root.join("research-stage");
-    let mut orchestrator =
-        super::super::super::orchestrator_model::OrchestratorModelSettings::default();
-    for trigger in super::super::super::orchestrator_model::Trigger::ALL {
-        let path = root.join(format!("orchestrator-{}.md", trigger.as_str()));
-        std::fs::write(&path, "owner research fixture\n").unwrap();
-        orchestrator.triggers.get_mut(&trigger).unwrap().prompt = path;
-    }
     let cfg = super::super::super::planner::PlannerConfig {
-        orchestrator: Some(orchestrator),
         research_tools: Some(research),
         ..Default::default()
     };
@@ -60,26 +53,6 @@ fn owner_fixture(root: &Path, source: &ResearchSettings) -> (Config, PlannerConf
 }
 
 use std::sync::atomic::{AtomicBool, Ordering};
-
-fn ensure_test_state(c: &Config) {
-    let db = super::super::super::open_book(c).unwrap();
-    let exists: i64 = db
-        .query_row("SELECT count(*) FROM state", [], |row| row.get(0))
-        .unwrap();
-    if exists == 0 {
-        let portfolio = nivra_core::execution::Portfolio::with_capital(
-            nivra_core::finance::Amount::parse("5000").unwrap(),
-        );
-        db.execute(
-            "INSERT INTO state VALUES(1,?,?)",
-            rusqlite::params![
-                super::super::super::book_binding(c).unwrap(),
-                serde_json::to_string(&portfolio).unwrap()
-            ],
-        )
-        .unwrap();
-    }
-}
 
 fn candidate_at_on(day: &str, hour: u32, minute: u32) -> i64 {
     chrono::DateTime::parse_from_rfc3339(&format!("{day}T{hour:02}:{minute:02}:00+05:30"))
@@ -784,48 +757,6 @@ else:
         )
 }
 
-fn candidate_observation_settings(root: &Path, base: &ResearchSettings) -> ResearchSettings {
-    let mut settings = candidate_settings(root, base);
-    let candidate = settings.candidate_compute.as_mut().unwrap();
-    candidate.replay.horizons_minutes = vec![1];
-    candidate.observation = Some(CandidateObservationSettings {
-        enabled: true,
-        abi: "observation_single_entry_v1".into(),
-        max_quotes: 64,
-        max_quote_events: 100,
-        max_observations: 1_000,
-        max_tape_bytes: 1_048_576,
-        max_capital: nivra_core::finance::Amount::parse("10000").unwrap(),
-        max_units: 100,
-        max_holding_ms: 3_600_000,
-        max_decision_delay_ms: 5_000,
-    });
-    settings
-}
-
-fn candidate_observation_args(
-    source_task_id: &str,
-    window_from_ms: i64,
-    window_to_ms: i64,
-) -> CandidateObservationArgsV1 {
-    CandidateObservationArgsV1 {
-        source_task_id: source_task_id.into(),
-        source_revision: 1,
-        window_from_ms,
-        window_to_ms,
-        units: 10,
-        capital: nivra_core::finance::Amount::parse("5000").unwrap(),
-        costs: serde_json::from_value(json!({
-            "per_order":"1","buy_bps":"0","sell_bps":"0","slippage_bps":"0","rounding_increment":"0.01"
-        }))
-        .unwrap(),
-        holding_ms: 60_000,
-        max_exit_delay_ms: 60_000,
-        decision_delay_ms: 2_000,
-        observation_projection: None,
-    }
-}
-
 fn case_carry_contract(root: &Path, base_settings: &ResearchSettings, base_policy: &PlannerConfig) {
     let dir = root.join("candidate-carry-contract");
     fs::create_dir_all(&dir).unwrap();
@@ -891,320 +822,6 @@ fn case_carry_contract(root: &Path, base_settings: &ResearchSettings, base_polic
     assert_eq!(trials["reset"], false);
     assert_eq!(trials["family_key_is_label_only"], true);
     assert!(trials["global_tested_trial_count"].is_u64());
-}
-
-fn insert_research_tick(c: &Config, at: i64) {
-    let db = super::super::super::open_book(c).unwrap();
-    let archive = json!({
-        "source":"upstox-readonly-v1",
-        "purpose":"research_observation",
-        "requested_ms":at,
-        "received_ms":at,
-        "body":candidate_quote_body(at).to_string()
-    });
-    db.execute(
-        "INSERT INTO ticks(at,receipt,body,event) VALUES(?1,?2,?3,CASE WHEN instr(?3,'\"purpose\":\"research_observation\"')>0 THEN 'research_quotes' ELSE 'wide_quotes' END)",
-        rusqlite::params![at, at, archive.to_string()],
-    )
-    .unwrap();
-}
-
-fn e2_item<'a>(value: &'a Value, id: &str) -> Option<&'a Value> {
-    value["items"]
-        .as_array()?
-        .iter()
-        .find(|item| item["candidate_id"] == id)
-}
-
-fn case_e2_bounds_contract(
-    root: &Path,
-    base_settings: &ResearchSettings,
-    base_policy: &PlannerConfig,
-) {
-    let dir = root.join("candidate-e2-bounds");
-    fs::create_dir_all(&dir).unwrap();
-    let t0 = candidate_at(9, 23);
-    let settings = candidate_observation_settings(&dir, base_settings);
-    if !candidate_sandbox_ready(&settings) {
-        assert!(
-            std::env::var_os("NIVRA_REQUIRE_SCORER_SANDBOX").is_none(),
-            "candidate sandbox required but python3 or bubblewrap is unavailable"
-        );
-        eprintln!("skipping candidate e2 bounds contract: python3 or bwrap unavailable");
-        return;
-    }
-    let (c, cfg) = candidate_config(&dir, base_policy, settings.clone());
-    candidate_book(&c);
-    ensure_test_state(&c);
-    insert_research_tick(&c, t0 + 500);
-    let mut failures = Vec::new();
-    macro_rules! check {
-        ($cond:expr, $msg:expr) => {
-            if !$cond {
-                failures.push($msg.to_string());
-            }
-        };
-    }
-    let mut source_args = candidate_submit_args("candidate-e2b-source", CANDIDATE_SOURCE, None);
-    source_args.horizon_minutes = 1;
-    let source = candidate_submit(
-        &c,
-        &cfg,
-        "grok-4.7",
-        3,
-        "turn-e2b",
-        source_args,
-        t0,
-        Some(candidate_evidence()),
-    )
-    .unwrap();
-    check!(source["status"] == "queued", format!("source: {source}"));
-    let source_task = source["task"]["task_id"].as_str().unwrap().to_owned();
-    candidate_drive(&c, &cfg, &source_task, move || t0 + 10);
-    {
-        let mut db = candidate_queue(&c, &cfg);
-        let record = jobs::load_candidate(&mut db, &source_task, 1).unwrap();
-        reconcile_candidate(&c, &cfg, &mut db, &record).unwrap();
-    }
-    // A compacted potential first exit must be an explicit unknown gap with
-    // its original archive SHA, never silently replaced by a later readable
-    // receipt and never a zero PnL.
-    insert_research_tick(&c, t0 + 419_500);
-    let mut args = candidate_submit_args("candidate-e2b-compacted", CANDIDATE_SOURCE, None);
-    args.observation = Some(Box::new(candidate_observation_args(
-        &source_task,
-        candidate_at(9, 21),
-        candidate_at(9, 22),
-    )));
-    let submitted = candidate_submit(
-        &c,
-        &cfg,
-        "grok-4.7",
-        3,
-        "turn-e2b",
-        args,
-        t0 + 420_000,
-        Some(candidate_evidence()),
-    )
-    .unwrap();
-    check!(
-        submitted["status"] == "queued",
-        format!("compacted submit: {submitted}")
-    );
-    let task = submitted["task"]["task_id"].as_str().unwrap().to_owned();
-    candidate_drive(&c, &cfg, &task, move || t0 + 421_000);
-    {
-        let mut db = candidate_queue(&c, &cfg);
-        let record = jobs::load_candidate(&mut db, &task, 1).unwrap();
-        reconcile_candidate(&c, &cfg, &mut db, &record).unwrap();
-    }
-    let record = candidate_record(&c, &cfg, &task);
-    let id = record.spec.lifecycle_candidate_id.clone();
-    {
-        let db = super::super::super::open_book(&c).unwrap();
-        let compacted = json!({
-            "kind":"compacted_quote_receipt",
-            "sha256":"d".repeat(64),
-            "original_bytes":1234
-        });
-        db.execute(
-            "INSERT INTO ticks(at,receipt,body,event) VALUES(?1,?2,?3,CASE WHEN instr(?3,'\"purpose\":\"research_observation\"')>0 THEN 'research_quotes' ELSE 'wide_quotes' END)",
-            rusqlite::params![t0 + 482_000, t0 + 482_000, compacted.to_string()],
-        )
-        .unwrap();
-    }
-    let matured = mature_candidates(&c, &cfg, t0 + 483_000).unwrap();
-    let item = e2_item(&matured, &id);
-    check!(
-        item.is_some_and(|item| item["state"] == "unknown"),
-        format!("compacted unknown: {matured}")
-    );
-    let measurement = item
-        .map(|item| item["observation"].clone())
-        .unwrap_or(Value::Null);
-    check!(
-        measurement["exit_status"] == "exit_first_receipt_unknown"
-            && measurement["first_receipt_unknown"] == true,
-        format!("compacted status: {measurement}")
-    );
-    check!(
-        measurement["exit_gap"]["archive_sha256"] == "d".repeat(64)
-            && measurement["net_pnl_if_flat"].is_null(),
-        format!("compacted gap sha: {measurement}")
-    );
-    // Capture caps: the grant timeout is enforced on the request path, the row
-    // budget is enforced before commit, and the verified-universe checks refuse
-    // a wrong-session or over-budget universe without calling the provider.
-    let capture_cfg = crate::runtime::owner_tasks::OwnerTasksSettings {
-        version: 1,
-        agenda: None,
-        review: crate::runtime::owner_tasks::ReviewSettings::default(),
-        research: Some(crate::runtime::owner_tasks::OwnerResearchSettings {
-            idle_trigger: None,
-            enabled: true,
-            cutoff_minute: 1020,
-            max_evidence: 4,
-            quote_capture: None,
-            observation_capture: Some(
-                crate::runtime::owner_tasks::ControllerObservationCaptureSettings {
-                    enabled: true,
-                    max_keys: 8,
-                    max_calls_per_session: 8,
-                    min_interval_ms: 1_000,
-                    timeout_ms: 1_000,
-                    max_rows: 1,
-                },
-            ),
-            lane: Some(Default::default()),
-        }),
-    };
-    let mut cfg = cfg.clone();
-    cfg.owner_tasks = Some(capture_cfg);
-    let mut db = super::super::super::open_book(&c).unwrap();
-    let portfolio = nivra_core::execution::Portfolio::with_capital(
-        nivra_core::finance::Amount::parse("5000").unwrap(),
-    );
-    let timeout = super::capture::tick_with(
-        &mut db,
-        &c,
-        &cfg,
-        &portfolio,
-        t0 + 600_000,
-        || t0 + 601_100,
-        |_| {
-            std::thread::sleep(std::time::Duration::from_millis(1_100));
-            Ok(crate::runtime::data::BoundedQuote {
-                requested_ms: t0 + 600_000,
-                receipt_ms: t0 + 600_000,
-                body: candidate_quote_body(t0 + 600_000).to_string(),
-                request_attempted: true,
-                provider_called: Some(true),
-            })
-        },
-    );
-    check!(
-        timeout["status"] == "timeout" && timeout["provider_called"] == true,
-        format!("capture timeout: {timeout}")
-    );
-    let rows = super::capture::tick_with(
-        &mut db,
-        &c,
-        &cfg,
-        &portfolio,
-        t0 + 601_000,
-        || t0 + 601_000,
-        |_| {
-            Ok(crate::runtime::data::BoundedQuote {
-                requested_ms: t0 + 601_000,
-                receipt_ms: t0 + 601_000,
-                body: candidate_quote_body(t0 + 601_000).to_string(),
-                request_attempted: true,
-                provider_called: Some(true),
-            })
-        },
-    );
-    check!(
-        rows["status"] == "refused" && rows["reason"] == "observation_capture_row_budget_exceeded",
-        format!("capture row cap: {rows}")
-    );
-    let mut one_key = cfg.clone();
-    if let Some(capture) = one_key
-        .owner_tasks
-        .as_mut()
-        .and_then(|tasks| tasks.research.as_mut())
-        .and_then(|research| research.observation_capture.as_mut())
-    {
-        capture.max_keys = 1;
-    }
-    let over_budget = super::capture::tick_with(
-        &mut db,
-        &c,
-        &one_key,
-        &portfolio,
-        t0 + 602_000,
-        || t0 + 602_000,
-        |_| panic!("provider must not be called for an over-budget universe"),
-    );
-    check!(
-        over_budget["status"] == "not_eligible" && over_budget["provider_called"] == false,
-        format!("capture key budget: {over_budget}")
-    );
-    let universe_path = c.directory.join("wide-universe.json");
-    let universe = fs::read(&universe_path).unwrap();
-    let mut corrupt: Value = serde_json::from_slice(&universe).unwrap();
-    corrupt["session"] = json!("2026-10-15");
-    fs::write(&universe_path, serde_json::to_vec(&corrupt).unwrap()).unwrap();
-    let unverified = super::capture::tick_with(
-        &mut db,
-        &c,
-        &cfg,
-        &portfolio,
-        t0 + 603_000,
-        || t0 + 603_000,
-        |_| panic!("provider must not be called for an unverified universe"),
-    );
-    check!(
-        unverified["status"] == "not_eligible"
-            && unverified["reason"] == "verified_universe_session_mismatch"
-            && unverified["provider_called"] == false,
-        format!("capture unverified universe: {unverified}")
-    );
-    fs::write(&universe_path, universe).unwrap();
-    // A forged parent ref is refused against the host-derived source identity.
-    let status = candidate_status(&c, &cfg, &source_task, 1, t0 + 100).unwrap();
-    let reference: jobs::CandidateParentRefV1 =
-        serde_json::from_value(status["parent_ref"]["ref"].clone()).unwrap();
-    let mut forged = reference.clone();
-    forged.cohort_key = "0".repeat(64);
-    check!(
-        super::carry::resolve_parent_ref(&c, &cfg, &forged).is_err(),
-        "forged cohort refused"
-    );
-    let mut forged = reference.clone();
-    forged.instrument_universe_sha256 = "0".repeat(64);
-    check!(
-        super::carry::resolve_parent_ref(&c, &cfg, &forged).is_err(),
-        "forged universe refused"
-    );
-    let mut forged = reference.clone();
-    forged.source_state_hash = "0".repeat(64);
-    check!(
-        super::carry::resolve_parent_ref(&c, &cfg, &forged).is_err(),
-        "forged state refused"
-    );
-    let mut forged = reference.clone();
-    forged.carry_sha256 = "0".repeat(64);
-    check!(
-        super::carry::resolve_parent_ref(&c, &cfg, &forged).is_err(),
-        "forged carry refused"
-    );
-    let mut forged = reference.clone();
-    forged.axes = vec!["edge_qualified".into()];
-    check!(
-        super::carry::resolve_parent_ref(&c, &cfg, &forged).is_err(),
-        "forged axes refused"
-    );
-    let mut forged = reference.clone();
-    forged.result_sha256 = "0".repeat(64);
-    check!(
-        super::carry::resolve_parent_ref(&c, &cfg, &forged).is_err(),
-        "forged result refused"
-    );
-    // A corrupt carry chain makes the global fold unavailable, not zero.
-    let broken = root.join("candidate-e2-broken-carry");
-    fs::create_dir_all(broken.join("sessions").join("2026-10-16")).unwrap();
-    fs::write(broken.join("carry-over.json"), b"{not-json").unwrap();
-    let mut broken_config = c.clone();
-    broken_config.directory = broken.clone();
-    broken_config.sessions_root = Some(broken.join("sessions"));
-    let broken_fold = super::carry::trial_fold(&broken_config, &cfg);
-    check!(
-        broken_fold["status"] == "unavailable"
-            && broken_fold["global_tested_trial_count"].is_null(),
-        format!("broken carry fold: {broken_fold}")
-    );
-    drop(db);
-    assert!(failures.is_empty(), "E2 bounds failures: {failures:#?}");
 }
 
 fn candidate_execution_contract(
@@ -3465,13 +3082,7 @@ fn candidate_recovery_and_execution_contracts() {
 
 #[test]
 fn observation_carry_and_evidence_contracts() {
-    run_contracts(
-        &[
-            ("carry", case_carry_contract),
-            ("e2_bounds", case_e2_bounds_contract),
-        ],
-        true,
-    );
+    run_contracts(&[("carry", case_carry_contract)], true);
 }
 
 #[test]

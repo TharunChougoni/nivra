@@ -588,13 +588,7 @@ pub(super) fn recent_decisions(bundle: &Value, limit: usize) -> Value {
         "execution_authorized":false
     })
 }
-pub(super) fn session_status(
-    c: &Config,
-    bundle: &Value,
-    role_name: &str,
-    role: &ModelRole,
-    now: i64,
-) -> Value {
+pub(super) fn session_status(c: &Config, bundle: &Value, now: i64) -> Value {
     let day = super::super::local(now).date_naive();
     let minute = super::super::minute(now);
     let book = &bundle["book_state"];
@@ -619,7 +613,6 @@ pub(super) fn session_status(
         "market_phase":phase,
         "minutes_to_close":if phase=="open" {Some(c.execution.session_end_minute.saturating_sub(minute))} else {None},
         "book":book,
-        "budget":planner::budget_status(c, role_name, role),
         "trigger":bundle["trigger"],
         "execution_authorized":false
     })

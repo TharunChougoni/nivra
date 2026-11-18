@@ -1,50 +1,11 @@
 //! Durable event admission for the opt-in planner. No model or market I/O.
 //! The original book owns the active decision and every consumed attempt.
-use super::orchestrator_model::Trigger;
 use super::phases::PlannerLogPhase;
 use super::*;
-use nivra_core::{
-    execution::Portfolio,
-    redecision::{Event, EventPolicy, EventState, MarketObservation, NewsObservation},
-};
+use nivra_core::{execution::Portfolio, redecision::EventState};
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Settings {
-    pub enabled: bool,
-    /// Independent run lifetime, measured from admission rather than the queued event.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decision_timeout_ms: Option<i64>,
-    /// IST minute for admitting decisions. Omission retains legacy pre-open planning.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decision_start_minute: Option<u16>,
-    pub policy: EventPolicy,
-    pub cooldown_ms: i64,
-    pub max_pending: usize,
-    pub news_file: Option<PathBuf>,
-}
-impl Settings {
-    pub fn validate(&self) -> Result<()> {
-        self.policy.validate()?;
-        if self
-            .decision_timeout_ms
-            .is_some_and(|n| !(30_000..=900_000).contains(&n))
-        {
-            return Err("planner_decision_timeout_invalid".into());
-        }
-        if self
-            .decision_start_minute
-            .is_some_and(|n| !(480..930).contains(&n))
-            || !(0..=86_400_000).contains(&self.cooldown_ms)
-            || !(1..=200).contains(&self.max_pending)
-        {
-            return Err("planner_event_settings_invalid".into());
-        }
-        Ok(())
-    }
-}
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Claim {
@@ -243,38 +204,12 @@ pub(crate) fn config_current(db: &Connection, cfg: &planner::PlannerConfig) -> R
 fn config_hash(cfg: &planner::PlannerConfig) -> Result<String> {
     Ok(digest(&planner::policy_bytes(cfg)?))
 }
-/// Policy identity used to explain an authority mismatch. Prompt content is a
-/// policy input, but keeping it separate makes the exact failed check auditable.
+/// Policy identity used to explain an authority mismatch. Prompt hashes are
+/// no longer policy inputs, so both prompt identities stay empty.
 fn config_identity(
     cfg: &planner::PlannerConfig,
 ) -> Result<(String, Option<Value>, Option<String>)> {
-    let bytes = planner::policy_bytes(cfg)?;
-    let hash = digest(&bytes);
-    let mut prompts = cfg
-        .orchestrator
-        .as_ref()
-        .map(|settings| settings.prompt_hashes())
-        .transpose()?;
-    if cfg.file_prompts.is_some() {
-        prompts = Some(json!({"orchestrator":prompts, "defaults":cfg.prompt_hashes()}));
-    }
-    let mut value: Value = serde_json::from_slice(&bytes)?;
-    if let Some(value) = value.as_object_mut() {
-        value.remove("default_prompt_sha256");
-    }
-    if let Some(triggers) = value
-        .get_mut("orchestrator")
-        .and_then(|settings| settings.get_mut("triggers"))
-        .and_then(Value::as_object_mut)
-    {
-        for settings in triggers.values_mut() {
-            if let Some(settings) = settings.as_object_mut() {
-                settings.remove("prompt_sha256");
-            }
-        }
-    }
-    let without_prompt = digest(&serde_json::to_vec(&value)?);
-    Ok((hash, prompts, Some(without_prompt)))
+    Ok((config_hash(cfg)?, None, None))
 }
 /// Read-only diagnosis attached to a planner-authority incident tick. It never
 /// mutates the journal and never loads a prompt outside the normal policy path.
@@ -337,11 +272,6 @@ pub(crate) fn configuration_check(db: &Connection, c: &Config) -> Value {
         "prior_config_without_prompt_sha256":state.config_without_prompt_sha256,
         "current_config_without_prompt_sha256":current_without
     })
-}
-fn settings(cfg: &planner::PlannerConfig) -> Option<&Settings> {
-    cfg.events
-        .as_ref()
-        .filter(|e| e.enabled && cfg.enabled && !cfg.uses_pi_paper())
 }
 /// Ignore quote marks: a protection tick may update marks while a model is running.
 /// Cash, holdings, costs, exit instructions and the complete fill sequence must agree.
@@ -470,9 +400,8 @@ pub(crate) fn initialize(
         return Ok(false);
     }
     let pi = cfg.is_some_and(planner::PlannerConfig::uses_pi_paper);
-    let enabled = pi || cfg.and_then(settings).is_some();
     let previous = load(db)?;
-    if previous.is_none() && !enabled {
+    if previous.is_none() && !pi {
         return Ok(false);
     }
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -488,9 +417,6 @@ pub(crate) fn initialize(
         Some(state) => state,
         None => {
             let cfg = cfg.ok_or("planner_event_configuration_required")?;
-            let attempted = !pi
-                && (c.directory.join("model/attempt.json").exists()
-                    || planner::usage(c)?["digest"].as_u64().unwrap_or(0) > 0);
             let (config_hash, prompt_sha256, config_without_prompt_sha256) = config_identity(cfg)?;
             Control {
                 binding: book_binding(c)?,
@@ -502,12 +428,8 @@ pub(crate) fn initialize(
                 fill_hash: digest(&serde_json::to_vec(&p.fills)?),
                 last_started_ms: None,
                 pending: None,
-                blocked: if attempted {
-                    Some("prior_attempt_incomplete_no_replay".into())
-                } else {
-                    None
-                },
-                initial_available: !attempted,
+                blocked: None,
+                initial_available: true,
                 digest_failed: None,
                 active: None,
                 last_cadence_facts_sha256: None,
@@ -531,7 +453,7 @@ pub(crate) fn initialize(
         state.prompt_sha256 = prompts.clone();
         state.config_without_prompt_sha256 = without_prompt.clone();
     }
-    if (!enabled
+    if (!pi
         || current_identity.as_ref().map(|(hash, _, _)| hash.as_str())
             != Some(state.config_hash.as_str()))
         && !state
@@ -540,21 +462,6 @@ pub(crate) fn initialize(
             .is_some_and(preserves_through_startup)
     {
         state.blocked = Some("planner_event_configuration_changed".into());
-    }
-    if enabled && !pi && !p.stopped && !p.halted && !p.closed {
-        prepare_usage(&tx, c)?;
-    }
-    if !pi
-        && state.blocked.as_deref() == Some("planner_budget_exhausted")
-        && let Some(cfg) = cfg
-    {
-        let digest_role = cfg.role(Trigger::Digest);
-        let usage = planner::usage(c)?;
-        if !digest_role.enabled
-            || usage["digest"].as_u64().unwrap_or(0) < u64::from(digest_role.daily_call_budget)
-        {
-            state.blocked = None;
-        }
     }
     if let Some(claim) = &state.pending {
         tx.execute(
@@ -575,21 +482,6 @@ pub(crate) fn initialize(
             .is_some_and(preserves_through_startup)
         {
             state.blocked = Some("attempt_interrupted_no_replay".into());
-        }
-    }
-    if let Some(settings) = cfg.and_then(settings) {
-        let stuck = state.blocked.as_deref() == Some("planner_event_queue_full");
-        if stuck || state.blocked.is_none() {
-            let pending = collapse_recheck_backlog(
-                &tx,
-                &state.binding,
-                settings.max_pending as i64,
-                now,
-                stuck,
-            )?;
-            if stuck && pending <= settings.max_pending as i64 {
-                state.blocked = None;
-            }
         }
     }
     save(&tx, &state)?;
@@ -883,13 +775,7 @@ impl Retirement {
     }
 }
 /// An attempt left pending by a stopped controller is retired, never replayed; charges stay.
-fn retire_interrupted(db: &Connection, c: &Config, claim: Claim, by: Retirement) -> Result<()> {
-    let state = load(db)?.ok_or("planner_event_authority_missing")?;
-    let pi = claim.trigger["kind"] == "pi_decision"
-        && authority_owner(db, &state)?.is_some_and(|receipt| receipt.owner == AuthorityOwner::Pi);
-    if !pi {
-        planner::require_usage(c)?;
-    }
+fn retire_interrupted(db: &Connection, claim: Claim, by: Retirement) -> Result<()> {
     let body: String = db.query_row(
         "SELECT body FROM planner_attempt_log WHERE id=? AND state IN ('reserved','interrupted')",
         [&claim.id],
@@ -947,7 +833,7 @@ pub(crate) fn retire_for_service_shutdown(
     if state.pending.as_ref() != Some(claim) || claim.binding != state.binding {
         return Err("planner_attempt_not_pending".into());
     }
-    retire_interrupted(&tx, c, claim.clone(), Retirement::ServiceShutdown)?;
+    retire_interrupted(&tx, claim.clone(), Retirement::ServiceShutdown)?;
     state.pending = None;
     save(&tx, &state)?;
     tx.commit()?;
@@ -963,8 +849,8 @@ pub(crate) fn recover(
     let mut state = load(db)?.ok_or("planner_event_state_missing")?;
     check(&state, c)?;
     let reviewed = recovery_block_for(db, &state)?;
-    cfg.validate_decision_owner()?;
-    if !cfg.uses_pi_paper() && settings(cfg).is_none() {
+    cfg.validate_decision_lane()?;
+    if !cfg.uses_pi_paper() {
         return Err("planner_recover_events_disabled".into());
     }
     let mut receipt = authority_owner(db, &state)?.ok_or("planner_authority_owner_missing")?;
@@ -972,7 +858,7 @@ pub(crate) fn recover(
         return Err("decision_owner_migration_required".into());
     }
     if let Some(claim) = state.pending.take() {
-        retire_interrupted(db, c, claim, Retirement::OperatorReview)?;
+        retire_interrupted(db, claim, Retirement::OperatorReview)?;
     }
     let (current_hash, current_prompts, current_without_prompt) = config_identity(cfg)?;
     db.execute("INSERT INTO ticks(at,receipt,body,event) VALUES(?,NULL,?,'operator_planner_authority_rebound')",
@@ -1030,7 +916,7 @@ pub(crate) fn apply_config(
     let current_owner = AuthorityOwner::configured(cfg);
     // config-apply holds the controller lock, so a pending claim was interrupted.
     if let Some(claim) = state.pending.take() {
-        retire_interrupted(db, c, claim, Retirement::OperatorReview)?;
+        retire_interrupted(db, claim, Retirement::OperatorReview)?;
     }
     // The stop artifact only records that an in-flight attempt was abandoned; with the
     // attempt retired above, the explicit operator apply clears it. Other blocks stay.
@@ -1093,7 +979,7 @@ pub(crate) fn owner_startup_check(
     c: &Config,
     cfg: &planner::PlannerConfig,
 ) -> Result<()> {
-    cfg.validate_decision_owner()?;
+    cfg.validate_decision_lane()?;
     let Some(state) = load(db)? else {
         return Ok(());
     };
@@ -1184,7 +1070,7 @@ pub(crate) fn activate_owner_plan(
     now: i64,
 ) -> Result<()> {
     let owner = AuthorityOwner::configured(cfg);
-    if owner == AuthorityOwner::Orchestrator && settings(cfg).is_none() {
+    if owner == AuthorityOwner::Orchestrator {
         return Err("planner_decision_owner_policy_required".into());
     }
     let mut state = load(db)?.ok_or("planner_event_authority_missing")?;
@@ -1207,17 +1093,12 @@ pub(crate) fn activate_owner_plan(
     {
         return Err("planner_decision_owner_not_ready".into());
     }
-    if p.stopped || p.halted || p.closed || !super::decision_owner::in_window(c, cfg, now) {
+    if p.stopped || p.halted || p.closed || !super::decision_owner::in_window(c, now) {
         return Err("planner_completion_outside_session".into());
     }
     planner::validate_saved(c, plan)?;
     if plan["portfolio_revision"] != portfolio_hash(p)?
         || plan["policy_sha256"] != digest(&planner::policy_bytes(cfg)?)
-        || plan["profile_sha256"]
-            != cfg
-                .profile_sha256()
-                .map(str::to_owned)
-                .map_or(Value::Null, Value::String)
     {
         return Err("planner_saved_binding_invalid".into());
     }
@@ -1430,28 +1311,6 @@ pub(crate) fn settle_pi(
     state.pending = None;
     save(&tx, &state)?;
     tx.commit()?;
-    Ok(())
-}
-
-fn append(db: &Connection, event: &Event) -> Result<()> {
-    let body = serde_json::to_string(event)?;
-    if let Some(existing) = db
-        .query_row(
-            "SELECT body FROM planner_event_log WHERE id=?",
-            [&event.id],
-            |r| r.get::<_, String>(0),
-        )
-        .optional()?
-    {
-        if existing != body {
-            return Err("planner_event_identity_changed".into());
-        }
-        return Ok(());
-    }
-    db.execute(
-        "INSERT INTO planner_event_log VALUES(?,?,?,'pending')",
-        rusqlite::params![event.id, event.observed_ms, body],
-    )?;
     Ok(())
 }
 

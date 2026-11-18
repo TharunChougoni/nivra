@@ -281,58 +281,6 @@ pub(crate) fn stage_release(
     }
     Ok(stage)
 }
-/// A release the operator fetched from `refs/release-assets/<tag>` by hand,
-/// verified with the updater's own manifest and checksum rules. Only the
-/// one-time host migration installs from a local directory.
-pub(crate) struct StagedRelease {
-    manifest: Manifest,
-    manifest_bytes: Vec<u8>,
-    binary: Vec<u8>,
-}
-impl StagedRelease {
-    pub(crate) fn read(stage: &Path) -> Result<Self> {
-        let manifest_bytes = read(&stage.join("release.json"), 16384)?;
-        let manifest: Manifest =
-            serde_json::from_slice(&manifest_bytes).map_err(|_| "invalid_release_manifest")?;
-        Version::parse(&manifest.tag)?;
-        if !hash(&manifest.source_commit, 40)
-            || manifest.target != TARGET
-            || !hash(&manifest.sha256, 64)
-        {
-            return Err("release_identity_mismatch");
-        }
-        let checksum = read(&stage.join(format!("{ASSET}.sha256")), 256)?;
-        let binary = read(&stage.join(ASSET), 64 * 1024 * 1024)?;
-        if checksum != format!("{}  {ASSET}\n", manifest.sha256).as_bytes()
-            || digest(&binary) != manifest.sha256
-        {
-            return Err("release_checksum_mismatch");
-        }
-        Ok(Self {
-            manifest,
-            manifest_bytes,
-            binary,
-        })
-    }
-    pub(crate) fn tag(&self) -> &str {
-        &self.manifest.tag
-    }
-    pub(crate) fn directory(&self, releases: &Path) -> PathBuf {
-        releases.join(format!(
-            "{}-{}",
-            self.manifest.tag, self.manifest.source_commit
-        ))
-    }
-    pub(crate) fn install(&self, releases: &Path) -> Result<PathBuf> {
-        let stage = stage_release(releases, &self.manifest, &self.manifest_bytes, &self.binary)?;
-        release_metadata(&stage, &self.manifest)?;
-        Ok(stage)
-    }
-    /// True when `dir` already holds exactly this release.
-    pub(crate) fn installed_at(&self, dir: &Path) -> bool {
-        release_complete(dir, &self.manifest, &self.manifest_bytes).is_ok()
-    }
-}
 pub(crate) fn installed_manifest(dir: &Path) -> Result<Option<Manifest>> {
     if !exists(&dir.join("release.json")) {
         return Ok(None);

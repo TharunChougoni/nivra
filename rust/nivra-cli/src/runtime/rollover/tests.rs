@@ -1,4 +1,5 @@
 use super::*;
+const PI_POLICY: &str = r#"{"enabled":true,"agent":{"mode":"paper","node":"/usr/bin/node","entry":"/opt/nivra/agent/dist/src/main.js","agent_dir":"/var/lib/nivra/pi","lanes":{"decision":{"model":{"provider":"openai-codex","id":"gpt-6.1-sol"},"daily_calls":10,"daily_cost_usd":10.0,"turn_timeout_ms":10000,"max_tool_calls":40}}}}"#;
 fn cost_transition_fixture(dir: &Path, closed: bool) -> (Config, Config) {
     cost_transition_fixture_with_planner(dir, closed, None)
 }
@@ -95,16 +96,15 @@ fn state_body(c: &Config) -> String {
         .unwrap()
 }
 fn stopped_carry_fixture(dir: &Path) -> (Config, i64) {
-    let (c, _) = cost_transition_fixture(dir, true);
+    let planner = dir.join("planner.json");
+    fs::write(&planner, PI_POLICY).unwrap();
+    let (c, _) = cost_transition_fixture_with_planner(dir, true, Some(planner));
     let now = DateTime::parse_from_rfc3339("2026-10-19T08:30:00+05:30")
         .unwrap()
         .timestamp_millis();
     let mut db = open_book(&c).unwrap();
     let mut p: Portfolio = serde_json::from_str(&state_body(&c)).unwrap();
-    let cfg: planner::PlannerConfig = serde_json::from_value(json!({"enabled":true,
-            "digest":{"enabled":true,"model_id":"fixture-model","daily_call_budget":8},"orchestrator":{"enabled":true,"model":{"model_id":"grok-4.7"},"triggers":{"supervisor":{"prompt":concat!(env!("CARGO_MANIFEST_DIR"),"/../../packaging/rust/prompts/supervisor.md")}}},
-            "events":{"enabled":true,"cooldown_ms":0,"max_pending":10,
-                "policy":{"price_move_bps":100,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
+    let cfg: planner::PlannerConfig = serde_json::from_str(PI_POLICY).unwrap();
     // Authority is recorded while the book can still trade. A closed book
     // skips initialization so a later config restart cannot halt it.
     p.closed = false;
@@ -145,10 +145,7 @@ fn halted_carry_fixture(dir: &Path) -> (Config, i64, planner::PlannerConfig) {
     let metadata = fs::metadata(&c.read_journal).unwrap();
     c.read_journal_device = metadata.dev();
     c.read_journal_inode = metadata.ino();
-    let cfg: planner::PlannerConfig = serde_json::from_value(json!({"enabled":true,
-            "digest":{"enabled":true,"model_id":"fixture-model","daily_call_budget":8},"orchestrator":{"enabled":true,"model":{"model_id":"grok-4.7"},"triggers":{"supervisor":{"prompt":concat!(env!("CARGO_MANIFEST_DIR"),"/../../packaging/rust/prompts/supervisor.md")}}},
-            "events":{"enabled":true,"cooldown_ms":0,"max_pending":10,
-                "policy":{"price_move_bps":100,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
+    let cfg: planner::PlannerConfig = serde_json::from_value(serde_json::json!({"enabled":true,"agent":{"mode":"paper","node":"/usr/bin/node","entry":"/opt/nivra/agent/dist/src/main.js","agent_dir":"/var/lib/nivra/pi","lanes":{"decision":{"model":{"provider":"openai-codex","id":"gpt-6.1-sol"},"daily_calls":10,"daily_cost_usd":10.0,"turn_timeout_ms":10000,"max_tool_calls":40}}}})).unwrap();
     let config_path = dir.join("planner.json");
     fs::write(&config_path, serde_json::to_vec(&cfg).unwrap()).unwrap();
     c.planner_config = Some(config_path);
@@ -398,7 +395,7 @@ fn halted_carry_reaches_protection_only_successor_and_clears_only_after_review()
         )
         .unwrap();
     let marker: serde_json::Value = serde_json::from_str(&marker).unwrap();
-    assert_eq!(marker["owner"], "orchestrator");
+    assert_eq!(marker["owner"], "pi");
     assert_eq!(marker["binding"], book_binding(&next).unwrap());
     assert_eq!(
         failure_code(wide::config_apply(&next, true).unwrap_err().as_ref()),

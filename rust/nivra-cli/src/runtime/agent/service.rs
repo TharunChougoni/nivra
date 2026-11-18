@@ -680,8 +680,7 @@ mod tests {
     #[test]
     fn a_review_waits_for_context_before_claiming_the_seal() {
         let dir = tempfile::tempdir().unwrap();
-        let (c, mut cfg) = crate::runtime::decision_owner::owner_fixture_config(dir.path());
-        cfg.agent = Some(super::super::tests::settings(10, 1.0));
+        let (c, mut cfg) = crate::runtime::decision_owner::decision_fixture_config(dir.path());
         cfg.decision_evidence = Some(decision_evidence::Settings {
             max_age_ms: 0,
             ..Default::default()

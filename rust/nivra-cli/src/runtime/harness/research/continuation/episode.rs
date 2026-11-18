@@ -692,7 +692,7 @@ pub(super) fn decide_episode(
                         due_ms: episode.due,
                         deadline_ms: episode.deadline,
                         gap: json!({"kind":"exit_measurement_unavailable"}),
-                        capture: capture_preflight(c, cfg, now, &episode.entry.key),
+                        capture: capture_preflight(&episode.entry.key),
                     })
                 } else {
                     let body = build_continuation(
@@ -724,7 +724,7 @@ pub(super) fn decide_episode(
                     due_ms: episode.due,
                     deadline_ms: episode.deadline,
                     gap: gap.gap,
-                    capture: capture_preflight(c, cfg, now, &episode.entry.key),
+                    capture: capture_preflight(&episode.entry.key),
                 });
             }
             // The CURRENT successor's capture is NOT authority for an exit in

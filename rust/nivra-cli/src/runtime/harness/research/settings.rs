@@ -330,10 +330,34 @@ pub(crate) struct ResearchSettings {
     pub library_max_bytes: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candidate_compute: Option<CandidateComputeSettings>,
+    /// Archived-receipt reads for the research lane's `quotes` tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote_capture: Option<QuoteCaptureSettings>,
     pub registrations: Vec<Registration>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct QuoteCaptureSettings {
+    pub enabled: bool,
+    pub max_rows: usize,
+}
+impl Default for QuoteCaptureSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_rows: 64,
+        }
+    }
 }
 impl ResearchSettings {
     pub(crate) fn validate(&self) -> Result<()> {
+        if self
+            .quote_capture
+            .as_ref()
+            .is_some_and(|quotes| !(1..=256).contains(&quotes.max_rows))
+        {
+            return Err("research_quote_capture_invalid".into());
+        }
         let candidate_enabled = self
             .candidate_compute
             .as_ref()

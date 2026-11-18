@@ -447,9 +447,6 @@ impl<'a> Controller<'a> {
             day: local(now).date_naive(),
             m: minute(now),
         };
-        if let Some(cfg) = self.event_config.as_mut() {
-            let _ = refresh_experiment_profile(&mut self.db, &self.config, cfg, now, &self.alerts);
-        }
         let session_end_ms = session_end_ms(&self.config);
         let research_context_unavailable = self.event_config.is_some() && session_end_ms.is_none();
         if research_context_unavailable {
@@ -1478,14 +1475,6 @@ impl<'a> Controller<'a> {
                 owner_decision_pending: owner_blocked,
                 context_unavailable: research_context_unavailable,
             });
-            let capture = harness::research_capture_observation(
-                &mut self.db,
-                c,
-                cfg,
-                &self.p,
-                self.client,
-                now,
-            );
             let mut status = match harness::research_tick_owner_tasks(
                 &mut self.db,
                 c,
@@ -1497,7 +1486,6 @@ impl<'a> Controller<'a> {
                 Ok(status) => status,
                 Err(_) => serde_json::json!({"status":"unavailable"}),
             };
-            status["observation_capture"] = capture;
             status["observation"] = harness::research_observation_status(c, cfg, now);
             if research_context_unavailable {
                 status["context"] = research_context_status(true);
@@ -1709,18 +1697,6 @@ impl<'a> Controller<'a> {
             }
         } {
             self.planner_status = events;
-            if let Some(cfg) = &self.event_config {
-                self.planner_status["coverage"]["news"] = serde_json::json!(if cfg
-                    .events
-                    .as_ref()
-                    .and_then(|s| s.news_file.as_ref())
-                    .is_some()
-                {
-                    "explicit_archived_feed"
-                } else {
-                    "not_configured"
-                });
-            }
         }
         self.planner_status["execution"] = serde_json::json!(execution);
         self.planner_status["nifty_options"] = self.option_status.clone();

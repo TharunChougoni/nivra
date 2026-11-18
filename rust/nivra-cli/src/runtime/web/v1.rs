@@ -1,5 +1,4 @@
 //! Authenticated v1 projections. No financial writes or execution authority.
-use super::super::session as session_store;
 use super::*;
 use chrono::{FixedOffset, NaiveDate, TimeZone};
 use nivra_core::execution::Portfolio;
@@ -9,7 +8,6 @@ use router::Route;
 mod book;
 mod market;
 mod ops;
-mod runs;
 mod series;
 mod stream;
 mod summary;
@@ -41,7 +39,6 @@ pub(crate) fn dispatch(
     view: &Arc<Mutex<serde_json::Value>>,
     settings: &DashboardSettings,
     session_root: Option<&Path>,
-    source: Option<&PathBuf>,
     stream_source: Option<&(PathBuf, String)>,
     features: Option<&Arc<Mutex<FeatureStore>>>,
     equity: Option<&Arc<Mutex<EquitySeries>>>,
@@ -62,26 +59,13 @@ pub(crate) fn dispatch(
         }
         Ok(Route::Sessions(query)) => sessions(head, query, view),
         Ok(Route::Health) => health(head, view),
-        Ok(Route::Approvals) => approvals(head, view),
         Ok(Route::Alerts(query)) => alerts(head, query, view),
-        Ok(Route::Session(query)) => session_view(head, query, view, session_root),
         Ok(Route::Tools(query)) => tool_calls(head, query, view, session_root),
         Ok(Route::Series(query)) => series(head, query, view, settings, features, equity),
-        Ok(Route::Runs(query)) => runs::runs(head, query, source, settings),
         Ok(Route::Events(query)) => {
             poll_source(head, query, EventSource::from_file(stream_source), settings)
         }
-        Ok(Route::Run(id)) => runs::run(head, &id, source, settings),
-        Ok(Route::Blob {
-            run: id,
-            name,
-            query,
-        }) => runs::blob(head, &id, &name, query, source, settings),
-        Ok(Route::Prompt(sha)) => runs::prompt(head, &sha, source, settings),
         Ok(_) => error("404 Not Found", "route_not_found"),
-        Err(reason @ ("run_not_found" | "blob_not_found" | "prompt_not_found")) => {
-            error("404 Not Found", reason)
-        }
         Err("method_not_allowed") => error("405 Method Not Allowed", "method_not_allowed"),
         Err(reason) => error("400 Bad Request", reason),
     }

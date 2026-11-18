@@ -161,8 +161,7 @@ fn prepare(args: &Args) -> Result<()> {
             "market_feed": {"mode": "ltpc"}
         }
     }))?;
-    let loaded = planner::PlannerConfig::parse(&planner, &config)?;
-    loaded.validate_decision_owner()?;
+    let loaded = planner::PlannerConfig::parse(&planner)?;
 
     // Exclusive creation: failures retain prepared artifacts, never replace/retry them.
     fs::DirBuilder::new().mode(0o700).create(&config)?;
@@ -270,10 +269,8 @@ pub(super) fn exercise() {
     assert!(generated.get("prior_config").is_none());
     let planner =
         planner::PlannerConfig::load(&args.config_directory.join("planner.json")).unwrap();
-    planner.validate_decision_owner().unwrap();
+    planner.validate_decision_lane().unwrap();
     assert!(planner.uses_pi_paper());
-    assert!(planner.orchestrator.is_none());
-    assert!(!planner.digest.enabled);
     assert!(!args.config_directory.join("prompts").exists());
     assert!(!original.join("unopened-pi").exists());
     assert_eq!(

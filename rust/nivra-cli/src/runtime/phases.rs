@@ -153,15 +153,13 @@ impl fmt::Display for IdleStatus {
 
 /// Shared vocabulary for `planner_event_log.state` and `planner_attempt_log.state`.
 ///
-/// Events start pending, then reserve, collapse, or expire. A reserved event
-/// settles to the same terminal as its attempt: planned or failed. Attempts add
-/// `interrupted` on process restart.
+/// Events start pending or reserved. A reserved event settles to the same
+/// terminal as its attempt: planned or failed. Attempts add `interrupted` on
+/// process restart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PlannerLogPhase {
     Pending,
     Reserved,
-    Collapsed,
-    Expired,
     Planned,
     Failed,
     Interrupted,
@@ -172,8 +170,6 @@ impl PlannerLogPhase {
         match self {
             Self::Pending => "pending",
             Self::Reserved => "reserved",
-            Self::Collapsed => "collapsed",
-            Self::Expired => "expired",
             Self::Planned => "planned",
             Self::Failed => "failed",
             Self::Interrupted => "interrupted",

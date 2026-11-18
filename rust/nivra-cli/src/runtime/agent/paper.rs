@@ -29,10 +29,7 @@ fn current_policy(c: &Config, cfg: &planner::PlannerConfig) -> Result<()> {
         .ok_or("agent_paper_policy_missing")?;
     let current = planner::PlannerConfig::load_for_session(path, c.session)
         .map_err(|_| "agent_paper_policy_unavailable")?;
-    if !current.uses_pi_paper()
-        || planner::policy_bytes(&current)? != planner::policy_bytes(cfg)?
-        || current.profile_sha256() != cfg.profile_sha256()
-    {
+    if !current.uses_pi_paper() || planner::policy_bytes(&current)? != planner::policy_bytes(cfg)? {
         return Err("agent_paper_policy_changed".into());
     }
     Ok(())
@@ -46,7 +43,7 @@ fn in_window(c: &Config, cfg: &planner::PlannerConfig, p: &Portfolio, now: i64) 
         || p.stopped
         || p.closed
         || p.halted
-        || !decision_owner::in_window(c, cfg, now)
+        || !decision_owner::in_window(c, now)
         || !c
             .calendar_at(c.session)?
             .is_open(nivra_core::time::Timestamp::from_epoch_millis(now)?)?
@@ -85,7 +82,6 @@ pub(super) fn reserve(
             "sha256":digest(&serde_json::to_vec(&triggered_by)?)
         },
         "policy_sha256":digest(&planner::policy_bytes(cfg)?),
-        "profile_sha256":cfg.profile_sha256(),
         "input_sha256":digest(&serde_json::to_vec(input)?),
         "model":lane.model.id,
         "provider":lane.model.provider,
@@ -150,7 +146,6 @@ pub(super) fn commit(
         || claim.trigger["model"] != completed.model
         || claim.trigger["input_sha256"] != hash
         || claim.trigger["policy_sha256"] != digest(&planner::policy_bytes(cfg)?)
-        || claim.trigger["profile_sha256"] != json!(cfg.profile_sha256())
     {
         return Err("agent_paper_turn_binding_invalid".into());
     }
@@ -337,65 +332,5 @@ mod tests {
             p.fills[0].decision_id.as_deref(),
             Some(decision_id.as_str())
         );
-    }
-
-    #[test]
-    fn reviewed_pi_cutover_preserves_the_archived_head() {
-        let dir = tempfile::tempdir().unwrap();
-        let (c, mut cfg) = decision_owner::owner_fixture_config(dir.path());
-        let at = chrono::DateTime::parse_from_rfc3339("2026-10-16T09:15:00+05:30")
-            .unwrap()
-            .timestamp_millis();
-        let mut db = open_book(&c).unwrap();
-        wide::ensure_actions(&db).unwrap();
-        let p = wide::load_wide(&mut db, &c).unwrap();
-        redecision::initialize(&mut db, &c, &p, Some(&cfg), at).unwrap();
-        let input = json!({"allowlist":[]});
-        let old = json!({
-            "decision_id":"owner-archived",
-            "decision_owner":"orchestrator",
-            "session_binding":crate::runtime::book_binding(&c).unwrap(),
-            "portfolio_revision":redecision::portfolio_hash(&p).unwrap(),
-            "policy_sha256":digest(&planner::policy_bytes(&cfg).unwrap()),
-            "profile_sha256":null,
-            "input_hash":digest(&serde_json::to_vec(&input).unwrap()),
-            "input":input,
-            "verdicts":[],
-            "fake":false,
-            "dry_run":false
-        });
-        let tx = db.transaction().unwrap();
-        redecision::activate_owner_plan(&tx, &c, &cfg, &p, &old, at).unwrap();
-        tx.commit().unwrap();
-        assert_eq!(planner::saved_plan(&db, &c).unwrap(), Some(old.clone()));
-
-        let mut settings = super::super::tests::settings(10, 10.0);
-        settings.mode = super::super::AgentMode::Paper;
-        cfg.agent = Some(settings);
-        cfg.digest = Default::default();
-        cfg.orchestrator = None;
-        cfg.events = None;
-        assert_eq!(
-            initialize(&mut db, &c, &cfg, &p, at + 1)
-                .unwrap_err()
-                .to_string(),
-            "decision_owner_migration_required"
-        );
-        assert!(!redecision::has_pi_authority(&db, &c).unwrap());
-        assert!(planner::saved_plan(&db, &c).unwrap().is_none());
-        let tx = db.transaction().unwrap();
-        redecision::apply_config(&tx, &c, &cfg).unwrap();
-        tx.commit().unwrap();
-        initialize(&mut db, &c, &cfg, &p, at + 2).unwrap();
-        assert!(redecision::has_pi_authority(&db, &c).unwrap());
-        assert!(planner::saved_plan(&db, &c).unwrap().is_none());
-        let archived: String = db
-            .query_row(
-                "SELECT body FROM planner_plan WHERE id='owner-archived'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&archived).unwrap(), old);
     }
 }

@@ -48,7 +48,7 @@ pub(super) fn check_boundaries() {
     let d = tempfile::tempdir().unwrap();
     let mut c = super::tests::config(d.path());
     c.sessions_root = Some(d.path().join("sessions"));
-    let cfg: planner::PlannerConfig = serde_json::from_value(json!({"enabled":true,"events":{"enabled":true,"cooldown_ms":0,"max_pending":10,"policy":{"price_move_bps":100,"max_event_age_ms":10000,"max_news_age_ms":60000,"max_instruments":20,"max_identities":100}}})).unwrap();
+    let cfg: planner::PlannerConfig = serde_json::from_value(serde_json::json!({"enabled":true,"agent":{"mode":"paper","node":"/usr/bin/node","entry":"/opt/nivra/agent/dist/src/main.js","agent_dir":"/var/lib/nivra/pi","lanes":{"decision":{"model":{"provider":"openai-codex","id":"gpt-6.1-sol"},"daily_calls":10,"daily_cost_usd":10.0,"turn_timeout_ms":10000,"max_tool_calls":40}}}})).unwrap();
     let now = DateTime::parse_from_rfc3339("2026-10-16T16:00:00+05:30")
         .unwrap()
         .timestamp_millis();

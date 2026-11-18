@@ -7,7 +7,6 @@ use super::tools::{LaneHost, PlanAttempt, lane_definitions};
 use super::{AgentSettings, Lane, ModelSpec};
 use crate::runtime::harness::{Bridge, LaneGrant};
 use crate::runtime::lane_queue::{MessageBody, TransitionReason};
-use crate::runtime::orchestrator_model::Trigger;
 use crate::runtime::planner::{Backend, CallGuard, PlannerConfig, preview_guard};
 use crate::runtime::web_tools::Transport;
 use crate::runtime::workspace::WorkspaceScope;
@@ -383,9 +382,7 @@ impl<'a> LaneRunner<'a> {
         let ledger = Ledger::new(self.c);
         let spent = ledger.spent(lane)?;
         let model = self.model(lane)?;
-        let role = self.cfg.role(Trigger::Supervisor);
         let guard = CallGuard {
-            invocation_id: Some(&id),
             configuration: Some((self.c, self.cfg)),
             clock: self.clock,
             ..preview_guard()
@@ -400,7 +397,6 @@ impl<'a> LaneRunner<'a> {
             bridge: Bridge::new(
                 self.c,
                 self.cfg,
-                &role,
                 &context.bundle,
                 context.backend.as_mut(),
                 &guard,

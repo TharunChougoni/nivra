@@ -1,5 +1,4 @@
 //! Dated cash-only scanner and single durable portfolio owner.
-use super::orchestrator_model::Trigger;
 use super::*;
 use super::{Fail, LIVE_ENABLED, failure_code};
 use crate::alert::{Alerts, Event};
@@ -14,7 +13,7 @@ pub(super) use operator::{
     config_apply, planner_recover, planner_recover_protection_only, resume, stop,
 };
 #[cfg(test)]
-use operator::{config_apply_with, planner_recover_checked, resume_preflight};
+use operator::{planner_recover_checked, resume_preflight};
 mod projection;
 mod shadow;
 mod shutdown;
@@ -437,89 +436,11 @@ pub(super) fn persist(
     tx.commit()?;
     Ok(())
 }
-/// Verify one capture clock sample against the VERIFIED session trading day and
-/// configured cash-session window. The admission, request, receipt and actual
-/// completion are separate samples; a completion after the close is refused
-/// even when admission happened inside the window.
-fn verified_capture_session_clock(c: &Config, at: i64) -> Result<()> {
-    let local = local(at);
-    if local.date_naive() != c.session {
-        return Err("observation_capture_session_date_mismatch".into());
-    }
-    if !c.is_trading_day(c.session)? {
-        return Err("observation_capture_not_trading_day".into());
-    }
-    let minute = local
-        .hour()
-        .saturating_mul(60)
-        .saturating_add(local.minute());
-    if !(c.execution.session_start_minute..c.execution.session_end_minute).contains(&minute) {
-        return Err("observation_capture_market_closed".into());
-    }
-    Ok(())
-}
 
 /// Tick event for controller research-observation receipts. They are kept apart
 /// from trading `wide_quotes` so retention never compacts the original receipt a
 /// later session re-derives an observation from (#240).
 pub(crate) const RESEARCH_QUOTES_EVENT: &str = "research_quotes";
-
-/// Append one original controller research-observation quote receipt. It writes
-/// only the original `ticks` row with purpose `research_observation`; it never
-/// applies quotes, changes portfolio/state, creates a plan/order or opens a new
-/// financial book. The receipt body is preserved exactly and never rewritten.
-pub(super) fn commit_research_quotes(
-    db: &mut Connection,
-    c: &Config,
-    requested: i64,
-    receipt: i64,
-    raw: &str,
-    now: i64,
-    max_rows: usize,
-) -> Result<()> {
-    if requested < 0
-        || receipt < requested
-        || receipt > now
-        || raw.is_empty()
-        || raw.len() > super::owner_tasks::OBSERVATION_CAPTURE_MAX_BYTES
-        || !(1..=super::owner_tasks::OBSERVATION_CAPTURE_MAX_ROWS).contains(&max_rows)
-    {
-        return Err("observation_capture_invalid".into());
-    }
-    // Re-check the request start and the ACTUAL completion against the verified
-    // session window before the INSERT. A stale admission sample is never
-    // reused as the completion clock.
-    verified_capture_session_clock(c, requested)?;
-    verified_capture_session_clock(c, receipt)?;
-    verified_capture_session_clock(c, now)?;
-    let body: serde_json::Value =
-        serde_json::from_str(raw).map_err(|_| "observation_capture_invalid")?;
-    if body["status"] != "success" || !body["data"].is_object() {
-        return Err("observation_capture_invalid".into());
-    }
-    if body["data"]
-        .as_object()
-        .is_none_or(|data| data.is_empty() || data.len() > max_rows)
-    {
-        return Err("observation_capture_row_budget_exceeded".into());
-    }
-    let archive = serde_json::json!({
-        "source":"upstox-readonly-v1",
-        "purpose":"research_observation",
-        "requested_ms":requested,
-        "received_ms":receipt,
-        "body":raw
-    })
-    .to_string();
-    // `now` is the actual completion observation clock sampled after the I/O
-    // returned; the original data receipt is stored unchanged and never
-    // replaced by a later clock sample or an artificial max().
-    db.execute(
-        "INSERT INTO ticks(at,receipt,body,event) VALUES(?,?,?,?)",
-        rusqlite::params![now, receipt, archive, RESEARCH_QUOTES_EVENT],
-    )?;
-    Ok(())
-}
 
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)] // Explicit transaction inputs, including the injectable post-lock clock.
@@ -608,19 +529,10 @@ fn commit_quotes_screened(
                     .as_deref()
                     != Some(expected)
             });
-            let profile_changed = plan.get("profile_sha256").is_some_and(|expected| {
-                let actual = current_cfg
-                    .as_ref()
-                    .and_then(|cfg| cfg.profile_sha256())
-                    .map_or(serde_json::Value::Null, |v| serde_json::json!(v));
-                *expected != actual
-            });
             let binding_refusal = if stale_portfolio {
                 Some("portfolio_changed")
             } else if policy_changed {
                 Some("policy_changed")
-            } else if profile_changed {
-                Some("profile_changed")
             } else {
                 None
             };
@@ -1086,55 +998,6 @@ pub(super) fn readiness_snapshot(
         "history":history,"history_preparation_enabled":c.history_preparation_enabled,"checked_at_ms":now})
 }
 
-fn refresh_experiment_profile(
-    db: &mut Connection,
-    c: &Config,
-    cfg: &mut planner::PlannerConfig,
-    now: i64,
-    alerts: &Alerts,
-) -> Result<()> {
-    if cfg.experiment_profile.is_none() {
-        return Ok(());
-    }
-    let path = cfg.experiment_profile.clone();
-    let mut next = cfg.without_experiment_profile();
-    next.experiment_profile = path;
-    match next.apply_experiment_profile() {
-        Err(reason) => {
-            if cfg.profile_error.as_deref() != Some(reason.as_str()) {
-                eprintln!("experiment_profile_rejected reason={reason}");
-                cfg.profile_error = Some(reason);
-            }
-            Ok(())
-        }
-        Ok(()) => {
-            if next.profile_sha256() == cfg.profile_sha256() {
-                return Ok(());
-            }
-            let changed = next.profile_changed_keys().unwrap_or(&[]).to_vec();
-            db.execute(
-                "INSERT INTO ticks(at,receipt,body,event) VALUES(?,NULL,?,?)",
-                rusqlite::params![
-                    now,
-                    serde_json::json!({
-                        "old_sha256": cfg.profile_sha256(),
-                        "new_sha256": next.profile_sha256(),
-                        "changed_keys": changed,
-                    })
-                    .to_string(),
-                    "experiment_profile_applied"
-                ],
-            )?;
-            alerts.emit(
-                Event::ExperimentProfileApplied,
-                c.session,
-                serde_json::json!({"changed_keys": changed}),
-            );
-            *cfg = next;
-            Ok(())
-        }
-    }
-}
 #[allow(clippy::too_many_arguments)] // Preserve original receipt separately from the processing clock.
 fn scan_rest_rows(
     scan: &mut Scanner,
@@ -1487,13 +1350,8 @@ fn read_apply(
             );
         }
     }
-    if !p.halted
-        && let Some(cfg) = event_config
-    {
-        let result =
-            redecision::observe_quotes(db, c, cfg, p, instruments, &quotes, rows, millis())
-                .and_then(|()| redecision::sticky_blocked(db, c));
-        match result {
+    if !p.halted && event_config.is_some() {
+        match redecision::sticky_blocked(db, c) {
             Ok(blocked) => {
                 if blocked && let Some(cancel) = event_cancel {
                     cancel.store(true, std::sync::atomic::Ordering::Release);

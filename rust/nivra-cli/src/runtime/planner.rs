@@ -1,5 +1,4 @@
 //! Opt-in planning. Models produce intents; the financial engine owns execution.
-use super::orchestrator_model::Trigger;
 use super::*;
 use nivra_core::execution::{Instrument, Portfolio};
 use nivra_core::finance::{Amount, Price};
@@ -9,8 +8,6 @@ mod turn;
 pub(super) use turn::call_time_input;
 
 mod config;
-use config::role_invalid;
-pub(crate) use config::{FallbackProfile, ModelRole};
 
 mod plan;
 #[allow(unused_imports)] // re-exported for crate callers and tests
@@ -21,8 +18,8 @@ mod failure;
 #[allow(unused_imports)] // re-exported for crate callers and tests
 mod usage;
 pub(crate) use usage::{
-    CallGuard, attempt_failed, budget_status, checked_reservations, prepare_review_usage,
-    preview_guard, require_usage, usage_directory, usage_lock, usage_path,
+    CallGuard, attempt_failed, checked_reservations, prepare_review_usage, preview_guard,
+    usage_directory, usage_lock, usage_path,
 };
 /// How much evidence the model sees in its user message. `ToolsOnly` is the
 /// default: the host keeps the full bundle for tools, validation and audits,
@@ -109,34 +106,15 @@ impl ToolsSettings {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct PlannerConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[allow(dead_code)] // parse-compatible unused leftover from removed approval renewal
-    pub approval_auto_renew: Option<crate::model::AutoRenewSettings>,
     pub enabled: bool,
-    pub provider: String,
     /// Omission retains deployed selector semantics; explicit false disables planning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_led: Option<bool>,
-    /// Session-local directory under model/. Existing inode pins cannot be moved.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage_namespace: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage_max_records: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage_manifest_max_bytes: Option<u64>,
-    pub model_config: Option<PathBuf>,
-    pub shortlist_n: usize,
     #[serde(skip_serializing_if = "PlannerConfig::default_max_handoff_instruments")]
     pub max_handoff_instruments: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub require_digest: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub operator_context: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub full_universe_features: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discovery: Option<super::discovery::Settings>,
-    /// Model prompt size controls. Omission means `tools_only`.
+    /// Lane brief size controls. Omission means `tools_only`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<ContextSettings>,
     /// Call-time retrieval bounds. Defaults are omitted from serialized policy.
@@ -146,84 +124,28 @@ pub(crate) struct PlannerConfig {
     pub effective_from: Option<NaiveDate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_config: Option<PathBuf>,
-    #[serde(default = "default_digest", deserialize_with = "deserialize_digest")]
-    pub digest: ModelRole,
-    pub events: Option<redecision::Settings>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner_tasks: Option<super::owner_tasks::OwnerTasksSettings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub research_tools: Option<super::harness::ResearchSettings>,
-    /// Owner workspace under the paper book. Omission keeps deployed policy
-    /// hashes unchanged and exposes no workspace tools.
+    /// Lane workspace under the paper book. Omission exposes no workspace tools.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<super::workspace::WorkspaceSettings>,
-    /// Orchestrator web tools (#222). Omission keeps deployed policy hashes
-    /// unchanged, exposes no web tool and makes no outbound call.
+    /// Lane web tools (#222). Omission exposes no web tool and makes no
+    /// outbound call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_tools: Option<super::web_tools::WebToolsSettings>,
-    /// pi agent service lanes (decision, research, review). Omission keeps
-    /// deployed policy hashes unchanged and starts no agent process.
+    /// pi agent service lanes (decision, research, review).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<super::agent::AgentSettings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision_evidence: Option<super::decision_evidence::Settings>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub orchestrator: Option<super::orchestrator_model::OrchestratorModelSettings>,
     /// Frozen exit behaviour. Absent keeps the historical execute/liquidate path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_policy: Option<nivra_core::execution::ExitPolicy>,
-    /// Operator experiment profile. The path and its contents are excluded from
-    /// the frozen trading-policy hash; see `experiment_profile`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub experiment_profile: Option<PathBuf>,
-    /// Policy ceiling for one loaded profile prompt.
-    #[serde(
-        default = "default_prompt_max_bytes",
-        skip_serializing_if = "is_default_prompt_max_bytes"
-    )]
-    pub prompt_max_bytes: u64,
-    /// Default files loaded beside the planner config; content is sealed policy.
-    #[serde(skip)]
-    pub file_prompts: Option<super::experiment_profile::PromptSet>,
-    /// Applied profile, excluded from serialization and policy bytes.
-    #[serde(skip)]
-    pub profile: Option<Box<super::experiment_profile::AppliedProfile>>,
-    /// Non-fatal profile reload failure retained for operator logs.
-    #[serde(skip)]
-    pub profile_error: Option<String>,
-}
-fn deserialize_role<'de, D: serde::Deserializer<'de>>(
-    d: D,
-    timeout: u64,
-) -> std::result::Result<ModelRole, D::Error> {
-    let mut value = Value::deserialize(d)?;
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| <D::Error as serde::de::Error>::custom("role must be an object"))?;
-    object.entry("timeout_ms").or_insert(json!(timeout));
-    serde_json::from_value(value).map_err(serde::de::Error::custom)
-}
-fn deserialize_digest<'de, D: serde::Deserializer<'de>>(
-    d: D,
-) -> std::result::Result<ModelRole, D::Error> {
-    deserialize_role(d, 20_000)
-}
-fn default_digest() -> ModelRole {
-    ModelRole {
-        daily_call_budget: 0,
-        ..Default::default()
-    }
-}
-fn default_prompt_max_bytes() -> u64 {
-    65_536
-}
-fn is_default_prompt_max_bytes(value: &u64) -> bool {
-    *value == default_prompt_max_bytes()
 }
 /// Operational allowances do not change the frozen trading policy. Shadow-only
 /// selector diagnostics remain excluded; live ranking participates in the policy.
 pub(super) fn policy_bytes(cfg: &PlannerConfig) -> Result<Vec<u8>> {
-    let mut cfg = cfg.without_experiment_profile();
+    let mut cfg = cfg.clone();
     if let Some(discovery) = &mut cfg.discovery
         && discovery
             .strategy_selection
@@ -232,58 +154,25 @@ pub(super) fn policy_bytes(cfg: &PlannerConfig) -> Result<Vec<u8>> {
     {
         discovery.strategy_selection = None;
     }
-    cfg.digest.daily_call_budget = 0;
-    let mut value = serde_json::to_value(&cfg)?;
-    if let Some(orchestrator) = cfg.orchestrator.as_ref() {
-        *value
-            .get_mut("orchestrator")
-            .ok_or("orchestrator_policy_invalid")? = orchestrator.policy_value()?;
-    }
-    super::owner_tasks::bind_policy(&cfg, &mut value);
-    bind_file_prompts(&cfg, &mut value);
-    Ok(serde_json::to_vec(&value)?)
-}
-fn bind_file_prompts(cfg: &PlannerConfig, value: &mut Value) {
-    if let Some(prompts) = &cfg.file_prompts {
-        value["default_prompt_sha256"] = prompts.hashes();
-    }
+    Ok(serde_json::to_vec(&cfg)?)
 }
 impl Default for PlannerConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            provider: "xai_subscription".into(),
             model_led: None,
-            usage_namespace: None,
-            usage_max_records: None,
-            usage_manifest_max_bytes: None,
-            model_config: None,
-            shortlist_n: 200,
             max_handoff_instruments: 20,
-            require_digest: None,
-            operator_context: None,
-            full_universe_features: None,
             discovery: None,
             context: None,
             tools: ToolsSettings::default(),
             effective_from: None,
             previous_config: None,
-            digest: default_digest(),
-            events: None,
-            owner_tasks: None,
-            approval_auto_renew: None,
             research_tools: None,
             workspace: None,
             web_tools: None,
             agent: None,
             decision_evidence: None,
-            orchestrator: None,
             exit_policy: None,
-            experiment_profile: None,
-            prompt_max_bytes: default_prompt_max_bytes(),
-            file_prompts: None,
-            profile: None,
-            profile_error: None,
         }
     }
 }
@@ -294,26 +183,6 @@ impl PlannerConfig {
             .is_some_and(|agent| agent.mode == super::agent::AgentMode::Paper)
     }
 
-    /// Resolve role identity without merging historical charges. The digest
-    /// has its own planner role; every other role runs through the orchestrator
-    /// and is disabled when the orchestrator is absent.
-    pub(crate) fn role(&self, trigger: Trigger) -> ModelRole {
-        match (trigger, &self.orchestrator) {
-            (Trigger::Digest, _) => self.digest.clone(),
-            (_, Some(o)) => {
-                let mut role = o.role_for(trigger);
-                role.enabled = o.enabled
-                    && o.triggers
-                        .get(&trigger)
-                        .is_some_and(|settings| settings.enabled);
-                role
-            }
-            (_, None) => ModelRole {
-                enabled: false,
-                ..ModelRole::default()
-            },
-        }
-    }
     fn default_max_handoff_instruments(v: &usize) -> bool {
         *v == 20
     }
@@ -335,62 +204,27 @@ impl PlannerConfig {
         }
         Ok(())
     }
-    /// Prerequisites for the two-role decision policy: Luna compiles the
-    /// factual digest and the persistent orchestrator owns paper decisions.
-    /// Empty for a disabled planner. The same list feeds config validation.
-    pub(crate) fn decision_owner_requirements(&self) -> Vec<&'static str> {
-        if self.uses_pi_paper() {
-            let mut missing = Vec::new();
-            if !self.enabled || self.model_led == Some(false) {
-                missing.push("pi_paper_planner_required");
-            }
-            if !self
-                .agent
-                .as_ref()
-                .is_some_and(|agent| agent.lanes.contains_key(&super::agent::Lane::Decision))
-            {
-                missing.push("pi_paper_decision_lane_required");
-            }
-            if self.digest.enabled
-                || self
-                    .orchestrator
-                    .as_ref()
-                    .is_some_and(|owner| owner.enabled)
-                || self.model_config.is_some()
-                || self.approval_auto_renew.is_some()
-            {
-                missing.push("pi_paper_legacy_model_config_refused");
-            }
-            return missing;
-        }
-        if !self.enabled {
+    /// Prerequisites for the pi paper decision lane. A disabled planner or an
+    /// explicit `model_led: false` policy makes no model call and needs none.
+    pub(crate) fn decision_lane_requirements(&self) -> Vec<&'static str> {
+        if !self.enabled || self.model_led == Some(false) {
             return Vec::new();
         }
         let mut missing = Vec::new();
-        let supervisor = self.orchestrator.as_ref().is_some_and(|orchestrator| {
-            orchestrator.enabled
-                && orchestrator
-                    .triggers
-                    .get(&Trigger::Supervisor)
-                    .is_some_and(|trigger| trigger.enabled)
-        });
-        if !supervisor {
-            missing.push("decision_owner_supervisor_required");
+        if !self.uses_pi_paper() {
+            missing.push("pi_paper_planner_required");
         }
-        let supervisor_role = self.role(Trigger::Supervisor);
-        if supervisor_role.model_id.is_empty() {
-            missing.push("decision_owner_supervisor_model_required");
-        }
-        if !self.digest.enabled {
-            missing.push("decision_owner_digest_required");
-        }
-        if !self.events.as_ref().is_some_and(|events| events.enabled) {
-            missing.push("decision_owner_events_required");
+        if !self
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.lanes.contains_key(&super::agent::Lane::Decision))
+        {
+            missing.push("pi_paper_decision_lane_required");
         }
         missing
     }
-    pub(crate) fn validate_decision_owner(&self) -> Result<()> {
-        if let Some(reason) = self.decision_owner_requirements().first() {
+    pub(crate) fn validate_decision_lane(&self) -> Result<()> {
+        if let Some(reason) = self.decision_lane_requirements().first() {
             return Err((*reason).into());
         }
         Ok(())
@@ -405,9 +239,6 @@ impl PlannerConfig {
             }
             let cfg = Self::load(&path)?;
             if cfg.effective_from.is_none_or(|date| session >= date) {
-                let mut cfg = cfg;
-                // A bad profile is recorded and ignored; the policy remains usable.
-                let _ = cfg.apply_experiment_profile();
                 return Ok(cfg);
             }
             path = cfg
@@ -418,13 +249,11 @@ impl PlannerConfig {
     }
     pub fn load(path: &Path) -> Result<Self> {
         let raw = crate::read_bounded(path, 65536).map_err(|_| "planner_config_unreadable")?;
-        Self::parse(&raw, path.parent().ok_or("planner_config_path_invalid")?)
+        Self::parse(&raw)
     }
-    /// Validate planner bytes as if they were stored in `directory`, whose
-    /// `prompts/` sibling supplies the default prompt files.
-    pub(crate) fn parse(raw: &[u8], directory: &Path) -> Result<Self> {
+    pub(crate) fn parse(raw: &[u8]) -> Result<Self> {
         let value = nivra_core::native::decode(raw).map_err(|_| "planner_config_invalid")?;
-        let mut c: Self = serde_json::from_value(value).map_err(|_| "planner_config_invalid")?;
+        let c: Self = serde_json::from_value(value).map_err(|_| "planner_config_invalid")?;
         c.validate_handoff_limit()?;
         if let Some(settings) = &c.decision_evidence {
             settings.validate()?;
@@ -437,112 +266,16 @@ impl PlannerConfig {
         {
             return Err("planner_config_schedule_invalid".into());
         }
-        if c.experiment_profile
-            .as_ref()
-            .is_some_and(|p| !p.is_absolute())
-        {
-            return Err("planner_experiment_profile_invalid".into());
-        }
-        if !(1..=65_536).contains(&c.prompt_max_bytes) {
-            return Err("planner_prompt_max_bytes_invalid".into());
-        }
-        if !c.uses_pi_paper() {
-            c.file_prompts = super::experiment_profile::PromptSet::load_directory(
-                &directory.join("prompts"),
-                c.prompt_max_bytes,
-            )
-            .map_err(|reason| format!("planner_default_{reason}"))?;
-        }
-        if c.usage_max_records == Some(0) || c.usage_manifest_max_bytes == Some(0) {
-            return Err("planner_usage_limits_invalid".into());
-        }
-        if c.operator_context
-            .as_ref()
-            .is_some_and(|s| s.len() > 8192 || s.chars().any(|c| c.is_control() && c != '\n'))
-        {
-            return Err("planner_operator_context_invalid".into());
-        }
-        if c.provider != "xai_subscription"
-            || !(1..=1000).contains(&c.shortlist_n)
-            || !c.digest.tools.is_empty()
-        {
-            return Err("planner_config_invalid".into());
-        }
-        if c.require_digest == Some(true) && !c.digest.enabled {
-            return Err("planner_initialization_roles_required".into());
-        }
         if let Some(discovery) = &c.discovery {
             discovery.validate()?;
-            let projection =
-                c.context.as_ref().map(|x| x.mode).unwrap_or_default() == ContextMode::Projection;
-            if !c.uses_pi_paper()
-                && (!c.digest.enabled || (projection && c.full_universe_features != Some(true)))
-            {
-                return Err("planner_discovery_roles_and_full_features_required".into());
-            }
         }
         if let Some(context) = &c.context {
             context.validate()?;
         }
         c.tools.validate()?;
-        if let Some(orchestrator) = &c.orchestrator {
-            let scorer = orchestrator.triggers.get(&Trigger::Scorer);
-            let scorer_after_minute = scorer
-                .and_then(|trigger| trigger.after_minute)
-                .or(orchestrator.scorer_after_minute);
-            if orchestrator.enabled
-                && scorer.is_some_and(|trigger| trigger.enabled)
-                && scorer_after_minute.is_none()
-            {
-                return Err("planner_scorer_after_minute_required".into());
-            }
-            if orchestrator
-                .scorer_after_minute
-                .is_some_and(|minute| !(931..=1439).contains(&minute))
-                || scorer
-                    .and_then(|trigger| trigger.after_minute)
-                    .is_some_and(|minute| !(931..=1439).contains(&minute))
-            {
-                return Err("planner_scorer_after_minute_invalid".into());
-            }
-            if let Some(trigger) = scorer
-                && (trigger
-                    .max_turns
-                    .is_some_and(|turns| !(1..=64).contains(&turns))
-                    || trigger
-                        .replay
-                        .as_ref()
-                        .is_some_and(|replay| replay.validate().is_err()))
-            {
-                return Err("planner_scorer_replay_invalid".into());
-            }
-            orchestrator
-                .validate_session_prompts()
-                .map_err(|error| error.to_string())?;
-            orchestrator
-                .validate_models()
-                .map_err(|error| error.to_string())?;
-        }
-        c.validate_decision_owner()?;
+        c.validate_decision_lane()?;
         if let Some(policy) = &c.exit_policy {
             policy.validate().map_err(|error| error.to_string())?;
-        }
-        if role_invalid(&c.digest, 120_000) {
-            return Err("planner_role_invalid".into());
-        }
-        if c.usage_namespace.as_deref().is_some_and(|name| {
-            name.is_empty()
-                || name.len() > 64
-                || name == "."
-                || name == ".."
-                || !name
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        }) {
-            return Err("planner_usage_namespace_invalid".into());
-        }
-        if let Some(tasks) = &c.owner_tasks {
-            tasks.validate(&c)?;
         }
         if let Some(research) = &c.research_tools {
             research.validate()?;
@@ -552,9 +285,6 @@ impl PlannerConfig {
         }
         if let Some(web_tools) = &c.web_tools {
             web_tools.validate()?;
-        }
-        if let Some(events) = &c.events {
-            events.validate()?;
         }
         Ok(c)
     }
@@ -621,19 +351,6 @@ fn load_daily(c: &Config) -> Result<BTreeMap<String, BTreeMap<NaiveDate, Value>>
     }
     Ok(daily)
 }
-// Newest daily bar strictly before the session. A name can miss previous_session
-// after a holiday and still have an earlier dated close. Bars on the session
-// itself are already dropped by load_daily.
-fn latest_daily_closes(c: &Config) -> Result<BTreeMap<String, (NaiveDate, Price)>> {
-    let mut closes = BTreeMap::new();
-    for (key, rows) in load_daily(c)? {
-        let Some((day, row)) = rows.iter().next_back() else {
-            continue;
-        };
-        closes.insert(key, (*day, Price::parse(&row[4].to_string())?));
-    }
-    Ok(closes)
-}
 fn reference_document(c: &Config, closes: &BTreeMap<String, (NaiveDate, Price)>) -> Value {
     let prices = closes
         .iter()
@@ -650,65 +367,6 @@ fn reference_document(c: &Config, closes: &BTreeMap<String, (NaiveDate, Price)>)
         "closes": prices,
         "close_dates": dates,
     })
-}
-fn verify_session_references(c: &Config, references: &Value) -> Result<()> {
-    let closes = references["closes"].as_object();
-    let dates = references["close_dates"].as_object();
-    if references["session"] != c.session.to_string()
-        || references["as_of"] != c.previous_session.to_string()
-        || references["close_basis"] != "latest_daily_before_session"
-        || closes.is_none_or(|m| m.len() > 20000)
-        || dates.is_none_or(|m| m.len() > 20000)
-        || closes.map(|m| m.len()) != dates.map(|m| m.len())
-    {
-        return Err("planner_saved_references_invalid".into());
-    }
-    let closes = closes.ok_or("planner_saved_references_invalid")?;
-    let dates = dates.ok_or("planner_saved_references_invalid")?;
-    for (key, close) in closes {
-        let day = dates
-            .get(key)
-            .and_then(|value| value.as_str())
-            .ok_or("planner_saved_references_invalid")?
-            .parse::<NaiveDate>()
-            .map_err(|_| "planner_saved_references_invalid")?;
-        if day >= c.session {
-            return Err("planner_saved_references_invalid".into());
-        }
-        Price::parse(close.as_str().ok_or("planner_saved_references_invalid")?)
-            .map_err(|_| "planner_saved_references_invalid")?;
-    }
-    Ok(())
-}
-fn persist_session_references(c: &Config, references: &Value) -> Result<()> {
-    verify_session_references(c, references)?;
-    fs::create_dir_all(c.directory.join("model"))?;
-    rollover::atomic(
-        &c.directory.join("model/market-references.json"),
-        references,
-    )
-}
-pub(crate) fn session_references(c: &Config) -> Result<Value> {
-    let path = c.directory.join("model/market-references.json");
-    if path.exists() {
-        let bytes = crate::read_bounded(&path, 8_000_000)
-            .map_err(|_| "planner_saved_references_invalid")?;
-        if let Ok(references) = serde_json::from_slice::<Value>(&bytes)
-            && verify_session_references(c, &references).is_ok()
-        {
-            return Ok(references);
-        }
-    }
-    // An older exact-date file has no close_basis. Rebuild it once, then reuse it.
-    let references = reference_document(c, &latest_daily_closes(c)?);
-    persist_session_references(c, &references)?;
-    Ok(references)
-}
-pub(crate) fn close_from_references(references: &Value, key: &str) -> Option<String> {
-    references["closes"][key]
-        .as_str()
-        .map(str::to_owned)
-        .or_else(|| references["closes"][key].as_number().map(|n| n.to_string()))
 }
 fn bundle_with_references(
     c: &Config,
@@ -955,28 +613,9 @@ pub enum Command {
         #[arg(long)]
         session: NaiveDate,
     },
-    /// Validate an experiment profile against a planner policy without model calls.
-    ProfileCheck {
-        #[arg(long)]
-        profile: PathBuf,
-        #[arg(long)]
-        planner: PathBuf,
-    },
 }
 pub fn entry(cmd: Command) -> ExitCode {
     match cmd {
-        Command::ProfileCheck { profile, planner } => {
-            match super::experiment_profile::check(&planner, &profile) {
-                Ok(value) => {
-                    println!("{value}");
-                    ExitCode::SUCCESS
-                }
-                Err(code) => {
-                    eprintln!("experiment_profile_refused: {code}");
-                    ExitCode::FAILURE
-                }
-            }
-        }
         Command::ConfigCheck { planner, session } => {
             match PlannerConfig::load_for_session(&planner, session) {
                 Ok(cfg) => {

@@ -1,42 +1,5 @@
 use super::*;
 
-/// One bounded quote response with the original request/receipt clocks and
-/// explicit attempt provenance. `provider_called` is `None` when a started
-/// request failed in a way that cannot prove the provider received it.
-#[derive(Clone, Debug)]
-pub struct BoundedQuote {
-    pub requested_ms: i64,
-    pub receipt_ms: i64,
-    pub body: String,
-    pub request_attempted: bool,
-    pub provider_called: Option<bool>,
-}
-
-/// Structured pre-network/network refusal. Credentials, URLs and response
-/// bodies never enter this value; only a static failure code.
-#[derive(Clone, Debug)]
-pub struct BoundedQuoteError {
-    pub code: String,
-    pub request_attempted: bool,
-    pub provider_called: Option<bool>,
-}
-
-impl BoundedQuoteError {
-    fn preflight(code: impl Into<String>) -> Self {
-        Self {
-            code: code.into(),
-            request_attempted: false,
-            provider_called: Some(false),
-        }
-    }
-    fn network(code: impl Into<String>) -> Self {
-        Self {
-            code: code.into(),
-            request_attempted: true,
-            provider_called: None,
-        }
-    }
-}
 use super::{Fail, failure_code};
 use nivra_core::finance::{Amount, Price};
 use std::io::Read;
@@ -113,73 +76,6 @@ impl Client {
         // Sample once after the complete response; retain this original receipt.
         let received = millis();
         Ok((requested, received, body))
-    }
-    /// Same application quote client and reserve, with the reviewed capture
-    /// grant's deadline applied to the actual HTTP request. This is not a new
-    /// provider, credential or fallback. The structured attempt metadata keeps
-    /// a pre-network token/key/journal refusal distinct from a request that was
-    /// actually started; the provider is `None` when it cannot be proven.
-    pub fn quotes_bounded(
-        &self,
-        c: &Config,
-        keys: &[&str],
-        timeout_ms: u64,
-    ) -> std::result::Result<BoundedQuote, BoundedQuoteError> {
-        if !valid_quote_keys(keys, &c.quote_keys) {
-            return Err(BoundedQuoteError::preflight("quote_keys"));
-        }
-        let token = match application_token(c) {
-            Ok(token) => token,
-            Err(error) => return Err(BoundedQuoteError::preflight(failure_code(error.as_ref()))),
-        };
-        if let Err(error) = reserve(c, millis()) {
-            return Err(BoundedQuoteError::preflight(failure_code(error.as_ref())));
-        }
-        let requested = millis();
-        let encoded = keys
-            .iter()
-            .map(|key| encode_key_path(key))
-            .collect::<Vec<_>>()
-            .join(",");
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_millis(timeout_ms)))
-            .max_redirects(0)
-            .build()
-            .into();
-        let req = agent
-            .get(&format!(
-                "https://api.upstox.com/v2/market-quote/quotes?instrument_key={encoded}"
-            ))
-            .header("Accept", "application/json")
-            .header(
-                "User-Agent",
-                concat!("Nivra-paper/", env!("CARGO_PKG_VERSION")),
-            )
-            .header("Authorization", format!("Bearer {token}"));
-        let mut response = match req.call() {
-            Ok(response) => response,
-            Err(error) => return Err(BoundedQuoteError::network(http_failure_code(&error))),
-        };
-        let mut bytes = vec![];
-        response
-            .body_mut()
-            .as_reader()
-            .take(2_000_001)
-            .read_to_end(&mut bytes)
-            .map_err(|_| BoundedQuoteError::network("read_only_http_failed"))?;
-        if bytes.len() > 2_000_000 {
-            return Err(BoundedQuoteError::network("response_too_large"));
-        }
-        let body = String::from_utf8(bytes)
-            .map_err(|_| BoundedQuoteError::network("response_not_utf8"))?;
-        let received = millis();
-        Ok(BoundedQuote {
-            requested_ms: requested,
-            receipt_ms: received,
-            body,
-            request_attempted: true,
-            provider_called: Some(true),
-        })
     }
     pub fn quote(&self, c: &Config) -> Result<(i64, i64, String)> {
         self.quotes(c, &[KEY])

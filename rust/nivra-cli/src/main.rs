@@ -1,7 +1,6 @@
 #![recursion_limit = "512"]
 mod alert;
 mod backtest;
-mod model;
 mod preflight;
 mod research;
 mod runtime;
@@ -168,22 +167,6 @@ enum Command {
         force_unwatched_window: bool,
         #[arg(long, requires = "operator_stopped")]
         confirm_paper_review: bool,
-    },
-    /// One-time off-hours move of an installed ind-sadr paper host to the nivra
-    /// layout. Dry run by default; never starts, stops or resumes anything.
-    HostMigrate {
-        /// Home directory to migrate; defaults to $HOME.
-        #[arg(long)]
-        home: Option<PathBuf>,
-        /// Directory holding this release's verified `release.json`, binary and checksum.
-        #[arg(long)]
-        release: PathBuf,
-        #[arg(long)]
-        apply: bool,
-        /// Allow the migration inside the weekday 09:00–15:45 IST activation window.
-        /// The paper service must already be stopped; other refusals still apply.
-        #[arg(long)]
-        during_market_hours: bool,
     },
     /// Hidden fixed candidate helper. Runs only inside an owned systemd unit.
     #[command(hide = true)]
@@ -567,12 +550,6 @@ fn main() -> ExitCode {
                 .map_err(|_| ()),
             "Protection diagnostics unavailable",
         ),
-        Command::HostMigrate {
-            home,
-            release,
-            apply,
-            during_market_hours,
-        } => runtime::host_migrate::entry(home.as_deref(), &release, apply, during_market_hours),
         Command::Update {
             config,
             check,

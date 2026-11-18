@@ -78,14 +78,13 @@ pub(super) fn resume_preflight(p: &Portfolio) -> std::result::Result<(), &'stati
     Ok(())
 }
 pub(in crate::runtime) fn planner_recover(c: &Config, confirm: bool) -> Result<()> {
-    planner_recover_checked(c, confirm, false, |c, p, cfg| {
+    planner_recover_checked(c, confirm, false, |c, p, _| {
         let instruments =
             history_instruments(c).map_err(|_| "planner_recover_input_unavailable")?;
         if !planner::has_eligible_input(c, p, &instruments)? {
             return Err("planner_recover_no_eligible_input".into());
         }
-        redecision::news(cfg, c, &instruments)?;
-        planner::require_usage(c)
+        Ok(())
     })
 }
 /// Reviewed protection-only recovery. The halt stays set, so entries remain
@@ -114,8 +113,7 @@ pub(super) fn planner_recover_checked(
             .ok_or("planner_config_required")?,
         c.session,
     )?;
-    let recovery_role = cfg.role(Trigger::Supervisor);
-    if !cfg.enabled || !recovery_role.enabled {
+    if !cfg.enabled || !cfg.uses_pi_paper() {
         return Err("planner_recover_planner_disabled".into());
     }
     let (mut db, mut p) = active.load()?;
@@ -277,18 +275,8 @@ pub(super) fn planner_recover_checked(
     }
     Ok(())
 }
+/// Reviewed config transition, audited beside the policy hashes.
 pub(in crate::runtime) fn config_apply(c: &Config, confirm: bool) -> Result<()> {
-    config_apply_with(c, confirm, None, true)
-}
-/// Reviewed config transition. `context` is recorded on the audited transition
-/// tick for an operator command that names the change beside the policy hashes;
-/// `report` prints the CLI line unless the caller owns its own output.
-pub(in crate::runtime) fn config_apply_with(
-    c: &Config,
-    confirm: bool,
-    context: Option<serde_json::Value>,
-    report: bool,
-) -> Result<()> {
     if !confirm {
         return Err("config_apply_confirm_paper_review_required".into());
     }
@@ -333,17 +321,12 @@ pub(in crate::runtime) fn config_apply_with(
     p.health = "operator_stopped".into();
     p.reconcile()?;
     let after = serde_json::to_string(&p)?;
-    let mut audit = serde_json::json!({"prior_state_sha256":digest(before.as_bytes()),"current_state_sha256":digest(after.as_bytes()),"configuration_sha256":digest(&serde_json::to_vec(&cfg)?),"model_led":desired,"usage_preserved":true,"stopped":true,"live_enabled":false});
-    if let Some(context) = context {
-        audit["operator_command"] = context;
-    }
+    let audit = serde_json::json!({"prior_state_sha256":digest(before.as_bytes()),"current_state_sha256":digest(after.as_bytes()),"configuration_sha256":digest(&serde_json::to_vec(&cfg)?),"model_led":desired,"usage_preserved":true,"stopped":true,"live_enabled":false});
     tx.execute("INSERT INTO ticks(at,receipt,body,event) VALUES(?,NULL,?,'operator_config_apply_confirmed_paper_review')",
         rusqlite::params![millis(), audit.to_string()])?;
     tx.execute("UPDATE state SET body=? WHERE id=1", [&after])?;
     tx.commit()?;
-    if report {
-        println!("config_applied_operator_stopped_resume_required");
-    }
+    println!("config_applied_operator_stopped_resume_required");
     Ok(())
 }
 pub(in crate::runtime) fn resume(c: &Config, confirm: bool) -> Result<()> {

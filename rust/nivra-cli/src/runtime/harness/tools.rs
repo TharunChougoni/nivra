@@ -210,50 +210,6 @@ pub(super) fn owner_candidate_tool_definitions(
     ]
 }
 
-fn owner_research_tools_allowed(
-    cfg: &PlannerConfig,
-    name: &str,
-    bundle: &Value,
-    guard: &planner::CallGuard<'_>,
-) -> bool {
-    let Some(turn_id) = guard.invocation_id else {
-        return false;
-    };
-    name == "supervisor"
-        && cfg.research_tools.is_some()
-        && bundle["trigger"]["kind"] == "decision"
-        && bundle["summary"]["host_decision"]["turn_id"] == turn_id
-}
-
-pub(super) fn owner_research_turn(
-    cfg: &PlannerConfig,
-    name: &str,
-    bundle: &Value,
-    guard: &planner::CallGuard<'_>,
-) -> bool {
-    let Some(turn_id) = guard.invocation_id else {
-        return false;
-    };
-    name == "supervisor"
-        && cfg
-            .owner_tasks
-            .as_ref()
-            .and_then(|settings| settings.research.as_ref())
-            .is_some_and(|research| research.enabled)
-        && bundle["trigger"]["kind"] == "research"
-        && bundle["summary"]["owner_task"]["kind"] == "research"
-        && bundle["summary"]["turn_id"] == turn_id
-        && bundle["summary"]["research_id"].is_string()
-}
-
-fn quote_capture_enabled(cfg: &PlannerConfig) -> bool {
-    cfg.owner_tasks
-        .as_ref()
-        .and_then(|settings| settings.research.as_ref())
-        .and_then(|research| research.quote_capture.as_ref())
-        .is_some_and(|quotes| quotes.enabled)
-}
-
 fn candidate_execution_enabled(cfg: &PlannerConfig) -> bool {
     cfg.research_tools
         .as_ref()
@@ -278,58 +234,6 @@ pub(super) fn candidate_tools_enabled(cfg: &PlannerConfig) -> bool {
                 .as_ref()
                 .is_some_and(|candidate| candidate.enabled)
     })
-}
-
-pub(super) fn owner_workspace_tools_allowed(
-    cfg: &PlannerConfig,
-    name: &str,
-    bundle: &Value,
-    guard: &planner::CallGuard<'_>,
-) -> bool {
-    let Some(turn_id) = guard.invocation_id else {
-        return false;
-    };
-    name == "supervisor"
-        && cfg
-            .workspace
-            .as_ref()
-            .is_some_and(|workspace| workspace.enabled)
-        && ((bundle["trigger"]["kind"] == "decision"
-            && bundle["summary"]["host_decision"]["turn_id"] == turn_id)
-            || (bundle["trigger"]["kind"] == "research"
-                && bundle["summary"]["owner_task"]["kind"] == "research"
-                && bundle["summary"]["turn_id"] == turn_id))
-}
-
-/// Only a bound trading decision turn may queue work for the research lane.
-pub(super) fn research_request_allowed(
-    cfg: &PlannerConfig,
-    name: &str,
-    bundle: &Value,
-    guard: &planner::CallGuard<'_>,
-) -> bool {
-    let Some(turn_id) = guard.invocation_id else {
-        return false;
-    };
-    name == "supervisor"
-        && super::super::lane_queue::lane_settings(cfg).is_some()
-        && bundle["trigger"]["kind"] == "decision"
-        && bundle["summary"]["host_decision"]["turn_id"] == turn_id
-}
-
-pub(super) fn owner_web_tools_allowed(
-    cfg: &PlannerConfig,
-    name: &str,
-    bundle: &Value,
-    guard: &planner::CallGuard<'_>,
-) -> bool {
-    let Some(turn_id) = guard.invocation_id else {
-        return false;
-    };
-    name == "supervisor"
-        && cfg.web_tools.as_ref().is_some_and(|web| web.enabled)
-        && bundle["trigger"]["kind"] == "decision"
-        && bundle["summary"]["host_decision"]["turn_id"] == turn_id
 }
 
 pub(crate) fn call_tool_definitions(
@@ -531,285 +435,6 @@ fn null_as_empty<'de, D: serde::Deserializer<'de>>(
     Ok(Option::<Vec<String>>::deserialize(d)?.unwrap_or_default())
 }
 
-pub(super) enum OwnerResearchOperation {
-    Enqueue(OwnerResearchEnqueueArgs),
-    Status(String, u32),
-    Result(String, u32),
-    Cancel(String, u32),
-    CandidateSubmit(research::CandidateSubmitArgs),
-    CandidateStatus(String, u32),
-    CandidateResult(Option<String>, Option<u32>, Option<String>),
-    CandidateCancel(String, u32),
-}
-impl OwnerResearchOperation {
-    fn is_candidate(&self) -> bool {
-        matches!(
-            self,
-            Self::CandidateSubmit(_)
-                | Self::CandidateStatus(_, _)
-                | Self::CandidateResult(_, _, _)
-                | Self::CandidateCancel(_, _)
-        )
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn owner_research_task(
-    c: &Config,
-    cfg: &PlannerConfig,
-    name: &str,
-    role: &ModelRole,
-    bundle: &Value,
-    guard: &planner::CallGuard<'_>,
-    operation: OwnerResearchOperation,
-    now: i64,
-) -> Result<Value> {
-    if !owner_research_tools_allowed(cfg, name, bundle, guard) {
-        return Err("harness_owner_research_scope_invalid".into());
-    }
-    let turn_id = guard
-        .invocation_id
-        .ok_or("harness_owner_research_scope_invalid")?;
-    let claim: super::super::decision_owner::Claim =
-        serde_json::from_value(bundle["summary"]["host_decision"].clone())
-            .map_err(|_| "harness_owner_research_scope_invalid")?;
-    let policy_sha256 = digest(&planner::policy_bytes(cfg)?);
-    let binding = super::super::book_binding(c)?;
-    let model_selection = &bundle["summary"]["model_selection"];
-    let model_revision = if model_selection.is_null() {
-        0
-    } else {
-        model_selection["revision"]
-            .as_u64()
-            .ok_or("harness_owner_research_scope_invalid")?
-    };
-    if claim.turn_id != turn_id
-        || claim.binding != binding
-        || claim.policy_sha256 != policy_sha256
-        || claim.profile_sha256.as_deref() != cfg.profile_sha256()
-        || claim.model_id != role.model_id
-        || (!model_selection.is_null()
-            && (model_selection["model_id"] != role.model_id
-                || model_selection["policy_sha256"] != policy_sha256))
-    {
-        return Err("harness_owner_research_scope_invalid".into());
-    }
-    if operation.is_candidate() && !candidate_tools_enabled(cfg) {
-        return Err("harness_candidate_compute_disabled".into());
-    }
-    match operation {
-        OwnerResearchOperation::Enqueue(args) => research::owner_task_enqueue_with_evidence(
-            c,
-            cfg,
-            &role.model_id,
-            model_revision,
-            turn_id,
-            &args.task_key,
-            &args.goal,
-            &args.analysis_id,
-            &args.dataset_id,
-            now,
-            Some(owner_evidence(cfg, &claim)?),
-        ),
-        OwnerResearchOperation::Status(task_id, revision) => {
-            research::owner_task_status(c, cfg, &task_id, revision, now)
-        }
-        OwnerResearchOperation::Result(task_id, revision) => {
-            research::owner_task_result(c, cfg, &task_id, revision, now)
-        }
-        OwnerResearchOperation::Cancel(task_id, revision) => {
-            research::owner_task_cancel(c, cfg, &task_id, revision, now)
-        }
-        OwnerResearchOperation::CandidateSubmit(args) => research::candidate_submit(
-            c,
-            cfg,
-            &role.model_id,
-            model_revision,
-            turn_id,
-            args,
-            now,
-            Some(owner_evidence(cfg, &claim)?),
-        ),
-        OwnerResearchOperation::CandidateStatus(task_id, revision) => {
-            research::candidate_status(c, cfg, &task_id, revision, now)
-        }
-        OwnerResearchOperation::CandidateResult(task_id, revision, observation_ref) => {
-            match observation_ref {
-                Some(raw) => {
-                    let reference: Value = serde_json::from_str(&raw)
-                        .map_err(|_| "harness_owner_research_args_invalid")?;
-                    research::candidate_result_for_observation_ref(c, cfg, &reference, now)
-                }
-                None => research::candidate_result(
-                    c,
-                    cfg,
-                    task_id
-                        .as_deref()
-                        .ok_or("harness_owner_research_args_invalid")?,
-                    revision.ok_or("harness_owner_research_args_invalid")?,
-                    now,
-                ),
-            }
-        }
-        OwnerResearchOperation::CandidateCancel(task_id, revision) => {
-            research::candidate_cancel(c, cfg, &task_id, revision, now)
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-/// Candidate tools in a research turn pass no decision evidence: research is
-/// not a decision claim and must never fabricate one. The existing candidate
-/// queue, guard, helper and cgroup are reused unchanged.
-fn owner_research_turn_task(
-    c: &Config,
-    cfg: &PlannerConfig,
-    name: &str,
-    role: &ModelRole,
-    bundle: &Value,
-    guard: &planner::CallGuard<'_>,
-    operation: OwnerResearchOperation,
-    now: i64,
-) -> Result<Value> {
-    if !owner_research_turn(cfg, name, bundle, guard) {
-        return Err("harness_owner_research_turn_scope_invalid".into());
-    }
-    let turn_id = guard
-        .invocation_id
-        .ok_or("harness_owner_research_turn_scope_invalid")?;
-    let policy_sha256 = digest(&planner::policy_bytes(cfg)?);
-    let model_selection = &bundle["summary"]["model_selection"];
-    let model_revision = if model_selection.is_null() {
-        0
-    } else {
-        model_selection["revision"]
-            .as_u64()
-            .ok_or("harness_owner_research_turn_scope_invalid")?
-    };
-    // A lane profile may pin its own provider-listed model; otherwise the
-    // research lane runs the orchestrator's active selection.
-    let lane_model =
-        super::super::lane_queue::lane_settings(cfg).and_then(|lane| lane.model_id.as_deref());
-    let model_mismatch = match lane_model {
-        Some(model) => role.model_id != model,
-        None => !model_selection.is_null() && model_selection["model_id"] != role.model_id,
-    };
-    if model_mismatch
-        || (!model_selection.is_null() && model_selection["policy_sha256"] != policy_sha256)
-    {
-        return Err("harness_owner_research_turn_scope_invalid".into());
-    }
-    match operation {
-        OwnerResearchOperation::CandidateSubmit(args) => research::candidate_submit(
-            c,
-            cfg,
-            &role.model_id,
-            model_revision,
-            turn_id,
-            args,
-            now,
-            None,
-        ),
-        OwnerResearchOperation::CandidateStatus(task_id, revision) => {
-            research::candidate_status(c, cfg, &task_id, revision, now)
-        }
-        OwnerResearchOperation::CandidateResult(task_id, revision, observation_ref) => {
-            match observation_ref {
-                Some(raw) => {
-                    let reference: Value = serde_json::from_str(&raw)
-                        .map_err(|_| "harness_owner_research_args_invalid")?;
-                    research::candidate_result_for_observation_ref(c, cfg, &reference, now)
-                }
-                None => research::candidate_result(
-                    c,
-                    cfg,
-                    task_id
-                        .as_deref()
-                        .ok_or("harness_owner_research_args_invalid")?,
-                    revision.ok_or("harness_owner_research_args_invalid")?,
-                    now,
-                ),
-            }
-        }
-        OwnerResearchOperation::CandidateCancel(task_id, revision) => {
-            research::candidate_cancel(c, cfg, &task_id, revision, now)
-        }
-        _ => Err("harness_owner_research_turn_scope_invalid".into()),
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn owner_candidate_operation(
-    c: &Config,
-    cfg: &PlannerConfig,
-    name: &str,
-    role: &ModelRole,
-    bundle: &Value,
-    guard: &planner::CallGuard<'_>,
-    operation: OwnerResearchOperation,
-    now: i64,
-) -> Result<Value> {
-    if owner_research_turn(cfg, name, bundle, guard) {
-        owner_research_turn_task(c, cfg, name, role, bundle, guard, operation, now)
-    } else {
-        owner_research_task(c, cfg, name, role, bundle, guard, operation, now)
-    }
-}
-
-pub(super) fn research_quote_capture(
-    c: &Config,
-    cfg: &PlannerConfig,
-    keys: Vec<String>,
-    from_ms: i64,
-    to_ms: i64,
-    now: i64,
-) -> Result<Value> {
-    let settings = cfg
-        .owner_tasks
-        .as_ref()
-        .and_then(|settings| settings.research.as_ref())
-        .and_then(|research| research.quote_capture.as_ref())
-        .filter(|quotes| quotes.enabled)
-        .ok_or("harness_quote_capture_disabled")?;
-    settings.validate()?;
-    let keys = keys.into_iter().collect::<std::collections::BTreeSet<_>>();
-    // The archive source is the book directory (universe and journal), as
-    // for candidate maturity; never the journal file itself.
-    let archived = super::super::paper_replay::candidate_quotes(
-        &c.directory,
-        c.session,
-        &keys,
-        from_ms,
-        to_ms,
-        settings.max_rows,
-        now,
-    )?;
-    Ok(json!({
-        "status":"archived_receipts_only",
-        "provider_called":false,
-        "ohlc_used":false,
-        "full_quote":false,
-        "interpolated":false,
-        "execution_authorized":false,
-        "source":archived
-    }))
-}
-
-fn owner_evidence(
-    cfg: &PlannerConfig,
-    claim: &super::super::decision_owner::Claim,
-) -> Result<nivra_store::research_jobs::OwnerEvidence> {
-    Ok(nivra_store::research_jobs::OwnerEvidence {
-        digest_id: claim.digest_id.clone(),
-        owner_work_id: claim.id.clone(),
-        facts_sha256: claim.facts_sha256.clone(),
-        profile_sha256: claim.profile_sha256.clone(),
-        prompt_hashes_sha256: digest(&serde_json::to_vec(
-            &json!({"compiler":cfg.prompt_hashes(),"owner":cfg.orchestrator.as_ref().ok_or("research_owner_prompt_missing")?.prompt_hashes()?}),
-        )?),
-        owner_claim_sha256: digest(&serde_json::to_vec(claim)?),
-    })
-}
 pub(super) fn checked_call_with(
     item: &Value,
     tools: &[Value],
@@ -1051,7 +676,7 @@ pub(crate) fn bridge_definitions(cfg: &PlannerConfig, lane_requests: bool) -> Re
         // Status, result and cancel also answer the pi lanes' own requests.
         research: analysis || lane_requests,
         research_turn: false,
-        quote_capture: quote_capture_enabled(cfg),
+        quote_capture: quote_capture(cfg).is_some(),
         candidate,
         candidate_execution: candidate && candidate_execution_enabled(cfg),
         candidate_observation: candidate && candidate_observation_enabled(cfg),
@@ -1074,4 +699,43 @@ pub(crate) fn bridge_definitions(cfg: &PlannerConfig, lane_requests: bool) -> Re
     )?);
     tools.retain(|tool| analysis || tool["name"] != "research_task_enqueue");
     Ok(tools)
+}
+
+fn quote_capture(cfg: &PlannerConfig) -> Option<&super::research::QuoteCaptureSettings> {
+    cfg.research_tools
+        .as_ref()
+        .and_then(|settings| settings.quote_capture.as_ref())
+        .filter(|quotes| quotes.enabled)
+}
+
+pub(super) fn research_quote_capture(
+    c: &Config,
+    cfg: &PlannerConfig,
+    keys: Vec<String>,
+    from_ms: i64,
+    to_ms: i64,
+    now: i64,
+) -> Result<Value> {
+    let settings = quote_capture(cfg).ok_or("harness_quote_capture_disabled")?;
+    let keys = keys.into_iter().collect::<std::collections::BTreeSet<_>>();
+    // The archive source is the book directory (universe and journal), as
+    // for candidate maturity; never the journal file itself.
+    let archived = super::super::paper_replay::candidate_quotes(
+        &c.directory,
+        c.session,
+        &keys,
+        from_ms,
+        to_ms,
+        settings.max_rows,
+        now,
+    )?;
+    Ok(json!({
+        "status":"archived_receipts_only",
+        "provider_called":false,
+        "ohlc_used":false,
+        "full_quote":false,
+        "interpolated":false,
+        "execution_authorized":false,
+        "source":archived
+    }))
 }

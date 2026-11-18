@@ -31,7 +31,6 @@ pub(crate) struct LaneGrant<'a> {
 pub(crate) struct Bridge<'a> {
     pub c: &'a Config,
     pub cfg: &'a PlannerConfig,
-    pub role: &'a ModelRole,
     pub bundle: &'a Value,
     pub backend: &'a mut dyn Backend,
     pub guard: &'a CallGuard<'a>,
@@ -50,7 +49,6 @@ impl<'a> Bridge<'a> {
     pub(crate) fn new(
         c: &'a Config,
         cfg: &'a PlannerConfig,
-        role: &'a ModelRole,
         bundle: &'a Value,
         backend: &'a mut dyn Backend,
         guard: &'a CallGuard<'a>,
@@ -66,7 +64,6 @@ impl<'a> Bridge<'a> {
         Ok(Self {
             c,
             cfg,
-            role,
             bundle,
             backend,
             guard,
@@ -112,20 +109,12 @@ impl<'a> Bridge<'a> {
             Err(tool) => execute_tool(
                 &mut ToolScope {
                     c: self.c,
-                    cfg: self.cfg,
-                    name: "supervisor",
-                    role: self.role,
                     bundle: self.bundle,
                     backend: &mut *self.backend,
                     guard: self.guard,
                     archive: self.archive,
-                    web_budget: &mut self.web_budget,
-                    web_transport: &mut *self.web_transport,
-                    run_id: self.run_id,
-                    turn: self.seen.len(),
                     tool_limits: &self.limits,
                 },
-                &id,
                 &key,
                 tool,
             )?,

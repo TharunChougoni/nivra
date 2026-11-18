@@ -638,179 +638,24 @@ pub(crate) fn record_continuation_checked(
     experiment_ledger::lifecycle::record_continuation(&c.directory, &token, now)
 }
 
-fn capture_usage_read(c: &Config) -> Option<(u32, Option<i64>)> {
-    // The CURRENT book may be live with a non-empty WAL. Read it through a
-    // normal read-only snapshot, never the closed-book immutable opener.
-    let db =
-        super::super::super::open_book_current_read_only(&c.directory.join("paper.sqlite")).ok()?;
-    let start = c
-        .session
-        .and_hms_opt(0, 0, 0)
-        .map(|local| local.and_utc().timestamp_millis() - 19_800_000)?;
-    let count: i64 = db
-        .query_row(
-            "SELECT count(*) FROM ticks WHERE event='research_quotes' AND at>=?",
-            [start],
-            |row| row.get(0),
-        )
-        .ok()?;
-    let last: Option<i64> = db
-        .query_row(
-            "SELECT max(at) FROM ticks WHERE event='research_quotes' AND at>=?",
-            [start],
-            |row| row.get(0),
-        )
-        .ok()?;
-    Some((u32::try_from(count).unwrap_or(u32::MAX), last))
-}
-
 /// PURE read-only capture preflight for the operational projection. It reports
 /// what the CURRENT session could attempt; it never calls the provider, reserves
 /// a call or claims a quote. For a cross-session continuation the current
 /// capture is NOT authority for an exit inside the ORIGINAL source window, so
 /// `eligible_for_attempt` stays false with an explicit unsupported-scope gap.
-fn capture_preflight(c: &Config, cfg: &PlannerConfig, now: i64, key: &str) -> Value {
-    let observation_enabled = observation_settings(cfg).is_some();
-    let capture = cfg
-        .owner_tasks
-        .as_ref()
-        .and_then(|settings| settings.research.as_ref())
-        .filter(|research| research.enabled)
-        .and_then(|research| research.observation_capture.as_ref());
-    let Some(capture) = capture else {
-        return json!({
-            "configured":false,
-            "eligible_for_attempt":false,
-            "status":"not_configured",
-            "reason":"observation_capture_not_configured",
-            "source_window_support":"unsupported_cross_session",
-            "key":key,
-            "interest_set":[key],
-            "new_model_call":false,
-            "provider_guarantee":false,
-            "provider_called":false,
-            "state_written":false
-        });
-    };
-    let configured = capture.enabled && observation_enabled && capture.max_keys >= 1;
-    let mut current = json!({"status":"unknown","reason":"current_capture_not_evaluated"});
-    if !capture.enabled {
-        current = json!({"status":"disabled","reason":"observation_capture_disabled"});
-    } else if !observation_enabled {
-        current = json!({"status":"disabled","reason":"candidate_observation_disabled"});
-    } else if capture.max_keys < 1 {
-        current = json!({"status":"disabled","reason":"observation_capture_key_budget"});
-    } else {
-        let portfolio =
-            super::super::super::open_book_current_read_only(&c.directory.join("paper.sqlite"))
-                .ok()
-                .and_then(|db| {
-                    db.query_row("SELECT body FROM state WHERE id=1", [], |row| {
-                        row.get::<_, String>(0)
-                    })
-                    .ok()
-                })
-                .and_then(|body| {
-                    serde_json::from_str::<nivra_core::execution::Portfolio>(&body).ok()
-                });
-        match portfolio {
-            Some(portfolio) if portfolio.halted => {
-                current = json!({"status":"not_eligible","reason":"book_halted"})
-            }
-            Some(portfolio) if portfolio.stopped => {
-                current = json!({"status":"not_eligible","reason":"book_stopped"})
-            }
-            Some(portfolio) if portfolio.closed => {
-                current = json!({"status":"not_eligible","reason":"book_closed"})
-            }
-            Some(_) => match c.is_trading_day(c.session) {
-                Err(_) => current = json!({"status":"unavailable","reason":"calendar_unavailable"}),
-                Ok(false) => {
-                    current = json!({"status":"not_eligible","reason":"not_a_trading_day"})
-                }
-                Ok(true) => {
-                    let local = super::super::super::local(now);
-                    let minute = local
-                        .hour()
-                        .saturating_mul(60)
-                        .saturating_add(local.minute());
-                    if !(c.execution.session_start_minute..c.execution.session_end_minute)
-                        .contains(&minute)
-                    {
-                        current = json!({"status":"not_eligible","reason":"market_closed"});
-                    } else {
-                        match capture_usage_read(c) {
-                            None => {
-                                current = json!({"status":"unknown","reason":"observation_capture_journal_unavailable"})
-                            }
-                            Some((used, last)) => {
-                                if used >= capture.max_calls_per_session {
-                                    current = json!({
-                                        "status":"quota_exhausted",
-                                        "used":used,
-                                        "max_calls_per_session":capture.max_calls_per_session
-                                    });
-                                } else if last.is_some_and(|last| {
-                                    now.saturating_sub(last) < capture.min_interval_ms
-                                }) {
-                                    current = json!({
-                                        "status":"backoff",
-                                        "last_capture_ms":last,
-                                        "min_interval_ms":capture.min_interval_ms
-                                    });
-                                } else {
-                                    match super::super::super::wide::history_instruments(c) {
-                                        Ok(instruments) => {
-                                            let supported = instruments
-                                                .iter()
-                                                .any(|instrument| instrument.key == key);
-                                            current = json!({
-                                                "status":if supported {"eligible"} else {"not_eligible"},
-                                                "reason":if supported {Value::Null} else {json!("interest_key_not_in_verified_universe")},
-                                                "interest_key_supported":supported,
-                                                "verified_universe_keys":instruments.len(),
-                                                "used":used,
-                                                "remaining":capture.max_calls_per_session.saturating_sub(used),
-                                                "last_capture_ms":last,
-                                                "max_calls_per_session":capture.max_calls_per_session
-                                            });
-                                        }
-                                        Err(_) => {
-                                            current = json!({"status":"unavailable","reason":"verified_universe_unavailable"})
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            None => {
-                current = json!({"status":"unknown","reason":"current_book_unavailable"});
-            }
-        }
-    }
+fn capture_preflight(key: &str) -> Value {
     json!({
-        "configured":configured,
-        // The CURRENT capture can only capture CURRENT-session quotes. It is
-        // not authority for an exit inside the ORIGINAL source window.
+        "configured":false,
         "eligible_for_attempt":false,
-        "status":"unsupported_session_scope",
-        "reason":"current_capture_not_eligible_in_source_window",
+        "status":"not_configured",
+        "reason":"observation_capture_not_configured",
         "source_window_support":"unsupported_cross_session",
-        "current_session":current,
         "key":key,
         "interest_set":[key],
-        "max_keys":capture.max_keys,
-        "max_rows":capture.max_rows,
-        "timeout_ms":capture.timeout_ms,
-        "min_interval_ms":capture.min_interval_ms,
-        "max_calls_per_session":capture.max_calls_per_session,
         "new_model_call":false,
         "provider_guarantee":false,
         "provider_called":false,
-        "state_written":false,
-        "source":"current_approved_research_observation_capture_preflight"
+        "state_written":false
     })
 }
 
@@ -1018,7 +863,7 @@ pub(crate) fn mature_predecessors(c: &Config, cfg: &PlannerConfig, now: i64) -> 
                                 "due_ms":clock.due,
                                 "deadline_ms":clock.deadline,
                                 "gap":{"kind":"unsupported_session_scope","reason":reason},
-                                "capture":capture_preflight(c, cfg, now, &clock.entry.key),
+                                "capture":capture_preflight(&clock.entry.key),
                                 "origin_session":session,
                                 "activation_authorized":false,
                                 "edge_qualified":false
