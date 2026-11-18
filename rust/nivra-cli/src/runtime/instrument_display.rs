@@ -5,7 +5,7 @@ use serde::{
     Deserialize, Serialize,
     de::{SeqAccess, Visitor},
 };
-use serde_json::{Value, json};
+use serde_json::{Value, json, value::RawValue};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -59,13 +59,70 @@ impl Settings {
     }
 }
 
+/// The dashboard catalog: the validated cash universe and the display
+/// projection the worker publishes for that same session and BOD.
+pub(crate) struct Catalog {
+    pub(crate) cash: Value,
+    /// `None` while loading.
+    pub(crate) display: Option<Display>,
+}
+/// `Err` carries the unavailable reason code.
+pub(crate) type Display = std::result::Result<Projection, String>;
+impl Catalog {
+    pub(crate) fn new(cash: Value) -> Self {
+        Self {
+            cash,
+            display: None,
+        }
+    }
+}
+
+/// Retained for the whole session beside ~86k BOD rows, so each row keeps
+/// its projected JSON serialized plus only the fields the dashboard filters,
+/// pages and groups on.
+pub(crate) struct Projection {
+    source: &'static str,
+    received_at_ms: i64,
+    bod_sha256: String,
+    cash_source_hashes: Value,
+    segments: BTreeMap<String, usize>,
+    kinds: BTreeMap<String, usize>,
+    rows_seen: usize,
+    rejected_rows: usize,
+    pub(crate) rows: Vec<Row>,
+}
+pub(crate) struct Row {
+    pub(crate) instrument_key: Box<str>,
+    pub(crate) symbol: Option<Box<str>>,
+    pub(crate) segment: Box<str>,
+    pub(crate) kind: Option<&'static str>,
+    pub(crate) underlying_key: Option<Box<str>>,
+    pub(crate) underlying_symbol: Option<Box<str>>,
+    pub(crate) expiry_ms: Option<i64>,
+    pub(crate) strike: Option<Amount>,
+    json: Box<RawValue>,
+}
+impl Row {
+    pub(crate) fn value(&self) -> serde_json::Result<Value> {
+        serde_json::from_str(self.json.get())
+    }
+}
+impl Projection {
+    pub(crate) fn summary(&self) -> Value {
+        json!({"source":self.source,"received_at_ms":self.received_at_ms,"source_hashes":{"bod_sha256":self.bod_sha256},
+        "cash_source_hashes":self.cash_source_hashes,"segments":self.segments,"kinds":self.kinds,"rows_seen":self.rows_seen,
+        "rejected_rows":self.rejected_rows,"total":self.rows.len(),"display_only":true,"quotes_available":false,
+        "margin_available":false,"coverage_kind":"contract_metadata_only"})
+    }
+}
+
 /// One worker per session. Public metadata I/O never delays a financial transaction.
-pub(super) fn start(c: &Config, catalog: &Arc<Mutex<Option<Value>>>, started: &AtomicBool) {
+pub(super) fn start(c: &Config, catalog: &Arc<Mutex<Option<Catalog>>>, started: &AtomicBool) {
     if started.load(Ordering::Acquire) {
         return;
     }
     let cash = match catalog.lock() {
-        Ok(value) => value.clone(),
+        Ok(value) => value.as_ref().map(|catalog| catalog.cash.clone()),
         Err(_) => None,
     };
     let Some(cash) = cash else { return };
@@ -82,14 +139,13 @@ pub(super) fn start(c: &Config, catalog: &Arc<Mutex<Option<Value>>>, started: &A
     let work = std::thread::Builder::new()
         .name("instrument-display".into())
         .spawn(move || {
-            let display = load(&c, &cash).unwrap_or_else(|error| {
+            let display = load(&c, &cash).map_err(|error| {
                 let code = super::failure_code(error.as_ref());
-                let code = if code.starts_with("instrument_display_") {
-                    code.as_str()
+                if code.starts_with("instrument_display_") {
+                    code
                 } else {
-                    "instrument_display_source_invalid_or_unavailable"
-                };
-                json!({"unavailable":true,"reason":code,"display_only":true})
+                    "instrument_display_source_invalid_or_unavailable".into()
+                }
             });
             publish(&worker_catalog, &worker_session, &worker_hash, display);
         });
@@ -98,36 +154,36 @@ pub(super) fn start(c: &Config, catalog: &Arc<Mutex<Option<Value>>>, started: &A
             &catalog,
             &session,
             &expected_hash,
-            json!({"unavailable":true,"reason":"instrument_display_worker_unavailable","display_only":true}),
+            Err("instrument_display_worker_unavailable".into()),
         );
     }
 }
 /// Nonblocking summary status; a catalog reader must not stall the paper loop.
-pub(super) fn status(catalog: &Arc<Mutex<Option<Value>>>) -> Option<Value> {
+pub(super) fn status(catalog: &Arc<Mutex<Option<Catalog>>>) -> Option<Value> {
     let catalog = catalog.try_lock().ok()?;
-    Some(match catalog.as_ref() {
+    Some(match catalog.as_ref().map(|catalog| &catalog.display) {
         None => json!({"status":"not_prepared"}),
-        Some(cash) => match cash.get("display") {
-            None => json!({"status":"loading"}),
-            Some(display) => {
-                json!({"status":if display["unavailable"]==true {"unavailable"} else {"ready"},
-                "source_sha256":display["source_hashes"]["bod_sha256"],"received_at_ms":display["received_at_ms"]})
-            }
-        },
+        Some(None) => json!({"status":"loading"}),
+        Some(Some(Err(_))) => {
+            json!({"status":"unavailable","source_sha256":null,"received_at_ms":null})
+        }
+        Some(Some(Ok(display))) => {
+            json!({"status":"ready","source_sha256":display.bod_sha256,"received_at_ms":display.received_at_ms})
+        }
     })
 }
 
-fn publish(catalog: &Arc<Mutex<Option<Value>>>, session: &str, hash: &Value, display: Value) {
+fn publish(catalog: &Arc<Mutex<Option<Catalog>>>, session: &str, hash: &Value, display: Display) {
     if let Ok(mut catalog) = catalog.lock()
         && let Some(current) = catalog.as_mut()
-        && current["session"] == session
-        && current["source_hashes"]["upstox_nse_bod_sha256"] == *hash
+        && current.cash["session"] == session
+        && current.cash["source_hashes"]["upstox_nse_bod_sha256"] == *hash
     {
-        current["display"] = display;
+        current.display = Some(display);
     }
 }
 
-fn load(c: &Config, cash: &Value) -> Result<Value> {
+fn load(c: &Config, cash: &Value) -> Result<Projection> {
     if cash["session"] != c.session.to_string() {
         return Err("instrument_display_session_mismatch".into());
     }
@@ -229,7 +285,7 @@ fn decimal(value: &Value) -> Option<String> {
     let value = Amount::parse(&value.to_string()).ok()?;
     (value >= Amount::ZERO).then(|| value.to_string())
 }
-fn item(row: &Value, cash: &BTreeMap<String, &Value>, settings: &Settings) -> Option<Value> {
+fn item(row: &Value, cash: &BTreeMap<String, &Value>, settings: &Settings) -> Option<Row> {
     for field in [
         "instrument_key",
         "segment",
@@ -274,15 +330,32 @@ fn item(row: &Value, cash: &BTreeMap<String, &Value>, settings: &Settings) -> Op
         Some("EQ") => Some("equity"),
         _ => None,
     };
-    Some(json!({
-        "instrument_key":key,"symbol":text(&row["trading_symbol"]),"segment":segment,"exchange":text(&row["exchange"]),
-        "kind":kind,"instrument_type":text(&row["instrument_type"]),"underlying_key":text(&row["underlying_key"]),
-        "underlying_symbol":text(&row["underlying_symbol"]),"expiry_ms":row["expiry"].as_i64().filter(|n|*n>0),
-        "strike":decimal(&row["strike_price"]),"lot_size":row["lot_size"].as_u64().filter(|n|*n>0).map(|n| n.to_string()),
+    let symbol = text(&row["trading_symbol"]);
+    let underlying_key = text(&row["underlying_key"]);
+    let underlying_symbol = text(&row["underlying_symbol"]);
+    let expiry_ms = row["expiry"].as_i64().filter(|n| *n > 0);
+    let strike = decimal(&row["strike_price"]);
+    let json = serde_json::value::to_raw_value(&json!({
+        "instrument_key":key,"symbol":symbol,"segment":segment,"exchange":text(&row["exchange"]),
+        "kind":kind,"instrument_type":text(&row["instrument_type"]),"underlying_key":underlying_key,
+        "underlying_symbol":underlying_symbol,"expiry_ms":expiry_ms,
+        "strike":strike,"lot_size":row["lot_size"].as_u64().filter(|n|*n>0).map(|n| n.to_string()),
         "provider_tick":decimal(&row["tick_size"]),"tick":verified.map(|v|v["tick"].clone()),
         "tick_unit":verified.map(|v|v["tick_unit"].clone()),"cash_execution_verified":verified.is_some(),
         "margin":null,"margin_reason":"margin_snapshot_not_captured","display_only":true
     }))
+    .ok()?;
+    Some(Row {
+        instrument_key: key.into(),
+        symbol: symbol.map(Into::into),
+        segment: segment.into(),
+        kind,
+        underlying_key: underlying_key.map(Into::into),
+        underlying_symbol: underlying_symbol.map(Into::into),
+        expiry_ms,
+        strike: strike.and_then(|n| Amount::parse(&n).ok()),
+        json,
+    })
 }
 
 pub(super) fn project(
@@ -291,15 +364,15 @@ pub(super) fn project(
     cash: &Value,
     received: i64,
     hash: &str,
-    source: &str,
-) -> Result<Value> {
+    source: &'static str,
+) -> Result<Projection> {
     settings.validate()?;
     struct Rows<'a> {
         settings: &'a Settings,
         cash: BTreeMap<String, &'a Value>,
     }
     impl<'de> Visitor<'de> for Rows<'_> {
-        type Value = (Vec<Value>, usize, usize);
+        type Value = (Vec<Row>, usize, usize);
         fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             f.write_str("BOD instrument array")
         }
@@ -320,7 +393,7 @@ pub(super) fn project(
                     rejected += 1;
                     continue;
                 };
-                let key = row["instrument_key"].as_str().unwrap().to_owned();
+                let key = row.instrument_key.clone();
                 if duplicate.contains(&key) {
                     rejected += 1;
                     continue;
@@ -360,7 +433,7 @@ pub(super) fn project(
         return Err("instrument_display_decoded_limit".into());
     }
     let mut de = serde_json::Deserializer::from_slice(&decoded);
-    let (items, seen, rejected) =
+    let (rows, seen, rejected) =
         serde::de::Deserializer::deserialize_seq(&mut de, Rows { settings, cash }).map_err(
             |error| {
                 if error
@@ -376,19 +449,23 @@ pub(super) fn project(
     de.end().map_err(|_| "instrument_display_json_invalid")?;
     let mut segments = BTreeMap::<String, usize>::new();
     let mut kinds = BTreeMap::<String, usize>::new();
-    for row in &items {
-        *segments
-            .entry(row["segment"].as_str().unwrap().to_owned())
-            .or_default() += 1;
+    for row in &rows {
+        *segments.entry(row.segment.to_string()).or_default() += 1;
         *kinds
-            .entry(row["kind"].as_str().unwrap_or("unknown").to_owned())
+            .entry(row.kind.unwrap_or("unknown").to_owned())
             .or_default() += 1;
     }
-    Ok(
-        json!({"source":source,"received_at_ms":received,"source_hashes":{"bod_sha256":hash},"cash_source_hashes":cash_source_hashes,
-        "segments":segments,"kinds":kinds,"rows_seen":seen,"rejected_rows":rejected,"total":items.len(),"items":items,
-        "display_only":true,"quotes_available":false,"margin_available":false,"coverage_kind":"contract_metadata_only"}),
-    )
+    Ok(Projection {
+        source,
+        received_at_ms: received,
+        bod_sha256: hash.to_owned(),
+        cash_source_hashes,
+        segments,
+        kinds,
+        rows_seen: seen,
+        rejected_rows: rejected,
+        rows,
+    })
 }
 
 #[cfg(test)]
@@ -407,7 +484,7 @@ pub(super) fn storage_fixture(bytes: &[u8], cash: &Value) {
     let identity = json!({"source":"upstox_complete_bod","received_at_ms":123456,"sha256":digest(bytes),"session":c.session});
     fs::write(&receipt, serde_json::to_vec(&identity).unwrap()).unwrap();
     let restored = load(&c, cash).unwrap();
-    assert_eq!(restored["received_at_ms"], 123456);
+    assert_eq!(restored.received_at_ms, 123456);
     let mut changed = identity;
     changed["sha256"] = json!("mismatch");
     fs::write(&receipt, serde_json::to_vec(&changed).unwrap()).unwrap();
@@ -421,15 +498,13 @@ pub(super) fn storage_fixture(bytes: &[u8], cash: &Value) {
     std::os::unix::fs::symlink(&target, &archive).unwrap();
     assert!(read_source(&archive, Settings::default().max_source_bytes).is_err());
     assert_eq!(fs::read(&target).unwrap(), bytes);
-    let catalog = Arc::new(Mutex::new(Some(cash.clone())));
-    let before = catalog.lock().unwrap().clone();
+    let catalog = Arc::new(Mutex::new(Some(Catalog::new(cash.clone()))));
     publish(
         &catalog,
         "wrong-session",
         &cash["source_hashes"]["upstox_nse_bod_sha256"],
-        restored,
+        Err("instrument_display_wrong_session".into()),
     );
-    assert_eq!(*catalog.lock().unwrap(), before);
     assert_eq!(status(&catalog).unwrap()["status"], "loading");
     {
         let _held = catalog.lock().unwrap();
@@ -439,7 +514,9 @@ pub(super) fn storage_fixture(bytes: &[u8], cash: &Value) {
         &catalog,
         c.session.to_string().as_str(),
         &cash["source_hashes"]["upstox_nse_bod_sha256"],
-        json!({"source_hashes":{"bod_sha256":digest(bytes)}}),
+        Ok(restored),
     );
-    assert_eq!(status(&catalog).unwrap()["status"], "ready");
+    let ready = status(&catalog).unwrap();
+    assert_eq!(ready["status"], "ready");
+    assert_eq!(ready["source_sha256"], digest(bytes));
 }

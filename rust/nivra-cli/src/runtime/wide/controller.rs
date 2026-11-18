@@ -102,7 +102,7 @@ struct Controller<'a> {
     stopping: Arc<AtomicBool>,
     display_catalog_status: serde_json::Value,
     display_catalog_started: AtomicBool,
-    instrument_catalog: Arc<Mutex<Option<serde_json::Value>>>,
+    instrument_catalog: Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>,
     equity_series: Arc<Mutex<web::EquitySeries>>,
     index_features: Arc<Mutex<FeatureStore>>,
     feature_store: Arc<Mutex<FeatureStore>>,
@@ -353,7 +353,9 @@ impl<'a> Controller<'a> {
                 serde_json::json!({"status":"waiting_for_spot","reason":"option_spot_unavailable"});
         }
         if let Ok(mut catalog) = instrument_catalog.lock() {
-            *catalog = universe.as_deref().map(Universe::dashboard_projection);
+            *catalog = universe
+                .as_deref()
+                .map(|u| super::super::instrument_display::Catalog::new(u.dashboard_projection()));
         }
         super::super::instrument_display::start(c, &instrument_catalog, &display_catalog_started);
         let alerts = Alerts::start(c.alert_webhook_file.as_deref(), true);
@@ -636,7 +638,9 @@ impl<'a> Controller<'a> {
                     .extend(self.option_instruments.iter().cloned());
             }
             if let Ok(mut catalog) = self.instrument_catalog.lock() {
-                *catalog = self.universe.as_deref().map(Universe::dashboard_projection);
+                *catalog = self.universe.as_deref().map(|u| {
+                    super::super::instrument_display::Catalog::new(u.dashboard_projection())
+                });
             }
             super::super::instrument_display::start(
                 c,
