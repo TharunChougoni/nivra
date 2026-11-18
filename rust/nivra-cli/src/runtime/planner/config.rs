@@ -66,10 +66,6 @@ impl FallbackProfile {
                 .as_deref()
                 .is_some_and(|effort| !["low", "medium", "high", "max"].contains(&effort))
     }
-    #[cfg(test)]
-    pub(crate) fn max_tokens(&self, role: &ModelRole) -> u32 {
-        self.output_cap.unwrap_or(role.output_cap)
-    }
 }
 impl Default for ModelRole {
     fn default() -> Self {
@@ -91,30 +87,9 @@ impl Default for ModelRole {
         }
     }
 }
-/// Serialized provider envelope bound as `output_cap` tokens times this many
-/// bytes. 2026-10-29 paper grok-4.7 turns with web_search serialized to
-/// ~128–139 KiB, clipping the previous ×16 (128 KiB) check after HTTP 200.
-pub(crate) const OUTPUT_BYTE_CAP_MULTIPLIER: usize = 64;
 impl ModelRole {
     fn default_max_analysis_tools(v: &usize) -> bool {
         *v == 4
-    }
-    pub(crate) fn run_budget_ms(&self) -> u64 {
-        self.run_timeout_ms.unwrap_or(self.timeout_ms)
-    }
-    pub(crate) fn output_byte_limit(&self) -> usize {
-        (self.output_cap as usize).saturating_mul(OUTPUT_BYTE_CAP_MULTIPLIER)
-    }
-    /// Live provider path (`planner_output_cap`) and `call_guarded` share this
-    /// bound. Empty output and a body past `output_cap × 64` are refused.
-    /// A body longer than the old `output_cap × 16` cap and within this limit
-    /// is accepted.
-    pub(crate) fn provider_envelope_code(&self, text: &str) -> Option<&'static str> {
-        if text.is_empty() || text.len() > self.output_byte_limit() {
-            Some("planner_output_cap")
-        } else {
-            None
-        }
     }
 }
 pub(super) fn role_invalid(role: &ModelRole, max_run: u64) -> bool {

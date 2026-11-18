@@ -316,18 +316,6 @@ fn halted_carry_reaches_protection_only_successor_and_clears_only_after_review()
         crate::runtime::phases::IdleStatus::RolloverBlockedInspectReviewHumanRequired.as_str(),
         "rollover_blocked_inspect_review_human_required"
     );
-    assert_eq!(
-        crate::runtime::phases::PlannerLogPhase::parse("pending")
-            .unwrap()
-            .as_str(),
-        "pending"
-    );
-    assert_eq!(
-        crate::runtime::phases::PlannerLogPhase::parse("reserved")
-            .unwrap()
-            .as_str(),
-        "reserved"
-    );
     assert!(nivra_core::book_phase::BookPhase::from_flags(true, true, false).carry_blocked());
     assert!(!nivra_core::book_phase::BookPhase::from_flags(false, true, true).carry_blocked());
     assert_eq!(
@@ -412,11 +400,6 @@ fn halted_carry_reaches_protection_only_successor_and_clears_only_after_review()
     let marker: serde_json::Value = serde_json::from_str(&marker).unwrap();
     assert_eq!(marker["owner"], "orchestrator");
     assert_eq!(marker["binding"], book_binding(&next).unwrap());
-    assert!(
-        redecision::reserve(&mut db, &next, &cfg, &carried, monday, true)
-            .unwrap()
-            .is_none()
-    );
     assert_eq!(
         failure_code(wide::config_apply(&next, true).unwrap_err().as_ref()),
         "config_apply_halted_requires_planner_recover"

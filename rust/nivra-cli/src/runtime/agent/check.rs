@@ -6,7 +6,7 @@ use super::lanes::{LaneRunner, TurnContext};
 use super::protocol::TurnStatus;
 use super::triggers::{Phase, Trigger, TriggerKind};
 use super::{Agent, AgentClient, AgentSettings, Lane, ModelSpec};
-use crate::runtime::planner::{Backend, ModelRole, PlannerConfig};
+use crate::runtime::planner::{Backend, PlannerConfig};
 use crate::runtime::web_tools::{HttpResponse, Transport};
 use crate::runtime::{Config, Result, millis};
 use nivra_core::execution::{Instrument, Portfolio};
@@ -52,9 +52,6 @@ pub(crate) struct FixtureBackend {
 }
 
 impl Backend for FixtureBackend {
-    fn call(&mut self, _role: &ModelRole, _prompt: &str) -> Result<String> {
-        Err("agent_check_backend_has_no_model".into())
-    }
     fn snapshot(&mut self, _bundle: &Value, keys: &[String], _at: i64) -> Option<Result<Value>> {
         self.snapshot.clone().map(|mut snapshot| {
             snapshot["requested_keys"] = json!(keys);

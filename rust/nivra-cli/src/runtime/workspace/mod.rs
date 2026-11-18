@@ -76,55 +76,6 @@ pub(crate) struct InstallAllow {
     pub sha256: String,
 }
 
-/// Stable reference to one original workspace file. The text is never copied:
-/// a pinned read re-opens the original path, verifies size and hash, and returns
-/// it as untrusted advisory evidence.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct WorkspaceRefV1 {
-    pub version: u32,
-    pub source_session: String,
-    pub path: String,
-    pub sha256: String,
-    pub captured_at_ms: i64,
-    pub kind: WorkspaceRefKind,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum WorkspaceRefKind {
-    Notes,
-    Skills,
-}
-impl WorkspaceRefKind {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Notes => "notes",
-            Self::Skills => "skills",
-        }
-    }
-}
-impl WorkspaceRefV1 {
-    pub(crate) fn validate(&self) -> Result<()> {
-        let rel = normalize_rel(&self.path)?;
-        let first = rel
-            .components()
-            .next()
-            .and_then(|component| match component {
-                Component::Normal(name) => name.to_str(),
-                _ => None,
-            })
-            .ok_or("workspace_ref_invalid")?;
-        if self.version != 1
-            || self.captured_at_ms <= 0
-            || chrono::NaiveDate::parse_from_str(&self.source_session, "%Y-%m-%d").is_err()
-            || first != self.kind.as_str()
-            || !hash_ok(&self.sha256)
-        {
-            return Err("workspace_ref_invalid".into());
-        }
-        Ok(())
-    }
-}
 /// Research turns may only write notes/skills. Decision turns keep the existing
 /// notes/skills/reports/data/journal scope. The pi research lane writes like a
 /// research turn, can write Python rankers, may run rankers and allowlisted
@@ -214,20 +165,7 @@ pub(crate) enum WorkspaceOp {
     },
 }
 
-impl WorkspaceOp {
-    pub(crate) fn is_analysis(&self) -> bool {
-        matches!(self, Self::Run { .. } | Self::Install { .. })
-    }
-    pub(crate) fn name(&self) -> &'static str {
-        match self {
-            Self::List(_) => "workspace_list",
-            Self::Read(_) => "workspace_read",
-            Self::Write { .. } => "workspace_write",
-            Self::Run { .. } => "workspace_run",
-            Self::Install { .. } => "workspace_install",
-        }
-    }
-}
+impl WorkspaceOp {}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -142,9 +142,6 @@ impl PromptSet {
             _ => None,
         }
     }
-    pub(crate) fn custom(&self) -> bool {
-        self.custom
-    }
     pub(crate) fn hashes(&self) -> Value {
         let mut hashes = BTreeMap::new();
         hashes.insert("digest", &self.digest.sha256);
@@ -169,7 +166,6 @@ pub(crate) struct AppliedProfile {
     pub(crate) sha256: String,
     pub(crate) prompts: PromptSet,
     pub(crate) changed_keys: Vec<String>,
-    raw: Profile,
     tools: Option<ToolsSettings>,
     idle: Option<i64>,
     digest_caps: Option<RoleCaps>,
@@ -215,14 +211,6 @@ impl PlannerConfig {
     }
     pub(crate) fn profile_changed_keys(&self) -> Option<&[String]> {
         self.profile.as_ref().map(|p| p.changed_keys.as_slice())
-    }
-    pub(crate) fn profile_value(&self, key: &str) -> Option<&Value> {
-        let raw = &self.profile.as_ref()?.raw;
-        match key {
-            "supervisor" => raw.supervisor.as_ref(),
-            "directives" => raw.directives.as_ref(),
-            _ => None,
-        }
     }
     /// Policy representation: profile paths, prompt text and applied tuning removed.
     pub(crate) fn without_experiment_profile(&self) -> Self {
@@ -366,7 +354,6 @@ fn apply(
         sha256,
         prompts,
         changed_keys,
-        raw: profile.clone(),
         tools: profile.tools.clone(),
         idle: profile.cadence.idle_digest_interval_ms,
         digest_caps: profile.roles.get("digest").cloned(),

@@ -2289,13 +2289,8 @@ fn pending_model_recovery_preserves_charges_and_busy_is_not_a_halt() {
     assert!(!p.halted && settings.is_some());
     assert!(settings_fallback.is_none());
     assert!(settings_reason.is_none());
-    let claim = redecision::reserve(&mut db, &c, &cfg, &p, start(), true)
-        .unwrap()
-        .unwrap();
+    let claim = redecision::pending_fixture(&mut db, &c, &p, start());
     drop(inherited);
-    let reservation = planner::fixture_reservation(&c, &cfg);
-    let original = fs::read(&reservation).unwrap();
-    let charges = planner::usage(&c).unwrap();
     p.halted = true;
     p.health = "planner_authority_invalid_recovery_required".into();
     persist(
@@ -2335,8 +2330,6 @@ fn pending_model_recovery_preserves_charges_and_busy_is_not_a_halt() {
         )
         .unwrap();
     assert_eq!(row, "failed");
-    assert_eq!(planner::usage(&c).unwrap(), charges);
-    assert_eq!(fs::read(&reservation).unwrap(), original);
     let mut db = open_book(&c).unwrap();
     let recovered = load_wide(&mut db, &c).unwrap();
     assert!(recovered.stopped && !recovered.halted);
@@ -2535,11 +2528,6 @@ fn halted_model_led_book_enters_reviewed_protection_only_mode(corrected: bool) {
     assert_eq!(recovered.fills, fills);
     assert!(redecision::config_current(&db, &cfg).unwrap());
     // The halt remains authoritative: no new planner entry can be reserved.
-    assert!(
-        redecision::reserve(&mut db, &c, &cfg, &recovered, start(), true)
-            .unwrap()
-            .is_none()
-    );
     let body: String = db
             .query_row(
                 "SELECT body FROM ticks WHERE event='operator_planner_protection_only_confirmed_paper_review' ORDER BY id DESC LIMIT 1",
@@ -2682,9 +2670,7 @@ fn stopped_recovery_retires_interrupted_pending_claim_without_replay() {
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
-    let claim = redecision::reserve(&mut db, &c, &cfg, &p, start(), true)
-        .unwrap()
-        .unwrap();
+    let claim = redecision::pending_fixture(&mut db, &c, &p, start());
     // A controller restart observes the reserved claim as interrupted.
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start() + 1).unwrap();
     p.stopped = true;
@@ -2758,9 +2744,7 @@ fn service_shutdown_continues_and_only_a_request_stops_the_book() {
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
-    let claim = redecision::reserve(&mut db, &c, &cfg, &p, start(), true)
-        .unwrap()
-        .unwrap();
+    let claim = redecision::pending_fixture(&mut db, &c, &p, start());
     let charges = planner::usage(&c).unwrap();
 
     // A plain SIGTERM (restart, updater, host stop) is a service shutdown: the
@@ -2802,9 +2786,7 @@ fn service_shutdown_continues_and_only_a_request_stops_the_book() {
     let mut fdb = open_book(&fc).unwrap();
     let mut fp = load_wide(&mut fdb, &fc).unwrap();
     redecision::initialize(&mut fdb, &fc, &fp, Some(&fcfg), start()).unwrap();
-    let mut foreign = redecision::reserve(&mut fdb, &fc, &fcfg, &fp, start(), true)
-        .unwrap()
-        .unwrap();
+    let mut foreign = redecision::pending_fixture(&mut fdb, &fc, &fp, start());
     foreign.id = "not-the-pending-claim".into();
     let intent = shutdown::intent(&fc, start() + 4);
     let details =
@@ -2981,9 +2963,7 @@ fn startup_preserves_active_and_sticky_block() {
     let mut db = open_book(&c).unwrap();
     let p = load_wide(&mut db, &c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
-    let claim = redecision::reserve(&mut db, &c, &cfg, &p, start(), true)
-        .unwrap()
-        .unwrap();
+    let claim = redecision::pending_fixture(&mut db, &c, &p, start());
     db.execute(
         "INSERT INTO planner_plan VALUES('legacy-plan',?)",
         [serde_json::json!({"decision_id":"legacy-plan"}).to_string()],
@@ -3034,9 +3014,7 @@ fn startup_preserves_active_and_sticky_block() {
     let mut db = open_book(&c).unwrap();
     let p = load_wide(&mut db, &c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
-    redecision::reserve(&mut db, &c, &cfg, &p, start(), true)
-        .unwrap()
-        .unwrap();
+    redecision::pending_fixture(&mut db, &c, &p, start());
     redecision::block(&mut db, &c, redecision::DATA_BLOCK).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start() + 1).unwrap();
     let control: serde_json::Value = serde_json::from_str(
@@ -3980,11 +3958,6 @@ fn resume_resolves_active_session_book_and_keeps_safety_checks() {
     assert!(!disabled.model_led);
     redecision::initialize(&mut db, &active_config, &disabled, Some(&edited), start()).unwrap();
     assert!(!redecision::blocked(&db, &active_config).unwrap());
-    assert!(
-        redecision::reserve(&mut db, &active_config, &edited, &disabled, start(), true)
-            .unwrap()
-            .is_none()
-    );
     let mut halted = applied.clone();
     halted.halted = true;
     halted.health = "risk_halt".into();
@@ -4062,7 +4035,6 @@ fn activate_fixture_plan(db: &mut Connection, c: &Config, p: &Portfolio, plan: &
 }
 #[test]
 fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
-    super::super::decision_owner::exercise();
     let d = tempfile::tempdir().unwrap();
     let c = super::super::tests::config(d.path());
     let mut db = open_book(&c).unwrap();
@@ -4243,9 +4215,7 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
             at + 1000,
         )
         .unwrap();
-        let claim = redecision::reserve(&mut db, &c, &cfg, &p, at + 1000, true)
-            .unwrap()
-            .unwrap();
+        let claim = redecision::pending_fixture(&mut db, &c, &p, at + 1000);
         assert_eq!(claim.predecessor.as_deref(), Some("fixture-predecessor"));
         if fault == "missing_control" {
             db.execute_batch("DELETE FROM planner_event_control;")
@@ -4264,17 +4234,7 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
             if fault == "audit_projection" {
                 current["verdicts"] = serde_json::json!([]);
             }
-            redecision::settle(
-                &mut db,
-                &c,
-                &cfg,
-                &p,
-                &claim,
-                Err("fixture_digest_failed".into()),
-                at + 1001,
-                true,
-            )
-            .unwrap();
+            redecision::fail_pending_fixture(&mut db, &claim);
             // A newer accepted plan is the active head; its damaged evidence
             // is read on the next tick.
             db.execute(

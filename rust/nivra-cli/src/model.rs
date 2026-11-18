@@ -1,13 +1,4 @@
 //! Configuration compatibility for archived planner policies and host migration.
-#[cfg(test)]
-fn now() -> chrono::DateTime<chrono::FixedOffset> {
-    let duration = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    chrono::DateTime::from_timestamp(duration.as_secs() as i64, duration.subsec_nanos())
-        .expect("clock range")
-        .fixed_offset()
-}
 
 use nivra_cli::native_transport::Transport;
 #[cfg(test)]
@@ -19,19 +10,10 @@ use nivra_core::{
 };
 use serde::Deserialize;
 #[cfg(test)]
-pub(crate) const LUNA: &str = "gpt-6-luna";
-#[cfg(test)]
-pub(crate) const FAST_VARIANT: &str = "grok-4.7-build-fast";
-#[cfg(test)]
 use serde_json::{Value, json};
 #[cfg(test)]
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
-#[cfg(test)]
-use std::{
-    path::Path,
-    time::{Duration, Instant},
-};
 type Result<T> = std::result::Result<T, String>;
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -59,11 +41,6 @@ fn default_timeout() -> u64 {
 fn default_grant() -> PathBuf {
     PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config/nivra/xai-grant")
 }
-#[cfg(test)]
-fn config(path: &Path) -> Result<Config> {
-    let bytes = crate::read_bounded(path, 16384).map_err(|_| "model_config_unreadable")?;
-    parse_config(&bytes)
-}
 /// Validate model credential config bytes without reading the grant itself.
 pub(crate) fn parse_config(bytes: &[u8]) -> Result<Config> {
     let c: Config = serde_json::from_slice(bytes).map_err(|_| "model_config_invalid")?;
@@ -90,12 +67,8 @@ mod fallback;
 mod grant;
 #[cfg(test)]
 mod probe;
-#[cfg(test)]
-pub(crate) use catalog::*;
 pub(crate) use fallback::*;
 pub(crate) use grant::*;
-#[cfg(test)]
-pub(crate) use probe::*;
 
 // Redact before truncating: neither a clipped credential nor terminal escapes may leak.
 #[cfg(test)]
@@ -143,10 +116,6 @@ fn safe_text(raw: &str, token: &str, limit: usize) -> String {
     words.join(" ").chars().take(limit).collect()
 }
 #[cfg(test)]
-fn check_http(status: u16, bytes: &[u8], token: &str) -> Result<()> {
-    check_http_secrets(status, bytes, &[token])
-}
-#[cfg(test)]
 fn check_http_secrets(status: u16, bytes: &[u8], secrets: &[&str]) -> Result<()> {
     if (200..300).contains(&status) {
         return Ok(());
@@ -187,8 +156,6 @@ fn http_error(status: u16, bytes: &[u8], secrets: &[&str]) -> String {
 
 #[cfg(test)]
 mod fallback_tests;
-#[cfg(test)]
-mod verification_tests;
 
 #[cfg(test)]
 mod refresh_readiness_tests;

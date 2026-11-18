@@ -12,7 +12,7 @@ use super::triggers::{
     Observation, Phase, Ranked, Trigger, TriggerEngine, TriggerKind, ranker_registry,
 };
 use super::{AgentMode, AgentSettings, Lane};
-use crate::runtime::planner::{self, Backend, ModelRole, PlannerConfig};
+use crate::runtime::planner::{self, Backend, PlannerConfig};
 use crate::runtime::{Config, Connection, Result, decision_evidence, decision_owner, redecision};
 use nivra_core::execution::{Instrument, Portfolio, Scanner};
 use nivra_core::feature_store::FeatureStore;
@@ -32,9 +32,6 @@ const CONTEXT_RETRY_MS: i64 = 5_000;
 pub(crate) struct LaneBackend(pub Option<decision_evidence::Snapshot>);
 
 impl Backend for LaneBackend {
-    fn call(&mut self, _role: &ModelRole, _prompt: &str) -> Result<String> {
-        Err("agent_backend_has_no_model".into())
-    }
     fn intraday_context(&mut self, keys: &[String], at: i64) -> Option<Result<Value>> {
         self.0.as_ref().map(|snapshot| snapshot.read(keys, at))
     }

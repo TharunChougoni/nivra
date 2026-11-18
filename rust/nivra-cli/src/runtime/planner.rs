@@ -6,19 +6,11 @@ use nivra_core::finance::{Amount, Price};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 mod turn;
-#[cfg(test)]
-pub(crate) use turn::produce;
-pub(super) use turn::{call_time_input, produce_clocked};
-// Preserve the historical crate path for all internal consumers.
-#[cfg(test)]
-use turn::produce_with_backend;
+pub(super) use turn::call_time_input;
 
 mod config;
 use config::role_invalid;
 pub(crate) use config::{FallbackProfile, ModelRole};
-// Preserve the original crate path for the moved constant, including test consumers.
-#[allow(unused_imports)]
-pub(crate) use config::OUTPUT_BYTE_CAP_MULTIPLIER;
 
 mod plan;
 #[allow(unused_imports)] // re-exported for crate callers and tests
@@ -26,24 +18,11 @@ pub(crate) use plan::{
     Action, CandidateReason, PlanSide, TradePlan, Verdict, plan_document, validate,
 };
 mod failure;
-#[cfg(test)]
-pub(crate) use failure::failure_record;
-pub(crate) use failure::failure_record_with_provider;
 #[allow(unused_imports)] // re-exported for crate callers and tests
-pub(crate) use failure::{
-    ProviderFailure, failure_evidence, provider_error_code_ok, provider_failure,
-    provider_failure_evidence, reason,
-};
 mod usage;
-#[cfg(test)]
-pub(crate) use usage::call_guarded;
 pub(crate) use usage::{
-    CallGuard, attempt_failed, budget_status, call_guarded_as, checked_reservations,
-    prepare_review_usage, preview_guard, require_usage, usage_directory, usage_lock, usage_path,
-};
-#[cfg(test)]
-pub(crate) use usage::{
-    UsageManifest, call, fixture_reservation, reservation_stamp, usage_lock_with,
+    CallGuard, attempt_failed, budget_status, checked_reservations, prepare_review_usage,
+    preview_guard, require_usage, usage_directory, usage_lock, usage_path,
 };
 /// How much evidence the model sees in its user message. `ToolsOnly` is the
 /// default: the host keeps the full bundle for tools, validation and audits,
@@ -125,77 +104,6 @@ impl ToolsSettings {
             return Err("planner_tools_settings_invalid".into());
         }
         Ok(())
-    }
-}
-fn rounded(value: &Value, decimals: Option<u32>) -> Value {
-    match (value, decimals) {
-        (Value::Number(n), Some(d)) if n.is_f64() => {
-            let scale = 10f64.powi(d as i32);
-            n.as_f64()
-                .map(|f| json!((f * scale).round() / scale))
-                .unwrap_or(Value::Null)
-        }
-        (Value::Array(items), Some(_)) => {
-            Value::Array(items.iter().map(|v| rounded(v, decimals)).collect())
-        }
-        (Value::Object(map), Some(_)) => Value::Object(
-            map.iter()
-                .map(|(k, v)| (k.clone(), rounded(v, decimals)))
-                .collect(),
-        ),
-        _ => value.clone(),
-    }
-}
-/// Compact the per-turn model projection. Rows are `[key, symbol, ...]` arrays.
-pub(super) fn compact_projection(projection: &mut Value, settings: &ContextSettings) {
-    let mut priority: std::collections::BTreeSet<String> = projection["positions"]
-        .as_object()
-        .map(|o| o.keys().cloned().collect())
-        .unwrap_or_default();
-    for row in projection["discovery"]["prospects"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
-        if let Some(key) = row["instrument_key"].as_str() {
-            priority.insert(key.to_owned());
-        }
-    }
-    if let Some(rows) = projection["universe_features"].as_array() {
-        let total = rows.len();
-        let (mut first, mut rest): (Vec<&Value>, Vec<&Value>) = rows
-            .iter()
-            .partition(|r| r[0].as_str().is_some_and(|k| priority.contains(k)));
-        // Column 11 is traded-value liquidity; unknown sorts last.
-        let liquidity = |r: &Value| {
-            r[11]
-                .as_f64()
-                .or_else(|| r[11].as_str().and_then(|t| t.parse().ok()))
-                .unwrap_or(f64::MIN)
-        };
-        rest.sort_by(|a, b| {
-            liquidity(b)
-                .total_cmp(&liquidity(a))
-                .then_with(|| a[0].as_str().cmp(&b[0].as_str()))
-        });
-        first.extend(rest);
-        first.truncate(settings.universe_rows.max(priority.len().min(total)));
-        let kept: Vec<Value> = first
-            .iter()
-            .map(|r| rounded(r, settings.decimals))
-            .collect();
-        projection["universe_features_presented"] = json!({"rows":kept.len(),"of":total,"selection":"held and scanned names first, then descending traded value; get_instrument_features answers any allowlisted key"});
-        projection["universe_features"] = Value::Array(kept);
-    }
-    if let Some(rows) = projection["discovery"]["prospects"].as_array() {
-        let kept: Vec<Value> = rows.iter().map(|r| rounded(r, settings.decimals)).collect();
-        projection["discovery"]["prospects"] = Value::Array(kept);
-    }
-    if !settings.include_allowlist
-        && let Some(object) = projection.as_object_mut()
-        && let Some(list) = object.remove("allowlist")
-    {
-        object.insert("allowlist_reference".into(), json!({"count":list.as_array().map(|a|a.len()),"omitted_from_prompt":true,"note":"The host enforces the full validated allowlist; any key shown in universe_features, discovery or positions is allowlisted, and tools answer for any allowlisted key."}));
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -652,18 +560,6 @@ impl PlannerConfig {
     }
 }
 pub(crate) trait Backend {
-    /// Real transports validate the configured profile before any reservation.
-    /// Offline/fixture adapters have no provider credentials to admit.
-    fn validate_role(
-        &mut self,
-        _c: &Config,
-        _cfg: &PlannerConfig,
-        _name: &str,
-        _role: &ModelRole,
-    ) -> Result<()> {
-        Ok(())
-    }
-    fn call(&mut self, role: &ModelRole, prompt: &str) -> Result<String>;
     /// Optional immutable controller context; absence is an explicit unavailable tool result.
     fn intraday_context(&mut self, _keys: &[String], _at: i64) -> Option<Result<Value>> {
         None
@@ -672,91 +568,11 @@ pub(crate) trait Backend {
     fn snapshot(&mut self, _bundle: &Value, _keys: &[String], _at: i64) -> Option<Result<Value>> {
         None
     }
-    fn provenance(&self) -> Value {
-        Value::Null
-    }
-}
-#[cfg(test)]
-pub(super) struct Subscription<'a>(&'a Path, Value, Option<&'a Path>);
-#[cfg(test)]
-impl<'a> Subscription<'a> {
-    pub(super) fn new(path: &'a Path) -> Self {
-        Self(path, Value::Null, None)
-    }
-}
-#[cfg(test)]
-impl Backend for Subscription<'_> {
-    fn validate_role(
-        &mut self,
-        c: &Config,
-        cfg: &PlannerConfig,
-        name: &str,
-        role: &ModelRole,
-    ) -> Result<()> {
-        super::model_admission::validate(
-            c,
-            cfg,
-            name,
-            role,
-            role.model_config.as_deref().unwrap_or(self.0),
-        )?;
-        Ok(())
-    }
-    fn call(&mut self, role: &ModelRole, prompt: &str) -> Result<String> {
-        let result = crate::model::planner_response_with_alerts(
-            role.model_config.as_deref().unwrap_or(self.0),
-            role,
-            prompt,
-            &mut self.1,
-            self.2,
-        );
-        if let Err(error) = &result
-            && let Some(cause) = error.split_whitespace().next()
-            && failure::LOCAL_FAILURE_CAUSES.contains(&cause)
-        {
-            self.1["local_cause"] = json!(cause);
-        }
-        let result = result.map_err(|e| {
-            provider_failure(&e)
-                .map(|detail| detail.reason)
-                .unwrap_or_else(|| "planner_provider_failed".to_owned())
-                .into()
-        });
-        if result.is_err() {
-            let frame: Option<super::harness::Frame> = serde_json::from_str(prompt).ok();
-            if let Some(frame) = frame {
-                nivra_cli::model_stream::publish(
-                    &frame.role,
-                    &role.model_id,
-                    &digest(prompt.as_bytes()),
-                    "request_failed",
-                    self.1["stage"].as_str().unwrap_or("provider"),
-                );
-            }
-        }
-        result
-    }
-    fn provenance(&self) -> Value {
-        self.1.clone()
-    }
 }
 
-pub(crate) const PROMPT_VERSION: &str = "planner-harness-v3";
 /// No prospect and no managed position: the planner has nothing to decide. This
 /// is a normal no-op, not a failed attempt, a block or an alert (#221).
 pub(crate) const NO_DECISION_WORK: &str = "model_plan_no_prospects_no_positions";
-/// Original durable plans include full-universe evidence, unlike provider replies.
-#[cfg(test)]
-pub(crate) const SAVED_PLAN_MAX_BYTES: usize = 8_000_000;
-#[cfg(test)]
-pub(crate) fn bundle(
-    c: &Config,
-    p: &Portfolio,
-    instruments: &[Instrument],
-    n: usize,
-) -> Result<Value> {
-    Ok(bundle_with_references(c, p, instruments, n)?.0)
-}
 fn load_daily(c: &Config) -> Result<BTreeMap<String, BTreeMap<NaiveDate, Value>>> {
     let mut daily = BTreeMap::<String, BTreeMap<NaiveDate, Value>>::new();
     let Some(dir) = &c.history_directory else {

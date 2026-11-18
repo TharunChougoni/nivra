@@ -1,26 +1,5 @@
 use super::*;
 
-// Refresh is fenced durably before sending a rotating credential. An ambiguous
-// failure leaves `refreshing`, requiring operator review rather than another attempt.
-#[cfg(test)]
-pub(crate) fn grant_with_observer<F>(
-    owner: &nivra_store::native_grant::FileOwner,
-    at: chrono::DateTime<chrono::FixedOffset>,
-    send: F,
-    failed: impl FnMut(Value),
-) -> Result<Value>
-where
-    F: FnMut(&str, Option<&[(&str, &str)]>, Option<&Value>, Option<&str>) -> Result<(u16, Vec<u8>)>,
-{
-    let bytes = owner.read().map_err(|_| "grant_unavailable")?;
-    refresh_with(
-        bytes,
-        at,
-        send,
-        |old, new| owner.replace(old, new).map_err(|_| ()),
-        failed,
-    )
-}
 #[cfg(test)]
 pub(crate) fn refresh_with<F>(
     bytes: Vec<u8>,
@@ -182,104 +161,6 @@ pub(crate) fn refresh_rotation(
         .map_err(|_| "token_response_invalid")?;
     Ok(pending)
 }
-#[cfg(test)]
-pub(crate) const MODEL_429_MAX_RETRIES: u32 = 3;
-/// One bounded retry for a malformed or incomplete response body. Schema,
-/// authority, credential and deadline failures are never retried.
-#[cfg(test)]
-pub(crate) const MODEL_BODY_MAX_RETRIES: u32 = 1;
-
-#[cfg(test)]
-pub(crate) fn transient_model_body_error(error: &str) -> bool {
-    matches!(
-        error,
-        "model_body_invalid" | "model_response_invalid" | "model_response_incomplete"
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn parse_retry_after(
-    value: &str,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Option<Duration> {
-    let value = value.trim();
-    if let Ok(seconds) = value.parse::<u64>() {
-        return Some(Duration::from_secs(seconds));
-    }
-    let retry_at = chrono::DateTime::parse_from_rfc2822(value).ok()?;
-    let wait = retry_at
-        .with_timezone(&chrono::Utc)
-        .signed_duration_since(now);
-    if wait <= chrono::Duration::zero() {
-        Some(Duration::ZERO)
-    } else {
-        wait.to_std().ok()
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn model_429_backoff(
-    retry_after: Option<&str>,
-    retry_index: u32,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Duration {
-    retry_after
-        .and_then(|value| parse_retry_after(value, now))
-        .unwrap_or_else(|| Duration::from_millis(250_u64 << retry_index.min(3)))
-}
-
-#[cfg(test)]
-pub(crate) fn retry_model_429<F, W>(
-    deadline: Instant,
-    mut send: F,
-    mut wait: W,
-) -> Result<nivra_cli::native_transport::HttpResponse>
-where
-    F: FnMut() -> Result<nivra_cli::native_transport::HttpResponse>,
-    W: FnMut(Duration),
-{
-    let mut retries_429 = 0u32;
-    let mut retries_body = 0u32;
-    loop {
-        let response = match send() {
-            Ok(response) => response,
-            Err(error)
-                if retries_body < MODEL_BODY_MAX_RETRIES && transient_model_body_error(&error) =>
-            {
-                retries_body += 1;
-                let delay = Duration::from_millis(250 * u64::from(retries_body));
-                let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-                    return Err(error);
-                };
-                if delay >= remaining {
-                    return Err(error);
-                }
-                wait(delay);
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
-        if response.status != 429 || retries_429 == MODEL_429_MAX_RETRIES {
-            return Ok(response);
-        }
-        let delay = model_429_backoff(
-            response.retry_after.as_deref(),
-            retries_429,
-            now().with_timezone(&chrono::Utc),
-        );
-        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-            return Ok(response);
-        };
-        if delay >= remaining {
-            return Ok(response);
-        }
-        wait(delay);
-        retries_429 += 1;
-        if Instant::now() >= deadline {
-            return Ok(response);
-        }
-    }
-}
 
 /// Read-only preflight for a configured model role. It validates the application's
 /// own grant through the supplied work deadline; it never refreshes credentials or
@@ -304,18 +185,6 @@ pub(crate) fn verified_refresh_covers(
                 && verified <= at
                 && at - verified <= REFRESH_EVIDENCE_MAX_AGE
         })
-}
-
-#[cfg(test)]
-pub(crate) fn grant_with<F>(
-    owner: &nivra_store::native_grant::FileOwner,
-    at: chrono::DateTime<chrono::FixedOffset>,
-    send: F,
-) -> Result<Value>
-where
-    F: FnMut(&str, Option<&[(&str, &str)]>, Option<&Value>, Option<&str>) -> Result<(u16, Vec<u8>)>,
-{
-    grant_with_observer(owner, at, send, |_| {})
 }
 
 /// Opt-in policy. Dates are IST calendar dates; no trading calendar is consulted.

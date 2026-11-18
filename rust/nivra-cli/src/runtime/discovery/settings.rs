@@ -236,11 +236,7 @@ impl Settings {
         Ok(())
     }
 }
-pub(crate) const DEFAULT_TRIGGER_MOVE_BPS: f64 = 200.0;
-pub(crate) const DEFAULT_DIGEST_CADENCE_MS: i64 = 60_000;
 pub(crate) const DEFAULT_SCAN_BATCH_SIZE: usize = 200;
 pub(crate) const DEFAULT_RANKING_WINDOW_MS: i64 = 60_000;
 /// AGENTS.md: the two-second financial freshness gate is a hard upper bound.
 pub(crate) const MAX_QUOTE_FRESHNESS_MS: i64 = nivra_core::market::MAX_FINANCIAL_AGE_MS;
-pub(crate) const DEFAULT_TRIGGER_COOLDOWN_MS: i64 = 900_000;
-pub(crate) const DEFAULT_MIN_TRIGGER_GAP_MS: i64 = 300_000;

@@ -10,8 +10,6 @@
 //! its action commit is refused when the set changed (#143).
 // The pi cutover left these modules read-only in production builds: every
 // writer below is compiled for tests only, together with what it needs.
-#[cfg(test)]
-use super::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -22,8 +20,6 @@ use std::{
     path::{Path, PathBuf},
     sync::Mutex,
 };
-#[cfg(test)]
-mod tests;
 
 const ROOT: &str = "model/session";
 pub(crate) const ROOT_PREFIX: &str = ROOT;
@@ -483,67 +479,9 @@ impl Notes {
             .unwrap_or_default()
     }
 
-    #[cfg(test)]
-    fn write(&self, notes: &NoteSet) -> Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        super::rollover::atomic(&self.path, &serde_json::to_value(notes)?)?;
-        Ok(())
-    }
-
     pub(crate) fn snapshot(&self) -> NoteSet {
         let _guard = io_lock();
         self.read()
-    }
-
-    #[cfg(test)]
-    fn update(
-        &self,
-        now: i64,
-        change: impl FnOnce(&mut NoteSet) -> Result<bool>,
-    ) -> Result<NoteSet> {
-        let _guard = io_lock();
-        let mut notes = self.read();
-        if change(&mut notes)? {
-            notes.version = notes.version.saturating_add(1);
-            for note in &mut notes.notes {
-                note.updated_at_ms = now;
-            }
-            self.write(&notes)?;
-        }
-        Ok(notes)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn add(&self, text: &str, keep: bool, now: i64) -> Result<Note> {
-        let text = text.trim();
-        if text.is_empty() || text.chars().count() > 2000 {
-            return Err("session_note_invalid".into());
-        }
-        let id = format!(
-            "note-{}",
-            &super::digest(format!("{text}|{now}").as_bytes())[..16]
-        );
-        let note = Note {
-            id: id.clone(),
-            text: text.to_owned(),
-            state: NoteState::Waiting,
-            keep,
-            revision: 1,
-            created_at_ms: now,
-            updated_at_ms: now,
-            pinned_in: None,
-            updated_by: "operator".into(),
-        };
-        self.update(now, |notes| {
-            if notes.notes.iter().any(|n| n.id == id) {
-                return Ok(false);
-            }
-            notes.notes.push(note.clone());
-            Ok(true)
-        })?;
-        Ok(note)
     }
 }
 

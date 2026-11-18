@@ -168,7 +168,4 @@ fn page_offset(query: &router::Query, key: &str) -> std::result::Result<usize, &
 mod tests;
 
 #[cfg(test)]
-mod transcript_api_tests;
-
-#[cfg(test)]
 mod event_tests;

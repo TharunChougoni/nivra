@@ -97,37 +97,6 @@ enum Command {
         #[arg(long)]
         events: PathBuf,
     },
-    /// Offline recorded-reply paper replay through the retained planner backend; never starts pi.
-    PaperReplay {
-        #[arg(long)]
-        manifest: PathBuf,
-        #[arg(long)]
-        events: PathBuf,
-        #[arg(long)]
-        planner: PathBuf,
-        #[arg(long)]
-        responses: PathBuf,
-        #[arg(long)]
-        output: PathBuf,
-    },
-    /// Export only original market quote receipts; source session remains read-only.
-    PaperReplayExport {
-        #[arg(long)]
-        source_session: PathBuf,
-        #[arg(long)]
-        output: PathBuf,
-        #[arg(long)]
-        capital: String,
-        #[arg(long)]
-        history: Option<PathBuf>,
-        #[arg(long)]
-        max_gap_ms: i64,
-    },
-    /// Generate a labelled synthetic 09:15–15:30 session and scripted model replies.
-    PaperReplayDemo {
-        #[arg(long)]
-        output: PathBuf,
-    },
     /// Exploratory offline daily-OHLC exit sensitivity; never starts trading.
     ExitBacktest {
         #[arg(long)]
@@ -564,27 +533,6 @@ fn main() -> ExitCode {
         } => alert::entry(config.as_deref(), test, event),
         Command::Preflight { config, unit_file } => preflight::entry(&config, unit_file.as_deref()),
         Command::Backtest { manifest, events } => backtest::entry(&manifest, &events),
-        Command::PaperReplay {
-            manifest,
-            events,
-            planner,
-            responses,
-            output,
-        } => runtime::paper_replay::entry(&manifest, &events, &planner, &responses, &output),
-        Command::PaperReplayExport {
-            source_session,
-            output,
-            capital,
-            history,
-            max_gap_ms,
-        } => runtime::paper_replay::export_entry(
-            &source_session,
-            &output,
-            &capital,
-            history.as_deref(),
-            max_gap_ms,
-        ),
-        Command::PaperReplayDemo { output } => runtime::paper_replay::demo_entry(&output),
         Command::HistoryBackfill { config } => runtime::history_download::backfill_entry(&config),
         Command::HistoryDownload {
             config,

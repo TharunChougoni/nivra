@@ -154,17 +154,15 @@ impl fmt::Display for IdleStatus {
 /// Shared vocabulary for `planner_event_log.state` and `planner_attempt_log.state`.
 ///
 /// Events start pending, then reserve, collapse, or expire. A reserved event
-/// settles to the same terminal as its attempt: planned, deferred, superseded,
-/// or failed. Attempts add `interrupted` on process restart.
+/// settles to the same terminal as its attempt: planned or failed. Attempts add
+/// `interrupted` on process restart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PlannerLogPhase {
     Pending,
     Reserved,
     Collapsed,
     Expired,
-    Deferred,
     Planned,
-    Superseded,
     Failed,
     Interrupted,
 }
@@ -176,37 +174,9 @@ impl PlannerLogPhase {
             Self::Reserved => "reserved",
             Self::Collapsed => "collapsed",
             Self::Expired => "expired",
-            Self::Deferred => "deferred",
             Self::Planned => "planned",
-            Self::Superseded => "superseded",
             Self::Failed => "failed",
             Self::Interrupted => "interrupted",
-        }
-    }
-
-    pub(crate) fn parse(raw: &str) -> Result<Self, &'static str> {
-        match raw {
-            "pending" => Ok(Self::Pending),
-            "reserved" => Ok(Self::Reserved),
-            "collapsed" => Ok(Self::Collapsed),
-            "expired" => Ok(Self::Expired),
-            "deferred" => Ok(Self::Deferred),
-            "planned" => Ok(Self::Planned),
-            "superseded" => Ok(Self::Superseded),
-            "failed" => Ok(Self::Failed),
-            "interrupted" => Ok(Self::Interrupted),
-            _ => Err("planner_log_phase_unknown"),
-        }
-    }
-
-    /// Attempt settlement written after a reserved claim finishes.
-    pub(crate) fn settle(deferred: bool, superseded: bool) -> Self {
-        if deferred {
-            Self::Deferred
-        } else if superseded {
-            Self::Superseded
-        } else {
-            Self::Failed
         }
     }
 }

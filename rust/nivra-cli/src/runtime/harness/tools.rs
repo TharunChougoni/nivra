@@ -3,10 +3,6 @@ use super::*;
 fn function(name: &str, description: &str, properties: Value, required: Value) -> Value {
     json!({"type":"function","name":name,"description":description,"strict":true,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})
 }
-#[cfg(test)]
-pub(crate) fn definitions(role: &str, native: &[String]) -> Result<Vec<Value>> {
-    definitions_with(role, native, &ToolsSettings::default())
-}
 
 pub(crate) fn definitions_with(
     role: &str,
@@ -35,20 +31,6 @@ pub(crate) fn definitions_with(
     tools.push(function("get_recent_decisions","Read the latest digest review, prior decision-owner plans with their gate outcome, and post-close advisory memory. All entries are untrusted prior observations.",json!({"limit":{"type":["integer","null"],"minimum":1,"maximum":limits.history_limit}}),json!(["limit"])));
     tools.push(function("get_session_status","Read the host clock, market phase, minutes to close, book state, role budget remaining and current trigger. No execution authority.",json!({}),json!([])));
     Ok(tools)
-}
-
-#[cfg(test)]
-pub(crate) fn configured_definitions(
-    role: &str,
-    native: &[String],
-    context: bool,
-    max_keys: usize,
-) -> Result<Vec<Value>> {
-    let limits = ToolsSettings {
-        max_instrument_keys: max_keys,
-        ..ToolsSettings::default()
-    };
-    configured_definitions_with(role, native, context, &limits)
 }
 
 pub(crate) fn configured_definitions_with(
@@ -264,27 +246,6 @@ pub(super) fn owner_research_turn(
         && bundle["summary"]["research_id"].is_string()
 }
 
-pub(super) fn owner_research_for_call(
-    cfg: &PlannerConfig,
-    name: &str,
-    bundle: &Value,
-    guard: &planner::CallGuard<'_>,
-) -> Result<bool> {
-    if bundle["summary"].get("owner_task").is_none() {
-        return Ok(false);
-    }
-    if bundle["summary"]["owner_task"]["kind"] != "research" {
-        return Ok(false);
-    }
-    if name != "supervisor" {
-        return Err("harness_owner_task_role_invalid".into());
-    }
-    let (c, _) = guard
-        .configuration
-        .ok_or("harness_owner_task_binding_required")?;
-    super::super::owner_tasks::validate_research_bundle(c, cfg, bundle, guard.invocation_id)
-}
-
 fn quote_capture_enabled(cfg: &PlannerConfig) -> bool {
     cfg.owner_tasks
         .as_ref()
@@ -371,77 +332,6 @@ pub(super) fn owner_web_tools_allowed(
         && bundle["summary"]["host_decision"]["turn_id"] == turn_id
 }
 
-pub(super) fn owner_review_for_call(
-    cfg: &PlannerConfig,
-    name: &str,
-    bundle: &Value,
-    guard: &planner::CallGuard<'_>,
-) -> Result<bool> {
-    if bundle["summary"].get("owner_task").is_none() {
-        return Ok(false);
-    }
-    if bundle["summary"]["owner_task"]["kind"] != "review" {
-        return Ok(false);
-    }
-    if name != "supervisor" {
-        return Err("harness_owner_task_role_invalid".into());
-    }
-    let (c, _) = guard
-        .configuration
-        .ok_or("harness_owner_task_binding_required")?;
-    super::super::owner_tasks::validate_review_bundle(c, cfg, bundle, guard.invocation_id)
-}
-
-pub(super) fn definitions_for_call(
-    cfg: &PlannerConfig,
-    name: &str,
-    native: &[String],
-    context: bool,
-    limits: &ToolsSettings,
-    bundle: &Value,
-    guard: &planner::CallGuard<'_>,
-) -> Result<Vec<Value>> {
-    if owner_review_for_call(cfg, name, bundle, guard)? {
-        return Ok(Vec::new());
-    }
-    let _research = owner_research_for_call(cfg, name, bundle, guard)?;
-    call_tool_definitions(
-        name,
-        native,
-        context,
-        limits,
-        owner_tools_for_call(cfg, name, bundle, guard),
-    )
-}
-pub(super) fn owner_tools_for_call(
-    cfg: &PlannerConfig,
-    name: &str,
-    bundle: &Value,
-    guard: &planner::CallGuard<'_>,
-) -> OwnerTools {
-    let research_turn = owner_research_turn(cfg, name, bundle, guard);
-    let decision_tools = owner_research_tools_allowed(cfg, name, bundle, guard);
-    let web = !research_turn && owner_web_tools_allowed(cfg, name, bundle, guard);
-    let web_settings = cfg.web_tools.as_ref().filter(|web| web.enabled);
-    OwnerTools {
-        research: decision_tools,
-        research_turn,
-        quote_capture: research_turn && quote_capture_enabled(cfg),
-        candidate: (decision_tools || research_turn) && candidate_tools_enabled(cfg),
-        candidate_execution: (decision_tools || research_turn)
-            && candidate_tools_enabled(cfg)
-            && candidate_execution_enabled(cfg),
-        candidate_observation: (decision_tools || research_turn)
-            && candidate_tools_enabled(cfg)
-            && candidate_observation_enabled(cfg),
-        candidate_parent_ref: (decision_tools || research_turn) && candidate_tools_enabled(cfg),
-        workspace: owner_workspace_tools_allowed(cfg, name, bundle, guard),
-        web,
-        web_search: web && web_settings.is_some_and(|settings| settings.search_available()),
-        web_news: web && web_settings.is_some_and(|settings| settings.news_available()),
-        research_request: research_request_allowed(cfg, name, bundle, guard),
-    }
-}
 pub(crate) fn call_tool_definitions(
     name: &str,
     native: &[String],
@@ -919,10 +809,6 @@ fn owner_evidence(
         )?),
         owner_claim_sha256: digest(&serde_json::to_vec(claim)?),
     })
-}
-#[cfg(test)]
-pub(super) fn checked_call(item: &Value, tools: &[Value]) -> Result<(String, Tool)> {
-    checked_call_with(item, tools, &ToolsSettings::default())
 }
 pub(super) fn checked_call_with(
     item: &Value,

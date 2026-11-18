@@ -1331,6 +1331,3 @@ pub(crate) fn entry(book: &Path, request: &Path, output: &Path) -> Result<Value>
     file.sync_all()?;
     Ok(result)
 }
-
-#[cfg(test)]
-mod tests;

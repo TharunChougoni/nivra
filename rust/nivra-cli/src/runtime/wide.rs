@@ -521,6 +521,7 @@ pub(super) fn commit_research_quotes(
     Ok(())
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)] // Explicit transaction inputs, including the injectable post-lock clock.
 pub(super) fn commit_quotes(
     db: &mut Connection,

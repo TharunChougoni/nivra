@@ -29,55 +29,6 @@ pub(crate) fn attempt_failed(journal: &Path, name: &str) -> Result<bool> {
     Ok(value["failed"].as_bool().unwrap_or(false))
 }
 
-/// Provider input+output tokens recorded on one bucket's call results. A call
-/// that is still in flight has no result yet and counts at admission next time.
-pub(crate) fn bucket_tokens(journal: &Path, role_name: &str) -> Result<u64> {
-    let prefix = format!("{role_name}-");
-    let entries = match fs::read_dir(journal) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(error) => return Err(error.into()),
-    };
-    let mut total = 0u64;
-    for entry in entries {
-        let name = entry?.file_name().to_string_lossy().into_owned();
-        if !name.starts_with(&prefix) || !name.ends_with(".result.json") {
-            continue;
-        }
-        let value: Value = serde_json::from_slice(
-            &crate::read_bounded(&journal.join(&name), 1_048_576)
-                .map_err(|_| "planner_usage_result_invalid")?,
-        )?;
-        total = total.saturating_add(result_tokens(&value));
-    }
-    Ok(total)
-}
-
-/// Tokens of one call result: the transport evidence when it carries counts,
-/// otherwise the `usage` of the completed provider envelope (#241). Results
-/// written before completed calls recorded their usage still count.
-fn result_tokens(value: &Value) -> u64 {
-    let evidence = &value["transport_evidence"];
-    let recorded = ["tokens_in", "tokens_out"]
-        .iter()
-        .filter_map(|key| evidence[*key].as_u64())
-        .fold(None, |sum: Option<u64>, n| {
-            Some(sum.unwrap_or(0).saturating_add(n))
-        });
-    if let Some(total) = recorded {
-        return total;
-    }
-    let usage = value["output"]
-        .as_str()
-        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-        .map(|envelope| envelope["usage"].clone())
-        .unwrap_or(Value::Null);
-    ["input_tokens", "output_tokens"]
-        .iter()
-        .filter_map(|key| usage[*key].as_u64())
-        .fold(0u64, u64::saturating_add)
-}
-
 /// Read-only budget view for the session-status tool. A missing journal means
 /// no calls have been reserved yet; any read failure is explicit unknown.
 pub(crate) fn budget_status(c: &Config, role_name: &str, role: &ModelRole) -> Value {
@@ -405,158 +356,13 @@ pub(crate) fn checked_reservations(
     }
     Ok(current)
 }
-#[allow(clippy::too_many_arguments)] // Reserve under one local lock, released before the injected/provider call.
-pub(crate) fn reserve_usage(
-    c: &Config,
-    cfg: &PlannerConfig,
-    role_name: &str,
-    role: &ModelRole,
-    prompt: &str,
-    guard: &CallGuard<'_>,
-) -> Result<(PathBuf, usize, usize)> {
-    if !["digest", "scorer", "supervisor", "research"].contains(&role_name) {
-        return Err("planner_usage_role_invalid".into());
-    }
-    let journal = usage_directory(c, guard.journal_required.get())?;
-    guard.journal_required.set(true);
-    let _lock = usage_lock(c, true)?;
-    usage_directory(c, true)?;
-    let mut records = checked_reservations(c, &journal)?;
-    // The research lane has its own bucket and token cap. It never reads or
-    // charges the trading `supervisor` allowance (#238).
-    if role_name == "research" {
-        let lane =
-            super::super::lane_queue::lane_settings(cfg).ok_or("research_lane_settings_missing")?;
-        if bucket_tokens(&journal, "research")? >= lane.max_tokens_per_session {
-            return Err("research_lane_token_budget_exhausted".into());
-        }
-    }
-    let used = records
-        .keys()
-        .filter(|name| name.starts_with(&format!("{role_name}-")))
-        .count();
-    let mut charged = std::collections::BTreeSet::new();
-    for name in records
-        .keys()
-        .filter(|n| n.starts_with(&format!("{role_name}-")))
-    {
-        if attempt_failed(&journal, name)? {
-            continue;
-        }
-        let prior: Value = serde_json::from_slice(
-            &crate::read_bounded(&journal.join(name), 4096)
-                .map_err(|_| "planner_usage_reservation_invalid")?,
-        )?;
-        charged.insert(prior["budget_event"].as_str().unwrap_or(name).to_owned());
-    }
-    let budget_event = guard
-        .invocation_id
-        .filter(|_| role.budget_unit.as_deref() == Some("event"));
-    if !budget_event.is_some_and(|id| charged.contains(id))
-        && charged.len() >= role.daily_call_budget as usize
-    {
-        return Err("planner_budget_exhausted".into());
-    }
-    if (charged.len() as u64) < guard.minimum_prior_calls {
-        return Err("planner_usage_history_missing".into());
-    }
-    let name = format!("{role_name}-{used:04}.attempt.json");
-    let reservation = journal.join(&name);
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&reservation)?;
-    use std::io::Write;
-    file.write_all(&serde_json::to_vec(&json!({"context_sha256":guard.context_hash,"budget_event":budget_event,"provider":cfg.provider,"transport":role.transport,"origin":role.transport.responses_url(),"model_admission":"provider_listed_required","model":role.model_id,"prompt_hash":digest(prompt.as_bytes()),"reserved_ms":(guard.clock)()}))?)?;
-    file.sync_all()?;
-    fs::File::open(&journal)?.sync_all()?;
-    records.insert(name, reservation_stamp(&reservation)?);
-    let root = c.directory.join("model");
-    let temp = root.join(format!("usage-reservations-{role_name}-{used:04}.tmp"));
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&temp)?;
-    file.write_all(&serde_json::to_vec(&UsageManifest {
-        session_binding: book_binding(c)?,
-        reservations: records,
-    })?)?;
-    file.sync_all()?;
-    fs::rename(&temp, root.join("usage-reservations.json"))?;
-    fs::File::open(&root)?.sync_all()?;
-    Ok((journal, used, charged.len()))
-}
 
-#[cfg(test)]
-pub(crate) fn fixture_reservation(c: &Config, cfg: &PlannerConfig) -> PathBuf {
-    let (journal, used, _) = reserve_usage(
-        c,
-        cfg,
-        "digest",
-        &cfg.digest,
-        "synthetic fixture",
-        &CallGuard {
-            cancel: None,
-            deadline: None,
-            not_before: None,
-            configuration: None,
-            journal_required: std::cell::Cell::new(true),
-            minimum_prior_calls: 0,
-            invocation_id: None,
-            context_hash: None,
-            clock: &|| 0,
-            duration: None,
-            started_wall_ms: None,
-        },
-    )
-    .unwrap();
-    journal.join(format!("digest-{used:04}.attempt.json"))
-}
-
-#[cfg(test)]
-pub(crate) fn call(
-    c: &Config,
-    cfg: &PlannerConfig,
-    role_name: &str,
-    role: &ModelRole,
-    prompt: &str,
-    backend: &mut impl Backend,
-) -> Result<String> {
-    call_guarded(
-        c,
-        cfg,
-        role_name,
-        role,
-        prompt,
-        backend,
-        &CallGuard {
-            cancel: None,
-            deadline: None,
-            not_before: None,
-            configuration: None,
-            journal_required: std::cell::Cell::new(false),
-            minimum_prior_calls: 0,
-            invocation_id: None,
-            context_hash: None,
-            clock: &millis,
-            duration: None,
-            started_wall_ms: None,
-        },
-    )
-}
 pub(crate) struct CallGuard<'a> {
     pub(crate) cancel: Option<&'a std::sync::atomic::AtomicBool>,
     pub(crate) deadline: Option<i64>,
     pub(crate) not_before: Option<i64>,
     pub(crate) configuration: Option<(&'a Config, &'a PlannerConfig)>,
-    pub(crate) journal_required: std::cell::Cell<bool>,
-    pub(crate) minimum_prior_calls: u64,
     pub(crate) invocation_id: Option<&'a str>,
-    pub(crate) context_hash: Option<&'a str>,
     /// Actual observation wall clock. This is the only source for model-visible
     /// observation timestamps; it is never derived from an anchor plus elapsed.
     pub(crate) clock: &'a dyn Fn() -> i64,
@@ -581,14 +387,6 @@ impl CallGuard<'_> {
     /// The actual current wall observation. Never `started + elapsed`.
     pub(crate) fn wall_ms(&self) -> i64 {
         (self.clock)()
-    }
-    /// Monotonic duration when configured, otherwise the historical wall
-    /// reading. Callers that need a duration subtract their own first reading.
-    pub(crate) fn elapsed_ms(&self) -> i64 {
-        match self.duration {
-            Some(duration) => (duration)().max(0),
-            None => (self.clock)(),
-        }
     }
     /// A conservative admission time for deadline/not-before checks: the later
     /// of the actual wall observation and the monotonic duration projection.
@@ -656,74 +454,9 @@ pub(crate) fn preview_guard() -> CallGuard<'static> {
         deadline: None,
         not_before: None,
         configuration: None,
-        journal_required: std::cell::Cell::new(false),
-        minimum_prior_calls: 0,
         invocation_id: None,
-        context_hash: None,
         clock: &millis,
         duration: None,
         started_wall_ms: None,
     }
-}
-#[cfg(test)]
-pub(crate) fn call_guarded(
-    c: &Config,
-    cfg: &PlannerConfig,
-    role_name: &str,
-    role: &ModelRole,
-    prompt: &str,
-    backend: &mut dyn Backend,
-    guard: &CallGuard<'_>,
-) -> Result<String> {
-    call_guarded_as(c, cfg, role_name, role_name, role, prompt, backend, guard)
-}
-
-/// `call_guarded`, charged to `usage_name`'s bucket. The research lane runs as
-/// the orchestrator role but charges its own `research` bucket (#238).
-#[allow(clippy::too_many_arguments)] // The admitted role and its usage bucket are independent inputs.
-pub(crate) fn call_guarded_as(
-    c: &Config,
-    cfg: &PlannerConfig,
-    role_name: &str,
-    usage_name: &str,
-    role: &ModelRole,
-    prompt: &str,
-    backend: &mut dyn Backend,
-    guard: &CallGuard<'_>,
-) -> Result<String> {
-    guard.check()?;
-    if prompt.len() > 2_000_000 {
-        return Err("planner_input_cap".into());
-    }
-    backend.validate_role(c, cfg, role_name, role)?;
-    let (journal, used, charged) = reserve_usage(c, cfg, usage_name, role, prompt, guard)?;
-    guard.check()?;
-    let start = std::time::Instant::now();
-    let result = backend.call(role, prompt).and_then(|raw| {
-        if start.elapsed() > Duration::from_millis(role.timeout_ms) {
-            return Err("planner_call_timeout".into());
-        }
-        if role.provider_envelope_code(&raw).is_some() {
-            Err("planner_output_or_timeout_cap".into())
-        } else {
-            Ok(raw)
-        }
-    });
-    let provider = backend.provenance();
-    let mut evidence = json!({"latency_ms":start.elapsed().as_millis(),"budget_used":charged+1,"output":result.as_ref().ok(),"failed":result.is_err(),"transport_evidence":provider});
-    let error_text = result
-        .as_ref()
-        .err()
-        .map(ToString::to_string)
-        .unwrap_or_default();
-    if let Value::Object(fields) = provider_failure_evidence(&error_text, &provider) {
-        for (key, value) in fields {
-            evidence[key] = value;
-        }
-    }
-    rollover::atomic(
-        &journal.join(format!("{usage_name}-{used:04}.result.json")),
-        &evidence,
-    )?;
-    result
 }
