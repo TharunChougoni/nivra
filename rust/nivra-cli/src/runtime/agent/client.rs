@@ -139,6 +139,24 @@ impl Partial {
     }
 }
 
+/// The agent process with its reviewed environment. Nothing is inherited, so
+/// no provider keys or cloud credentials reach pi unless the owner names them
+/// in `pass_env`.
+pub(crate) fn command(settings: &AgentSettings) -> Command {
+    let mut command = Command::new(&settings.node);
+    command.env_clear().env("HOME", &settings.agent_dir);
+    for name in std::iter::once("PATH").chain(settings.pass_env.iter().map(String::as_str)) {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    command
+        .arg(&settings.entry)
+        .arg("--agent-dir")
+        .arg(&settings.agent_dir);
+    command
+}
+
 pub(crate) struct AgentClient {
     writer: Box<dyn Write + Send>,
     lines: Receiver<std::io::Result<String>>,
@@ -180,19 +198,7 @@ impl AgentClient {
     /// Start the agent process. `extra` adds arguments such as an offline `--fake` script.
     pub(crate) fn spawn(settings: &AgentSettings, extra: &[std::ffi::OsString]) -> Result<Self> {
         let started = Instant::now();
-        let mut command = Command::new(&settings.node);
-        // Nothing inherited: no provider keys or cloud credentials reach pi
-        // unless the owner names them in `pass_env`.
-        command.env_clear().env("HOME", &settings.agent_dir);
-        for name in std::iter::once("PATH").chain(settings.pass_env.iter().map(String::as_str)) {
-            if let Some(value) = std::env::var_os(name) {
-                command.env(name, value);
-            }
-        }
-        command
-            .arg(&settings.entry)
-            .arg("--agent-dir")
-            .arg(&settings.agent_dir);
+        let mut command = command(settings);
         if let Some(prompts) = &settings.prompts {
             command.arg("--prompts").arg(prompts);
         }

@@ -19,7 +19,7 @@ mod tools;
 mod triggers;
 pub(crate) mod turn_cli;
 
-pub(crate) use client::{Agent, AgentClient};
+pub(crate) use client::{Agent, AgentClient, command};
 pub(crate) use lanes::read_spend;
 pub(crate) use triggers::{Ranked, TriggerSettings};
 

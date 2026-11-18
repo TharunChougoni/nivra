@@ -16,6 +16,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
+# Keep the pi agent_dir under %h/.local/state/nivra (for example
+# %h/.local/state/nivra/pi): pi rewrites auth.json when it refreshes OAuth, and
+# preflight refuses an agent_dir this unit does not grant.
 ReadWritePaths=%h/nivra-data %h/.config/nivra %h/.local/state/nivra
 # Persistent staging shared with transient workers, outside PrivateTmp.
 ReadWritePaths=-/var/lib/nivra-research

@@ -271,3 +271,29 @@ test("the stdio service speaks the protocol end to end", async () => {
   assert.equal(messages[0]?.type, "ready");
   await new Promise((resolve) => child.on("exit", resolve));
 });
+
+test("the check mode reports catalog and credential presence without a turn", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nivra-agent-check-"));
+  writeFileSync(join(dir, "auth.json"), JSON.stringify({ mistral: { type: "api_key", key: "test-value-not-a-key" } }), { mode: 0o600 });
+  const models = [
+    { provider: "mistral", id: "deepseek-v4-1-flash-1017" },
+    { provider: "openai-codex", id: "no-such-model" },
+  ];
+  const child = spawn(process.execPath, [join(root, "dist", "src", "main.js"), "--agent-dir", dir, "--check", JSON.stringify(models)], {
+    stdio: ["ignore", "pipe", "inherit"],
+    env: { PATH: process.env.PATH ?? "", HOME: dir },
+  });
+  let out = "";
+  child.stdout.on("data", (chunk) => (out += chunk));
+  const code = await new Promise((resolve) => child.on("exit", resolve));
+  assert.equal(code, 0);
+  assert.ok(!out.includes("test-value-not-a-key"), "no credential value is printed");
+  assert.deepEqual(JSON.parse(out), {
+    v: PROTOCOL_VERSION,
+    type: "check",
+    models: [
+      { provider: "mistral", id: "deepseek-v4-1-flash-1017", known: true, auth: true },
+      { provider: "openai-codex", id: "no-such-model", known: false, auth: false },
+    ],
+  });
+});

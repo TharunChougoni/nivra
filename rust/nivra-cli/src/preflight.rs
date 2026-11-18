@@ -1,9 +1,13 @@
 //! Offline sandbox admission; never opens credentials, journals or books.
+//! Provider credential presence is asked of the pi agent, which reports only
+//! whether each configured provider has one.
+use crate::runtime::agent::AgentSettings;
 use chrono::NaiveDate;
 use serde::Deserialize;
 use std::{
+    collections::BTreeSet,
     fs,
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
     process::{Command, ExitCode},
 };
@@ -41,6 +45,98 @@ fn grants(text: &str, home: &str) -> Result<Vec<PathBuf>, &'static str> {
     }
     Ok(granted)
 }
+/// Create and remove a private probe file; returns the canonical directory and
+/// the probe's owner, which is the effective user.
+fn writable(path: &Path, code: &'static str) -> Result<(PathBuf, u32), &'static str> {
+    let path = absolute(path).map_err(|_| code)?;
+    let probe = path.join(format!(".nivra-preflight-{}", std::process::id()));
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&probe)
+        .map_err(|_| code)?;
+    let uid = file.metadata().map_err(|_| code)?.uid();
+    drop(file);
+    fs::remove_file(probe).map_err(|_| code)?;
+    Ok((path, uid))
+}
+
+#[derive(Deserialize)]
+struct AgentCheck {
+    models: Vec<CheckedModel>,
+}
+
+#[derive(Deserialize)]
+struct CheckedModel {
+    known: bool,
+    auth: bool,
+}
+
+/// The pi agent can start, write its own directory and reach every configured
+/// lane model and fallback with stored or passed credentials.
+fn agent(settings: &AgentSettings) -> Result<PathBuf, &'static str> {
+    if !fs::metadata(&settings.node)
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    {
+        return Err("preflight_agent_node_missing");
+    }
+    if !settings.entry.is_file() {
+        return Err("preflight_agent_entry_missing");
+    }
+    let installed = settings
+        .entry
+        .ancestors()
+        .find(|dir| dir.join("package.json").is_file())
+        .is_some_and(|package| {
+            package
+                .join("node_modules/@earendil-works/pi-coding-agent/package.json")
+                .is_file()
+        });
+    if !installed {
+        return Err("preflight_agent_modules_missing");
+    }
+    if settings.prompts.as_ref().is_some_and(|dir| !dir.is_dir()) {
+        return Err("preflight_agent_prompts_missing");
+    }
+    let (dir, uid) = writable(&settings.agent_dir, "preflight_agent_dir_not_writable")?;
+    if fs::metadata(&dir)
+        .map_err(|_| "preflight_agent_dir_not_writable")?
+        .uid()
+        != uid
+    {
+        return Err("preflight_agent_dir_not_owned");
+    }
+    let models: BTreeSet<(&str, &str)> = settings
+        .lanes
+        .values()
+        .flat_map(|lane| std::iter::once(&lane.model).chain(&lane.fallback))
+        .map(|model| (model.provider.as_str(), model.id.as_str()))
+        .collect();
+    let query: Vec<_> = models
+        .iter()
+        .map(|(provider, id)| serde_json::json!({"provider":provider,"id":id}))
+        .collect();
+    let output = crate::runtime::agent::command(settings)
+        .arg("--check")
+        .arg(serde_json::Value::from(query).to_string())
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map_err(|_| "preflight_agent_check_failed")?;
+    let check: AgentCheck = serde_json::from_slice(&output.stdout)
+        .ok()
+        .filter(|check: &AgentCheck| output.status.success() && check.models.len() == models.len())
+        .ok_or("preflight_agent_check_failed")?;
+    if check.models.iter().any(|model| !model.known) {
+        return Err("preflight_agent_model_unknown");
+    }
+    if check.models.iter().any(|model| !model.auth) {
+        return Err("preflight_agent_auth_missing");
+    }
+    Ok(dir)
+}
+
 fn inspect(config: &Path, unit: Option<&Path>) -> Result<(), &'static str> {
     let paths: Paths =
         serde_json::from_slice(&fs::read(config).map_err(|_| "preflight_config_unreadable")?)
@@ -60,17 +156,7 @@ fn inspect(config: &Path, unit: Option<&Path>) -> Result<(), &'static str> {
     ];
     let mut resolved = Vec::new();
     for (path, code) in required {
-        let path = absolute(path).map_err(|_| code)?;
-        let probe = path.join(format!(".nivra-preflight-{}", std::process::id()));
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&probe)
-            .map_err(|_| code)?;
-        drop(file);
-        fs::remove_file(probe).map_err(|_| code)?;
-        resolved.push(path);
+        resolved.push(writable(path, code)?.0);
     }
     if let Some(planner) = paths.planner_config.as_deref() {
         let planner = match paths.session {
@@ -84,6 +170,9 @@ fn inspect(config: &Path, unit: Option<&Path>) -> Result<(), &'static str> {
             // Registered research bytes are reviewed inputs. Check them before a
             // post-close review call instead of discovering a stale path later.
             crate::runtime::harness::validate_research_files(research)?;
+        }
+        if let Some(settings) = planner.agent.as_ref() {
+            resolved.push(agent(settings)?);
         }
     }
     let coverage = if let Some(unit) = unit {
@@ -279,6 +368,119 @@ mod tests {
         assert_eq!(
             inspect(&with_planner, Some(&unit)),
             Err("research_registered_bytes_changed")
+        );
+        assert_eq!(fs::read_to_string(journal).unwrap(), "original");
+    }
+
+    #[test]
+    fn pi_agent_install_directory_and_credentials_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let pi = tempfile::tempdir().unwrap();
+        let (root, agent_dir) = (dir.path(), pi.path());
+        let journal = root.join("journal");
+        fs::write(&journal, "original").unwrap();
+        let package = root.join("agent");
+        let modules = package.join("node_modules/@earendil-works/pi-coding-agent");
+        fs::create_dir_all(&modules).unwrap();
+        fs::write(package.join("package.json"), "{}").unwrap();
+        fs::write(modules.join("package.json"), "{}").unwrap();
+        // `sh` stands in for node; the entry records its query and replies.
+        let entry = package.join("main.js");
+        fs::write(
+            &entry,
+            "printf '%s' \"$4\" > \"$2/query.json\"; cat \"$2/check.json\"\n",
+        )
+        .unwrap();
+        let planner = root.join("planner.json");
+        let write_planner = |node: &Path| {
+            let lane = serde_json::json!({
+                "model":{"provider":"openai-codex","id":"gpt-6.1-sol"},
+                "fallback":{"provider":"mistral","id":"deepseek-v4-1-flash-1017","thinking":"high"},
+                "daily_calls":10,"daily_cost_usd":1.0
+            });
+            fs::write(
+                &planner,
+                serde_json::json!({"enabled":true,"agent":{"mode":"paper","node":node,"entry":entry,
+                    "agent_dir":agent_dir,"lanes":{"decision":lane,"review":lane}}})
+                .to_string(),
+            )
+            .unwrap();
+        };
+        write_planner(Path::new("/bin/sh"));
+        let config = root.join("config.json");
+        fs::write(
+            &config,
+            serde_json::json!({"directory":root,"sessions_root":root,"read_journal":journal,
+                "planner_config":planner})
+            .to_string(),
+        )
+        .unwrap();
+        let unit = root.join("paper.service");
+        let grant = |paths: &[&Path]| {
+            let paths: Vec<_> = paths.iter().map(|p| p.display().to_string()).collect();
+            fs::write(
+                &unit,
+                format!("[Service]\nReadWritePaths={}\n", paths.join(" ")),
+            )
+            .unwrap();
+        };
+        grant(&[root, agent_dir]);
+        let reply = |known: bool, auth: bool| {
+            fs::write(
+                agent_dir.join("check.json"),
+                serde_json::json!({"models":[{"known":true,"auth":true},{"known":known,"auth":auth}]})
+                    .to_string(),
+            )
+            .unwrap();
+        };
+        reply(true, true);
+        assert_eq!(inspect(&config, Some(&unit)), Ok(()));
+        let query: serde_json::Value =
+            serde_json::from_slice(&fs::read(agent_dir.join("query.json")).unwrap()).unwrap();
+        assert_eq!(
+            query,
+            serde_json::json!([{"provider":"mistral","id":"deepseek-v4-1-flash-1017"},
+                {"provider":"openai-codex","id":"gpt-6.1-sol"}])
+        );
+        grant(&[root]);
+        assert_eq!(
+            inspect(&config, Some(&unit)),
+            Err("preflight_unit_path_uncovered")
+        );
+        grant(&[root, agent_dir]);
+        reply(true, false);
+        assert_eq!(
+            inspect(&config, Some(&unit)),
+            Err("preflight_agent_auth_missing")
+        );
+        reply(false, true);
+        assert_eq!(
+            inspect(&config, Some(&unit)),
+            Err("preflight_agent_model_unknown")
+        );
+        fs::write(agent_dir.join("check.json"), "not json").unwrap();
+        assert_eq!(
+            inspect(&config, Some(&unit)),
+            Err("preflight_agent_check_failed")
+        );
+        fs::set_permissions(agent_dir, fs::Permissions::from_mode(0o500)).unwrap();
+        let readonly = inspect(&config, Some(&unit));
+        fs::set_permissions(agent_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(readonly, Err("preflight_agent_dir_not_writable"));
+        fs::remove_file(modules.join("package.json")).unwrap();
+        assert_eq!(
+            inspect(&config, Some(&unit)),
+            Err("preflight_agent_modules_missing")
+        );
+        fs::remove_file(&entry).unwrap();
+        assert_eq!(
+            inspect(&config, Some(&unit)),
+            Err("preflight_agent_entry_missing")
+        );
+        write_planner(&root.join("missing-node"));
+        assert_eq!(
+            inspect(&config, Some(&unit)),
+            Err("preflight_agent_node_missing")
         );
         assert_eq!(fs::read_to_string(journal).unwrap(), "original");
     }
