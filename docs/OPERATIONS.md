@@ -755,8 +755,11 @@ a closed book refuses with `stop_session_closed`.
 A service stop cancels workers and retires an in-flight planner attempt as
 failed `service_shutdown_interrupted_no_replay` with its charges preserved. It is
 never replayed and leaves no sticky block. The book is not stopped. The tick
-`service_shutdown` records the planner disposition and any ignored request, and
-the Stop alert reports `operator_stopped:false`. If the retirement cannot be
+`service_shutdown` records the planner disposition and any ignored request. The
+Stop alert reports `operator_stopped:false` and `shutdown:service` and is a
+`warning` classified `service_restart_continues_session`. The updater writes its
+planned-restart notice before it stops the controller, so during an update the
+same alert arrives as the informational `planned_restart`. If the retirement cannot be
 proven exact, the claim stays pending behind the reviewed
 `attempt_interrupted_no_replay` block and the tick says so. Halted books stay
 halted and operator-stopped books stay stopped across any restart; nothing

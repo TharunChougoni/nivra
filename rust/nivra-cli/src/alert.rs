@@ -587,11 +587,19 @@ impl Payload {
         if planned_stop {
             details["classification"] = json!("expected_not_failure");
         }
+        let service_stop = matches!(event, Event::Stop)
+            && details["shutdown"] == "service"
+            && details["halted"] == false;
+        if service_stop {
+            details["classification"] = json!("service_restart_continues_session");
+        }
         Self {
             source: "nivra".into(),
             event: event.name().into(),
             severity: if closed_incident || planned_stop {
                 "info".into()
+            } else if service_stop {
+                "warning".into()
             } else {
                 event.severity().into()
             },
@@ -604,6 +612,8 @@ impl Payload {
                 "Closed paper book retained; no session reactivation".into()
             } else if planned_stop {
                 "Expected protection (expected_not_failure): operator requested paper stop; explicit resume required".into()
+            } else if service_stop {
+                "Paper controller service stopped; the same session continues on restart".into()
             } else {
                 match event {
                     Event::Stop => "Paper stop; operator review required".into(),
@@ -633,7 +643,9 @@ impl Payload {
         if matches!(
             self.event.as_str(),
             "stop" | "halt" | "restart_loop" | "session_start" | "planned_restart"
-        ) && !(matches!(self.event.as_str(), "stop" | "halt") && self.details["closed"] == false)
+        ) && !(matches!(self.event.as_str(), "stop" | "halt")
+            && self.details["closed"] == false
+            && self.details["classification"] != "service_restart_continues_session")
             && let Some(marker) = marker
         {
             self.event = "planned_restart".into();

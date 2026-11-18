@@ -168,6 +168,27 @@ fn delivery_policy_and_secret_boundary() {
             .severity,
         "critical"
     );
+    // A service stop of an open book continues the same session on restart.
+    let service =
+        json!({"closed":false,"operator_stopped":false,"halted":false,"shutdown":"service"});
+    let unplanned = Payload::new(Event::Stop, session, service.clone());
+    assert_eq!(unplanned.severity, "warning");
+    assert_eq!(
+        unplanned.details["classification"],
+        "service_restart_continues_session"
+    );
+    assert!(unplanned.summary.contains("same session continues"));
+    let planned = Payload::new(Event::Stop, session, service).with_restart(marker());
+    assert_eq!(planned.event, "planned_restart");
+    assert_eq!(planned.severity, "info");
+    let halted =
+        json!({"closed":false,"operator_stopped":false,"halted":true,"shutdown":"service"});
+    assert_eq!(
+        Payload::new(Event::Stop, session, halted)
+            .with_restart(marker())
+            .severity,
+        "critical"
+    );
     plan_restart(state.path(), "v0.5.12", 1002).unwrap(); // rollback shares the same notice
     assert_eq!(marker().unwrap().version, "v0.5.13");
     assert!(planned_restart(state.path(), 999).is_none());

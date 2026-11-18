@@ -565,6 +565,12 @@ impl Host for RealHost {
         clear_preflight_failure(state);
         Ok(())
     }
+    fn plan_restart(&mut self, tag: &str) -> Result<()> {
+        let state = self.cache.parent().ok_or("update_directory_unavailable")?;
+        Version::parse(tag)?;
+        crate::alert::plan_restart(state, tag, now_utc().timestamp())
+            .map_err(|_| "update_restart_marker_failed")
+    }
     fn restart(&mut self) -> Result<()> {
         let state = self
             .cache

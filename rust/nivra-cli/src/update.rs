@@ -172,6 +172,11 @@ pub(crate) trait Host {
     /// The currently installed binary remains the rollback target after the
     /// flip, so prove it can still parse the reviewed paper config first.
     fn rollback_preflight(&mut self, binary: &Path) -> Result<()>;
+    /// Record the planned-restart notice before the controller stops, so the
+    /// old controller's service-stop alert is already classified as planned.
+    fn plan_restart(&mut self, _tag: &str) -> Result<()> {
+        Ok(())
+    }
     fn restart(&mut self) -> Result<()>;
     fn healthy(&mut self) -> Result<()>;
     /// Injectable for failure-path tests; production always uses the atomic flip.
