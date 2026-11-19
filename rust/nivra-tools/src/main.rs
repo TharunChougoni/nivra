@@ -5,6 +5,7 @@ mod goldens;
 mod progress;
 mod release;
 mod replay;
+mod retired;
 // Offline repository tooling; never loads application configuration or credentials.
 use clap::{Parser, Subcommand};
 use sha2::{Digest, Sha256};
@@ -26,6 +27,11 @@ enum Task {
         root: PathBuf,
     },
     CheckRelease {
+        #[arg(default_value = ".")]
+        root: PathBuf,
+    },
+    /// Print current retired-name counts in the allowance format.
+    RetiredNames {
         #[arg(default_value = ".")]
         root: PathBuf,
     },
@@ -73,8 +79,28 @@ fn main() -> ExitCode {
                 }
             };
         }
+        Task::RetiredNames { root } => {
+            return match retired::scan(&root) {
+                Ok(found) => {
+                    print!("{}", retired::render(&found));
+                    ExitCode::SUCCESS
+                }
+                Err(code) => {
+                    eprintln!("{code}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         Task::CheckRelease { root } => {
-            return match docs::check(&root) {
+            let checked = match (docs::check(&root), retired::check(&root)) {
+                (Ok(()), Ok(())) => Ok(()),
+                (docs, names) => Err([docs.err(), names.err()]
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .collect::<Vec<_>>()),
+            };
+            return match checked {
                 Ok(()) => {
                     println!("release_docs_ok");
                     ExitCode::SUCCESS

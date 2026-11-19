@@ -78,8 +78,9 @@ Some private-file fixtures need writable `/var/tmp`; a sandbox denial is an
 environment failure, not grounds to relax file ownership/privacy validation.
 Fixture provenance is in [fixtures](../fixtures/README.md).
 
-For a reproducible off-market full session, use [paper replay](PAPER_REPLAY.md).
-Scripted model responses test orchestration; they do not measure reasoning quality.
+For the scripted pi decision and research round trip, use
+`nivra agent-check` ([pi agent lanes](AGENT.md#prepare-and-verify)). Scripted
+model turns test the lane plumbing; they do not measure reasoning quality.
 Daily bars do not establish executable quote depth or intrabar order.
 
 Provider inference/search/refresh, actual sandbox containment, market execution,

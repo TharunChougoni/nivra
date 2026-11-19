@@ -52,9 +52,7 @@ Release tags still require an explicit request.
 
 Nivra is the only deployment source; never install from the retired `ind-sadr`
 repository. Releases are published from this repository when explicitly requested
-(`v0.9.26` is the first), and an installed host bound to the retired repository is
-moved once through the reviewed
-[host migration](OPERATIONS.md#one-time-host-migration). The
+(`v0.9.26` is the first). The
 workflow below runs when a release is explicitly requested and its annotated
 version tag is created.
 
@@ -117,7 +115,8 @@ authorize a paper or live session.
 
 | Command | Purpose |
 | --- | --- |
-| `nivra-tools check-release` | Changelog/version and Markdown link check |
+| `nivra-tools check-release` | Changelog/version, Markdown links and the retired-name ratchet |
+| `nivra-tools retired-names` | Prints current retired-name counts in the `rust/nivra-tools/retired-names.txt` format |
 | `nivra-tools release-artifact` | Assemble the release assets on a development host |
 | `nivra-tools golden-check` | Verify frozen fixture bytes |
 | `nivra-tools replay` / `replay-fingerprint` | Offline shared replay ([shared replay](reference/SHARED_REPLAY.md)) |
@@ -126,3 +125,14 @@ authorize a paper or live session.
 | `nivra setup --help` | Explicit fresh current-policy paper preparation; never activates |
 | `nivra backtest` | Offline bounded quote backtest |
 | `nivra history-download` | Resumable read-only candle evidence ([usage](HISTORY_DOWNLOAD.md)) |
+
+## Retired vocabulary
+
+The pi lanes replaced the earlier model harness. Code, docs and packaging use the
+lane vocabulary: controller, brief, the decision, research and review lanes,
+ranker, promotion, trigger, sandbox, and turn or session. `check-release` refuses
+Luna, supervisor, orchestrator, owner as a lane, decide, digest as the fact
+summary, scorer, wake and harness run under `rust/`, `docs/` and `packaging/`
+beyond the per-file allowance in `rust/nivra-tools/retired-names.txt`. An
+allowance only shrinks: when a file loses occurrences, lower its line (or
+regenerate the file with `nivra-tools retired-names`) in the same commit.

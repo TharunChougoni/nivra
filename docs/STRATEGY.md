@@ -10,7 +10,7 @@ brief from controller evidence and publishes the lane tools; only a completed
 turn with a final validated TradePlan can reach the paper plan head. Planner
 configs enable the planner, set `model_led`, and carry an `agent` block in
 `paper` mode with a decision lane. Trigger cadence, lane budgets and evidence
-eligibility are described in [the model harness](MODEL_HARNESS.md) and
+eligibility are described in [lane tools](LANE_TOOLS.md) and
 [pi agent lanes](AGENT.md). Policy changes use the reviewed
 [config-apply flow](OPERATIONS.md#reviewing-a-planner-policy-change).
 
@@ -106,8 +106,7 @@ qualification remain unverified.
 Operational allowances and deadlines protect resources and are configured
 separately from trading risk. An allowance is not a target to consume.
 
-No deterministic strategy substitutes for a failed or unavailable model. See
-[replay](PAPER_REPLAY.md) for the offline flow.
+No deterministic strategy substitutes for a failed or unavailable model.
 
 ## Strategy laboratory
 

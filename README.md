@@ -94,8 +94,7 @@ target/debug/nivra self-check
 These commands are offline checks and do not start a paper session. Guarded
 releases are published from this repository when explicitly requested;
 installing one never authorizes a session. The retired `ind-sadr` repository is
-no longer a deployment source — an installed host moves once through the
-[reviewed host migration](docs/OPERATIONS.md#one-time-host-migration).
+no longer a deployment source.
 
 - [Configure a paper installation](packaging/rust/CONFIGURATION.md)
 - [Read the documentation index](docs/README.md)
@@ -112,7 +111,7 @@ features.
 | [Architecture](docs/ARCHITECTURE.md) | Crates, runtime flow, durable state and lane boundaries |
 | [Operations](docs/OPERATIONS.md) | Configuration, startup, recovery and operator safety procedures |
 | [Strategy](docs/STRATEGY.md) | Paper mandate, execution gates, fees and Nifty option scope |
-| [Model Harness](docs/MODEL_HARNESS.md) | Lane tool boundary, evidence, budgets, archives and retained offline-replay mechanics |
+| [Lane tools](docs/LANE_TOOLS.md) | Lane triggers, tool boundary, plan binding, evidence and budgets |
 | [Dashboard](docs/DASHBOARD.md) | Read-only API, React workspace and captured-data projections |
 | [Testing](docs/TESTING.md) | Behavioral test strategy and current gate |
 | [Development](docs/DEVELOPMENT.md) | Build, release workflow and immutable-tag policy |

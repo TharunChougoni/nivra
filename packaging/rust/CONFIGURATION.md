@@ -3,8 +3,8 @@
 `paper-current.example.json` lists the paper runtime inputs.
 `agent-settings.example.json` shows settings for the three pi lanes. Replace the
 paths with the installed application paths. Keep any credentials in the
-application's private files. The earlier planner template
-`planner-current.example.json` is retained as a reference for archived books.
+application's private files. `nivra setup` writes the planner file: `enabled`,
+`model_led`, the `agent` settings and the discovery defaults.
 
 ## Explicit fresh paper installation
 
@@ -62,17 +62,15 @@ active.
    Preserve stopped or halted books and any failed artifacts.
    [Review a planner policy change](../../docs/OPERATIONS.md#reviewing-a-planner-policy-change)
 
-## Archived configuration compatibility
+## Configuration compatibility
 
 | Input/path | Current treatment |
 | --- | --- |
-| `decision_owner`, `decide` or `handoff_gate` key | Removed; the pi decision lane owns the paper plan head. A planner file that still carries one refuses with `planner_config_invalid` until it is rewritten and applied with `config-apply` |
+| Any key outside the pi policy shape (for example a removed model role, owner-task, event, usage or prompt block) | Refused with `planner_config_invalid`. Rewrite the planner file and apply it with `config-apply` |
 | Absent `workspace` | No lane workspace tools; sealed policy hash unchanged. Enable with a reviewed `workspace` block and `config-apply` |
-| `workspace.network` | Default off and omitted from serialized policy. Explicit opt-in outbound network for allowlisted scanner scripts only; the scorer sandbox refuses it |
+| `workspace.network` | Default off and omitted from serialized policy. Explicit opt-in outbound network for allowlisted scanner scripts only; the ranker sandbox refuses it |
 | Absent `web_tools` | No lane web tools and no outbound call; sealed policy hash unchanged. Enable with a reviewed `web_tools` block and `config-apply`. See `web-tools.fragment.json` |
-| Enabled Operations/Strategy/post-close | Refused for a pi paper planner; historical records remain readable |
-| Orchestrator plus old review-role blocks | Refused as `orchestrator_and_legacy_roles_conflict`; do not grow compatibility shims to reuse a clashing config. A pi paper planner refuses any enabled orchestrator with `pi_paper_legacy_model_config_refused` |
-| Old `max_handoff_instruments`/context schema | Retained for sealed historical policy and tool bounds; new template uses factual tools-only defaults and no handoff gate |
+| `max_handoff_instruments`, `context` and `tools` | Lane tool and brief bounds; defaults are omitted from serialized policy |
 | Dated planner schedule/predecessor fields | Retained as explicit reviewed authority evidence, not a silent active-config conversion |
 | Retired dashboard tuning keys | Decode to preserve original config/hash interpretation; omit from new configuration, current React runtime ignores them |
 | `prior_config`/cost transition proofs | Only exact reviewed original-binding transitions; never bypass stopped/halted/open-book guards |

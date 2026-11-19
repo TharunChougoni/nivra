@@ -17,12 +17,7 @@ The shared financial engine is `nivra-core`; the paper controller and offline
 replay both call it. The research lane is separate from the trading lane and
 cannot place, size or promote a trade.
 
-See [strategy sandbox](STRATEGY_SANDBOX.md) for its containment behavior. The
-earlier persistent supervisor's durable state and load/save helpers remain in
-`runtime/supervisor/state.rs` for archived-books and the read-only dashboard
-projection; the live controller starts no supervisor turn. Wake configuration and
-pure scheduling precedence in `runtime/supervisor/wake.rs` are retained for
-archived-state handling and offline replay.
+See [strategy sandbox](STRATEGY_SANDBOX.md) for its containment behavior.
 
 ## Runtime flow
 
@@ -34,14 +29,12 @@ archived-state handling and offline replay.
    remain explicit. Protect held positions before lower-priority scanning.
 3. Rotate configured quote batches. Project timestamped scanner prospects and full
    historical features; observations are not executable fill authority.
-4. Rust's deterministic trigger engine wakes a pi decision lane turn from eligible
+4. Rust's deterministic trigger engine starts a pi decision lane turn from eligible
    evidence: a fill, position risk, a persistent top-ranked candidate or a
    scheduled/pre-close turn. Rust builds the bounded brief and publishes the
    lane's tools; pi owns the provider call, conversation state, tool loop,
    compaction and usage report. Only a completed turn with a final validated
-   proposal can reach the paper plan head. There is no factual digest or
-   persistent orchestrator on the live path; older journals and transcripts keep
-   their archive identities.
+   proposal can reach the paper plan head.
 5. Deterministic execution rechecks identity, held units, available cash, fees and
    the original ≤2-second quote receipt under the financial lock. Accepting a plan
    does not create a fill. Outcome/holdings feed the next decision turn and the
@@ -64,12 +57,9 @@ inputs, outputs and receipts; namespace/device/inode pins prevent journal resets
 stay in private application files outside Git/model evidence.
 
 Research workers receive registered hash-pinned inputs, never financial writer
-ownership or credentials. [Paper replay](PAPER_REPLAY.md) replaces market/clock
-inputs with explicit offline evidence and replays recorded model replies through
-the retained planner backend while using the same paper flow; it never starts pi
-or the lane service.
+ownership or credentials.
 
-See [operations](OPERATIONS.md) and [harness](MODEL_HARNESS.md). Future work is
+See [operations](OPERATIONS.md) and [lane tools](LANE_TOOLS.md). Future work is
 tracked in [GitHub Issues](https://github.com/TharunChougoni/nivra/issues).
 
 The financial freshness gate derives both clock units from
@@ -77,24 +67,22 @@ The financial freshness gate derives both clock units from
 for execution clocks and `_MICROS` for market receipts; receipt timestamps are
 still archived unchanged.
 
-`runtime/model_admission.rs` retains the earlier planner's provider-call admission
-checks (exact configured role/profile and application credential path before
-reserving usage). It belongs to the retained legacy planner path used by offline
-replay and archived-policy validation, not to pi lane turns.
-
 `runtime/instrument_display.rs` owns background public BOD capture, bounded
 metadata projection and immutable source receipts. It joins only already-verified
 cash metadata for qualified tick display and never extends `Universe::instruments`.
 Authenticated catalog/chain reads stay in `web/v1.rs`; summary readiness uses a
 nonblocking status read so catalog work cannot hold up the financial loop.
 
-`runtime/planner/config.rs` owns `ModelRole`, its defaults, invocation/output
-bounds and role validation for the retained legacy planner. Serialized legacy
-role configuration and budget semantics are unchanged.
+`runtime/planner.rs` owns the pi paper policy shape (`PlannerConfig`), its
+validation and policy hash, the TradePlan validator (`planner/plan.rs`), the
+brief's call-time evidence (`planner/turn.rs`) and the lane call guard
+(`planner/guard.rs`). `runtime/redecision.rs` owns the durable plan-head
+authority: pi claims, settlement, recovery and config rebinding.
 
 `runtime/agent/` owns the pi agent service the paper controller requires: the
 JSONL client, the lane runner and budgets, the deterministic trigger engine and
-the tool bridge that serves pi's calls through the harness executors. The book's
+the tool bridge. `runtime/harness/` owns the lane tool schemas, argument
+validation, the data-tool executor and the research task and ranker runner. The book's
 `model/agent/` directory holds trigger batches, turn receipts, plan outcomes,
 usage and lane sessions. See [pi agent lanes](AGENT.md).
 
@@ -102,21 +90,12 @@ usage and lane sessions. See [pi agent lanes](AGENT.md).
 pi decision and research lanes: configuration, public-HTTPS URL policy, bounded
 provider reads, per-run budget and the session `model/web-tools.ndjson` call
 record. It has no broker credential, order path or sandbox environment access.
-The owner workspace sandbox keeps network disabled unless the reviewed
-`workspace.network` setting explicitly enables it; the post-close scorer sandbox
-refuses network.
+The research workspace sandbox keeps network disabled unless the reviewed
+`workspace.network` setting explicitly enables it; the ranker sandbox refuses
+network.
 
-`runtime/wide/projection.rs` owns bounded execution/usage dashboard reads and
+`runtime/wide/projection.rs` owns the bounded execution dashboard read and
 their existing incident handling; the controller retains the original call order.
 
 `runtime/wide/controller.rs` owns the dated paper loop and worker orchestration.
 `wide.rs` reexports the original `run` path and retains book/history/recovery helpers.
-
-`runtime/planner/turn.rs` retains digest-turn production, cached-digest admission,
-trigger envelopes and result assembly for offline recorded-reply replay; the live
-controller reaches the plan head only through `runtime/agent/paper.rs`.
-
-`runtime/supervisor/consider.rs` and `runtime/supervisor/decision.rs` retain the
-earlier owner/supervisor wake admission and persistent owner-decision mechanics as
-test-only code. `supervisor.rs` keeps the read-only dashboard projections and
-archived-state readers the running controller still uses.

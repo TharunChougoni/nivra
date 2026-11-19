@@ -451,8 +451,7 @@ At most ten reports are stored in the browser without silent eviction; export
 preserves a convenience copy, not an authoritative experiment record.
 
 Use `nivra backtest-fingerprint` / `nivra backtest --manifest FILE --events FILE`
-for matching CLI replay, or [full-day paper replay](PAPER_REPLAY.md) for the
-recorded-reply model replay. [Shared replay](reference/SHARED_REPLAY.md) explains formats.
+for matching CLI replay. [Shared replay](reference/SHARED_REPLAY.md) explains formats.
 
 Static assets have SHA-256 ETags and configurable cache lifetimes; the HTML shell
 revalidates with `no-cache`. Gzip is negotiated for assets and JSON; API responses

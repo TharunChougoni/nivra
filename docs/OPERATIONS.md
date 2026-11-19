@@ -8,7 +8,7 @@ Commands below use placeholders or the conventional installation layout.
 ## Services and files
 
 Units, the release pointer, the deploy directory and updater state use the
-`nivra` names below. A host moved by the [host migration](#one-time-host-migration)
+`nivra` names below. A host first installed from the retired `ind-sadr` repository
 keeps its `~/ind-sadr-data` and `~/.config/ind-sadr` directories, because the book
 binding hashes paths inside them.
 
@@ -67,9 +67,9 @@ Review the complete set together:
 | --- | --- |
 | Paper config | Explicit broker, account, session, original read-journal and sessions/history/source paths; continuing account cash comes from its original ledger, never a replacement journal |
 | Costs and instruments | Complete `paper_costs` (see packaged fragment), verified cash instrument identities/tick units, calendar and provider metadata; no derivative execution |
-| Planner | Pi paper policy: `enabled`, `model_led`, and an `agent` block in `paper` mode with a decision lane; no enabled legacy `digest`/`orchestrator`, `model_config` or `approval_auto_renew`, and no `decision_owner`, `decide`, `handoff_gate` or `post_close` key |
+| Planner | Pi paper policy: `enabled`, `model_led`, and an `agent` block in `paper` mode with a decision lane; any key outside the pi policy shape refuses |
 | Models | One reviewed provider/model spec per enabled pi lane, authenticated in the application's own pi directory; catalog or directory presence does not establish entitlement |
-| Prompts | Pi lane prompts come from the built agent (`agent/prompts/`) or `planner.agent.prompts`; the earlier planner's `prompts/` directory is archive/offline-replay evidence. See [pi agent lanes](AGENT.md) |
+| Prompts | Pi lane prompts come from the built agent (`agent/prompts/`) or `planner.agent.prompts`. See [pi agent lanes](AGENT.md) |
 | Credentials | Application-owned pi `auth.json`/`models.json`; never reuse another application's authentication or put credentials in templates/history |
 | Limits | Explicit reviewed per-lane daily call/cost budgets, turn timeouts, tool limits and source bounds; no new trading risk caps and no silent provider fallback |
 
@@ -116,7 +116,7 @@ its committed current pointer under a root-wide writer lock.
 | After 15:00 | An uncommitted session waits for the next trading date (`missed_preopen_idle`) |
 | 09:15–15:30 | Protect holdings, rotate scans, wake the pi decision lane on eligible triggers, serve research requests and validate paper fills independently |
 | Close | Seal/report actual cash, fees and unresolved/carried holdings; no forced 15:15 liquidation for model-led holdings |
-| After close, before 18:00 | Seal financial reporting; the configured pi review lane may run once after the seal. The earlier owner-review and scorer triggers exist only as archived legacy evidence |
+| After close, before 18:00 | Seal financial reporting; the configured pi review lane may run once after the seal |
 
 An open operator-stopped book is expected protection: startup diagnostics,
 stop alerts and `/api/v1/health` book / summary state classify it as
@@ -396,14 +396,12 @@ The paper config points to ordinary planner JSON. A pi paper planner sets
 `enabled: true`, `model_led: true` and an `agent` block in `paper` mode with a
 reviewed `decision` lane; the setup workflow writes that shape. Each enabled lane
 needs an exact provider/model spec, positive daily call and cost budgets, a valid
-turn timeout and tool-call bound. An enabled `digest` or `orchestrator`, a
-`model_config` or `approval_auto_renew` refuses with
-`pi_paper_legacy_model_config_refused`; there is no live legacy model role.
+turn timeout and tool-call bound. Unknown keys refuse with
+`planner_config_invalid`. `enabled: false` or `model_led: false` is an explicit
+no-call policy and needs no lane.
 
-A planner without `agent.mode: "paper"` is refused by the running controller with
-`pi_paper_planner_required` and by readiness with `pi_paper_config_required`. It is
-usable only for offline `paper-replay` and archive validation. Retained
-`context`/`full_universe_features` settings apply to that legacy replay path.
+An enabled planner without `agent.mode: "paper"` and a decision lane refuses with
+`pi_paper_planner_required` or `pi_paper_decision_lane_required`.
 
 `planner.tools` bounds call-time reads and defaults are omitted from policy bytes:
 
@@ -411,10 +409,7 @@ usable only for offline `paper-replay` and archive validation. Retained
 "tools":{"scanner_limit":40,"ranking_limit":50,"history_limit":5,"max_instrument_keys":20}
 ```
 
-`operator_context` supplies up to 8192 characters of task context; it cannot
-authorise live orders, unsafe fills or credential/service tools.
-[Replay/flow](PAPER_REPLAY.md) contains the discovery/allowance example;
-[harness](MODEL_HARNESS.md) explains the lane tool boundary and archives.
+[Lane tools](LANE_TOOLS.md) explains the lane tool boundary and budgets.
 
 Prefer dated configuration for the next session:
 
@@ -464,7 +459,7 @@ deletion or journal replacement.
 The optional planner fragment
 [`decision-evidence.fragment.json`](../packaging/rust/decision-evidence.fragment.json)
 adds intraday context and the uncertainty instructions described in the
-[model harness](MODEL_HARNESS.md#opt-in-intraday-decision-evidence). Defaults:
+[lane tools guide](LANE_TOOLS.md#intraday-decision-evidence). Defaults:
 20 completed price bars, 20 retained scanner samples, return windows `[1,5,15]`,
 180,000 ms price age, 300,000 ms metadata age and 200 benchmark contributors.
 Bars and sample limits are 1–20; one to six unique return windows may each be
@@ -778,13 +773,6 @@ Apply reviewed config before resume if required; recovery itself makes no call/f
 Recovery validates the current pi paper prerequisites (enabled planner, `model_led`, a decision lane). The same reviewed
 eligibility checks apply to flat recovery and protection-only recovery.
 
-Earlier owner review artifacts were versioned canonical JSON
-(`ReviewCompletedV1`). This build still reads the frozen older `Completed` shape
-and recovers an old fully-bound failed `owner_review_clock_invalid` artifact in
-place without rewriting bytes or replaying the model. Unknown or corrupt review
-artifacts fail closed; the pi review lane writes its own redacted memory under
-`model/agent/`.
-
 Every recovery mode uses one shared typed block gate. A data, news or transient
 read block requires the same input validation as a stopped recovery; an
 unavailable or ineligible input refuses with
@@ -797,7 +785,7 @@ block. An interrupted claim is retired only from its exact stored claim body and
 preserves its charges.
 
 Authority receipts are versioned separately from the planner event state. Every
-new authority writes its owner marker (the earlier orchestrator or pi) in the same
+new authority writes its owner marker (`pi`) in the same
 transaction, and `config-apply` and `planner-recover` rewrite it with the control
 hash they bind. Startup preserves the original active head and any
 stronger sticky data/news/configuration block; a pending claim is marked
@@ -817,112 +805,6 @@ owner, including a stored `legacy` owner, refuses as
 `planner_authority_owner_invalid`; a foreign binding, another version or a stale
 hash refuses as `planner_authority_owner_mismatch`. These refusals leave the
 book, report, charges and authority unchanged.
-
-### Historical: owner review and research turns (earlier planner)
-
-The earlier planner's optional owner review/research turns and their dashboard
-projections are retained as archive evidence. The pi lanes replace these model
-turns; their artifacts and read-only projections stay readable.
-
-When the reviewed `owner_tasks.review` policy was enabled, the controller could run
-one sealed owner review after the report was written. It is advisory: it cannot
-place, size or block an order, change policy, or write the workspace. The
-dashboard `owner_review` projection is read-only and reports `disabled`, `due`,
-`busy`, `attempted`, `expired`, `parked` or
-`awaiting_sealed_report`, and `invalid` with one of
-`owner_tasks_settings_invalid`, `owner_review_cutoff_invalid`,
-`owner_review_path_invalid`, `owner_review_binding_invalid`,
-`owner_review_report_changed` or `owner_review_session_date_mismatch`. The first
-sealed report owns the single attempt. Later evidence ticks do not authorize a
-second call, and a changed original `report.json` refuses as
-`owner_review_report_changed` instead of starting another review. A recorded
-review remains valid evidence after the binary prompt changes; only a new
-review call must match the current prompt and policy. A failed review keeps its
-artifact and specific code; an interrupted review is never replayed. Review
-does not replace the post-close scorer trigger, which remains disabled unless
-separately configured.
-
-A reviewed `owner_tasks.research` policy adds one bounded owner research turn
-over terminal verified evidence. It is optional and absent by default; when
-absent, old policy bytes, templates and tool frames are unchanged. The dashboard `owner_research` projection and the operational
-health `research` block are read-only and report `disabled`, `awaiting_evidence`,
-`pending`, `deferred`, `expired`, `parked`, `due` or `invalid` with a static
-reason; `parked` and `deferred` carry the research lane's own cap, book or
-schedule reason (see the research lane in [model harness](MODEL_HARNESS.md)). They expose the selected original evidence id
-and count, cutoff, real deferred expiry, checked pending source and the captured
-`as_of_ms`; they never start a turn, create a queue or renew the snapshot. Both
-projections are derived from one read-only capture at the controller completion
-sample, so `owner_research.as_of_ms` and
-`operational_health.research.as_of_ms` are the same completion time. Every
-disabled, unavailable, invalid, configured, parked and deferred branch carries
-that sample, and a later health/summary GET copies the captured value instead
-of renewing it with request time.
-An open paper position no longer blocks research; research runs in its own lane
-and never parks or delays trading. `owner_research_no_eligible_evidence` means no terminal
-verified evidence exists; no provider call or usage journal is created. A
-configured policy that failed to load reports `unavailable` with a bounded
-static reason, never `disabled`; only a genuinely absent policy is `disabled`.
-A retained turn whose owner-task binding cannot be verified reports
-`owner_research_source_unverified`; malformed evidence reports
-`owner_research_source_invalid`, never `owner_research_settings_invalid`.
-When evidence is due, the read-only projection also verifies the pinned
-workspace refs with the same bounded reader admission uses, so a changed or
-missing source is reported as `invalid` before any paid call.
-
-The lane profile is bounded: `max_tool_turns` is 1..=256 and `timeout_ms` is
-10,000..=21,600,000; the defaults remain 8 tool turns and 600,000 ms. A reviewed
-deployment may raise them within those bounds (for example 96 tool turns, 150
-calls, 12 turns, 12,000,000 tokens and 3,600,000 ms); those are deployment
-settings, not source defaults. `max_tokens_per_session` counts provider
-input+output tokens from completed and incomplete calls, including result
-envelopes written before completed-call usage was recorded.
-
-Optional `owner_tasks.research.idle_trigger {enabled, quiet_minutes}` is off by
-default and requires enabled research with its lane. During market hours, when
-no fill has happened for `quiet_minutes` (anchored at the market open before
-the first fill), the lane projects due with reason
-`research_lane_idle_trigger` and posts one host-authored request into the same
-durable queue. It still passes the lane's turn/call/token caps, minimum
-interval, pending turn, request capacity and market-hours window, runs only in
-the research slot, and never blocks or delays trading. `quiet_minutes` is
-1..=375. A reviewed deployment may enable it with `quiet_minutes:30`; that is a
-deployment setting, not a source default. The lane must opt into
-`during_market:true` for an intraday trigger; otherwise the existing
-market-hours deferral applies. The trigger adds no trade authority and no paid
-call starts without an eligible request or evidence.
-
-The operational health `owner_failure_backoff` block is separate from the
-context-exhaustion `backoff` block. It reports the optional configured
-`failure_backoff_ms`, `enforced_scope=owner_model_turns_only`, active state,
-earliest retry, owner failure count and last failure time. Only actual
-supervisor/decision provider or transport failures arm it; research lane,
-review,
-compaction, aside and host lifecycle failures do not. Host protection and
-lifecycle work continue while it is active. An aside request that cannot start
-because the supervisor is parked, owner work is pending or the owner backoff is
-active is exposed as `aside` with a static `deferred_reason` and, for backoff,
-the real `deferred_until_ms`; its question is never exposed and it is never
-silently dropped.
-
-The research turn writes one durable artifact and one `owner_research` action
-receipt before its result. A committed artifact or action reconstructs the
-missing result without another provider call; neither is an explicit
-`owner_research_interrupted` terminal state and is never replayed. A failed
-attempt is terminal for that original evidence id. The turn has no order,
-market, financial, web, policy, `workspace_run`, `workspace_install` or
-registered-analysis enqueue tools; it may submit candidates only through the
-existing queue and write only `notes/`/`skills/` in the workspace. Research
-does not promote, activate, place or size anything and makes no profitability
-claim.
-
-When the reviewed owner workspace policy is enabled, the successor seed may
-carry a top-level `workspace_state` with bounded pinned `notes`/`skills` refs.
-The host verifies the original source session, same book binding, path, size and
-sha256 on a no-follow descriptor; missing or changed refs are explicit and no
-file is copied. Pinning uses the reviewed `workspace.max_file_bytes` limit and
-the same bounded UTF-8 reader, so a larger or non-UTF-8 file is not offered as a
-readable ref. New seeds with this field are forward-only for older binaries;
-restore the original seed or disable the workspace policy before rollback.
 
 ### Workspace write safety (current pi research lane)
 
@@ -1151,90 +1033,12 @@ A `prior_config` transition admits only exact documented original
 bindings. Keep original configs
 and predecessor seals; do not generalise compatibility flags to new successors.
 
-## Grants and model admission
-
-Use the application's pi directory to authenticate each configured provider.
-[Install the pi agent and authenticate](AGENT.md#prepare-and-verify)
-
-The earlier planner's Luna and Grok evidence records independent application
-grants, catalog admission, and charge identities. Preserve those receipts when
-archiving the book. [Subscription transports](XAI_SUBSCRIPTION_TRANSPORT.md)
-
-### Switch a pi lane model
+## Switch a pi lane model
 
 Change `provider` and `id` in the lane's `model` block. Authenticate the
 selected provider in the application's pi directory and validate the planner
 config before applying the reviewed policy transition.
 [Pi lane configuration](AGENT.md#prepare-and-verify)
-
-### Historical: explicit limit fallback
-
-The earlier planner could configure one explicit fallback for a single call whose
-primary failed with one of the reviewed eligibility classes below. It applies to
-`digest.fallback` and `orchestrator.model.fallback` in that retained planner; omit
-it to keep existing policy bytes and hashes unchanged. A pi lane turn has no
-fallback: a configured lane starts on its exact provider/model or not at all.
-
-```json
-"digest": {
-  "fallback": {
-    "model_id": "deepseek-v4-1-flash-1017",
-    "transport": "mistral_chat",
-    "model_config": "/absolute/path/mistral-fallback.json",
-    "output_cap": 32000,
-    "reasoning_effort": "max"
-  }
-}
-```
-
-The same object goes under `orchestrator.model.fallback`. `output_cap` is
-optional and, when present, is 64..=131072. `reasoning_effort` is optional and
-one of `low`, `medium`, `high` or `max`. `model_config` is an absolute path to
-the application-owned fallback credential config, not the key:
-
-```json
-{"transport":"mistral_chat","api_key_file":"/absolute/path/mistral-api-key"}
-```
-
-The key file must be a regular, owner-owned, single-link file with mode 0600,
-outside the repository and foreign agent auth caches. Create it without putting
-the key in shell history, a config file, a log or the repository; the runtime
-reads and trims it and never prints it. A group/world-readable key, a symlink, a
-foreign owner or a transport mismatch blocks fallback readiness without changing
-the primary role's status.
-
-Exactly these primary failures may switch that one call to the fallback, each
-with its explicit reason code:
-
-| Reason | Primary failure |
-| --- | --- |
-| `usage_limit_reached` | HTTP 429 after the bounded retries, or a provider error carrying `usage_limit_reached` |
-| `rate_limited` | HTTP 429, `rate_limit_exceeded` or a rate-limit provider error |
-| `quota_exceeded` | A provider error carrying `insufficient_quota` or quota |
-| `entitlement_auth_failed` | HTTP 401/403 from the catalog or inference request (provider stage `catalog`, `inference` or `http_response`), for example an expired subscription or a revoked grant |
-| `response_validation_rejected` | An opaque HTTP 200 whose body is a provider error object or stream failure at response validation (`model_http_200`), for example a provider that rejects the supervisor prompt |
-
-Timeouts, HTTP 5xx, cancelled turns, malformed or incomplete output from a real
-response, ambiguous paper actions, a grant-refresh auth failure (provider stage
-`grant_owner`) and local refusals never switch. The fallback has no separate
-call budget; the call keeps the role's existing reservation and accounting. The
-request uses Mistral chat completions with a system role, `max_tokens`, no
-`store` and no tool-action replay; the reply is translated back to the same
-harness envelope. Each switch is recorded in transport evidence (`fallback`
-with from/to model, transport, reason, primary status/stage and outcome),
-logged, and alerted as `model_fallback` at most once per 30 minutes per role.
-Readiness reports each role's `fallback` status, reason and `eligibility`
-reason codes. No key, grant, token or auth cache enters the evidence, alert or
-report.
-
-Adding a fallback is a policy change: it changes the serialized policy bytes and
-hash. With the old config still in place, install the release that supports the
-key first, then back up the reviewed config, add the fallback and key reference,
-and run `planner config-check` and preflight before the normal reviewed
-transition. Do not add the key to config or change policy before the supporting
-binary is installed; the updater's rollback preflight must still parse the old
-config. The normal [release transition](#releases-and-updates) and reviewed
-`config-apply` path apply; there is no bypass.
 
 ### Reviewing a planner policy change
 
@@ -1251,41 +1055,8 @@ paper config's `planner_config` at the new file, run
 predecessor planner file and the same reviewed transition.
 
 A policy that differs from the one that initialized the durable authority is
-refused at controller startup with `decision_owner_migration_required`. An active
-plan written by the other authority (the earlier orchestrator versus pi) refuses
-with `decision_owner_legacy_plan_requires_migration`. Host protection continues
-until a reviewed `config-apply` rebinds the policy. See the
-[model harness](MODEL_HARNESS.md#plan-head-and-ledger-authority).
-
-### Inspect archived operator requests
-
-The previous planner recorded operator questions in
-`model/agent-requests.json` and wrote answers under the corresponding session
-in `aside-reply.json`. Its owner instructions remain in
-`model/directives.ndjson`. Preserve these files with the archived book.
-
-### Historical scorer trigger
-
-In the earlier planner the orchestrator scorer trigger was post-close only. Configure
-`orchestrator.triggers.scorer.after_minute` (931–1439 IST, or the top-level
-`scorer_after_minute` fallback), its prompt/tools, and
-`orchestrator.triggers.scorer.replay` (`max_snapshots` 60,
-`min_valid_snapshots` 3, `horizons_minutes` `[5,15,30]`, `top_n` 10,
-`max_replays` 3, `max_age_ms` 2000, `lookback_samples` 20,
-`max_feedback_chars` 4096, `notional` 5000). An enabled scorer trigger without
-either due minute is rejected at planner-config load with
-`planner_scorer_after_minute_required`. A runtime `after_minute_unset`
-configuration error is reported as `configuration_error` and is not persisted as
-a terminal skip; a skip written by an older release is re-admittable after the
-corrected config is applied. The trigger extracts the session's
-real feature snapshots, runs the written Python scorer through the sandbox and
-feeds an unqualified report back for a bounded fix/replay loop. With
-`discovery.shadow_scorer.enabled`, only a report with `status=ok`, enough valid
-snapshots and zero failed snapshots publishes the written scorer and parameter
-files to the configured `scorer_path`/`params_path`, plus a
-`<scorer>.qualification.json` hash sidecar; no strategy is promoted. A restart
-leaves an admitted run `interrupted` and never replays it automatically. See the
-[model harness](MODEL_HARNESS.md#historical-post-close-scorer-trigger).
+refused at controller startup until a reviewed `config-apply` rebinds the policy;
+host protection continues meanwhile.
 
 ## Releases and updates
 
@@ -1304,8 +1075,7 @@ Nivra is the only deployment source. Releases are published from
 `github.com/TharunChougoni/nivra` when explicitly requested by the repository
 owner; the first is `v0.9.26`. The predecessor `ind-sadr` repository is retired:
 its release assets are no longer installed, and new work, tags and deployment
-instructions live here. An installed host bound to the retired repository is moved
-once through the reviewed [host migration](#one-time-host-migration).
+instructions live here.
 
 Updater config selects the configured Git remote and absolute `paper_config` path.
 It never reads keys itself or needs a GitHub token. Remote transport is a
@@ -1507,264 +1277,6 @@ reviewed `config-apply`; the updater never edits these policy inputs. Custom
 writable paths require preflight. Resume only an eligible reviewed stopped open
 book, never a closed book.
 
-### One-time host migration
-
-A host installed before the rename runs `sadr-rs` from `~/ind-sadr-rust-current`
-under the `ind-sadr-rust-*` units, and its updater cannot fetch the renamed
-`nivra-x86_64-unknown-linux-musl` asset. The renamed updater looks for
-`~/nivra-current/nivra`, `~/nivra-deploy` and `~/.local/state/nivra` and accepts
-only the `github-nivra:` remote. `nivra host-migrate` moves such a host once,
-with the controller stopped, normally off-hours. It is a dry run unless
-`--apply` is given. It never starts, stops, enables or resumes a unit or a book, and never
-reads or prints a credential.
-
-```sh
-nivra host-migrate --release STAGE [--home HOME] [--during-market-hours] [--apply]
-```
-
-To migrate inside the weekday 09:00–15:45 IST activation window, pass
-`--during-market-hours`. Stop the paper service first: a held controller lock
-still refuses, and every other refusal below still applies. The JSON report
-carries `"during_market_hours": true` when the command ran inside the window.
-
-**What moves and what stays.**
-
-| Location | Migration | Reason |
-| --- | --- | --- |
-| `~/ind-sadr-deploy` | Renamed to `~/nivra-deploy`; a `HOLD` file carries over | The updater hard-codes the deploy lock and hold |
-| `~/.local/state/ind-sadr` | Renamed to `~/.local/state/nivra` | Hard-coded updater state, alert outbox and evidence |
-| `~/nivra-releases/<tag>-<commit>/` | Created from the staged release | Updater release root |
-| `~/nivra-current`, `~/nivra-previous` | Created; they point at the new release and at the old current release | Updater pointers |
-| `~/.config/systemd/user/nivra-paper.service`, `nivra-update.service`, `nivra-update.timer`, `nivra-alert@.service` | Rendered from `packaging/rust` with the kept paths below | The old `ind-sadr-*` units stay installed for rollback |
-| `~/ind-sadr-data` | Kept | The book binding hashes the session directory path |
-| `~/.config/ind-sadr` | Kept; reviewed configs are rewritten in place | The book binding hashes `token_file` and `dashboard_token_file`; grants and model-selection receipts name files here |
-| `~/ind-sadr-history`, `~/ind-sadr-backups`, `~/ind-sadr-diagnostics`, `~/ind-sadr-monitor` | Kept | Not hard-coded by the binary; history may hold the bound read journal |
-| `~/ind-sadr-rust-releases`, `~/ind-sadr-rust-current`, `~/ind-sadr-rust-previous` | Kept | Prior releases and the rollback pointer of the old units |
-| `/var/lib/ind-sadr-research` | Kept | Root-owned research stage that the paper unit may write |
-
-**Why data and config keep their names.** A paper book's identity is the
-SHA-256 of the serialized paper config (`book_binding` in
-`runtime/mod.rs`). The serialized fields include `directory`, `token_file`,
-`dashboard_token_file` and `read_journal` as absolute path text, plus the read
-journal's device and inode; `sessions_root`, `planner_config`,
-`alert_webhook_file`, `prior_config` and `history_directory` are not serialized.
-A dated successor's `directory` is `sessions_root/<date>`. `book-identity.json`
-stores the `paper.sqlite` device, inode and this binding, and the same binding is
-repeated by the ledger `state` row, the planner authority, the usage pin
-`model/usage-identity.json`, `model/model-selection.json` and the scorer
-admission. A same-filesystem rename keeps inodes but changes the path text, so the
-live book would refuse with `original_paper_book_changed`, and so would every
-predecessor the next rollover verifies. There is no reviewed rebind, and a fresh
-book would be a replacement journal. A compatibility symlink does not help either:
-token reads refuse a symlinked ancestor. Paths that bind nothing need no move:
-grant files record version, client, grant ID and account hash but no path;
-prompts are hashed by content; history receipts bind data and engine hashes.
-Renaming the data or config directories later needs a reviewed rebind feature
-first.
-
-**What the command checks and rewrites.** Before writing anything it refuses:
-
-| Refusal | Condition |
-| --- | --- |
-| `host_migrate_activation_blackout` | Weekday 09:00–15:45:59 IST (the updater's clock window; holidays are not exempt), unless `--during-market-hours` is given |
-| `host_migrate_lock_held` | Another process holds the sessions-root or live-session `controller.lock`, `updater.lock` or the deploy `.lock` |
-| `host_migrate_update_transaction_requires_review` | `pending.json`, `pending-review.json` or `update-recovery.json` is present |
-| `host_migrate_book_binding_mismatch` | The rewritten paper config would not reproduce the live book's binding |
-| `host_migrate_book_identity_mismatch` | The live SQLite file does not match its retained device and inode identity |
-| `host_migrate_config_changed` | A config input or the staged updater's presence changed after planning |
-| `host_migrate_session_changed` / `host_migrate_book_state_changed` | The current session or book facts changed before apply acquired its locks |
-| `host_migrate_release_version_mismatch` | The staged release is not the running binary's own version |
-| `host_migrate_planner_chain_cycle` | A planner's `previous_config` chain revisits a file |
-| `host_migrate_planner_chain_too_deep` | The `previous_config` chain is longer than the resolver's 32-entry bound |
-| `host_migrate_*_config_invalid` | A rewritten config does not parse with the new types |
-| `host_migrate_*_conflict` | A target path already exists with different content |
-
-It reads `~/.config/ind-sadr/updater.json`, the paper config it names, that
-config's planner and every planner in its `previous_config` chain, the active
-planner's experiment profile and every `model_config` it names. It then
-rewrites:
-
-- Paper config: drops `allow_legacy_model_led_default`. It writes `sessions_root`
-  explicitly as `~/ind-sadr-data/sessions` when the key is absent, because the
-  default moved to `~/nivra-data/sessions`.
-- Planner and every planner in its `previous_config` chain: drops
-  `decision_owner`, `decide`, `handoff_gate`, `post_close`,
-  `orchestrator.triggers.operations|strategy`, the trigger keys
-  `after_decide`, `luna_no_decide_streak`, `minimum_turn_ms` and
-  `max_failed_tools`, the same two limits on `digest` and `orchestrator.model`,
-  and the `orchestrator.trigger_prompts` keys `post_decide` and
-  `luna_no_decide_streak`.
-- Experiment profile: drops `handoff_gate`, `prompts.decide`,
-  `prompts.decision_evidence`, `prompts.decision_evidence_digest` and
-  `roles.decide`.
-- Model configs: writes `grant_file` explicitly as
-  `~/.config/ind-sadr/xai-grant` when a non-Codex config omits it, because the
-  default moved to `~/.config/nivra/xai-grant`. Fallback configs are only
-  validated.
-- Paper, model and updater configs: write `alert_webhook_file` explicitly when it
-  is absent and `~/.config/ind-sadr/alert-webhook.json` exists, because the
-  default destination moved.
-- `updater.json`: written fresh with `remote`
-  `github-nivra:TharunChougoni/nivra.git`, the same `paper_config` and the same
-  alert file. `updater-nivra.json` and its staged `distribution_migration` block
-  are left as an unused archive; the new updater no longer parses that block.
-- Any string under a renamed root (`~/ind-sadr-deploy`, `~/.local/state/ind-sadr`)
-  moves with it.
-
-Every planner in a dated `previous_config` chain is rewritten, backed up and
-validated the same way. `preflight` resolves the planner for the paper config's
-`session`, and that session can predate the active planner's `effective_from`,
-so a legacy-shaped predecessor would still refuse after migration. The chain is
-bounded to 32 entries with cycle detection; a cycle or an over-deep chain
-refuses. Rewriting a predecessor does not change the active policy hash.
-
-Each rewritten file is validated with the new types first. The original stays
-beside it as `FILE.pre-nivra` (0600) and the new bytes are staged as
-`FILE.nivra-next` (0600). The release install, directory renames, links and
-units run next, and only then is each staged file renamed over its original. The
-command holds the controller and updater locks throughout. It prints one JSON
-report with the steps, the removed and added key names, the kept roots, the
-book's binding check and `operator_next`. It prints no config values. A rerun
-after a complete migration reports `already_migrated` and changes nothing. An
-interrupted apply can leave staged configs, backups, links or moved directories.
-A rerun refuses conflicting or incomplete state. Preserve the partial artifacts
-and review them before continuing; do not delete them or assume a rerun completes
-the migration.
-
-Keep the old services stopped and their timer disabled until migration finishes.
-Locks follow renamed directories and cannot prevent an old binary from
-recreating the old paths.
-
-**Runbook.** The owner runs every step on the host; nothing here runs
-automatically.
-
-1. Choose an off-hours window after the close. To migrate during market hours
-   instead, add `--during-market-hours` to both `host-migrate` commands in step
-   4; the steps are otherwise the same. Check the book with the
-   installed binary and confirm that no research sandbox units are running,
-   because the renamed binary names them `nivra-rw-*`/`nivra-candidate-*` and
-   would not see `sadr-*` ones:
-
-   ```sh
-   ~/ind-sadr-rust-current/sadr-rs readiness --config ~/.config/ind-sadr/rust-paper.json
-   systemctl --user list-units 'sadr-*'
-   ```
-
-2. Stop the old updater and the controller, and confirm they are inactive:
-
-   ```sh
-   systemctl --user disable --now ind-sadr-rust-update.timer
-   systemctl --user stop ind-sadr-rust-update.service ind-sadr-rust-paper.service
-   systemctl --user is-active ind-sadr-rust-paper.service ind-sadr-rust-update.service
-   ```
-
-3. Fetch the release assets with the existing deploy-key alias into a private
-   staging directory, and verify the checksum and the tag's commit:
-
-   ```sh
-   TAG=vX.Y.Z
-   STAGE=$(mktemp -d ~/nivra-stage.XXXXXX)
-   git init --bare -q "$STAGE/git"
-   git --git-dir "$STAGE/git" fetch -q github-nivra:TharunChougoni/nivra.git \
-     "refs/release-assets/$TAG:refs/assets/$TAG" "refs/tags/$TAG:refs/tags/$TAG"
-   for f in release.json nivra-x86_64-unknown-linux-musl nivra-x86_64-unknown-linux-musl.sha256; do
-     git --git-dir "$STAGE/git" show "refs/assets/$TAG:$f" > "$STAGE/$f"
-   done
-   (cd "$STAGE" && sha256sum -c nivra-x86_64-unknown-linux-musl.sha256)
-   git --git-dir "$STAGE/git" rev-parse "$TAG^{commit}"   # equals source_commit in release.json
-   chmod 0700 "$STAGE/nivra-x86_64-unknown-linux-musl"
-   ```
-
-4. Preview, review the report, then apply:
-
-   ```sh
-   "$STAGE/nivra-x86_64-unknown-linux-musl" host-migrate --release "$STAGE"
-   "$STAGE/nivra-x86_64-unknown-linux-musl" host-migrate --release "$STAGE" --apply
-   ```
-
-   The report must show `"binding": "matches"`. Keep the applied report; its
-   `rewrite_config` steps list the files rollback restores, including every
-   planner in a `previous_config` chain.
-
-5. Verify the installed release with its own binary. `update --check` proves the
-   installed tag and commit against the published annotated tag and prints
-   `already_current`, or `available` when a newer tag exists:
-
-   ```sh
-   ~/nivra-current/nivra self-check --expected-version "$TAG"
-   ~/nivra-current/nivra planner config-check --planner ~/.config/ind-sadr/planner.json --session NEXT_SESSION
-   ~/nivra-current/nivra preflight --config ~/.config/ind-sadr/rust-paper.json
-   ~/nivra-current/nivra update --check --config ~/.config/ind-sadr/updater.json
-   systemctl --user daemon-reload
-   systemctl --user cat nivra-paper.service
-   ```
-
-   A dated planner schedule needs one extra check. `preflight` resolves the
-   planner for the paper config's `session`; when that session predates the
-   active planner's `effective_from`, resolution follows `previous_config`.
-   Migration rewrites and validates every planner in that chain, so `preflight`
-   must pass without manual edits. A host migrated by 0.10.1, which rewrote only
-   the named planner, can still fail with `preflight_planner_config_invalid`.
-   Recover manually: copy the predecessor to `FILE.pre-nivra` (0600), drop its
-   `decision_owner`, `decide` and the other removed planner keys listed above,
-   validate with `~/nivra-current/nivra planner config-check --planner
-   PREVIOUS_PLANNER --session BOOK_SESSION`, then rerun `preflight`. The active
-   policy hash is unaffected by that predecessor.
-
-6. Inspect `operator_next` and the original book state. Migration preserves stop
-   and halt flags. Authorization to migrate the installation does not authorize
-   a resume, recovery, unhalt or new session.
-   - `preserve_stopped_or_halted_book`: leave the book stopped or halted. Do not
-     run `resume` or `planner-recover`. A separate owner mandate must review the
-     original incident and authorize any later state transition.
-   - `start_service_successor_binds_new_policy`: the book is closed.
-     `config-apply` refuses a closed book (`config_apply_book_closed`), and none
-     is needed. When separately authorized, the next normal rollover initializes
-     the successor's planner authority from the rewritten policy. Never resume
-     the closed book.
-   - `config_apply_then_resume`: the book is open and was not operator-stopped
-     or halted. The planner policy hash changes because `decide` and
-     `decision_owner` are gone. With an explicit paper continuation mandate,
-     run `~/nivra-current/nivra config-apply --confirm-paper-review --config ~/.config/ind-sadr/rust-paper.json`,
-     then `resume --confirm-paper-review`, then `readiness`, then start
-     `nivra-paper.service`. The migration preserves recorded model-selection
-     profiles and receipts for inspection.
-   - `inspect_book_readiness`: the book state could not be read, including when
-     a WAL or shared-memory file prevents immutable inspection. Inspect it with
-     `readiness` and preserve its state until reviewed.
-
-   Keep `nivra-paper.service` disabled at boot, as the old service was.
-
-7. Re-enable updates and remove the staging copy:
-
-   ```sh
-   systemctl --user enable --now nivra-update.timer
-   rm -rf "$STAGE"
-   ```
-
-**Rollback.** Before the renamed controller has written to a book, rollback is
-exact. Stop the new units, restore every file the applied report rewrote, move the
-two directories back, remove the new links and units, and start the old units:
-
-```sh
-systemctl --user disable --now nivra-update.timer
-systemctl --user stop nivra-update.service nivra-paper.service
-for f in FILES_FROM_THE_REPORT; do mv "$f.pre-nivra" "$f"; done
-mv ~/nivra-deploy ~/ind-sadr-deploy
-mv ~/.local/state/nivra ~/.local/state/ind-sadr
-rm ~/nivra-current ~/nivra-previous
-rm ~/.config/systemd/user/nivra-paper.service ~/.config/systemd/user/nivra-update.service \
-  ~/.config/systemd/user/nivra-update.timer ~/.config/systemd/user/nivra-alert@.service
-systemctl --user daemon-reload
-systemctl --user enable --now ind-sadr-rust-update.timer
-```
-
-Then start `ind-sadr-rust-paper.service` as before. Keep `~/nivra-releases` as
-evidence. After the renamed controller has run a rollover, `config-apply` or
-`resume`, the book's planner authority is bound to the new policy hash and the old
-binary with the restored planner refuses it. Fix forward from that point instead
-of rolling back.
-
 ## Dashboard and alerts
 
 The paper worker serves loopback `127.0.0.1:8771`; enter the application dashboard
@@ -1798,10 +1310,8 @@ transcript once on `run_ended`. Live events are hints only and carry
 `execution_authority:false`; they never imply an order, fill or validation fact.
 The workspace remains read-only and exposes no controls.
 
-The Model run history lists archived digest/orchestrator/scorer runs with their
-individual model identities and outcomes; pi lane status and turn journals are
-exposed by the controller's `agent` status and `agent-shadow-report`. System
-health lists each configured role's own status; missing evidence stays unknown.
+Pi lane status and turn journals are exposed by the controller's `agent` status.
+System health lists each component's own status; missing evidence stays unknown.
 
 An optional authenticated tunnel uses the exact `dashboard_public_host` hostname
 (no scheme/path) and proxies to loopback. Enable it only through the operator's
@@ -1841,36 +1351,9 @@ one. `captured_at_ms` is the loop's single completion sample, so an API request
 clock never renews the projection, the controller heartbeat, `as_of_ms` or a
 quote receipt. There is no UI for this projection yet.
 
-The snapshot has `version`, `captured_at_ms`, `supervisor`, `calendar` and
-`alert_transport`. New fields are nullable and mean unknown, not zero. The
-`supervisor` block is a read-only projection of the earlier planner's state; a pi
-paper book reports its own lane status separately and this block stays
-`not_configured`/`disabled`.
+The snapshot has `version` (2), `captured_at_ms`, `calendar` and
+`alert_transport`. New fields are nullable and mean unknown, not zero.
 
-- `supervisor` reads the bounded current-session `model/supervisor-state.json`
-  (64 KiB limit, no follow) and the pending session-log turn with a checked,
-  bounded reader (64 MiB cap, no follow, no repair/truncate on read) without
-  creating a journal. `config` is `configured`, `unavailable` or `not_configured`
-  and `config_reason` is a static code (for example
-  `planner_usage_unavailable_recovery_required`, matching the planner status).
-  A genuinely absent/disabled policy stays `disabled`; a configured policy that
-  failed to load, or whose usage/authority projection failed, is `unknown`
-  (never `disabled`), and its static caps remain visible when the original
-  policy is available. `pending_source` distinguishes
-  the known absences `missing`/`no_pending` from the unavailable sources
-  `corrupt`/`incomplete`/`unreadable`/`oversize`/`non_regular`/`symlink`; a real
-  checked pending turn is still exposed separately as evidence. Status is
-  `unknown` when the state source is not present or the pending source is
-  unavailable, never `idle`; a missing log with present state can be `idle`.
-  Missing, malformed, oversized, unreadable or other-session state is reported
-  as `unknown` with its `state` source; `budget.exhausted` and `backoff.active`
-  are `null` unless the present current-session state proves the fact.
-  `charged_calls` is the existing provider-usage projection, not a turn-run
-  count. `backoff` reports the actual current-session context-exhaustion path
-  only; general failure backoff is not implemented here. No next-retry time,
-  progress percentage or model-hang conclusion is guessed from an old
-  `last_run`. Only static reason/kind codes and bounded counters are exposed; raw
-  prompts, transcripts, provider errors, profile/auth data and paths are not.
 - `calendar` reports the verified embedded `NSE/CMTR/71775` coverage
   (`2026-01-01`..`2026-12-31`), the current operational date, the requested
   session and the recorded book session separately, plus `days_remaining`.
@@ -1966,7 +1449,6 @@ from serialized configuration so existing sealed configuration hashes remain sta
 
 | Configuration file / key | Default | Valid range |
 | --- | --- | --- |
-| Planner: `digest.max_analysis_tools` (retained legacy planner) | 4 | 0–64 calls per invocation; 0 disables analysis calls |
 | Planner: `max_handoff_instruments` | 20 | 1–20 keys per snapshot or feature tool request |
 | Runtime: `history_download.quota_wait_max_attempts` | 1800 | 0–1800 retries after the initial shared-quota reservation attempt |
 | Runtime: `history_download.quota_wait_poll_ms` | 1000 | 1–60000 ms between denied reservations |
@@ -2076,20 +1558,11 @@ prompt's SHA-256 in the turn record. The prompt text is not sealed into the plan
 policy; changing it is a reviewed agent-build or configuration change, and the
 controller never swaps lane prompts during a running turn.
 
-The earlier planner's `prompts/` directory (with `objective.md`, `data_owner.md`,
-`supervisor.md`, `orchestrator.md` and `scorer.md`) is retained only for offline
-replay and archived-policy loading. A present legacy directory must be complete:
-missing, empty, unreadable, oversized or invalid UTF-8 files refuse configuration
-loading, and there is no partial-directory fallback. Its file contents were part of
-that sealed policy hash; their location was not. A pi paper planner does not load a
-sibling `prompts/` directory at all.
-
 ### Pi paper planner policy
 
-The pi decision lane owns the paper plan head. Planner JSON that still carries
-`decision_owner`, `decide` or `handoff_gate` refuses with
-`planner_config_invalid`, and a book bound to an older policy hash refuses with
-`decision_owner_migration_required`. To change the policy, write it to a new
+The pi decision lane owns the paper plan head. Planner JSON with a key outside
+the pi policy shape refuses with `planner_config_invalid`, and a book bound to an
+older policy hash refuses with `decision_owner_migration_required`. To change the policy, write it to a new
 planner config, check it with `planner config-check`, and review its lane model,
 budget, prompt and credential bindings. On an open, non-halted book, use
 `config-apply --confirm-paper-review`. Preserve an existing operator stop unless
@@ -2153,12 +1626,6 @@ from the original candidate queue and lifecycle ledgers:
   counts are null or explicitly lower-bound when the fold is partial;
 - `measurement`: `independent_episodes`, no portfolio claim and no aggregate
   PnL;
-- `capture`: the distinct controller capture grant, used/remaining calls, last
-  receipt age, timeout/row/key budgets and journal coverage
-  (`journal_readable` / `journal_unavailable`). `coverage_label` says the label
-  is journal readability only and `current_eligibility` is `not_evaluated`;
-  `status: journal_readable` is not capture eligibility. It never calls the
-  provider.
 
 `as_of_ms` is the controller sample; a later GET never renews it. Missing or
 malformed source state is `unavailable`, never a fake zero, idle or progress

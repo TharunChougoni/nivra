@@ -15,7 +15,7 @@ start.
 | [Architecture](ARCHITECTURE.md) | Crate boundaries, runtime flow, durable state and lane separation |
 | [Operations](OPERATIONS.md) | Configuration, startup, recovery, releases and operator safety procedures |
 | [Strategy](STRATEGY.md) | Paper mandate, execution gates, fees and Nifty option scope |
-| [Model Harness](MODEL_HARNESS.md) | Lane tool boundary, evidence, budgets, archives and the retained offline-replay mechanics |
+| [Lane tools](LANE_TOOLS.md) | Lane triggers, tool boundary, plan binding, evidence and budgets |
 | [pi agent lanes](AGENT.md) | Current pi service: protocol, lanes, tools, budgets, verification and operations |
 | [Dashboard](DASHBOARD.md) | Read-only API, React workspace and captured-data projections |
 | [Testing](TESTING.md) | Behavioral test strategy and the current gate |
@@ -27,12 +27,10 @@ start.
 | Guide | Description |
 | --- | --- |
 | [Paper configuration](../packaging/rust/CONFIGURATION.md) | Current setup templates, fresh-install workflow and compatibility inventory |
-| [Paper replay](PAPER_REPLAY.md) | Offline full-day replay and recorded quote archives |
 | [Upstox market feed](UPSTOX_MARKET_FEED.md) | V3 screening feed, index context and fallback behavior |
 | [Research worker](RESEARCH_WORKER.md) | Registered research jobs, leases and sandbox containment |
 | [Strategy sandbox](STRATEGY_SANDBOX.md) | Scores-only strategies, recorded replay and read-only evidence |
 | [Historical candles](HISTORY_DOWNLOAD.md) | Read-only history download, receipts and coverage limits |
-| [Subscription transports](XAI_SUBSCRIPTION_TRANSPORT.md) | Application-owned model grants and transport admission |
 
 ## Reference
 
