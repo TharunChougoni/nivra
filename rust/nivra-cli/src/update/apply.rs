@@ -1,43 +1,5 @@
 use super::*;
 
-pub(crate) fn validate_prompt_bundle(
-    bytes: &[u8],
-) -> Result<std::collections::BTreeMap<String, String>> {
-    if bytes.is_empty() || bytes.len() > 65_536 {
-        return Err("release_prompts_invalid");
-    }
-    let prompts: std::collections::BTreeMap<String, String> =
-        serde_json::from_slice(bytes).map_err(|_| "release_prompts_invalid")?;
-    let expected = prompt_files();
-    if prompts.len() != expected.len()
-        || expected.iter().any(|name| {
-            prompts
-                .get(*name)
-                .is_none_or(|text| text.trim().is_empty() || text.len() > 16_384)
-        })
-    {
-        return Err("release_prompts_invalid");
-    }
-    Ok(prompts)
-}
-pub(crate) fn retain_prompt_bundle(stage: &Path, bundle: &[u8], checksum: &[u8]) -> Result<()> {
-    for (name, bytes) in [
-        (DEFAULT_PROMPTS_ASSET, bundle),
-        ("default-prompts.sha256", checksum),
-    ] {
-        let path = stage.join(name);
-        if exists(&path) {
-            if read(&path, 65_536)? != bytes {
-                return Err("installed_artifact_mismatch");
-            }
-        } else if let Err(error) = write_new(&path, bytes, false)
-            && (!exists(&path) || read(&path, 65_536)? != bytes)
-        {
-            return Err(error);
-        }
-    }
-    sync(stage)
-}
 pub(crate) fn exists(path: &Path) -> bool {
     path.symlink_metadata().is_ok()
 }
@@ -790,32 +752,8 @@ pub(crate) fn apply_selected(
     if checksum != format!("{}  {ASSET}\n", m.sha256).as_bytes() || digest(&binary) != m.sha256 {
         return Err("release_checksum_mismatch");
     }
-    let prompt_bundle = if let Some(checksum_bytes) =
-        host.fetch_optional(&format!("{tag}/default-prompts.sha256"), 256)?
-    {
-        let checksum =
-            std::str::from_utf8(&checksum_bytes).map_err(|_| "release_prompts_checksum_invalid")?;
-        let (expected, name) = checksum
-            .strip_suffix('\n')
-            .and_then(|s| s.split_once("  "))
-            .ok_or("release_prompts_checksum_invalid")?;
-        if name != DEFAULT_PROMPTS_ASSET || !hash(expected, 64) {
-            return Err("release_prompts_checksum_invalid");
-        }
-        let bytes = host.fetch(&format!("{tag}/{DEFAULT_PROMPTS_ASSET}"), 65_536)?;
-        if digest(&bytes) != expected {
-            return Err("release_prompts_checksum_mismatch");
-        }
-        validate_prompt_bundle(&bytes)?;
-        Some((bytes, checksum_bytes))
-    } else {
-        None
-    };
     if running == m.tag && digest(&read(&old.join("nivra"), 64 * 1024 * 1024)?) == m.sha256 {
         if !check && !dry {
-            if let Some((bundle, checksum)) = prompt_bundle.as_ref() {
-                retain_prompt_bundle(&old, bundle, checksum)?;
-            }
             release_metadata(&old, &m)?;
         }
         return Ok("already_current");
@@ -828,9 +766,6 @@ pub(crate) fn apply_selected(
         });
     }
     let stage = stage_release(&releases, &m, &manifest_bytes, &binary)?;
-    if let Some((bundle, checksum)) = prompt_bundle.as_ref() {
-        retain_prompt_bundle(&stage, bundle, checksum)?;
-    }
     release_metadata(&stage, &m)?;
     if exists(&stage.join("failed-update.json")) {
         return Err("failed_release_requires_review");

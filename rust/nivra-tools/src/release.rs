@@ -2,13 +2,6 @@
 use crate::{digest, safe_file};
 use std::{fs, path::Path, process::Command};
 const ASSET: &str = "nivra-x86_64-unknown-linux-musl";
-const PROMPTS_ASSET: &str = "default-prompts.json";
-fn prompt_files() -> impl Iterator<Item = &'static str> {
-    include_str!("../../../packaging/rust/prompts/inventory")
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-}
 fn git(root: &Path, args: &[&str]) -> Result<String, &'static str> {
     let out = Command::new("git")
         .args(args)
@@ -50,26 +43,6 @@ pub fn assemble(root: &Path, tag: &str, binary: &Path, output: &Path) -> Result<
     fs::create_dir(output).map_err(|_| "immutable_release_output_required")?;
     fs::write(output.join(ASSET), &bytes).map_err(|_| "release_write_failed")?;
     let sha = digest(&bytes);
-    let mut prompts = serde_json::Map::new();
-    for name in prompt_files() {
-        let prompt = safe_file(root, &format!("packaging/rust/prompts/{name}"))?;
-        if prompt.is_empty() || prompt.len() > 16_384 {
-            return Err("release_prompt_invalid");
-        }
-        let text = String::from_utf8(prompt).map_err(|_| "release_prompt_invalid")?;
-        prompts.insert((*name).to_owned(), serde_json::Value::String(text));
-    }
-    let prompts_bytes = serde_json::to_vec(&prompts).map_err(|_| "release_prompt_invalid")?;
-    if prompts_bytes.len() > 65_536 {
-        return Err("release_prompt_bundle_oversize");
-    }
-    let prompts_sha = digest(&prompts_bytes);
-    fs::write(output.join(PROMPTS_ASSET), &prompts_bytes).map_err(|_| "release_write_failed")?;
-    fs::write(
-        output.join("default-prompts.sha256"),
-        format!("{prompts_sha}  {PROMPTS_ASSET}\n"),
-    )
-    .map_err(|_| "release_write_failed")?;
     fs::write(
         output.join(format!("{ASSET}.sha256")),
         format!("{sha}  {ASSET}\n"),

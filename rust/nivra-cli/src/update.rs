@@ -15,14 +15,6 @@ use std::{
 };
 const TARGET: &str = "x86_64-unknown-linux-musl";
 const ASSET: &str = "nivra-x86_64-unknown-linux-musl";
-const DEFAULT_PROMPTS_ASSET: &str = "default-prompts.json";
-fn prompt_files() -> Vec<&'static str> {
-    include_str!("../../../packaging/rust/prompts/inventory")
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .collect()
-}
 type Result<T> = std::result::Result<T, &'static str>;
 #[derive(Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
@@ -152,9 +144,6 @@ pub(crate) enum Admission {
 }
 pub(crate) trait Host {
     fn fetch(&mut self, name: &str, limit: usize) -> Result<Vec<u8>>;
-    fn fetch_optional(&mut self, _name: &str, _limit: usize) -> Result<Option<Vec<u8>>> {
-        Ok(None)
-    }
     fn version(&mut self, binary: &Path) -> Result<String>;
     fn stop(&mut self) -> Result<()>;
     fn guard(&mut self, force: bool) -> Result<Admission>;

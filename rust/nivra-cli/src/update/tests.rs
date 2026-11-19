@@ -22,7 +22,6 @@ struct Fake {
     swap_failures: usize,
     swap_before_failure: bool,
     fail_restart: bool,
-    prompt_bundle: Option<Vec<u8>>,
     installed_version: Option<String>,
 }
 impl Fake {
@@ -50,20 +49,11 @@ impl Fake {
             swap_failures: 0,
             swap_before_failure: false,
             fail_restart: false,
-            prompt_bundle: None,
             installed_version: None,
         }
     }
 }
 impl Host for Fake {
-    fn fetch_optional(&mut self, name: &str, _: usize) -> Result<Option<Vec<u8>>> {
-        if name.ends_with("default-prompts.sha256") {
-            return Ok(self.prompt_bundle.as_ref().map(|bytes| {
-                format!("{}  {DEFAULT_PROMPTS_ASSET}\n", digest(bytes)).into_bytes()
-            }));
-        }
-        Ok(None)
-    }
     fn keep_stopped(&self) -> bool {
         self.keep_stopped
     }
@@ -84,8 +74,6 @@ impl Host for Fake {
             serde_json::json!({"tag":"v0.6.0","source_commit":sha,"target":TARGET,"sha256":sum})
                 .to_string()
                 .into_bytes()
-        } else if name.ends_with(DEFAULT_PROMPTS_ASSET) {
-            self.prompt_bundle.clone().ok_or("release_assets_pending")?
         } else if name.ends_with(".sha256") {
             format!("{sum}  {ASSET}\n").into_bytes()
         } else if self.corrupt {
@@ -274,15 +262,6 @@ fn update_decision_verifies_and_defers_then_activates_or_rolls_back() {
         let home = fixture();
         let h = home.path();
         let mut host = Fake::new(h);
-        host.prompt_bundle = Some(
-            serde_json::to_vec(
-                &super::prompt_files()
-                    .iter()
-                    .map(|name| ((*name).to_owned(), format!("packaged {name}")))
-                    .collect::<std::collections::BTreeMap<_, _>>(),
-            )
-            .unwrap(),
-        );
         assert_eq!(
             apply_selected(
                 h,
@@ -293,18 +272,6 @@ fn update_decision_verifies_and_defers_then_activates_or_rolls_back() {
                 &Selection::new(Some(version), None).unwrap()
             ),
             Ok("updated")
-        );
-        let stage = h.join(format!("nivra-releases/v0.6.0-{}", "a".repeat(40)));
-        assert_eq!(
-            fs::read(stage.join(DEFAULT_PROMPTS_ASSET)).unwrap(),
-            host.prompt_bundle.as_ref().unwrap().as_slice()
-        );
-        assert_eq!(
-            fs::read_to_string(stage.join("default-prompts.sha256")).unwrap(),
-            format!(
-                "{}  {DEFAULT_PROMPTS_ASSET}\n",
-                digest(host.prompt_bundle.as_ref().unwrap())
-            )
         );
     }
     let force = crate::Args::try_parse_from([

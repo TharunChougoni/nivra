@@ -276,29 +276,6 @@ pub(crate) struct RealHost {
     pub(crate) operator_stopped: bool,
 }
 impl Host for RealHost {
-    fn fetch_optional(&mut self, name: &str, limit: usize) -> Result<Option<Vec<u8>>> {
-        let (_, file) = name.split_once('/').ok_or("invalid_asset_request")?;
-        let tag = name.split_once('/').ok_or("invalid_asset_request")?.0;
-        let entries = git(
-            &self.cache,
-            &[
-                "ls-tree",
-                "-r",
-                "--name-only",
-                &format!("refs/assets/{tag}"),
-            ],
-        )?;
-        if !String::from_utf8_lossy(&entries)
-            .lines()
-            .any(|entry| entry == file)
-        {
-            return Ok(None);
-        }
-        self.fetch(name, limit).map(Some)
-    }
-    fn keep_stopped(&self) -> bool {
-        self.operator_stopped
-    }
     fn fetch(&mut self, name: &str, limit: usize) -> Result<Vec<u8>> {
         let data = if name == "tags" {
             git_run(&self.cache, &["ls-remote", "--tags", &self.remote])?

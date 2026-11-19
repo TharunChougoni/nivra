@@ -154,7 +154,7 @@ jobs:
           test ! -e "$index"
           export GIT_INDEX_FILE="$index"
           git read-tree --empty
-          for file in nivra-x86_64-unknown-linux-musl nivra-x86_64-unknown-linux-musl.sha256 release.json default-prompts.json default-prompts.sha256 nivra-analysis-x86_64-unknown-linux-musl nivra-analysis-x86_64-unknown-linux-musl.sha256; do
+          for file in nivra-x86_64-unknown-linux-musl nivra-x86_64-unknown-linux-musl.sha256 release.json nivra-analysis-x86_64-unknown-linux-musl nivra-analysis-x86_64-unknown-linux-musl.sha256; do
             blob=$(git hash-object -w "$RUNNER_TEMP/release-dist/$file")
             git update-index --add --cacheinfo "100644,$blob,$file"
           done
