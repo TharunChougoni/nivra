@@ -357,31 +357,6 @@ fn check(state: &Control, c: &Config) -> Result<()> {
     }
     Ok(())
 }
-/// Bootstrap only when the original event journal proves no provider could have run.
-/// A pending, interrupted, ambiguous or successful attempt requires the original pin.
-fn prepare_usage(db: &Connection, c: &Config) -> Result<()> {
-    if !c.directory.join("model/usage-identity.json").exists() {
-        let mut rows = db.prepare("SELECT state,result FROM planner_attempt_log")?;
-        for row in rows.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
-        })? {
-            let (state, result) = row?;
-            let result: Value = serde_json::from_str(result.as_deref().unwrap_or("null"))?;
-            if state != PlannerLogPhase::Failed.as_str()
-                || result["status"] != "model_plan_unavailable_no_trades"
-            {
-                return Err("planner_usage_identity_missing".into());
-            }
-        }
-        if c.directory.join("model/attempt.json").exists()
-            || c.directory.join("model/session-plan.json").exists()
-            || c.directory.join("model/usage-reservations.json").exists()
-        {
-            return Err("planner_usage_identity_missing".into());
-        }
-    }
-    planner::prepare_review_usage(c)
-}
 
 /// Called once under the book's controller lock. An abandoned claim is never replayed.
 pub(crate) fn initialize(
@@ -947,8 +922,6 @@ pub(crate) fn apply_config(
             )?;
             state.digest_failed = None;
         }
-    } else {
-        prepare_usage(db, c)?;
     }
     db.execute("INSERT INTO ticks(at,receipt,body,event) VALUES(?,NULL,?,'operator_planner_config_applied')",
         rusqlite::params![millis(), serde_json::to_string(&json!({"prior_config_hash":state.config_hash,"current_config_hash":next,"prior_prompt_sha256":state.prompt_sha256,"current_prompt_sha256":next_prompts,"configuration_sha256":digest(&serde_json::to_vec(cfg)?),"prior_active":state.active,"usage_preserved":true}))?])?;

@@ -2541,7 +2541,6 @@ fn stopped_recovery_retires_interrupted_pending_claim_without_replay() {
     p.stopped = true;
     p.health = "operator_stopped".into();
     persist(&mut db, &c, &p, start() + 2, None, None, "operator_stopped").unwrap();
-    let charges = planner::usage(&c).unwrap();
     let attempts: i64 = db
         .query_row("SELECT count(*) FROM planner_attempt_log", [], |r| r.get(0))
         .unwrap();
@@ -2578,7 +2577,6 @@ fn stopped_recovery_retires_interrupted_pending_claim_without_replay() {
             )
             .unwrap()
         );
-    assert_eq!(planner::usage(&c).unwrap(), charges);
     let recovered = load_wide(&mut db, &c).unwrap();
     assert!(recovered.stopped && !recovered.halted);
     assert_eq!(recovered.health, "operator_stopped");
@@ -2610,7 +2608,6 @@ fn service_shutdown_continues_and_only_a_request_stops_the_book() {
     let mut p = load_wide(&mut db, &c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
     let claim = redecision::pending_fixture(&mut db, &c, &p, start());
-    let charges = planner::usage(&c).unwrap();
 
     // A plain SIGTERM (restart, updater, host stop) is a service shutdown: the
     // cancelled claim is retired failed/no-replay, nothing sticks, the book stays open.
@@ -2632,7 +2629,6 @@ fn service_shutdown_continues_and_only_a_request_stops_the_book() {
     let result: serde_json::Value = serde_json::from_str(&result).unwrap();
     assert_eq!(result["status"], "service_shutdown_interrupted_no_replay");
     assert_eq!(result["charges_preserved"], true);
-    assert_eq!(planner::usage(&c).unwrap(), charges);
     assert_eq!(tick_count(&db, "service_shutdown"), 1);
     assert_eq!(tick_count(&db, "operator_stopped"), 0);
     drop(db);
@@ -2851,7 +2847,6 @@ fn startup_preserves_active_and_sticky_block() {
     let plans: i64 = db
         .query_row("SELECT count(*) FROM planner_plan", [], |r| r.get(0))
         .unwrap();
-    let usage = planner::usage(&c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start() + 1).unwrap();
     let control: serde_json::Value = serde_json::from_str(
         &db.query_row(
@@ -2866,7 +2861,6 @@ fn startup_preserves_active_and_sticky_block() {
     assert_eq!(control["blocked"], "attempt_interrupted_no_replay");
     assert_eq!(control["pending"]["id"], claim.id);
     assert_eq!(marker_receipt(&db).unwrap()["owner"], "pi");
-    assert_eq!(planner::usage(&c).unwrap(), usage);
     assert_eq!(
         db.query_row("SELECT count(*) FROM planner_plan", [], |r| r
             .get::<_, i64>(0))
@@ -2923,7 +2917,7 @@ fn halted_recovery_requires_block_proof() {
         let d = tempfile::tempdir().unwrap();
         let (c, _cfg, mut db, _p) = halted_owner_book(d.path());
         redecision::block(&mut db, &c, block).unwrap();
-        let before = recovery_authority_snapshot(&db, &c);
+        let before = recovery_authority_snapshot(&db);
         drop(db);
         assert_eq!(
             planner_recover(&c, true).unwrap_err().to_string(),
@@ -2931,7 +2925,7 @@ fn halted_recovery_requires_block_proof() {
             "{block}"
         );
         let db = open_book(&c).unwrap();
-        assert_eq!(recovery_authority_snapshot(&db, &c), before, "{block}");
+        assert_eq!(recovery_authority_snapshot(&db), before, "{block}");
     }
 
     // A configuration block is resolved by the exact policy rebind, not by a
@@ -2939,7 +2933,6 @@ fn halted_recovery_requires_block_proof() {
     let d = tempfile::tempdir().unwrap();
     let (c, _cfg, mut db, p) = halted_owner_book(d.path());
     redecision::block(&mut db, &c, "planner_event_configuration_changed").unwrap();
-    let usage = planner::usage(&c).unwrap();
     drop(db);
     planner_recover(&c, true).unwrap();
     let mut db = open_book(&c).unwrap();
@@ -2949,7 +2942,6 @@ fn halted_recovery_requires_block_proof() {
     assert_eq!(recovered.cash, p.cash);
     assert_eq!(recovered.positions, p.positions);
     assert_eq!(recovered.fills, p.fills);
-    assert_eq!(planner::usage(&c).unwrap(), usage);
 }
 
 /// Protection-only recovery keeps the halt and cannot clear a market-data
@@ -3004,7 +2996,7 @@ fn protection_only_retains_integrity_block() {
     }
 }
 
-fn recovery_authority_snapshot(db: &Connection, c: &Config) -> serde_json::Value {
+fn recovery_authority_snapshot(db: &Connection) -> serde_json::Value {
     let portfolio: String = db
         .query_row("SELECT body FROM state WHERE id=1", [], |r| r.get(0))
         .unwrap();
@@ -3035,8 +3027,7 @@ fn recovery_authority_snapshot(db: &Connection, c: &Config) -> serde_json::Value
         None
     };
     serde_json::json!({"portfolio":portfolio,"authority":authority,"ticks":ticks,
-        "attempts":attempts,"receipt_exists":receipt_exists,"receipt":receipt,
-        "usage":planner::usage(c).unwrap()})
+        "attempts":attempts,"receipt_exists":receipt_exists,"receipt":receipt})
 }
 fn recovery_owner_receipt_compatibility() {
     for case in [
@@ -3114,7 +3105,7 @@ fn recovery_owner_receipt_compatibility() {
             }
             _ => None,
         };
-        let before = recovery_authority_snapshot(&db, &c);
+        let before = recovery_authority_snapshot(&db);
         drop(db);
         if let Some(expected) = expected_error {
             assert_eq!(
@@ -3123,7 +3114,7 @@ fn recovery_owner_receipt_compatibility() {
                 "{case}"
             );
             assert_eq!(
-                recovery_authority_snapshot(&open_book(&c).unwrap(), &c),
+                recovery_authority_snapshot(&open_book(&c).unwrap()),
                 before,
                 "{case}"
             );
@@ -3135,7 +3126,6 @@ fn recovery_owner_receipt_compatibility() {
             assert_eq!(recovered.cash, p.cash);
             assert_eq!(recovered.positions, p.positions);
             assert_eq!(recovered.fills, p.fills);
-            assert_eq!(planner::usage(&c).unwrap(), before["usage"]);
             assert!(redecision::config_current(&db, &cfg).unwrap());
             redecision::owner_startup_check(&db, &c, &cfg).unwrap();
             let raw: String = db
@@ -3246,7 +3236,7 @@ fn recovery_owner_receipt_compatibility() {
     initialize_legacy_marked(&mut db, &c, &p, &legacy, start());
     mark_operator_stopped(&mut p);
     persist(&mut db, &c, &p, start(), None, None, "operator_stopped").unwrap();
-    let before = recovery_authority_snapshot(&db, &c);
+    let before = recovery_authority_snapshot(&db);
     drop(db);
     let (owner_c, _) = super::super::decision_owner::decision_fixture_config(d.path());
     assert_eq!(
@@ -3254,7 +3244,7 @@ fn recovery_owner_receipt_compatibility() {
         "planner_authority_owner_invalid"
     );
     let db = open_book(&owner_c).unwrap();
-    assert_eq!(recovery_authority_snapshot(&db, &owner_c), before);
+    assert_eq!(recovery_authority_snapshot(&db), before);
 }
 #[test]
 fn resume_clears_operator_stop_with_audit_when_flat() {
@@ -3366,7 +3356,6 @@ fn resume_clears_operator_stop_with_audit_when_flat() {
             r.get::<_, i64>(0)
         })
         .unwrap();
-    let charges_before = planner::usage(&c).unwrap();
     drop(db);
     assert!(planner_recover(&c, false).is_err());
     planner_recover(&c, true).unwrap();
@@ -3381,7 +3370,6 @@ fn resume_clears_operator_stop_with_audit_when_flat() {
         .unwrap(),
         attempts_before
     );
-    assert_eq!(planner::usage(&c).unwrap(), charges_before);
 
     // A stopped data block has no automatic recovery, but explicit review
     // can recover after input validation; failure preserves state and charges.
@@ -3422,7 +3410,6 @@ fn resume_clears_operator_stop_with_audit_when_flat() {
     assert!(checked.get());
     let mut db = open_book(&c).unwrap();
     assert!(!redecision::blocked(&db, &c).unwrap());
-    assert_eq!(planner::usage(&c).unwrap(), charges_before);
     assert_eq!(
         db.query_row("SELECT count(*) FROM planner_attempt_log", [], |r| {
             r.get::<_, i64>(0)
@@ -3867,7 +3854,6 @@ fn resume_resolves_active_session_book_and_keeps_safety_checks() {
 fn activate_fixture_plan(db: &mut Connection, c: &Config, p: &Portfolio, plan: &serde_json::Value) {
     if redecision::active_plan(db, c).unwrap().is_none() {
         let cfg: planner::PlannerConfig = serde_json::from_value(serde_json::json!({"enabled":true,"agent":{"mode":"paper","node":"/usr/bin/node","entry":"/opt/nivra/agent/dist/src/main.js","agent_dir":"/var/lib/nivra/pi","lanes":{"decision":{"model":{"provider":"openai-codex","id":"gpt-6.1-sol"},"daily_calls":10,"daily_cost_usd":10.0,"turn_timeout_ms":10000,"max_tool_calls":40}}}})).unwrap();
-        planner::prepare_review_usage(c).unwrap();
         ensure_actions(db).unwrap();
         redecision::initialize(db, c, p, Some(&cfg), start()).unwrap();
     }
@@ -4032,7 +4018,6 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
         "audit_projection",
         "missing_actions",
         "observer",
-        "usage_unavailable",
     ] {
         let d = tempfile::tempdir().unwrap();
         let c = super::super::tests::config(d.path());
@@ -4148,18 +4133,6 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
             assert_eq!(settings_reason, Some("planner_integrity_failure"));
         }
         let later = at + 1500;
-        if fault == "usage_unavailable" {
-            fs::rename(
-                c.directory.join("model/usage"),
-                c.directory.join("model/preserved-usage"),
-            )
-            .unwrap();
-            fs::write(
-                c.directory.join("model/usage"),
-                b"preserved invalid journal",
-            )
-            .unwrap();
-        }
         let quotes = BTreeMap::from([
             (i.key.clone(), quote(later, 111)),
             (second.key.clone(), quote(later, 100)),
@@ -4168,14 +4141,6 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
             later
         })
         .unwrap();
-        if fault == "usage_unavailable" {
-            assert!(
-                usage_projection(&mut db, &c, &mut p, later)
-                    .unwrap()
-                    .is_null()
-            );
-            assert!(c.directory.join("model/usage").is_file());
-        }
         assert!(p.positions.is_empty(), "{fault}");
         assert_eq!(p.fills.len(), 2);
         assert!(!p.fills[1].buy);

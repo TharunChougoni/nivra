@@ -125,7 +125,7 @@ fn plan_validation_reserves_cash_and_holdings() {
             .is_empty()
     );
     assert_eq!(
-        plan_document(&with_reasons.to_string()).unwrap()["candidate_reasons"][0]["reason"],
+        super::plan::plan_document(&with_reasons.to_string()).unwrap()["candidate_reasons"][0]["reason"],
         "spread too wide"
     );
     let mut oversized = with_reasons;

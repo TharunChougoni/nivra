@@ -6,21 +6,10 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 mod turn;
 pub(super) use turn::call_time_input;
-
-mod config;
-
 mod plan;
-#[allow(unused_imports)] // re-exported for crate callers and tests
-pub(crate) use plan::{
-    Action, CandidateReason, PlanSide, TradePlan, Verdict, plan_document, validate,
-};
-mod failure;
-#[allow(unused_imports)] // re-exported for crate callers and tests
-mod usage;
-pub(crate) use usage::{
-    CallGuard, attempt_failed, checked_reservations, prepare_review_usage, preview_guard,
-    usage_directory, usage_lock, usage_path,
-};
+pub(crate) use plan::{PlanSide, Verdict, validate};
+mod guard;
+pub(crate) use guard::{CallGuard, preview_guard};
 /// How much evidence the model sees in its user message. `ToolsOnly` is the
 /// default: the host keeps the full bundle for tools, validation and audits,
 /// while the model receives only a trigger envelope and fetches facts itself.
@@ -544,62 +533,6 @@ pub(crate) fn saved_plan(db: &Connection, c: &Config) -> Result<Option<Value>> {
         validate_saved(c, plan)?;
     }
     Ok(plan)
-}
-pub(crate) fn usage(c: &Config) -> Result<Value> {
-    let path = usage_path(c)?;
-    if c.directory.join("model/usage-identity.json").exists() {
-        usage_directory(c, true)?;
-        let _lock = usage_lock(c, false)?;
-        let journal = usage_directory(c, true)?;
-        let records = checked_reservations(c, &journal)?;
-        let mut counts = serde_json::Map::new();
-        for role in [
-            "digest",
-            "operations",
-            "strategy",
-            "scorer",
-            "supervisor",
-            "research",
-        ] {
-            let mut charged = std::collections::BTreeSet::new();
-            for name in records
-                .keys()
-                .filter(|n| n.starts_with(&format!("{role}-")))
-            {
-                if attempt_failed(&journal, name)? {
-                    continue;
-                }
-                let prior: Value = serde_json::from_slice(
-                    &crate::read_bounded(&journal.join(name), 4096)
-                        .map_err(|_| "planner_usage_reservation_invalid")?,
-                )?;
-                charged.insert(prior["budget_event"].as_str().unwrap_or(name).to_owned());
-            }
-            counts.insert(role.into(), json!(charged.len()));
-        }
-        return Ok(Value::Object(counts));
-    }
-    let mut counts = BTreeMap::from([
-        ("digest", 0usize),
-        ("operations", 0usize),
-        ("strategy", 0usize),
-        ("scorer", 0usize),
-        ("supervisor", 0usize),
-        ("research", 0usize),
-    ]);
-    if path.exists() {
-        for item in fs::read_dir(&path)? {
-            let name = item?.file_name().to_string_lossy().into_owned();
-            if name.ends_with(".attempt.json") && !attempt_failed(&path, &name)? {
-                for (role, count) in &mut counts {
-                    if name.starts_with(&format!("{role}-")) {
-                        *count += 1;
-                    }
-                }
-            }
-        }
-    }
-    Ok(serde_json::to_value(counts)?)
 }
 pub(crate) fn status(plan: &Value) -> Value {
     json!({"status":"validated_plan","decision_id":plan["decision_id"],"model_id":plan["model_id"],"provider":plan["provider"],"actions":plan["verdicts"],"budget_used":plan["budget_used"],"budgets":plan["budgets"]})

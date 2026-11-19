@@ -12,7 +12,6 @@ mod bridge;
 pub(crate) use bridge::{Bridge, LaneGrant, LaneRequests, failure_reason};
 mod bundle;
 use bundle::*;
-mod failure_window;
 pub(crate) mod research;
 pub(crate) use research::{
     LaunchBook, OwnerResearchRuntime, ResearchLaunch, ResearchSettings,
@@ -85,7 +84,6 @@ impl OwnerTools {
         *self == Self::default()
     }
 }
-mod digest;
 
 /// Two independent readings for one admitted model turn: the actual observation
 /// wall (model-visible timestamps) and the monotonic duration budget. They are

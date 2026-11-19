@@ -18,8 +18,6 @@ mod projection;
 mod shadow;
 mod shutdown;
 use projection::execution_projection;
-#[cfg(test)]
-use projection::usage_projection;
 use shadow::{ShadowScorer, ShadowSelection};
 #[cfg(test)]
 use shadow::{sandbox_failure_detail, shadow_regime_inputs};
@@ -799,12 +797,6 @@ fn contain_event_error(
 ) -> Result<()> {
     if let Err(error) = result {
         let code = failure_code(error.as_ref());
-        if matches!(
-            code.as_str(),
-            "planner_usage_busy_no_retry" | "planner_usage_lock_timeout"
-        ) {
-            return Ok(());
-        }
         if redecision::recoverable_block(&code)
             || matches!(
                 code.as_str(),
