@@ -232,7 +232,7 @@ fn retain_transcripts(model: &Path, runs: &[PathBuf]) -> Result<u64> {
             .and_then(|v| v.to_str())
             .ok_or("retention_name_invalid")?;
         let target = directory.join(format!("{name}.ndjson"));
-        nivra_store::native_grant::file_path_ok(&target)?;
+        nivra_store::private_path::file_path_ok(&target)?;
         match fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -290,7 +290,7 @@ pub fn run(c: &Config, today: NaiveDate, apply: bool) -> Result<Summary> {
     if c.directory.file_name().and_then(|v| v.to_str()) != Some(c.session.to_string().as_str()) {
         return Err("retention_root_invalid".into());
     }
-    nivra_store::native_grant::file_path_ok(&root.join("retention-scope"))?;
+    nivra_store::private_path::file_path_ok(&root.join("retention-scope"))?;
     let mut sessions: Vec<_> = fs::read_dir(root)?
         .map(|e| e.map(|e| e.path()))
         .collect::<std::io::Result<_>>()?;
@@ -390,7 +390,7 @@ pub fn run(c: &Config, today: NaiveDate, apply: bool) -> Result<Summary> {
                 .recursive(true)
                 .mode(0o700)
                 .create(&archive_dir)?;
-            nivra_store::native_grant::file_path_ok(&archive)?;
+            nivra_store::private_path::file_path_ok(&archive)?;
             pack(&temp, &entries)?;
             fs::rename(&temp, &archive)?;
             fs::File::open(&archive_dir)?.sync_all()?;
@@ -464,7 +464,7 @@ fn bound_closed_sessions(
     let Some(root) = c.directory.parent() else {
         return Ok(());
     };
-    if nivra_store::native_grant::file_path_ok(&root.join("retention-scope")).is_err() {
+    if nivra_store::private_path::file_path_ok(&root.join("retention-scope")).is_err() {
         return Ok(());
     }
     let mut sessions: Vec<_> = fs::read_dir(root)?
@@ -543,7 +543,7 @@ fn replace_regular_file(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
         .and_then(|name| name.to_str())
         .ok_or("retention_name_invalid")?;
     let tmp = path.with_file_name(format!(".{name}.retention-tmp"));
-    nivra_store::native_grant::file_path_ok(&tmp)?;
+    nivra_store::private_path::file_path_ok(&tmp)?;
     if let Ok(meta) = fs::symlink_metadata(&tmp) {
         if !meta.is_file() || meta.file_type().is_symlink() {
             return Err("retention_temp_invalid".into());

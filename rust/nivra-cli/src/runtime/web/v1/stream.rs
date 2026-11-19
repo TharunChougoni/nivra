@@ -3,43 +3,27 @@ use super::*;
 #[derive(Clone)]
 pub(crate) enum EventSource {
     Global,
-    File(PathBuf, String),
     #[cfg(test)]
     Test(Arc<TestFeed>),
 }
 impl EventSource {
-    pub(crate) fn from_file(source: Option<&(PathBuf, String)>) -> Self {
-        source.map_or(Self::Global, |(path, binding)| {
-            Self::File(path.clone(), binding.clone())
-        })
-    }
-    pub(crate) fn from_ctx(ctx: &Ctx) -> Self {
+    pub(crate) fn from_ctx(_ctx: &Ctx) -> Self {
         #[cfg(test)]
-        if let Some(feed) = &ctx.event_feed {
+        if let Some(feed) = &_ctx.event_feed {
             return Self::Test(feed.clone());
         }
-        Self::from_file(ctx.source.as_ref())
+        Self::Global
     }
     pub(crate) fn snapshot(&self, after: u64) -> serde_json::Value {
         match self {
-            Self::Global => nivra_cli::model_stream::snapshot(after),
-            Self::File(path, binding) => {
-                nivra_cli::model_stream::read_snapshot(path, binding, after)
-                    .unwrap_or_else(|_| serde_json::json!({"unavailable":true}))
-            }
+            Self::Global => nivra_cli::event_feed::snapshot(after),
             #[cfg(test)]
             Self::Test(feed) => feed.snapshot(after),
         }
     }
     pub(crate) fn wait(&self, after: u64, timeout: Duration) {
         match self {
-            Self::Global => nivra_cli::model_stream::wait_after(after, timeout),
-            Self::File(_, _) => {
-                let seq = nivra_cli::model_stream::snapshot(0)["next"]
-                    .as_u64()
-                    .unwrap_or(0);
-                nivra_cli::model_stream::wait_after(seq, timeout);
-            }
+            Self::Global => nivra_cli::event_feed::wait_after(after, timeout),
             #[cfg(test)]
             Self::Test(feed) => feed.wait(after, timeout),
         }

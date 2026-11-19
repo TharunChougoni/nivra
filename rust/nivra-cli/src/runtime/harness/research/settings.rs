@@ -388,7 +388,7 @@ impl ResearchSettings {
         {
             return Err("research_settings_invalid".into());
         }
-        nivra_store::native_grant::file_path_ok(&self.queue)
+        nivra_store::private_path::file_path_ok(&self.queue)
             .map_err(|_| "research_queue_path_invalid")?;
         let mut ids = BTreeSet::new();
         for r in &self.registrations {
@@ -405,7 +405,7 @@ impl ResearchSettings {
                 return Err("research_limits_invalid".into());
             }
             for p in [&r.code_file, &r.runtime_file, &r.input_file] {
-                nivra_store::native_grant::file_path_ok(p)
+                nivra_store::private_path::file_path_ok(p)
                     .map_err(|_| "research_registration_path_invalid")?;
             }
             for hash in [&r.code_sha256, &r.runtime_sha256, &r.input_sha256] {

@@ -5,7 +5,6 @@ fn ctx(feed: Arc<TestFeed>, streams: usize) -> Ctx {
         token: "fixture".into(),
         public_host: None,
         view: Arc::new(Mutex::new(json!({"paper_only":true}))),
-        source: None,
         history: None,
         features: None,
         equity: None,

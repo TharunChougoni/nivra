@@ -3,16 +3,16 @@ use super::*;
 fn configured_public_host(config: Option<&Config>) -> Option<DashboardPublicHost> {
     config.and_then(|c| c.dashboard_public_host.clone())
 }
-pub fn entry(token_file: &Path, model_config: Option<&Path>) -> ExitCode {
+pub fn entry(token_file: &Path, config: Option<&Path>) -> ExitCode {
     let result = (|| -> Result<()> {
         let token = private(token_file)?;
         if token.trim().len() < 32 {
             return Err("dashboard_token_too_short".into());
         }
-        let config: Option<Config> = model_config
+        let config: Option<Config> = config
             .map(|path| -> Result<Config> {
                 let config: Config = serde_json::from_slice(
-                    &crate::read_bounded(path, 16384).map_err(|_| "model_feed_config_invalid")?,
+                    &crate::read_bounded(path, 16384).map_err(|_| "dashboard_config_invalid")?,
                 )?;
                 config.validate()?;
                 Ok(config)
@@ -32,23 +32,7 @@ pub fn entry(token_file: &Path, model_config: Option<&Path>) -> ExitCode {
             .unwrap_or_default();
         let public_host = configured_public_host(config.as_ref());
 
-        let feed = if let Some(config) = config {
-            let config = rollover::current(&config)?;
-            rollover::bound_state(&config)?;
-            Some((
-                config.directory.join("model/live-stream.json"),
-                book_binding(&config)?,
-            ))
-        } else {
-            None
-        };
-        web::start_with_feed(
-            token.trim().to_owned(),
-            public_host,
-            view.clone(),
-            feed,
-            settings,
-        )?;
+        web::start_research(token.trim().to_owned(), public_host, view.clone(), settings)?;
         tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()?

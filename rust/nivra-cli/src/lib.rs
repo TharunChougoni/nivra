@@ -1,10 +1,9 @@
-//! Reusable offline transport contracts; no session activation or provider client.
-pub mod native_transport;
+//! Offline libraries shared by the nivra binaries; no session activation or provider client.
 pub mod orchestrator;
 
 pub mod dashboard_host;
+pub mod event_feed;
 pub mod lock;
-pub mod model_stream;
 
 pub mod archive_reconcile;
 pub mod candidate_execution;

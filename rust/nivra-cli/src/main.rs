@@ -233,9 +233,9 @@ enum Command {
     Dashboard {
         #[arg(long)]
         token_file: PathBuf,
-        /// Read the redacted model feed from this explicitly bound paper config.
+        /// Paper config whose dashboard settings and public host apply.
         #[arg(long)]
-        model_config: Option<PathBuf>,
+        config: Option<PathBuf>,
     },
     /// Read-only credential/source probe; prints only a redacted outcome.
     Probe {
@@ -589,10 +589,9 @@ fn main() -> ExitCode {
             dry_run: _,
             apply,
         } => runtime::retention::entry(&config, apply),
-        Command::Dashboard {
-            token_file,
-            model_config,
-        } => runtime::research_dashboard::entry(&token_file, model_config.as_deref()),
+        Command::Dashboard { token_file, config } => {
+            runtime::research_dashboard::entry(&token_file, config.as_deref())
+        }
         Command::Rollover {
             config,
             now,

@@ -243,7 +243,6 @@ fn dispatch_source(
     token: &str,
     view: &Arc<Mutex<serde_json::Value>>,
     public_host: Option<&str>,
-    source: Option<&(PathBuf, String)>,
     history: Option<&PathBuf>,
     settings: &DashboardSettings,
 ) -> Response {
@@ -253,7 +252,6 @@ fn dispatch_source(
         token,
         view,
         public_host,
-        source,
         history,
         settings,
         None,
@@ -268,7 +266,6 @@ fn dispatch_source_with(
     token: &str,
     view: &Arc<Mutex<serde_json::Value>>,
     public_host: Option<&str>,
-    source: Option<&(PathBuf, String)>,
     history: Option<&PathBuf>,
     settings: &DashboardSettings,
     features: Option<&Arc<Mutex<FeatureStore>>>,
@@ -288,7 +285,6 @@ fn dispatch_source_with(
         token,
         view,
         public_host,
-        source,
         history,
         settings,
         features,
@@ -311,10 +307,10 @@ fn negotiate(mut reply: Response, head: &str, settings: &DashboardSettings) -> R
     reply
 }
 /// The dashboard's session API reads the controller's own state directory. The
-/// live-stream/history file always lives at `<root>/model/...`; anything else
+/// history file always lives at `<root>/model/...`; anything else
 /// disables the session routes instead of guessing a path.
-fn runtime_root(history: Option<&PathBuf>, source: Option<&(PathBuf, String)>) -> Option<PathBuf> {
-    let path = history.or_else(|| source.map(|(path, _)| path))?;
+fn runtime_root(history: Option<&PathBuf>) -> Option<PathBuf> {
+    let path = history?;
     let model = path.parent()?;
     if model.file_name()? != "model" {
         return None;
@@ -329,7 +325,6 @@ fn dispatch_inner(
     token: &str,
     view: &Arc<Mutex<serde_json::Value>>,
     public_host: Option<&str>,
-    source: Option<&(PathBuf, String)>,
     history: Option<&PathBuf>,
     settings: &DashboardSettings,
     features: Option<&Arc<Mutex<FeatureStore>>>,
@@ -357,7 +352,7 @@ fn dispatch_inner(
         if let Ok(route @ (router::Route::Backtest | router::Route::BacktestExample)) = route {
             return backtest_route(route, head, body, view, public_host, settings);
         }
-        let session_root = runtime_root(history, source);
+        let session_root = runtime_root(history);
         return v1::dispatch(
             route,
             head,
@@ -365,7 +360,6 @@ fn dispatch_inner(
             view,
             settings,
             session_root.as_deref(),
-            source,
             features,
             equity,
             instrument_catalog,
@@ -448,7 +442,6 @@ fn dispatch(
         view,
         public_host,
         None,
-        None,
         &DashboardSettings::default(),
     )
 }
@@ -485,7 +478,6 @@ pub fn start(
         token,
         public_host,
         view,
-        None,
         settings,
         Some(history),
         features,
@@ -493,31 +485,19 @@ pub fn start(
         instrument_catalog,
     )
 }
-pub fn start_with_feed(
+pub fn start_research(
     token: String,
     public_host: Option<DashboardPublicHost>,
     view: Arc<Mutex<serde_json::Value>>,
-    source: Option<(PathBuf, String)>,
     settings: DashboardSettings,
 ) -> Result<()> {
-    serve(
-        token,
-        public_host,
-        view,
-        source,
-        settings,
-        None,
-        None,
-        None,
-        None,
-    )
+    serve(token, public_host, view, settings, None, None, None, None)
 }
 #[allow(clippy::too_many_arguments)]
 fn serve(
     token: String,
     public_host: Option<DashboardPublicHost>,
     view: Arc<Mutex<serde_json::Value>>,
-    source: Option<(PathBuf, String)>,
     settings: DashboardSettings,
     history: Option<PathBuf>,
     features: Option<Arc<Mutex<FeatureStore>>>,
@@ -529,7 +509,6 @@ fn serve(
         token,
         public_host,
         view,
-        source,
         settings,
         history,
         features,
@@ -554,7 +533,6 @@ struct Ctx {
     token: String,
     public_host: Option<DashboardPublicHost>,
     view: Arc<Mutex<serde_json::Value>>,
-    source: Option<(PathBuf, String)>,
     settings: DashboardSettings,
     history: Option<PathBuf>,
     features: Option<Arc<Mutex<FeatureStore>>>,
@@ -689,7 +667,6 @@ fn handle(mut stream: TcpStream, ctx: &Ctx) {
             &ctx.token,
             &ctx.view,
             ctx.public_host.as_ref().map(DashboardPublicHost::as_str),
-            ctx.source.as_ref(),
             ctx.history.as_ref(),
             &ctx.settings,
             ctx.features.as_ref(),
@@ -713,7 +690,6 @@ mod tests {
                 token: "fixture".into(),
                 public_host: None,
                 view: view(),
-                source: None,
                 history: None,
                 features: None,
                 equity: None,
@@ -828,7 +804,6 @@ mod tests {
             &v,
             None,
             None,
-            None,
             &settings,
         );
         assert_eq!(asset.cache, "no-cache");
@@ -837,7 +812,6 @@ mod tests {
             b"",
             "fixture",
             &v,
-            None,
             None,
             None,
             &settings,
@@ -1089,34 +1063,6 @@ mod tests {
                 "{origin}"
             );
         }
-    }
-    #[cfg(unix)]
-    #[test]
-    fn model_run_does_not_serve_symlinked_run_directories() {
-        let dir = tempfile::tempdir().unwrap();
-        let model = dir.path().join("sessions/2026-10-23/model");
-        fs::create_dir_all(&model).unwrap();
-        let external = dir.path().join("external");
-        fs::create_dir(&external).unwrap();
-        fs::write(
-            external.join("turn-00-response.json"),
-            br#"{"output":{"stance":"abstain"}}"#,
-        )
-        .unwrap();
-        let id = "harness-digest-5000-link";
-        std::os::unix::fs::symlink(&external, model.join(id)).unwrap();
-        let history = model.join("live-stream.json");
-        let response = dispatch_source(
-            &head(&format!("GET /api/v1/runs/{id}"), ""),
-            b"",
-            "fixture",
-            &view(),
-            None,
-            None,
-            Some(&history),
-            &DashboardSettings::default(),
-        );
-        assert_eq!(response.code, "404 Not Found");
     }
     #[test]
     fn pure_backtest_route_runs_engine_and_refuses_invalid_or_cross_origin_inputs() {

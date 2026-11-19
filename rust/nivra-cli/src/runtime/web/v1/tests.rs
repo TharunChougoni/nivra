@@ -104,7 +104,6 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
             &view,
             None,
             None,
-            None,
             &DashboardSettings::default(),
         )
     };
@@ -449,7 +448,6 @@ fn series_projects_receipt_bars_and_equity_without_volume() {
             b"",
             "fixture",
             &view,
-            None,
             None,
             None,
             &DashboardSettings::default(),

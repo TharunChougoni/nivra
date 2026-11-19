@@ -1842,7 +1842,7 @@ impl<'a> Controller<'a> {
         }
         *self.view.lock().map_err(|_| Fail::new("dashboard_lock"))? = v_json.clone();
         let prepared_summary = super::super::web::update_prepared_summary(&v_json);
-        nivra_cli::model_stream::summary_changed(&prepared_summary.etag);
+        nivra_cli::event_feed::summary_changed(&prepared_summary.etag);
         Ok(interval_ms)
     }
 

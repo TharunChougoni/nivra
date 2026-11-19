@@ -39,7 +39,6 @@ pub(crate) fn dispatch(
     view: &Arc<Mutex<serde_json::Value>>,
     settings: &DashboardSettings,
     session_root: Option<&Path>,
-    stream_source: Option<&(PathBuf, String)>,
     features: Option<&Arc<Mutex<FeatureStore>>>,
     equity: Option<&Arc<Mutex<EquitySeries>>>,
     instrument_catalog: Option<&Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
@@ -62,9 +61,7 @@ pub(crate) fn dispatch(
         Ok(Route::Alerts(query)) => alerts(head, query, view),
         Ok(Route::Tools(query)) => tool_calls(head, query, view, session_root),
         Ok(Route::Series(query)) => series(head, query, view, settings, features, equity),
-        Ok(Route::Events(query)) => {
-            poll_source(head, query, EventSource::from_file(stream_source), settings)
-        }
+        Ok(Route::Events(query)) => poll_source(head, query, EventSource::Global, settings),
         Ok(_) => error("404 Not Found", "route_not_found"),
         Err("method_not_allowed") => error("405 Method Not Allowed", "method_not_allowed"),
         Err(reason) => error("400 Bad Request", reason),
