@@ -82,7 +82,11 @@ bound to another authority requires the reviewed config-apply transition.
 ## Research and review
 
 The decision lane can post `research` questions. Rust delivers each completed
-answer in a subsequent decision brief. The research lane can write
+answer in a subsequent decision brief. Rust checks the request deadline when it
+claims the question, including questions selected earlier in the same batch.
+After saving the answer artifact, Rust publishes the result and completes the
+request in one SQLite transaction. If publication fails, the turn reports
+`agent_research_answer_failed` and the artifact stays available for audit. The research lane can write
 `scripts/<name>.py` and test the source with bounded inline feature rows. The
 scores-only sandbox has no network access. The response includes the executed
 source hash. Configured analysis and backtest tools use the existing research

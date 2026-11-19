@@ -673,6 +673,123 @@ fn request_research_reaches_a_research_turn_and_the_next_decision_brief() {
     assert_eq!(spent["lanes"]["research"]["calls"], 2);
 }
 
+#[test]
+fn research_claim_checks_expiry_at_the_claim_clock() {
+    use crate::runtime::harness::LaneRequests;
+
+    for (claim_at, accepted) in [(199, true), (200, false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let (c, _) = all_tools(dir.path());
+        let requests = requests::Requests::new(
+            &c,
+            &triggers::ResearchTriggers {
+                request_ttl_ms: 100,
+                ..Default::default()
+            },
+        );
+        let posted = requests
+            .post("decision-1", "Check evidence", Vec::new(), 100)
+            .unwrap();
+        let id = posted["request_id"].as_str().unwrap();
+        assert_eq!(requests.queued(199, 4).unwrap()[0].id, id);
+        assert_eq!(
+            requests.claim(id, "research-1-1-1", claim_at).unwrap(),
+            accepted
+        );
+        let status = requests.status(id).unwrap().unwrap();
+        if accepted {
+            assert_eq!(status["state"], "running");
+            assert_eq!(status["turn_id"], "research-1-1-1");
+        } else {
+            assert_eq!(status["state"], "cancelled");
+            assert_eq!(status["reason"], "expired");
+            assert!(status["turn_id"].is_null());
+        }
+        assert!(requests.result(id).unwrap().unwrap()["answer"].is_null());
+        assert!(requests.updates(claim_at).unwrap().is_empty());
+    }
+}
+
+#[test]
+fn research_publication_failure_rolls_back_and_preserves_the_answer() {
+    use crate::runtime::harness::LaneRequests;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (c, cfg) = all_tools(dir.path());
+    let settings = settings(100, 10.0);
+    let clock = || 1_760_600_000_000_i64;
+    let (client, peer) = connect(|peer| {
+        let (research, _) = peer.turn();
+        peer.finish(&research, "ok", "Verified fixture answer", 1, 0.01);
+    });
+    let mut context = context("5000");
+    let mut agent = fixture_agent(client);
+    let mut runner = LaneRunner::new(&mut agent, &settings, &c, &cfg, &clock);
+    let posted = runner
+        .requests
+        .post("decision-1", "Check evidence", Vec::new(), clock())
+        .unwrap();
+    let id = posted["request_id"].as_str().unwrap();
+    let mut db = lane_queue::open_file(&c.directory.join("model/agent/requests.sqlite")).unwrap();
+    db.execute_batch(
+        "CREATE TRIGGER fail_completion BEFORE UPDATE OF state ON lane_messages
+         WHEN NEW.state='done'
+         BEGIN SELECT RAISE(ABORT,'injected private database detail'); END;",
+    )
+    .unwrap();
+    let turns = runner
+        .research_requests(
+            &json!({"kind":"request"}),
+            &fixture_brief(&context, clock()),
+            &mut context,
+        )
+        .unwrap();
+    peer.join().unwrap();
+
+    assert_eq!(turns.len(), 1);
+    assert_ne!(turns[0].outcome.status, TurnStatus::Ok);
+    assert_eq!(
+        turns[0].outcome.error.as_deref(),
+        Some("agent_research_answer_failed")
+    );
+    let result = runner.requests.result(id).unwrap().unwrap();
+    assert_eq!(result["request"]["state"], "failed");
+    assert_eq!(result["request"]["reason"], "turn_failed");
+    assert!(result["answer"].is_null());
+    assert!(runner.requests.updates(clock()).unwrap().is_empty());
+    let published: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM lane_messages WHERE kind='research_result'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(published, 0);
+    let artifact = c
+        .directory
+        .join("model/agent/research")
+        .join(format!("{id}.json"));
+    let answer: Value = serde_json::from_slice(&std::fs::read(artifact).unwrap()).unwrap();
+    assert_eq!(answer["request_id"], id);
+    assert_eq!(answer["text"], "Verified fixture answer");
+    assert_eq!(answer["turn_id"], turns[0].outcome.id);
+    let journal = std::fs::read_to_string(c.directory.join("model/agent/turns.ndjson")).unwrap();
+    let receipt: Value = serde_json::from_str(journal.lines().last().unwrap()).unwrap();
+    assert_eq!(receipt["status"], "error");
+    assert_eq!(receipt["error"], "agent_research_answer_failed");
+
+    // A pre-fix journal can already contain the result of a failed request.
+    let body = lane_queue::MessageBody::ResearchResult {
+        request_id: Some(id.to_owned()),
+        research_id: turns[0].outcome.id.clone(),
+        summary: "Legacy answer".into(),
+        artifact_ref: format!("agent/research/{id}.json"),
+        output_sha256: crate::runtime::digest(b"Legacy answer"),
+    };
+    lane_queue::post(&mut db, &c.session.to_string(), id, &body, clock(), 100, 4).unwrap();
+    assert!(runner.requests.updates(clock()).unwrap().is_empty());
+}
+
 /// Failure modes: a turn that keeps spending after pi reports the lane's
 /// daily allowance is gone, a next turn that still calls the model, a
 /// research turn that blocks a waiting decision, and an agent crash that

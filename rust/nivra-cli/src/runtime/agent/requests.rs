@@ -7,12 +7,12 @@ use crate::runtime::lane_queue::{
     self, LaneMessage, MessageBody, MessageKind, MessageState, TransitionReason,
 };
 use crate::runtime::{Config, Result, digest};
-use rusqlite::Connection;
+use rusqlite::{Connection, TransactionBehavior};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 /// Research answers delivered per decision turn; the rest wait for the next.
-const MAX_UPDATES: usize = 4;
+const MAX_UPDATES: i64 = 4;
 const MAX_ANSWER_CHARS: usize = 16_000;
 
 pub(crate) struct Requests {
@@ -60,14 +60,7 @@ impl Requests {
 
     /// Answers not yet shown to a decision turn.
     pub(crate) fn updates(&self, now: i64) -> Result<Vec<LaneMessage>> {
-        lane_queue::list(
-            &self.open()?,
-            &self.session,
-            &[MessageKind::ResearchResult],
-            MessageState::Queued,
-            now,
-            MAX_UPDATES,
-        )
+        lane_queue::completed_research_updates(&self.open()?, &self.session, now, MAX_UPDATES)
     }
 
     pub(crate) fn mark_delivered(&self, ids: &[String], turn_id: &str, now: i64) -> Result<()> {
@@ -143,9 +136,9 @@ impl Requests {
         Ok(failed)
     }
 
-    /// Store the answer, post it for the next decision brief and close the
-    /// request, in that order. The artifact text is redacted like any
-    /// transcript.
+    /// Publish an answer only while this turn still owns the running request.
+    /// The write lock covers the artifact and both queue changes. A failed
+    /// transaction can leave an orphan artifact, which is never delivered.
     pub(crate) fn answer(
         &self,
         request: &LaneMessage,
@@ -154,44 +147,56 @@ impl Requests {
         usage: &Value,
         now: i64,
     ) -> Result<()> {
-        let MessageBody::ResearchRequest { question, .. } = &request.body else {
+        let mut db = self.open()?;
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = lane_queue::load(&tx, &request.id)?
+            .filter(|message| {
+                message.session == self.session
+                    && message.kind == MessageKind::ResearchRequest
+                    && message.state == MessageState::Running
+                    && message.turn_id.as_deref() == Some(turn_id)
+            })
+            .ok_or("agent_research_request_not_owned")?;
+        let MessageBody::ResearchRequest { question, .. } = &current.body else {
             return Err("agent_research_request_invalid".into());
         };
-        let artifact = format!("agent/research/{}.json", request.id);
+        let artifact = format!("agent/research/{}.json", current.id);
+        let body = MessageBody::ResearchResult {
+            request_id: Some(current.id.clone()),
+            research_id: turn_id.to_owned(),
+            summary: super::lanes::summary(text),
+            artifact_ref: artifact.clone(),
+            output_sha256: digest(text.as_bytes()),
+        };
         let path = self.model.join(&artifact);
         super::lanes::private_dir(path.parent().ok_or("agent_research_path")?)?;
         let redacted = crate::runtime::transcript::redact(&json!(text));
         crate::runtime::rollover::atomic(
             &path,
-            &json!({"request_id":request.id,"question":question,"turn_id":turn_id,
+            &json!({"request_id":current.id,"question":question,"turn_id":turn_id,
                 "text":redacted,"usage":usage}),
         )?;
-        let body = MessageBody::ResearchResult {
-            request_id: Some(request.id.clone()),
-            research_id: turn_id.to_owned(),
-            summary: super::lanes::summary(text),
-            artifact_ref: artifact,
-            output_sha256: digest(text.as_bytes()),
-        };
-        let mut db = self.open()?;
-        lane_queue::post(
-            &mut db,
+        lane_queue::post_in_transaction(
+            &tx,
             &self.session,
-            &request.id,
+            &current.id,
             &body,
             now,
             self.ttl_ms,
             self.max_open,
         )?;
-        lane_queue::transition(
-            &mut db,
-            &request.id,
+        if !lane_queue::transition_in_transaction(
+            &tx,
+            &current.id,
             MessageState::Running,
             MessageState::Done,
             TransitionReason::Completed,
             Some(turn_id),
             now,
-        )?;
+        )? {
+            return Err("agent_research_request_not_owned".into());
+        }
+        tx.commit()?;
         Ok(())
     }
 

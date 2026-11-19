@@ -6,7 +6,7 @@ use super::requests::Requests;
 use super::tools::{LaneHost, PlanAttempt, lane_definitions};
 use super::{AgentSettings, Lane, ModelSpec};
 use crate::runtime::harness::{Bridge, LaneGrant};
-use crate::runtime::lane_queue::{MessageBody, TransitionReason};
+use crate::runtime::lane_queue::{LaneMessage, MessageBody, TransitionReason};
 use crate::runtime::planner::{Backend, CallGuard, PlannerConfig, preview_guard};
 use crate::runtime::web_tools::Transport;
 use crate::runtime::workspace::WorkspaceScope;
@@ -366,7 +366,7 @@ impl<'a> LaneRunner<'a> {
         context: &mut TurnContext,
     ) -> Result<LaneTurn> {
         let id = self.next_id(lane);
-        self.turn_as(id, lane, trigger, brief, context)
+        self.turn_as(id, lane, trigger, brief, context, None)
     }
 
     fn turn_as(
@@ -376,6 +376,7 @@ impl<'a> LaneRunner<'a> {
         trigger: Value,
         brief: Value,
         context: &mut TurnContext,
+        research_request: Option<&LaneMessage>,
     ) -> Result<LaneTurn> {
         let now = (self.clock)();
         let lane_settings = self.settings.lane(lane)?.clone();
@@ -457,7 +458,7 @@ impl<'a> LaneRunner<'a> {
             });
         let plan = host.plan.take();
         drop(host);
-        let outcome = match result {
+        let mut outcome = match result {
             Ok(outcome) => outcome,
             Err(error) => {
                 self.journal(&json!({"turn_id":id,"lane":lane,"trigger":trigger,"at_ms":now,"status":"refused","error":error.to_string()}))?;
@@ -479,6 +480,22 @@ impl<'a> LaneRunner<'a> {
             .mode(0o600)
             .open(archive.join("events.ndjson"))?
             .write_all(&events)?;
+        if let Some(request) = research_request
+            && outcome.status == TurnStatus::Ok
+            && self
+                .requests
+                .answer(
+                    request,
+                    &id,
+                    &outcome.text,
+                    &json!(outcome.usage),
+                    (self.clock)(),
+                )
+                .is_err()
+        {
+            outcome.status = TurnStatus::Error;
+            outcome.error = Some("agent_research_answer_failed".into());
+        }
         let mut line = json!({
             "turn_id":id,"lane":lane,"trigger":trigger,"at_ms":now,
             "status":outcome.status,"error":outcome.error,"model":outcome.model,"provider":outcome.provider,
@@ -531,7 +548,14 @@ impl<'a> LaneRunner<'a> {
             .iter()
             .map(crate::runtime::lane_queue::update_fact)
             .collect();
-        let turn = self.turn_as(id, Lane::Decision, trigger, json!(brief.render()?), context)?;
+        let turn = self.turn_as(
+            id,
+            Lane::Decision,
+            trigger,
+            json!(brief.render()?),
+            context,
+            None,
+        )?;
         if turn.outcome.status == TurnStatus::Ok {
             let ids: Vec<String> = updates.into_iter().map(|update| update.id).collect();
             self.requests
@@ -569,31 +593,26 @@ impl<'a> LaneRunner<'a> {
             brief.task =
                 json!({"kind":"request","request_id":request.id,"question":question,"refs":refs});
             let turn = brief.render().and_then(|text| {
-                self.turn_as(id, Lane::Research, trigger.clone(), json!(text), context)
+                self.turn_as(
+                    id,
+                    Lane::Research,
+                    trigger.clone(),
+                    json!(text),
+                    context,
+                    Some(&request),
+                )
             });
             let at = (self.clock)();
             match turn {
-                Ok(turn) if turn.outcome.status == TurnStatus::Ok => {
-                    let answered = self.requests.answer(
-                        &request,
-                        &turn.outcome.id,
-                        &turn.outcome.text,
-                        &json!(turn.outcome.usage),
-                        at,
-                    );
-                    if answered.is_err() {
-                        self.requests
-                            .fail(&request.id, TransitionReason::TurnFailed, at)?;
-                    }
-                    turns.push(turn);
-                }
                 Ok(turn) => {
-                    let reason = if turn.outcome.error.as_deref() == Some("agent_preempted") {
-                        TransitionReason::Interrupted
-                    } else {
-                        TransitionReason::TurnFailed
-                    };
-                    self.requests.fail(&request.id, reason, at)?;
+                    if turn.outcome.status != TurnStatus::Ok {
+                        let reason = if turn.outcome.error.as_deref() == Some("agent_preempted") {
+                            TransitionReason::Interrupted
+                        } else {
+                            TransitionReason::TurnFailed
+                        };
+                        self.requests.fail(&request.id, reason, at)?;
+                    }
                     turns.push(turn);
                 }
                 Err(error) => {

@@ -322,6 +322,22 @@ pub(crate) fn post(
     ttl_ms: i64,
     max_open_requests: usize,
 ) -> Result<Posted> {
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let posted = post_in_transaction(&tx, session, key, body, now, ttl_ms, max_open_requests)?;
+    tx.commit()?;
+    Ok(posted)
+}
+
+/// Shared posting logic for changes that publish a result and settle its request.
+pub(crate) fn post_in_transaction(
+    tx: &rusqlite::Transaction<'_>,
+    session: &str,
+    key: &str,
+    body: &MessageBody,
+    now: i64,
+    ttl_ms: i64,
+    max_open_requests: usize,
+) -> Result<Posted> {
     body.validate()?;
     if session.is_empty() || !bounded_id(key) || ttl_ms <= 0 || now < 0 {
         return Err("lane_message_invalid".into());
@@ -329,7 +345,6 @@ pub(crate) fn post(
     let kind = body.kind();
     let id = message_id(session, kind, key);
     let encoded = serde_json::to_string(body)?;
-    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let existing: Option<String> = tx
         .query_row(
             "SELECT body FROM lane_messages WHERE session=?1 AND kind=?2 AND idempotency_key=?3",
@@ -338,11 +353,10 @@ pub(crate) fn post(
         )
         .optional()?;
     if let Some(existing) = existing {
-        drop(tx);
         if existing != encoded {
             return Err("lane_message_conflict".into());
         }
-        let message = load(db, &id)?.ok_or("lane_message_invalid")?;
+        let message = load(tx, &id)?.ok_or("lane_message_invalid")?;
         return Ok(Posted {
             message,
             deduped: true,
@@ -364,7 +378,7 @@ pub(crate) fn post(
         params![id, session, kind.as_str(), key, encoded, now, expires],
     )?;
     event(
-        &tx,
+        tx,
         &id,
         None,
         MessageState::Queued,
@@ -372,16 +386,16 @@ pub(crate) fn post(
         None,
         now,
     )?;
-    tx.commit()?;
-    let message = load(db, &id)?.ok_or("lane_message_invalid")?;
+    let message = load(tx, &id)?.ok_or("lane_message_invalid")?;
     Ok(Posted {
         message,
         deduped: false,
     })
 }
 
-/// Compare-and-set one transition. `Ok(false)` means another writer moved the
-/// message first; nothing is written. An illegal move is an error.
+/// Compare-and-set one transition. A claim at or after its deadline records
+/// expiration and returns `Ok(false)`. Other failed comparisons write nothing.
+/// An illegal move is an error.
 pub(crate) fn transition(
     db: &mut Connection,
     id: &str,
@@ -392,15 +406,31 @@ pub(crate) fn transition(
     now: i64,
 ) -> Result<bool> {
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let kind: Option<String> = tx
-        .query_row("SELECT kind FROM lane_messages WHERE id=?1", [id], |r| {
-            r.get(0)
-        })
-        .optional()?;
-    let kind = MessageKind::parse(&kind.ok_or("lane_message_missing")?)?;
+    let changed = transition_in_transaction(&tx, id, from, to, reason, turn_id, now)?;
+    tx.commit()?;
+    Ok(changed)
+}
+
+pub(crate) fn transition_in_transaction(
+    tx: &rusqlite::Transaction<'_>,
+    id: &str,
+    from: MessageState,
+    to: MessageState,
+    reason: TransitionReason,
+    turn_id: Option<&str>,
+    now: i64,
+) -> Result<bool> {
+    let message = load(tx, id)?.ok_or("lane_message_missing")?;
+    let kind = message.kind;
     if !MessageState::can_move(kind, from, to) {
         return Err("lane_message_transition_invalid".into());
     }
+    let expired = to == MessageState::Running && message.expires_ms <= now;
+    let (to, reason, turn_id) = if expired {
+        (MessageState::Cancelled, TransitionReason::Expired, None)
+    } else {
+        (to, reason, turn_id)
+    };
     let changed = tx.execute(
         "UPDATE lane_messages SET state=?1,updated_ms=?2,turn_id=COALESCE(?3,turn_id),reason=?4 WHERE id=?5 AND state=?6",
         params![to.as_str(), now, turn_id, reason.as_str(), id, from.as_str()],
@@ -408,9 +438,8 @@ pub(crate) fn transition(
     if changed != 1 {
         return Ok(false);
     }
-    event(&tx, id, Some(from), to, reason, turn_id, now)?;
-    tx.commit()?;
-    Ok(true)
+    event(tx, id, Some(from), to, reason, turn_id, now)?;
+    Ok(!expired)
 }
 
 /// Cancel queued messages that expired or belong to another session. Running
@@ -459,6 +488,27 @@ pub(crate) fn list(
     messages.retain(|message| kinds.contains(&message.kind));
     messages.truncate(limit);
     Ok(messages)
+}
+
+/// Older journals can contain a posted answer whose request never completed.
+pub(crate) fn completed_research_updates(
+    db: &Connection,
+    session: &str,
+    now: i64,
+    limit: i64,
+) -> Result<Vec<LaneMessage>> {
+    query(
+        db,
+        "AS result WHERE result.session=?1 AND result.kind='research_result'
+         AND result.state='queued' AND result.expires_ms>?2
+         AND EXISTS (SELECT 1 FROM lane_messages AS request
+             WHERE request.id=result.idempotency_key AND request.session=result.session
+             AND request.kind='research_request' AND request.state='done'
+             AND request.id=json_extract(result.body,'$.request_id')
+             AND request.turn_id=json_extract(result.body,'$.research_id'))
+         ORDER BY result.created_ms,result.id LIMIT ?3",
+        &[&session, &now, &limit],
+    )
 }
 
 pub(crate) fn update_fact(message: &LaneMessage) -> Value {
