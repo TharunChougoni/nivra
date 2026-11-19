@@ -255,22 +255,41 @@ nivra rollover --config PAPER_CONFIG --now RFC3339_TIME --dry-run
 
 Self-check accepts a version with or without `v` and prints the failed check.
 Preflight checks writable paths using a private temporary probe, without credentials
-or opening the read journal. Under systemd, it also checks effective writable paths;
-use `INVOCATION_ID=manual` for that check before activation. `--unit-file FILE`
-checks one explicit unit file instead. This is admission, not sandbox qualification.
+or opening the read journal. When `INVOCATION_ID` is set, as it is under systemd,
+preflight also reads `ReadWritePaths` of the installed unit through
+`systemctl --user show nivra-paper.service` and refuses a required path the unit
+does not grant (`preflight_unit_path_uncovered`). To run that check from a shell
+before activation, set `INVOCATION_ID=manual`; it reads the unit systemd has
+loaded, so run `systemctl --user daemon-reload` after you edit the unit.
+`--unit-file FILE` checks the `ReadWritePaths` lines of one unit file instead.
+Without either, preflight does not check unit coverage. This is admission, not
+sandbox qualification.
+
+With a pi planner, preflight also checks the agent: node, the entry, the agent
+package dependencies, the prompts directory, and an agent directory that the
+current user owns and can write. It then runs the agent with `--check` to confirm
+that pi knows every lane model and fallback and that each provider has a stored
+or passed credential. pi reports presence only; preflight never reads
+`auth.json`. The agent directory is part of the unit coverage check. The codes
+are `preflight_agent_node_missing`, `preflight_agent_entry_missing`,
+`preflight_agent_modules_missing`, `preflight_agent_prompts_missing`,
+`preflight_agent_dir_not_writable`, `preflight_agent_dir_not_owned`,
+`preflight_agent_model_unknown`, `preflight_agent_auth_missing` and
+`preflight_agent_check_failed`.
 
 Readiness is read-only: it never refreshes credentials, calls models, creates
 namespaces or repairs state. It reports grant coverage, history and rollover
-separately. Its exit code checks `models.status`: success means
-`model_roles_ready`, including when history coverage is PARTIAL. It does not
-certify overall history/lifecycle readiness; inspect those fields separately.
-Older snapshots without `models` may use top-level `model_status`.
-Future refresh/unestablished usage may be UNKNOWN;
-authenticated status alone does not establish session coverage. Readiness also
-reports each configured role's optional limit fallback (`fallback`) with a
-static status, reason and an `eligibility` array of the reason codes it may
-switch for; a blocked fallback does not change the primary role's status or the
-model-readiness exit code.
+separately. Its exit code checks `models.status` and succeeds only for
+`model_roles_ready`. A pi planner never reports `model_roles_ready`, because
+readiness does not check provider access. With node, the entry, the agent
+directory and the decision lane budget in place, it reports
+`model_roles_unknown` with reason `agent_provider_not_checked` and exits non-zero.
+Otherwise it reports `model_roles_blocked` with the first blocking reason, such
+as `agent_node_unavailable`, `agent_usage_unavailable` or
+`daily_budget_exhausted`. Each lane appears in `roles` with its model, budget and
+current spend. Use preflight for credential presence. Readiness does not certify
+overall history or lifecycle readiness; inspect those fields separately. Older
+snapshots without `models` may use top-level `model_status`.
 
 Preflight and readiness also read every `research_tools.registrations` file from the
 resolved planner config and compare its bytes with the registered SHA-256. A

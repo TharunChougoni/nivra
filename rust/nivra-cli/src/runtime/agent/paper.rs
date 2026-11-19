@@ -73,7 +73,7 @@ pub(super) fn reserve(
     let deadline = now
         .checked_add(i64::try_from(lane.turn_timeout_ms)?)
         .ok_or("agent_paper_deadline_invalid")?;
-    let trigger = json!({
+    let mut trigger = json!({
         "kind":"pi_decision",
         "observed_ms":now,
         "triggered_by":{
@@ -86,6 +86,9 @@ pub(super) fn reserve(
         "model":lane.model.id,
         "provider":lane.model.provider,
     });
+    if let Some(fallback) = &lane.fallback {
+        trigger["fallback"] = json!({"model":fallback.id,"provider":fallback.provider});
+    }
     redecision::reserve_pi(db, c, cfg, p, now, deadline, trigger)
 }
 
@@ -142,8 +145,11 @@ pub(super) fn commit(
     }
     let hash = digest(&serde_json::to_vec(completed.input)?);
     if completed.turn_id != turn_id(claim)
-        || claim.trigger["provider"] != completed.provider
-        || claim.trigger["model"] != completed.model
+        || ![&claim.trigger, &claim.trigger["fallback"]]
+            .iter()
+            .any(|bound| {
+                bound["provider"] == completed.provider && bound["model"] == completed.model
+            })
         || claim.trigger["input_sha256"] != hash
         || claim.trigger["policy_sha256"] != digest(&planner::policy_bytes(cfg)?)
     {
@@ -205,6 +211,11 @@ mod tests {
         let mut c = crate::runtime::tests::config(dir.path());
         let mut settings = super::super::tests::settings(10, 10.0);
         settings.mode = super::super::AgentMode::Paper;
+        settings.lanes.get_mut(&Lane::Decision).unwrap().fallback = Some(super::super::ModelSpec {
+            provider: "mistral".into(),
+            id: "deepseek-v4-1-flash-1017".into(),
+            thinking: Some("high".into()),
+        });
         let cfg = planner::PlannerConfig {
             enabled: true,
             agent: Some(settings),
@@ -241,19 +252,15 @@ mod tests {
             "stance":"long",
             "notes":""
         });
-        let model = &cfg
-            .agent
-            .as_ref()
-            .unwrap()
-            .lane(Lane::Decision)
-            .unwrap()
-            .model;
+        let lane = cfg.agent.as_ref().unwrap().lane(Lane::Decision).unwrap();
+        let (primary, fallback) = (&lane.model, lane.fallback.as_ref().unwrap());
         initialize(&mut db, &c, &cfg, &p, at).unwrap();
         assert!(redecision::has_pi_authority(&db, &c).unwrap());
         let mut decision_id = String::new();
-        for (offset, age, expected) in [
-            (0, 2_001, "execution_gate_rejected"),
-            (5_000, 2_000, "filled"),
+        // Either the primary or the configured fallback may answer the claim.
+        for (offset, age, expected, model) in [
+            (0, 2_001, "execution_gate_rejected", primary),
+            (5_000, 2_000, "filled", fallback),
         ] {
             let now = at + offset;
             let claim = reserve(&mut db, &c, &cfg, &p, now, &input, json!({}))
@@ -261,17 +268,10 @@ mod tests {
                 .unwrap();
             assert!(redecision::pending_attempt(&db).unwrap());
             let turn_id = turn_id(&claim);
-            let result = |model| Completed {
+            let result = |id| Completed {
                 turn_id: &turn_id,
-                provider: &cfg
-                    .agent
-                    .as_ref()
-                    .unwrap()
-                    .lane(Lane::Decision)
-                    .unwrap()
-                    .model
-                    .provider,
-                model,
+                provider: &model.provider,
+                model: id,
                 proposal: &proposal,
                 input: &input,
             };

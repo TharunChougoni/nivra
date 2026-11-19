@@ -10,6 +10,62 @@ and cost budget. Pi reads the application's own `auth.json` and `models.json`
 from its configured agent directory. Rust starts the agent as a subprocess with
 an explicit environment allowlist.
 
+## Agent directory
+
+The agent directory holds the application's own pi `auth.json` and optional
+`models.json`. Do not point it at an interactive pi directory such as
+`~/.pi/agent`. The paper unit runs with `ProtectHome=read-only`, so keep the
+directory under the granted state root, for example
+`~/.local/state/nivra/pi`. Create it with mode `0700` and log in to each
+configured provider with pi's own command:
+
+```sh
+install -d -m 0700 ~/.local/state/nivra/pi
+PI_CODING_AGENT_DIR=~/.local/state/nivra/pi pi auth login openai-codex
+PI_CODING_AGENT_DIR=~/.local/state/nivra/pi pi auth login mistral --api-key
+```
+
+`nivra preflight` checks that pi knows every lane model and fallback and that
+each provider has a credential, without reading it.
+
+## Fallback
+
+A lane may name a fallback model. pi's catalog already includes Mistral's
+`deepseek-v4-1-flash-1017`, so it needs no `models.json` entry. pi maps the
+`medium` thinking level to `high` for that model.
+
+```json
+"decision": {
+  "model": { "provider": "openai-codex", "id": "gpt-6.1-sol", "thinking": "medium" },
+  "fallback": { "provider": "mistral", "id": "deepseek-v4-1-flash-1017", "thinking": "high" },
+  "daily_calls": 300,
+  "daily_cost_usd": 10.0
+}
+```
+
+A turn moves to the fallback only when the primary fails before any model
+output or tool call:
+
+| Primary failure | Fallback |
+| --- | --- |
+| Usage, quota or rate limit still failing after pi's retries (`quota`) | Yes |
+| Authentication or entitlement failure, such as 401, 403 or a missing credential (`auth`) | Yes |
+| Another provider rejection that pi does not retry (`rejected`) | Yes |
+| Timeout, 5xx, network error or context overflow | No |
+| Abort, preemption, budget or turn deadline | No |
+| Any model output or tool call earlier in the turn | No |
+
+The agent rewinds the lane session to the state before the brief and runs the
+brief once on the fallback. The failed attempt stays in the session file. Rust
+accepts the switch only if it served no tool call in the turn; otherwise it
+aborts the turn with `agent_fallback_refused`. The turn journal records
+`fallback` with `from`, `to`, `reason` and the bounded error. The turn events
+and the log carry the same switch. Lane budgets count the fallback's usage at
+the cost pi reports for it. A decision claim accepts a plan from the primary or
+the configured fallback. The fallback is part of the planner policy, so set it
+before the session starts. A book already bound to the earlier policy needs the
+reviewed config-apply transition.
+
 ## Decision
 
 Rust wakes the decision lane when eligible evidence supports a trigger, such as

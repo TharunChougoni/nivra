@@ -30,6 +30,8 @@ export interface TurnRequest {
   /** The lane's pi session: one per session date, stored under `dir`. */
   session: { date: string; dir: string };
   model: ModelSpec;
+  /** Used only when the primary fails before any output for a reason `fallbackReason` accepts. */
+  fallback?: ModelSpec;
   trigger: JsonObject;
   brief: JsonValue;
   tools: ToolSpec[];
@@ -68,6 +70,17 @@ export interface Usage {
 
 export type TurnStatus = "ok" | "error" | "aborted";
 
+export type FallbackReason = "quota" | "auth" | "rejected";
+
+/** A turn moved from the lane's primary model to its fallback. */
+export interface Fallback {
+  from: { provider: string; id: string };
+  to: { provider: string; id: string };
+  reason: FallbackReason;
+  /** The primary's error, bounded. */
+  error: string;
+}
+
 export type Outbound =
   | { v: number; type: "ready"; pi_version: string; node: string; pid: number }
   | { v: number; type: "tool_call"; turn_id: string; call_id: string; name: string; args: JsonValue }
@@ -84,6 +97,7 @@ export type Outbound =
       provider: string;
       session_file: string | null;
       prompt_sha256: string;
+      fallback?: Fallback;
     }
   | { v: number; type: "error"; error: string };
 
@@ -94,6 +108,19 @@ function isObject(value: unknown): value is Record<string, unknown> {
 function str(value: unknown, field: string): string {
   if (typeof value !== "string" || value.length === 0) throw new Error(`protocol_field_invalid:${field}`);
   return value;
+}
+
+const THINKING: readonly Thinking[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+
+function modelSpec(value: unknown, field: string): ModelSpec {
+  if (!isObject(value)) throw new Error(`protocol_field_invalid:${field}`);
+  const thinking = value.thinking;
+  if (thinking !== undefined && !THINKING.includes(thinking as Thinking)) throw new Error(`protocol_field_invalid:${field}.thinking`);
+  return {
+    provider: str(value.provider, `${field}.provider`),
+    id: str(value.id, `${field}.id`),
+    ...(thinking === undefined ? {} : { thinking: thinking as Thinking }),
+  };
 }
 
 function tools(value: unknown): ToolSpec[] {
@@ -118,22 +145,14 @@ export function parseInbound(line: string): Inbound {
       const lane = value.lane;
       if (typeof lane !== "string" || !LANES.includes(lane as Lane)) throw new Error("protocol_field_invalid:lane");
       const session = value.session;
-      const model = value.model;
-      if (!isObject(session) || !isObject(model) || !isObject(value.trigger)) throw new Error("protocol_message_invalid");
-      const thinking = model.thinking;
-      if (thinking !== undefined && !["off", "minimal", "low", "medium", "high", "xhigh"].includes(String(thinking))) {
-        throw new Error("protocol_field_invalid:model.thinking");
-      }
+      if (!isObject(session) || !isObject(value.trigger)) throw new Error("protocol_message_invalid");
       return {
         type: "turn",
         id: str(value.id, "id"),
         lane: lane as Lane,
         session: { date: str(session.date, "session.date"), dir: str(session.dir, "session.dir") },
-        model: {
-          provider: str(model.provider, "model.provider"),
-          id: str(model.id, "model.id"),
-          ...(thinking === undefined ? {} : { thinking: thinking as Thinking }),
-        },
+        model: modelSpec(value.model, "model"),
+        ...(value.fallback == null ? {} : { fallback: modelSpec(value.fallback, "fallback") }),
         trigger: value.trigger as JsonObject,
         brief: (value.brief ?? null) as JsonValue,
         tools: tools(value.tools),

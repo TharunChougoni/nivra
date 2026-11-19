@@ -135,7 +135,7 @@ fn primary(triggers: &[Trigger]) -> Value {
 fn turn_summary(turn: &lanes::LaneTurn) -> Value {
     json!({"turn_id":turn.outcome.id,"lane":turn.outcome.lane,"status":turn.outcome.status,
         "error":turn.outcome.error,"usage":turn.outcome.usage,"model":turn.outcome.model,
-        "provider":turn.outcome.provider,"tool_calls":turn.outcome.tool_calls.len(),
+        "provider":turn.outcome.provider,"fallback":turn.outcome.fallback,"tool_calls":turn.outcome.tool_calls.len(),
         "elapsed_ms":turn.outcome.elapsed_ms})
 }
 

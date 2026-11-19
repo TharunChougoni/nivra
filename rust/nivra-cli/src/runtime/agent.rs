@@ -19,7 +19,7 @@ mod tools;
 mod triggers;
 pub(crate) mod turn_cli;
 
-pub(crate) use client::{Agent, AgentClient};
+pub(crate) use client::{Agent, AgentClient, command};
 pub(crate) use lanes::read_spend;
 pub(crate) use triggers::{Ranked, TriggerSettings};
 
@@ -54,10 +54,30 @@ pub(crate) struct ModelSpec {
     pub thinking: Option<String>,
 }
 
+impl ModelSpec {
+    /// The agent refuses any other thinking level as a protocol error, which
+    /// would leave the turn waiting for its deadline.
+    fn valid(&self) -> bool {
+        !self.provider.is_empty()
+            && !self.id.is_empty()
+            && self.thinking.as_deref().is_none_or(|level| {
+                matches!(
+                    level,
+                    "off" | "minimal" | "low" | "medium" | "high" | "xhigh"
+                )
+            })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LaneSettings {
     pub model: ModelSpec,
+    /// Runs the turn instead when the primary fails before any output with a
+    /// usage limit, an auth failure or a provider rejection; never after a
+    /// tool ran. Each switch is journalled with its reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<ModelSpec>,
     /// Model requests per session date, counted from pi's usage reports.
     pub daily_calls: u64,
     /// Spend per session date in US dollars, from pi's cost reports.
@@ -124,8 +144,12 @@ impl AgentSettings {
             && self.prompts.as_ref().is_none_or(|p| p.is_absolute())
             && !self.lanes.is_empty()
             && self.lanes.values().all(|lane| {
-                !lane.model.provider.is_empty()
-                    && !lane.model.id.is_empty()
+                lane.model.valid()
+                    && lane.fallback.as_ref().is_none_or(|fallback| {
+                        fallback.valid()
+                            && (&fallback.provider, &fallback.id)
+                                != (&lane.model.provider, &lane.model.id)
+                    })
                     && lane.daily_calls > 0
                     && lane.daily_cost_usd.is_finite()
                     && lane.daily_cost_usd > 0.0

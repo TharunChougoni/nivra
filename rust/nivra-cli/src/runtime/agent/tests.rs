@@ -17,6 +17,8 @@ struct Peer {
     reader: BufReader<std::io::PipeReader>,
     writer: std::io::PipeWriter,
     calls: usize,
+    /// The model the last turn request named; a real agent reports it back.
+    model: Value,
 }
 
 impl Peer {
@@ -32,6 +34,7 @@ impl Peer {
     fn turn(&mut self) -> (String, Value) {
         let turn = self.recv();
         assert_eq!(turn["type"], "turn");
+        self.model = turn["model"].clone();
         (turn["id"].as_str().unwrap().to_owned(), turn)
     }
     fn call(&mut self, turn: &str, name: &str, args: Value) -> Value {
@@ -50,7 +53,7 @@ impl Peer {
     fn finish(&mut self, turn: &str, status: &str, text: &str, calls: u64, cost_usd: f64) {
         self.send(json!({"type":"turn_result","id":turn,"status":status,"output":{"text":text},
             "usage":{"input":100*calls,"output":10*calls,"cache_read":50,"cache_write":0,"cost_usd":cost_usd,"calls":calls},
-            "model":"scripted","provider":"fake","session_file":null,"prompt_sha256":"0".repeat(64)}));
+            "model":self.model["id"],"provider":self.model["provider"],"session_file":null,"prompt_sha256":"0".repeat(64)}));
     }
 }
 
@@ -64,6 +67,7 @@ fn connect<T: Send + 'static>(
             reader: BufReader::new(from_rust),
             writer: to_rust,
             calls: 0,
+            model: Value::Null,
         };
         peer.send(json!({"type":"ready","pi_version":"test","node":"test","pid":1}));
         script(&mut peer)
@@ -107,6 +111,7 @@ fn lane_settings(daily_calls: u64, daily_cost_usd: f64) -> LaneSettings {
             id: "gpt-6.1-sol".into(),
             thinking: None,
         },
+        fallback: None,
         daily_calls,
         daily_cost_usd,
         turn_timeout_ms: 10_000,
@@ -754,6 +759,88 @@ fn budgets_preemption_and_agent_exit_stop_turns() {
         serde_json::from_slice(&std::fs::read(c.directory.join("model/agent/usage.json")).unwrap())
             .unwrap();
     assert_eq!(spent["lanes"]["review"]["cost_usd"], 0.25);
+}
+
+#[test]
+fn a_fallback_switch_is_journalled_and_charged_but_refused_after_a_served_tool() {
+    let dir = tempfile::tempdir().unwrap();
+    let (c, cfg) = all_tools(dir.path());
+    let mut settings = settings(10, 1.0);
+    let fallback = ModelSpec {
+        provider: "mistral".into(),
+        id: "deepseek-v4-1-flash-1017".into(),
+        thinking: Some("high".into()),
+    };
+    let decision = settings.lanes.get_mut(&Lane::Decision).unwrap();
+    decision.fallback = Some(decision.model.clone());
+    assert!(
+        settings.validate().is_err(),
+        "a fallback must differ from the primary"
+    );
+    let mut unknown_level = fallback.clone();
+    unknown_level.thinking = Some("max".into());
+    settings.lanes.get_mut(&Lane::Decision).unwrap().fallback = Some(unknown_level);
+    assert!(
+        settings.validate().is_err(),
+        "pi's agent accepts no other level"
+    );
+    settings.lanes.get_mut(&Lane::Decision).unwrap().fallback = Some(fallback.clone());
+    settings.validate().unwrap();
+    let switch = json!({"kind":"fallback","from":{"provider":"openai-codex","id":"gpt-6.1-sol"},
+        "to":{"provider":"mistral","id":"deepseek-v4-1-flash-1017"},"reason":"quota","error":"usage limit"});
+    let clock = || 1_760_600_000_000_i64;
+    let (client, peer) = connect(move |peer| {
+        let (id, turn) = peer.turn();
+        peer.send(json!({"type":"event","turn_id":id,"event":switch}));
+        peer.model = turn["fallback"].clone();
+        peer.message(&id, 0.3);
+        peer.send(json!({"type":"turn_result","id":id,"status":"ok","output":{"text":"held"},
+            "usage":{"input":100,"output":10,"cache_read":0,"cache_write":0,"cost_usd":0.3,"calls":1},
+            "model":"deepseek-v4-1-flash-1017","provider":"mistral","session_file":null,
+            "prompt_sha256":"0".repeat(64),"fallback":switch}));
+        let (id, _) = peer.turn();
+        peer.call(&id, "portfolio", json!({}));
+        peer.send(json!({"type":"event","turn_id":id,"event":switch}));
+        let refused = peer.recv();
+        peer.finish(&id, "aborted", "", 1, 0.0);
+        let (id, _) = peer.turn();
+        peer.model = json!({"provider":"mistral","id":"deepseek-v4-1-flash-1017"});
+        peer.finish(&id, "ok", "unannounced", 1, 0.0);
+        (turn, refused)
+    });
+    let mut context = context("5000");
+    let mut agent = fixture_agent(client);
+    let mut runner = LaneRunner::new(&mut agent, &settings, &c, &cfg, &clock);
+    let switched = runner
+        .turn(Lane::Decision, json!({}), json!({}), &mut context)
+        .unwrap();
+    let after_tool = runner
+        .turn(Lane::Decision, json!({}), json!({}), &mut context)
+        .unwrap();
+    let unannounced = runner
+        .turn(Lane::Decision, json!({}), json!({}), &mut context)
+        .unwrap();
+    let (request, refused) = peer.join().unwrap();
+    assert_eq!(request["fallback"], json!(fallback));
+    assert_eq!(switched.outcome.status, TurnStatus::Ok);
+    assert_eq!(switched.outcome.model, "deepseek-v4-1-flash-1017");
+    let journal = std::fs::read_to_string(c.directory.join("model/agent/turns.ndjson")).unwrap();
+    let first: Value = serde_json::from_str(journal.lines().next().unwrap()).unwrap();
+    assert_eq!(first["fallback"]["reason"], "quota");
+    assert_eq!(first["fallback"]["to"]["provider"], "mistral");
+    let spent: Value =
+        serde_json::from_slice(&std::fs::read(c.directory.join("model/agent/usage.json")).unwrap())
+            .unwrap();
+    assert_eq!(spent["lanes"]["decision"]["cost_usd"], 0.3);
+    assert_eq!(refused["type"], "abort");
+    assert_eq!(refused["reason"], "agent_fallback_refused");
+    assert_eq!(after_tool.outcome.status, TurnStatus::Aborted);
+    assert!(after_tool.outcome.fallback.is_none());
+    assert_eq!(unannounced.outcome.status, TurnStatus::Error);
+    assert_eq!(
+        unannounced.outcome.error.as_deref(),
+        Some("agent_fallback_unreported")
+    );
 }
 
 #[test]

@@ -114,7 +114,7 @@ jobs:
 
   release:
     name: Build and publish tagged musl release
-    needs: [release-selection, dashboard-js, rust-fmt-clippy, rust-test]
+    needs: [release-selection, dashboard-js, agent-js, rust-fmt-clippy, rust-test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.release-selection.outputs.tag != ''
     permissions:
       contents: write

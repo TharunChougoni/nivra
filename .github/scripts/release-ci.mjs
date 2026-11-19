@@ -28,7 +28,7 @@ export async function verifiedCiRun({
   const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
     owner, repo, run_id: run.id, attempt_number: run.run_attempt, per_page: 100,
   });
-  for (const name of ['Dashboard JS tests', 'Rust fmt + clippy', 'Rust tests']) {
+  for (const name of ['Dashboard JS tests', 'pi agent tests', 'Rust fmt + clippy', 'Rust tests']) {
     const job = jobs.find(job => job.name === name);
     if (!job || job.status !== 'completed' || job.conclusion !== 'success') {
       throw new Error(`Required CI job did not pass: ${name}`);

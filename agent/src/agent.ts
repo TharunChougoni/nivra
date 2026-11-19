@@ -13,11 +13,14 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { fallbackReason } from "./fallback.js";
 import {
+  type Fallback,
   type Inbound,
   type JsonObject,
   type JsonValue,
   type Lane,
+  type ModelSpec,
   type Outbound,
   PROTOCOL_VERSION,
   type ToolSpec,
@@ -52,7 +55,17 @@ interface ActiveTurn {
   callIds: Set<string>;
   pending: Map<string, PendingCall>;
   abortReason?: string;
+  /** Set once the model returned anything or a tool started; a fallback would then replay work. */
+  produced: boolean;
 }
+
+/** How the turn's latest attempt failed; `providerAnswered` is false when pi threw before a response. */
+interface Failure {
+  error: string;
+  providerAnswered: boolean;
+}
+
+const MAX_FALLBACK_ERROR_CHARS = 300;
 
 function emptyUsage(): Usage {
   return { input: 0, output: 0, cache_read: 0, cache_write: 0, cost_usd: 0, calls: 0 };
@@ -161,6 +174,11 @@ export class LaneAgent {
     return this.sessions.get(lane)?.session.getActiveToolNames() ?? [];
   }
 
+  /** The lane's current model context, for tests and diagnostics. */
+  contextMessages(lane: Lane): AgentSession["messages"] {
+    return this.sessions.get(lane)?.session.messages ?? [];
+  }
+
   private send(message: Outbound): void {
     this.options.send(message);
   }
@@ -240,6 +258,7 @@ export class LaneAgent {
         const message = event.message;
         if (message.role !== "assistant") return;
         addUsage(turn.usage, message.usage);
+        if (message.stopReason !== "error" || message.content.length > 0) turn.produced = true;
         const text = message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
         const toolCalls = message.content.flatMap((part) => (part.type === "toolCall" ? [{ id: part.id, name: part.name }] : []));
         emit({
@@ -255,6 +274,7 @@ export class LaneAgent {
         return;
       }
       case "tool_execution_start":
+        turn.produced = true;
         emit({ kind: "tool_start", pi_call_id: event.toolCallId, name: event.toolName, args: (event.args ?? null) as JsonValue });
         return;
       case "tool_execution_end":
@@ -288,6 +308,31 @@ export class LaneAgent {
     }
   }
 
+  /** One prompt of the brief; the failure, if the turn ended in a provider error or pi threw. */
+  private async attempt(session: AgentSession, request: TurnRequest): Promise<Failure | undefined> {
+    try {
+      await session.prompt(briefText(request));
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error), providerAnswered: false };
+    }
+    const last = session.messages.findLast((message) => message.role === "assistant");
+    return last?.role === "assistant" && last.stopReason === "error"
+      ? { error: last.errorMessage ?? "provider_error", providerAnswered: true }
+      : undefined;
+  }
+
+  /**
+   * Return the lane's context to where it stood before this turn's brief. The
+   * failed attempt stays in the session file as an abandoned branch.
+   */
+  private async rewind(session: AgentSession, leaf: string | null): Promise<void> {
+    const branch = session.sessionManager.getBranch();
+    const start = leaf === null ? 0 : branch.findIndex((entry) => entry.id === leaf) + 1;
+    if (start === 0 && leaf !== null) throw new Error("agent_fallback_rewind_failed");
+    const brief = branch.slice(start).find((entry) => entry.type === "message" && entry.message.role === "user");
+    if (brief) await session.navigateTree(brief.id);
+  }
+
   private async runTurn(request: TurnRequest): Promise<void> {
     const prompt = (() => {
       try {
@@ -296,6 +341,8 @@ export class LaneAgent {
         return undefined;
       }
     })();
+    let used: ModelSpec = request.model;
+    let fallback: Fallback | undefined;
     const result = (status: TurnStatus, text: string, usage: Usage, error?: string, session?: AgentSession) =>
       this.send({
         v: PROTOCOL_VERSION,
@@ -305,10 +352,11 @@ export class LaneAgent {
         ...(error === undefined ? {} : { error }),
         output: { text },
         usage,
-        model: request.model.id,
-        provider: request.model.provider,
+        model: used.id,
+        provider: used.provider,
         session_file: session?.sessionFile ?? null,
         prompt_sha256: prompt?.sha256 ?? "",
+        ...(fallback ? { fallback } : {}),
       });
     if (this.active) {
       result("error", "", emptyUsage(), "agent_turn_busy");
@@ -323,14 +371,18 @@ export class LaneAgent {
       result("error", "", emptyUsage(), "agent_model_unknown");
       return;
     }
-    const turn: ActiveTurn = { request, usage: emptyUsage(), callIds: new Set(), pending: new Map() };
+    const fallbackModel = request.fallback && this.options.runtime.getModel(request.fallback.provider, request.fallback.id);
+    if (request.fallback && !fallbackModel) {
+      result("error", "", emptyUsage(), "agent_fallback_model_unknown");
+      return;
+    }
+    const turn: ActiveTurn = { request, usage: emptyUsage(), callIds: new Set(), pending: new Map(), produced: false };
     this.active = turn;
     let session: AgentSession | undefined;
     let unsubscribe = () => {};
     try {
       session = await this.laneSession(request, model);
-      if (session.model?.provider !== model.provider || session.model?.id !== model.id) await session.setModel(model);
-      if (request.model.thinking && session.thinkingLevel !== request.model.thinking) session.setThinkingLevel(request.model.thinking);
+      await useModel(session, model, request.model.thinking);
       // An abort that arrived while the session was being opened has no
       // running prompt to cancel; honour it before any model call.
       if (turn.abortReason !== undefined) {
@@ -340,13 +392,33 @@ export class LaneAgent {
       const active = session;
       unsubscribe = active.subscribe((event) => this.event(turn, event));
       this.options.beforeTurn?.(request);
-      await active.prompt(briefText(request));
+      const leaf = active.sessionManager.getLeafId();
+      let failure = await this.attempt(active, request);
+      const reason =
+        failure && request.fallback && turn.abortReason === undefined && !turn.produced
+          ? fallbackReason(failure.error, failure.providerAnswered)
+          : undefined;
+      if (failure && reason && request.fallback && fallbackModel) {
+        const to = request.fallback;
+        fallback = {
+          from: { provider: request.model.provider, id: request.model.id },
+          to: { provider: to.provider, id: to.id },
+          reason,
+          error: failure.error.slice(0, MAX_FALLBACK_ERROR_CHARS),
+        };
+        // Rust refuses the switch if it already served a tool call this turn.
+        this.send({ v: PROTOCOL_VERSION, type: "event", turn_id: request.id, event: { kind: "fallback", ...fallback } });
+        await this.rewind(active, leaf);
+        await useModel(active, fallbackModel, to.thinking);
+        used = to;
+        failure = turn.abortReason === undefined ? await this.attempt(active, request) : undefined;
+      }
       const last = active.messages.findLast((message) => message.role === "assistant");
       const text = active.getLastAssistantText() ?? "";
       if (turn.abortReason !== undefined || (last?.role === "assistant" && last.stopReason === "aborted")) {
         result("aborted", text, turn.usage, turn.abortReason ?? "aborted", active);
-      } else if (last?.role === "assistant" && last.stopReason === "error") {
-        result("error", text, turn.usage, last.errorMessage ?? "provider_error", active);
+      } else if (failure) {
+        result("error", text, turn.usage, failure.error, active);
       } else {
         result("ok", text, turn.usage, undefined, active);
       }
@@ -357,4 +429,10 @@ export class LaneAgent {
       this.active = undefined;
     }
   }
+}
+
+async function useModel(session: AgentSession, model: Model<string>, thinking: ModelSpec["thinking"]): Promise<void> {
+  if (session.model?.provider !== model.provider || session.model?.id !== model.id) await session.setModel(model);
+  const level = thinking ?? "medium";
+  if (session.thinkingLevel !== level) session.setThinkingLevel(level);
 }

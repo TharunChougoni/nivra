@@ -19,11 +19,12 @@ const { values } = parseArgs({
     "agent-dir": { type: "string" },
     prompts: { type: "string" },
     fake: { type: "string" },
+    check: { type: "string" },
   },
 });
 const agentDir = values["agent-dir"];
 if (!agentDir) {
-  process.stderr.write("usage: nivra-agent --agent-dir <dir> [--prompts <dir>] [--fake <script.json>]\n");
+  process.stderr.write("usage: nivra-agent --agent-dir <dir> [--prompts <dir>] [--fake <script.json>] [--check <models.json>]\n");
   process.exit(2);
 }
 
@@ -39,6 +40,23 @@ const runtime = await ModelRuntime.create({
   allowModelNetwork: false,
   refreshOnCreate: false,
 });
+// Preflight: is each model in pi's catalog, and does its provider have
+// credentials? pi reports only presence; no credential value leaves it and no
+// OAuth token is refreshed.
+if (values.check !== undefined) {
+  const models = JSON.parse(values.check) as { provider: string; id: string }[];
+  const report = await Promise.all(
+    models.map(async ({ provider, id }) => ({
+      provider,
+      id,
+      known: runtime.getModel(provider, id) !== undefined,
+      auth: (await runtime.checkAuth(provider)) !== undefined,
+    })),
+  );
+  process.stdout.write(`${JSON.stringify({ v: PROTOCOL_VERSION, type: "check", models: report })}\n`);
+  process.exit(0);
+}
+
 const beforeTurn = values.fake ? installFake(runtime, JSON.parse(readFileSync(values.fake, "utf8")) as FakeScript) : undefined;
 const agent = new LaneAgent({
   runtime,
