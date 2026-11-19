@@ -13,9 +13,9 @@ fn limits() -> ToolsSettings {
 }
 
 #[test]
-fn schemas_use_configured_limits_and_digest_has_no_search() {
+fn data_and_granted_tool_schemas_use_configured_limits() {
     let settings = limits();
-    let digest = configured_definitions_with("digest", &[], false, &settings).unwrap();
+    let digest = data_tool_definitions(&settings).unwrap();
     let names: Vec<&str> = digest
         .iter()
         .filter_map(|tool| tool["name"].as_str())
@@ -57,30 +57,22 @@ fn schemas_use_configured_limits_and_digest_has_no_search() {
         tool("get_recent_decisions")["parameters"]["properties"]["limit"]["maximum"],
         2
     );
-    assert!(configured_definitions_with("decide", &[], false, &settings).is_err());
     // OpenAI strict function schemas require every property in `required`;
     // optional arguments are nullable instead (#123).
-    let owner = call_tool_definitions(
-        "supervisor",
-        &[],
-        false,
-        &settings,
-        OwnerTools {
-            research: true,
-            candidate: true,
-            candidate_execution: false,
-            workspace: true,
-            web: true,
-            web_search: true,
-            web_news: true,
-            research_request: true,
-            quote_capture: true,
-            candidate_observation: true,
-            candidate_parent_ref: true,
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    let owner = granted_tool_definitions(GrantedTools {
+        research: true,
+        candidate: true,
+        candidate_execution: false,
+        workspace: true,
+        web: true,
+        web_search: true,
+        web_news: true,
+        research_request: true,
+        quote_capture: true,
+        candidate_observation: true,
+        candidate_parent_ref: true,
+        ..Default::default()
+    });
     // Config-gated orchestrator web tools (#222) are advertised only for the
     // enabled capabilities, and only on the supervisor/owner role.
     let candidate_submit = owner
@@ -114,19 +106,12 @@ fn schemas_use_configured_limits_and_digest_has_no_search() {
             .unwrap()
             .contains(&json!("execution"))
     );
-    let execution_owner = call_tool_definitions(
-        "supervisor",
-        &[],
-        false,
-        &settings,
-        OwnerTools {
-            research: true,
-            candidate: true,
-            candidate_execution: true,
-            ..OwnerTools::default()
-        },
-    )
-    .unwrap();
+    let execution_owner = granted_tool_definitions(GrantedTools {
+        research: true,
+        candidate: true,
+        candidate_execution: true,
+        ..GrantedTools::default()
+    });
     let execution_submit = execution_owner
         .iter()
         .find(|tool| tool["name"] == "candidate_submit")
@@ -145,20 +130,13 @@ fn schemas_use_configured_limits_and_digest_has_no_search() {
     // the optional archived-receipt quote reader. It never gets TradePlan,
     // market/financial/web/policy, workspace_run/install or registered-analysis
     // enqueue, and review remains tool-less.
-    let research_turn = call_tool_definitions(
-        "supervisor",
-        &[],
-        false,
-        &settings,
-        OwnerTools {
-            research_turn: true,
-            candidate: true,
-            workspace: true,
-            quote_capture: true,
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    let research_turn = granted_tool_definitions(GrantedTools {
+        research_turn: true,
+        candidate: true,
+        workspace: true,
+        quote_capture: true,
+        ..Default::default()
+    });
     let research_names = research_turn
         .iter()
         .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
@@ -188,10 +166,10 @@ fn schemas_use_configured_limits_and_digest_has_no_search() {
     ] {
         assert!(!research_names.iter().any(|tool| tool == name), "{name}");
     }
-    let default_tools = serde_json::to_value(OwnerTools::default()).unwrap();
+    let default_tools = serde_json::to_value(GrantedTools::default()).unwrap();
     assert!(default_tools.get("research_turn").is_none());
     assert!(default_tools.get("quote_capture").is_none());
-    let enabled_tools = serde_json::to_value(OwnerTools {
+    let enabled_tools = serde_json::to_value(GrantedTools {
         research_turn: true,
         quote_capture: true,
         ..Default::default()
@@ -199,43 +177,29 @@ fn schemas_use_configured_limits_and_digest_has_no_search() {
     .unwrap();
     assert_eq!(enabled_tools["research_turn"], true);
     assert_eq!(enabled_tools["quote_capture"], true);
-    let web_names = |owner: OwnerTools| -> Vec<String> {
-        call_tool_definitions("supervisor", &[], false, &settings, owner)
-            .unwrap()
+    let web_names = |owner: GrantedTools| -> Vec<String> {
+        granted_tool_definitions(owner)
             .iter()
             .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
             .filter(|name| name.starts_with("web_") || name == "news_lookup")
             .collect()
     };
-    assert!(web_names(OwnerTools::default()).is_empty());
+    assert!(web_names(GrantedTools::default()).is_empty());
     assert_eq!(
-        web_names(OwnerTools {
+        web_names(GrantedTools {
             web: true,
             web_search: true,
-            ..OwnerTools::default()
+            ..GrantedTools::default()
         }),
         vec!["web_search", "web_fetch"]
     );
     assert_eq!(
-        web_names(OwnerTools {
+        web_names(GrantedTools {
             web: true,
             web_news: true,
-            ..OwnerTools::default()
+            ..GrantedTools::default()
         }),
         vec!["web_fetch", "news_lookup"]
-    );
-    assert!(
-        call_tool_definitions(
-            "digest",
-            &[],
-            false,
-            &settings,
-            OwnerTools {
-                web: true,
-                ..OwnerTools::default()
-            },
-        )
-        .is_err()
     );
     fn strict_schema(schema: &Value) {
         let object = schema["type"] == "object"
@@ -324,19 +288,4 @@ fn schemas_use_configured_limits_and_digest_has_no_search() {
         .is_ok(),
         "request_research must accept null refs"
     );
-    assert!(
-        configured_definitions_with("digest", &["web_search".into()], false, &settings).is_err()
-    );
-}
-
-#[test]
-fn prompt_tool_lists_match_the_configured_definitions() {
-    let settings = ToolsSettings::default();
-    let digest = configured_definitions_with("digest", &[], false, &settings).unwrap();
-    for tool in &digest {
-        let name = tool["name"].as_str().unwrap();
-        assert!(DATA_OWNER_PROMPT.contains(name), "Luna prompt omits {name}");
-    }
-    assert!(SCORER_PROMPT.contains("sandbox_write"));
-    assert!(SCORER_PROMPT.contains("replay"));
 }

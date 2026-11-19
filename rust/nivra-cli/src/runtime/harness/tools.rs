@@ -4,17 +4,10 @@ fn function(name: &str, description: &str, properties: Value, required: Value) -
     json!({"type":"function","name":name,"description":description,"strict":true,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})
 }
 
-pub(crate) fn definitions_with(
-    role: &str,
-    native: &[String],
-    limits: &ToolsSettings,
-) -> Result<Vec<Value>> {
-    instructions(role)?;
-    if matches!(role, "scorer" | "supervisor") {
-        return Ok(Vec::new());
-    }
-    if !native.is_empty() {
-        return Err("harness_data_tools_invalid".into());
+/// The read-only data tools every lane may call.
+pub(crate) fn data_tool_definitions(limits: &ToolsSettings) -> Result<Vec<Value>> {
+    if !(1..=MAX_INSTRUMENT_KEYS).contains(&limits.max_instrument_keys) {
+        return Err("harness_snapshot_args_invalid".into());
     }
     let max_keys = limits.max_instrument_keys;
     let mut tools = vec![function(
@@ -30,31 +23,7 @@ pub(crate) fn definitions_with(
     tools.push(function("get_portfolio","Read current cash, positions, exit intents, marks, available-to-sell units and book state. Never an order or execution authorization.",json!({}),json!([])));
     tools.push(function("get_recent_decisions","Read the latest digest review, prior decision-owner plans with their gate outcome, and post-close advisory memory. All entries are untrusted prior observations.",json!({"limit":{"type":["integer","null"],"minimum":1,"maximum":limits.history_limit}}),json!(["limit"])));
     tools.push(function("get_session_status","Read the host clock, market phase, minutes to close, book state, role budget remaining and current trigger. No execution authority.",json!({}),json!([])));
-    Ok(tools)
-}
-
-pub(crate) fn configured_definitions_with(
-    role: &str,
-    native: &[String],
-    context: bool,
-    limits: &ToolsSettings,
-) -> Result<Vec<Value>> {
-    if !(1..=MAX_INSTRUMENT_KEYS).contains(&limits.max_instrument_keys) {
-        return Err("harness_snapshot_args_invalid".into());
-    }
-    let mut tools = definitions_with(role, native, limits)?;
-    if context && role == "digest" {
-        tools.push(function("get_intraday_context", "Read frozen receipt-derived minute price bars, aligned market-relative returns and optional sourced VWAP/volume proxies for unique keys. Duplicate keys are folded in first-seen order. Missing/stale fields are explicit; no execution authority.",json!({"instrument_keys":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":limits.max_instrument_keys}}),json!(["instrument_keys"])));
-    }
-    for tool in &mut tools {
-        if matches!(
-            tool["name"].as_str(),
-            Some("get_market_snapshot" | "get_instrument_features" | "get_intraday_context")
-        ) {
-            tool["parameters"]["properties"]["instrument_keys"]["maxItems"] =
-                json!(limits.max_instrument_keys);
-        }
-    }
+    tools.push(function("get_intraday_context", "Read frozen receipt-derived minute price bars, aligned market-relative returns and optional sourced VWAP/volume proxies for unique keys. Duplicate keys are folded in first-seen order. Missing/stale fields are explicit; no execution authority.",json!({"instrument_keys":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":max_keys}}),json!(["instrument_keys"])));
     Ok(tools)
 }
 
@@ -236,17 +205,9 @@ pub(super) fn candidate_tools_enabled(cfg: &PlannerConfig) -> bool {
     })
 }
 
-pub(crate) fn call_tool_definitions(
-    name: &str,
-    native: &[String],
-    context: bool,
-    limits: &ToolsSettings,
-    owner: OwnerTools,
-) -> Result<Vec<Value>> {
-    if !owner.is_empty() && name != "supervisor" {
-        return Err("harness_owner_tools_invalid".into());
-    }
-    let mut tools = configured_definitions_with(name, native, context, limits)?;
+/// The tools a lane grant adds to the data tools.
+pub(crate) fn granted_tool_definitions(owner: GrantedTools) -> Vec<Value> {
+    let mut tools = Vec::new();
     if owner.research {
         tools.extend(owner_research_tool_definitions());
     }
@@ -296,7 +257,7 @@ pub(crate) fn call_tool_definitions(
             owner.web_news,
         ));
     }
-    Ok(tools)
+    tools
 }
 
 #[derive(Deserialize)]
@@ -668,11 +629,11 @@ pub(super) fn checked_call_with(
 /// bridge narrows the set per lane.
 pub(crate) fn bridge_definitions(cfg: &PlannerConfig, lane_requests: bool) -> Result<Vec<Value>> {
     let limits = cfg.effective_tools();
-    let mut tools = configured_definitions_with("digest", &[], true, &limits)?;
+    let mut tools = data_tool_definitions(&limits)?;
     let candidate = candidate_tools_enabled(cfg);
     let web = cfg.web_tools.as_ref().filter(|web| web.enabled);
     let analysis = cfg.research_tools.is_some();
-    let owner = OwnerTools {
+    let owner = GrantedTools {
         // Status, result and cancel also answer the pi lanes' own requests.
         research: analysis || lane_requests,
         research_turn: false,
@@ -690,13 +651,7 @@ pub(crate) fn bridge_definitions(cfg: &PlannerConfig, lane_requests: bool) -> Re
         web_news: web.is_some_and(|settings| settings.news_available()),
         research_request: lane_requests,
     };
-    tools.extend(call_tool_definitions(
-        "supervisor",
-        &[],
-        false,
-        &limits,
-        owner,
-    )?);
+    tools.extend(granted_tool_definitions(owner));
     tools.retain(|tool| analysis || tool["name"] != "research_task_enqueue");
     Ok(tools)
 }

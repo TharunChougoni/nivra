@@ -19,26 +19,12 @@ pub(crate) use research::{
     status as research_status, tick_owner_tasks as research_tick_owner_tasks,
     validate_files as validate_research_files,
 };
-pub(crate) const DATA_OWNER_PROMPT: &str =
-    include_str!("../../../../packaging/rust/prompts/data_owner.md");
-pub(crate) const SCORER_PROMPT: &str = include_str!("../../../../packaging/rust/prompts/scorer.md");
-pub(crate) const SUPERVISOR_PROMPT: &str =
-    include_str!("../../../../packaging/rust/prompts/supervisor.md");
-pub(crate) fn instructions(role: &str) -> Result<&'static str> {
-    match role {
-        "digest" => Ok(DATA_OWNER_PROMPT),
-        "scorer" => Ok(SCORER_PROMPT),
-        "supervisor" => Ok(SUPERVISOR_PROMPT),
-        _ => Err("harness_role_invalid".into()),
-    }
-}
-
 fn skip_false(value: &bool) -> bool {
     !*value
 }
 #[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct OwnerTools {
+pub(crate) struct GrantedTools {
     pub research: bool,
     /// One bounded owner research turn over existing evidence. Omitted unless
     /// the reviewed research capability admitted this exact frame.
@@ -79,11 +65,7 @@ pub(crate) struct OwnerTools {
     #[serde(default, skip_serializing_if = "skip_false")]
     pub research_request: bool,
 }
-impl OwnerTools {
-    fn is_empty(&self) -> bool {
-        *self == Self::default()
-    }
-}
+impl GrantedTools {}
 
 /// Two independent readings for one admitted model turn: the actual observation
 /// wall (model-visible timestamps) and the monotonic duration budget. They are
