@@ -1,7 +1,7 @@
 use super::*;
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn owner_task_enqueue_with_evidence(
+pub(crate) fn task_enqueue_with_evidence(
     c: &Config,
     cfg: &PlannerConfig,
     model_id: &str,
@@ -55,7 +55,7 @@ pub(crate) fn owner_task_enqueue_with_evidence(
     }
     let binding = book_binding(c)?;
     let policy_sha256 = digest(&super::super::super::planner::policy_bytes(cfg)?);
-    let mut db = open_queue_for_owner(settings, &c.directory.join("model"), true)?;
+    let mut db = open_queue(settings, &c.directory.join("model"), true)?;
     register_reviewed_locked(settings, &c.directory.join("model"), &mut db, registration)?;
     let session = c.session.to_string();
     let task_id = jobs::scoped_task_id(&binding, &session, task_key);
@@ -185,7 +185,7 @@ pub(crate) fn scoped_task(
         .research_tools
         .as_ref()
         .ok_or("harness_analysis_disabled")?;
-    let mut db = open_queue_for_owner(settings, &c.directory.join("model"), false)?;
+    let mut db = open_queue(settings, &c.directory.join("model"), false)?;
     let record =
         jobs::load_scoped(&mut db, task_id, revision).map_err(|_| "research_task_unavailable")?;
     if record.spec.session != c.session.to_string() || record.spec.book_binding != book_binding(c)?
@@ -195,7 +195,7 @@ pub(crate) fn scoped_task(
     Ok((db, record))
 }
 
-pub(crate) fn owner_task_status(
+pub(crate) fn research_task_status(
     c: &Config,
     cfg: &PlannerConfig,
     task_id: &str,
@@ -207,7 +207,7 @@ pub(crate) fn owner_task_status(
     Ok(task_summary(&record))
 }
 
-pub(crate) fn owner_task_result(
+pub(crate) fn research_task_result(
     c: &Config,
     cfg: &PlannerConfig,
     task_id: &str,
@@ -228,7 +228,7 @@ pub(crate) fn owner_task_result(
     Ok(json!({"task":task_summary(&record),"result":result_value,"result_status":"verified"}))
 }
 
-pub(crate) fn owner_task_cancel(
+pub(crate) fn research_task_cancel(
     c: &Config,
     cfg: &PlannerConfig,
     task_id: &str,

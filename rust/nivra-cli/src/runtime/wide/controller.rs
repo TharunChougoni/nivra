@@ -108,8 +108,8 @@ struct Controller<'a> {
     feature_store: Arc<Mutex<FeatureStore>>,
     view: Arc<Mutex<serde_json::Value>>,
     loop_generation: u64,
-    owner_research_status: serde_json::Value,
-    owner_research_worker: harness::OwnerResearchRuntime,
+    research_tasks_status: serde_json::Value,
+    research_worker: harness::ResearchRuntime,
     /// pi lanes, when the planner has an `agent` block.
     agent: Option<super::super::agent::service::LaneService>,
     /// The built-in ranking the last rank pass produced, best first.
@@ -423,8 +423,8 @@ impl<'a> Controller<'a> {
             feature_store,
             view,
             loop_generation: 0,
-            owner_research_status: serde_json::json!({"status":"disabled"}),
-            owner_research_worker: harness::OwnerResearchRuntime::default(),
+            research_tasks_status: serde_json::json!({"status":"disabled"}),
+            research_worker: harness::ResearchRuntime::default(),
             // The research lane's own slot (#237): never shared with trading turns.
             agent,
             live_ranking: Vec::new(),
@@ -450,7 +450,7 @@ impl<'a> Controller<'a> {
         let session_end_ms = session_end_ms(&self.config);
         let research_context_unavailable = self.event_config.is_some() && session_end_ms.is_none();
         if research_context_unavailable {
-            self.owner_research_status = serde_json::json!({
+            self.research_tasks_status = serde_json::json!({
                 "status":"unavailable",
                 "reason":"controller_session_end_unavailable",
                 "action":"none"
@@ -1472,15 +1472,15 @@ impl<'a> Controller<'a> {
             let launch = harness::ResearchLaunch::for_book(harness::LaunchBook {
                 halted: self.p.halted,
                 stopped: self.p.stopped,
-                owner_decision_pending: owner_blocked,
+                decision_pending: owner_blocked,
                 context_unavailable: research_context_unavailable,
             });
-            let mut status = match harness::research_tick_owner_tasks(
+            let mut status = match harness::research_tick_tasks(
                 &mut self.db,
                 c,
                 cfg,
                 launch,
-                &mut self.owner_research_worker,
+                &mut self.research_worker,
                 now,
             ) {
                 Ok(status) => status,
@@ -1490,7 +1490,7 @@ impl<'a> Controller<'a> {
             if research_context_unavailable {
                 status["context"] = research_context_status(true);
             }
-            self.owner_research_status = status;
+            self.research_tasks_status = status;
         }
     }
 
@@ -1590,7 +1590,7 @@ impl<'a> Controller<'a> {
         self.reported = false;
         self.read_failure = None;
         self.planner_status = serde_json::json!({"status":"disabled_no_plan"});
-        self.owner_research_status = if self.config.planner_config.is_some() {
+        self.research_tasks_status = if self.config.planner_config.is_some() {
             serde_json::json!({
                 "status":"unavailable",
                 "reason":"planner_config_unavailable",
@@ -1797,7 +1797,7 @@ impl<'a> Controller<'a> {
         let initialization = serde_json::json!({"stage":if self.p.halted {"halted_requires_review"} else if !history_admitted {"waiting_for_history"} else if self.planner_status["pending_attempt"].is_string() {"pi_decision_in_progress"} else if entry_status=="model_plan_ready" {"model_initialized"} else {"waiting_for_initial_or_next_model_plan"},"paper_only":true,"financial_execution_requires_accepted_plan":true});
         let updater_status = crate::update::dashboard_status();
         let owner_activity = if self.event_config.is_some() {
-            super::super::decision_owner::activity_analytics(&self.db, c, &self.p).ok()
+            super::super::decision::activity_analytics(&self.db, c, &self.p).ok()
         } else {
             None
         };
@@ -1825,7 +1825,7 @@ impl<'a> Controller<'a> {
             c.idle_poll_interval_ms
         };
         let research_context_status = research_context_status(research_context_unavailable);
-        let mut v_json = serde_json::json!({"research_library":research_library,"experiment_lifecycle":experiment_lifecycle,"instrument_display":self.display_catalog_status,"paper_only":true,"live_enabled":LIVE_ENABLED,"account":c.account,"authorized_session":c.session,"next_session_config":c.next_sessions(day)?,"policy":self.p.policy,"model_led":self.p.model_led,"strategy_decision":rollover::published_decision(c),"status":status,"as_of_ms":completed_at_ms,"universe_size":self.universe.as_ref().map(|u|u.instruments.len()),"universe_exclusions":self.universe.as_ref().map(|u|&u.exclusions),"security_ready":self.universe.is_some(),"scanned_count":scanned_count,"pending_count":self.universe.as_ref().map(|u|u.instruments.len().saturating_sub(scanned_count as usize)),"market_feed":self.feed_health,"oldest_scan_age_ms":oldest,"screen_reasons":reasons,"discovery":discovery_status,"ranking":self.scan.ranking.iter().take(10).collect::<Vec<_>>(),"capital":self.p.allocation()?,"planner":self.planner_status,"nifty_options":self.option_status,"research_tasks":self.owner_research_status,"activity_attribution":owner_activity,"retention":self.retention_status,"readiness":self.readiness_status,"history_preparation":self.history_status,"model_initialization":initialization,"model_status":"model-led","entry_status":entry_status,"realised_net_pnl_by_fill":self.p.realised_net_pnl(),"portfolio":self.p,"read_failure_reason":self.read_failure,"fee_policy":format!("SIMULATION_ONLY: {}", serde_json::to_string(&self.p.costs.clone().ok_or("paper_costs_required")?)?),"updater":updater_status});
+        let mut v_json = serde_json::json!({"research_library":research_library,"experiment_lifecycle":experiment_lifecycle,"instrument_display":self.display_catalog_status,"paper_only":true,"live_enabled":LIVE_ENABLED,"account":c.account,"authorized_session":c.session,"next_session_config":c.next_sessions(day)?,"policy":self.p.policy,"model_led":self.p.model_led,"strategy_decision":rollover::published_decision(c),"status":status,"as_of_ms":completed_at_ms,"universe_size":self.universe.as_ref().map(|u|u.instruments.len()),"universe_exclusions":self.universe.as_ref().map(|u|&u.exclusions),"security_ready":self.universe.is_some(),"scanned_count":scanned_count,"pending_count":self.universe.as_ref().map(|u|u.instruments.len().saturating_sub(scanned_count as usize)),"market_feed":self.feed_health,"oldest_scan_age_ms":oldest,"screen_reasons":reasons,"discovery":discovery_status,"ranking":self.scan.ranking.iter().take(10).collect::<Vec<_>>(),"capital":self.p.allocation()?,"planner":self.planner_status,"nifty_options":self.option_status,"research_tasks":self.research_tasks_status,"activity_attribution":owner_activity,"retention":self.retention_status,"readiness":self.readiness_status,"history_preparation":self.history_status,"model_initialization":initialization,"model_status":"model-led","entry_status":entry_status,"realised_net_pnl_by_fill":self.p.realised_net_pnl(),"portfolio":self.p,"read_failure_reason":self.read_failure,"fee_policy":format!("SIMULATION_ONLY: {}", serde_json::to_string(&self.p.costs.clone().ok_or("paper_costs_required")?)?),"updater":updater_status});
         if let Some(agent) = &self.agent {
             v_json["agent"] = agent.status();
         }

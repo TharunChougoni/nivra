@@ -416,7 +416,7 @@ pub(crate) fn initialize(
     };
     check(&state, c)?;
     // Only a new authority writes the owner marker. An existing marker must be
-    // current; a journal without one is refused by `owner_startup_check`.
+    // current; a journal without one is refused by `decision_startup_check`.
     let marker = authority_owner(&tx, &state)?;
     if original_authority && marker.is_some() {
         return Err("planner_authority_owner_without_authority".into());
@@ -912,10 +912,10 @@ pub(crate) fn apply_config(
     let changed = state.config_hash != next || prior_owner != Some(current_owner);
     if current_owner == AuthorityOwner::Pi {
         if changed && let Some(id) = &state.active {
-            super::decision_owner::supersede_plan_actions(db, c, id, "superseded_by_pi_config")?;
+            super::decision::supersede_plan_actions(db, c, id, "superseded_by_pi_config")?;
         }
         if prior_owner != Some(current_owner) {
-            super::decision_owner::retire_for_pi_cutover(db, c)?;
+            super::decision::retire_for_pi_cutover(db, c)?;
             db.execute(
                 "UPDATE planner_event_log SET state='superseded' WHERE state='pending'",
                 [],
@@ -947,7 +947,7 @@ pub(crate) fn apply_config(
 /// shape is checked at load; this checks the durable authority belongs to that
 /// exact policy. A legacy authority requires the reviewed config-apply
 /// transition, never an implicit rewrite of its config hash or active plan.
-pub(crate) fn owner_startup_check(
+pub(crate) fn decision_startup_check(
     db: &Connection,
     c: &Config,
     cfg: &planner::PlannerConfig,
@@ -1001,7 +1001,7 @@ pub(crate) fn active_plan(db: &Connection, c: &Config) -> Result<Option<Option<V
     }
     planner::validate_saved(c, &plan)?;
     // A pending factual digest must not suspend a committed owner plan: only
-    // activate_owner_plan's own decision id marks an executable owner plan.
+    // activate_plan's own decision id marks an executable owner plan.
     let pi =
         authority_owner(db, &state)?.is_some_and(|receipt| receipt.owner == AuthorityOwner::Pi);
     if pi != (plan["decision_owner"] == AuthorityOwner::Pi.plan_name()) {
@@ -1034,7 +1034,7 @@ pub(crate) fn active_plan(db: &Connection, c: &Config) -> Result<Option<Option<V
 /// Activate a supervisor-owned plan inside the caller's transaction. This
 /// writes only the durable plan head; admission/usage and execution stay in
 /// their existing deterministic paths.
-pub(crate) fn activate_owner_plan(
+pub(crate) fn activate_plan(
     db: &Connection,
     c: &Config,
     cfg: &planner::PlannerConfig,
@@ -1066,7 +1066,7 @@ pub(crate) fn activate_owner_plan(
     {
         return Err("planner_decision_owner_not_ready".into());
     }
-    if p.stopped || p.halted || p.closed || !super::decision_owner::in_window(c, now) {
+    if p.stopped || p.halted || p.closed || !super::decision::in_window(c, now) {
         return Err("planner_completion_outside_session".into());
     }
     planner::validate_saved(c, plan)?;
@@ -1087,7 +1087,7 @@ pub(crate) fn activate_owner_plan(
             AuthorityOwner::Orchestrator => "superseded_by_digest",
             AuthorityOwner::Pi => "superseded_by_pi_decision",
         };
-        super::decision_owner::supersede_plan_actions(db, c, prior, reason)?;
+        super::decision::supersede_plan_actions(db, c, prior, reason)?;
     }
     db.execute(
         "INSERT INTO planner_plan VALUES(?,?)",
@@ -1253,7 +1253,7 @@ pub(crate) fn settle_pi(
             {
                 return Err("agent_paper_turn_binding_invalid".into());
             }
-            activate_owner_plan(&tx, c, cfg, p, plan, now)?;
+            activate_plan(&tx, c, cfg, p, plan, now)?;
             state = load(&tx)?.ok_or("planner_event_authority_missing")?;
             (
                 PlannerLogPhase::Planned.as_str(),

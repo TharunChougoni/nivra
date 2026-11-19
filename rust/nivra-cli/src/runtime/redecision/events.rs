@@ -4,7 +4,7 @@ use crate::runtime::phases::PlannerLogPhase;
 /// Make one durable owner recheck for a terminal registered-analysis task.
 /// The event identity is bound to the book/task revision rather than a clock,
 /// so a driver restart can retry insertion without manufacturing another wake.
-pub(crate) fn enqueue_owner_research_event(
+pub(crate) fn enqueue_research_event(
     db: &Connection,
     c: &Config,
     task_id: &str,
@@ -13,7 +13,7 @@ pub(crate) fn enqueue_owner_research_event(
     status: &str,
     observed_ms: i64,
 ) -> Result<()> {
-    enqueue_owner_research_event_kind(
+    enqueue_research_event_kind(
         db,
         c,
         task_id,
@@ -28,7 +28,7 @@ pub(crate) fn enqueue_owner_research_event(
 /// Terminal event with an explicit task capability. The owner must use the
 /// candidate tools for a candidate receipt, never the registered alias.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn enqueue_owner_research_event_kind(
+pub(crate) fn enqueue_research_event_kind(
     db: &Connection,
     c: &Config,
     task_id: &str,

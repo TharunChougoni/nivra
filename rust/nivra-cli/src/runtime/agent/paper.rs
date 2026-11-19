@@ -1,7 +1,7 @@
 //! The controller's only path from a completed pi decision to the paper head.
 use super::Lane;
 use crate::runtime::{
-    Config, Connection, LIVE_ENABLED, Result, decision_owner, digest, planner, redecision,
+    Config, Connection, LIVE_ENABLED, Result, decision, digest, planner, redecision,
 };
 use nivra_core::execution::{Instrument, Portfolio};
 use serde_json::{Value, json};
@@ -17,7 +17,7 @@ pub(crate) fn initialize(
         return Err("agent_paper_book_required".into());
     }
     if redecision::initialize(db, c, p, Some(cfg), now)? {
-        redecision::owner_startup_check(db, c, cfg)?;
+        redecision::decision_startup_check(db, c, cfg)?;
     }
     Ok(())
 }
@@ -43,7 +43,7 @@ fn in_window(c: &Config, cfg: &planner::PlannerConfig, p: &Portfolio, now: i64) 
         || p.stopped
         || p.closed
         || p.halted
-        || !decision_owner::in_window(c, now)
+        || !decision::in_window(c, now)
         || !c
             .calendar_at(c.session)?
             .is_open(nivra_core::time::Timestamp::from_epoch_millis(now)?)?
@@ -125,7 +125,7 @@ pub(super) struct Completed<'a> {
 }
 
 pub(super) fn commit(
-    context: &mut decision_owner::Context<'_>,
+    context: &mut decision::Context<'_>,
     c: &Config,
     cfg: &planner::PlannerConfig,
     claim: &redecision::Claim,
@@ -275,7 +275,7 @@ mod tests {
                 proposal: &proposal,
                 input: &input,
             };
-            let mut context = decision_owner::Context {
+            let mut context = decision::Context {
                 db: &mut db,
                 portfolio: &p,
                 instruments,

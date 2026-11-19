@@ -2254,7 +2254,7 @@ fn issue_137_planner_config(dir: &std::path::Path) -> (Config, planner::PlannerC
 }
 fn closed_flat_planner_halt_is_recovered_without_financial_change() {
     let d = tempfile::tempdir().unwrap();
-    let (c, cfg) = super::super::decision_owner::decision_fixture_config(d.path());
+    let (c, cfg) = super::super::decision::decision_fixture_config(d.path());
     cfg.validate_decision_lane().unwrap();
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
@@ -2308,7 +2308,7 @@ fn closed_flat_planner_halt_is_recovered_without_financial_change() {
     // cannot silently retire it without the shared input proof.
     for block in [redecision::DATA_BLOCK, "planner_news_evidence_invalid"] {
         let d = tempfile::tempdir().unwrap();
-        let (c, cfg) = super::super::decision_owner::decision_fixture_config(d.path());
+        let (c, cfg) = super::super::decision::decision_fixture_config(d.path());
         let mut db = open_book(&c).unwrap();
         let mut p = load_wide(&mut db, &c).unwrap();
         redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
@@ -2352,7 +2352,7 @@ fn closed_flat_planner_halt_is_recovered_without_financial_change() {
 }
 fn halted_model_led_book_enters_reviewed_protection_only_mode(corrected: bool) {
     let d = tempfile::tempdir().unwrap();
-    let (c, mut cfg) = super::super::decision_owner::decision_fixture_config(d.path());
+    let (c, mut cfg) = super::super::decision::decision_fixture_config(d.path());
     cfg.validate_decision_lane().unwrap();
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
@@ -2530,7 +2530,7 @@ fn planner_incident_never_halts_a_closed_book() {
 }
 fn stopped_recovery_retires_interrupted_pending_claim_without_replay() {
     let d = tempfile::tempdir().unwrap();
-    let (c, cfg) = super::super::decision_owner::decision_fixture_config(d.path());
+    let (c, cfg) = super::super::decision::decision_fixture_config(d.path());
     cfg.validate_decision_lane().unwrap();
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
@@ -2603,7 +2603,7 @@ fn archived_requests(c: &Config, label: &str) -> usize {
 }
 fn service_shutdown_continues_and_only_a_request_stops_the_book() {
     let d = tempfile::tempdir().unwrap();
-    let (c, cfg) = super::super::decision_owner::decision_fixture_config(d.path());
+    let (c, cfg) = super::super::decision::decision_fixture_config(d.path());
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
@@ -2643,7 +2643,7 @@ fn service_shutdown_continues_and_only_a_request_stops_the_book() {
 
     // Retirement that cannot be proven exact fails closed behind the reviewed block.
     let failed = tempfile::tempdir().unwrap();
-    let (fc, fcfg) = super::super::decision_owner::decision_fixture_config(failed.path());
+    let (fc, fcfg) = super::super::decision::decision_fixture_config(failed.path());
     let mut fdb = open_book(&fc).unwrap();
     let mut fp = load_wide(&mut fdb, &fc).unwrap();
     redecision::initialize(&mut fdb, &fc, &fp, Some(&fcfg), start()).unwrap();
@@ -2771,7 +2771,7 @@ fn hex_bytes(bytes: &[u8]) -> String {
 fn halted_owner_book(
     dir: &std::path::Path,
 ) -> (Config, planner::PlannerConfig, Connection, Portfolio) {
-    let (c, cfg) = super::super::decision_owner::decision_fixture_config(dir);
+    let (c, cfg) = super::super::decision::decision_fixture_config(dir);
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
@@ -2820,7 +2820,7 @@ fn initialize_legacy_marked(
 /// block just because a claim is pending or the policy changed.
 fn startup_preserves_active_and_sticky_block() {
     let d = tempfile::tempdir().unwrap();
-    let (c, cfg) = super::super::decision_owner::decision_fixture_config(d.path());
+    let (c, cfg) = super::super::decision::decision_fixture_config(d.path());
     let mut db = open_book(&c).unwrap();
     let p = load_wide(&mut db, &c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
@@ -2869,7 +2869,7 @@ fn startup_preserves_active_and_sticky_block() {
     );
     // A pending claim must not replace a stronger sticky data block.
     let d = tempfile::tempdir().unwrap();
-    let (c, cfg) = super::super::decision_owner::decision_fixture_config(d.path());
+    let (c, cfg) = super::super::decision::decision_fixture_config(d.path());
     let mut db = open_book(&c).unwrap();
     let p = load_wide(&mut db, &c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
@@ -2949,7 +2949,7 @@ fn halted_recovery_requires_block_proof() {
 fn protection_only_retains_integrity_block() {
     for block in [redecision::DATA_BLOCK, "planner_news_evidence_invalid"] {
         let d = tempfile::tempdir().unwrap();
-        let (c, cfg) = super::super::decision_owner::decision_fixture_config(d.path());
+        let (c, cfg) = super::super::decision::decision_fixture_config(d.path());
         let mut db = open_book(&c).unwrap();
         let mut p = load_wide(&mut db, &c).unwrap();
         p.model_led = true;
@@ -3040,7 +3040,7 @@ fn recovery_owner_receipt_compatibility() {
         "missing_row",
     ] {
         let d = tempfile::tempdir().unwrap();
-        let (c, mut cfg) = super::super::decision_owner::decision_fixture_config(d.path());
+        let (c, mut cfg) = super::super::decision::decision_fixture_config(d.path());
         let mut db = open_book(&c).unwrap();
         let mut p = load_wide(&mut db, &c).unwrap();
         redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
@@ -3127,7 +3127,7 @@ fn recovery_owner_receipt_compatibility() {
             assert_eq!(recovered.positions, p.positions);
             assert_eq!(recovered.fills, p.fills);
             assert!(redecision::config_current(&db, &cfg).unwrap());
-            redecision::owner_startup_check(&db, &c, &cfg).unwrap();
+            redecision::decision_startup_check(&db, &c, &cfg).unwrap();
             let raw: String = db
                 .query_row(
                     "SELECT body FROM planner_authority_owner WHERE id=1",
@@ -3147,7 +3147,7 @@ fn recovery_owner_receipt_compatibility() {
     // stay as regression checks: repair is an explicit offline command, so the
     // controller still refuses a stale marker until that command runs.
     let d = tempfile::tempdir().unwrap();
-    let (c, mut cfg) = super::super::decision_owner::decision_fixture_config(d.path());
+    let (c, mut cfg) = super::super::decision::decision_fixture_config(d.path());
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
     redecision::initialize(&mut db, &c, &p, Some(&cfg), start()).unwrap();
@@ -3219,7 +3219,7 @@ fn recovery_owner_receipt_compatibility() {
     )
     .unwrap();
     drop(db);
-    let (owner_c, owner) = super::super::decision_owner::decision_fixture_config(d.path());
+    let (owner_c, owner) = super::super::decision::decision_fixture_config(d.path());
     owner.validate_decision_lane().unwrap();
     let recover_error = planner_recover(&owner_c, true).unwrap_err().to_string();
     let apply_error = config_apply(&owner_c, true).unwrap_err().to_string();
@@ -3238,7 +3238,7 @@ fn recovery_owner_receipt_compatibility() {
     persist(&mut db, &c, &p, start(), None, None, "operator_stopped").unwrap();
     let before = recovery_authority_snapshot(&db);
     drop(db);
-    let (owner_c, _) = super::super::decision_owner::decision_fixture_config(d.path());
+    let (owner_c, _) = super::super::decision::decision_fixture_config(d.path());
     assert_eq!(
         config_apply(&owner_c, true).unwrap_err().to_string(),
         "planner_authority_owner_invalid"
@@ -3333,7 +3333,7 @@ fn resume_clears_operator_stop_with_audit_when_flat() {
     // Recovery success is owner-only; the legacy Decide path is refused in
     // production and covered by the explicit gate cases.
     drop(db);
-    let (c, cfg) = super::super::decision_owner::decision_fixture_config(d.path());
+    let (c, cfg) = super::super::decision::decision_fixture_config(d.path());
     let mut db = open_book(&c).unwrap();
     let mut p = load_wide(&mut db, &c).unwrap();
     assert!(p.model_led);

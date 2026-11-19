@@ -135,7 +135,7 @@ fn all_tools(dir: &std::path::Path) -> (Config, planner::PlannerConfig) {
     use crate::runtime::harness::research::{
         CandidateComputeSettings, CandidateDataset, CandidateDatasetKind, ResearchSettings,
     };
-    let (c, mut cfg) = crate::runtime::decision_owner::decision_fixture_config(dir);
+    let (c, mut cfg) = crate::runtime::decision::decision_fixture_config(dir);
     let install_hash = crate::runtime::digest(b"print(1)");
     cfg.workspace = Some(
         serde_json::from_value(json!({
@@ -761,7 +761,7 @@ fn next_decision_receives_only_the_sealed_predecessor_review() {
     let dir = tempfile::tempdir().unwrap();
     let original = dir.path().join("original");
     std::fs::create_dir(&original).unwrap();
-    let (prior, cfg) = crate::runtime::decision_owner::decision_fixture_config(&original);
+    let (prior, cfg) = crate::runtime::decision::decision_fixture_config(&original);
     let mut successor = prior.clone();
     successor.session = "2026-10-19".parse().unwrap();
     successor.previous_session = prior.session;

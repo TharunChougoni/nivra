@@ -14,9 +14,9 @@ mod bundle;
 use bundle::*;
 pub(crate) mod research;
 pub(crate) use research::{
-    LaunchBook, OwnerResearchRuntime, ResearchLaunch, ResearchSettings,
+    LaunchBook, ResearchLaunch, ResearchRuntime, ResearchSettings,
     helper_entry as research_candidate_helper, observation_status as research_observation_status,
-    status as research_status, tick_owner_tasks as research_tick_owner_tasks,
+    status as research_status, tick_tasks as research_tick_tasks,
     validate_files as validate_research_files,
 };
 fn skip_false(value: &bool) -> bool {

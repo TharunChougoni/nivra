@@ -281,7 +281,7 @@ fn candidate_sandbox_ready(settings: &ResearchSettings) -> bool {
 }
 
 fn candidate_queue(c: &Config, cfg: &PlannerConfig) -> Connection {
-    open_queue_for_owner(
+    open_queue(
         cfg.research_tools.as_ref().unwrap(),
         &c.directory.join("model"),
         false,
@@ -811,7 +811,7 @@ fn case_carry_contract(root: &Path, base_settings: &ResearchSettings, base_polic
     let _ = super::carry::resolve_parent_ref(&c, &cfg, &cross_account);
     assert_eq!(digest(&fs::read(&sentinel).unwrap()), before);
     // The global fold is read-only and never resets the trial debt.
-    let _ = open_queue_for_owner(
+    let _ = open_queue(
         cfg.research_tools.as_ref().unwrap(),
         &c.directory.join("model"),
         true,
@@ -1544,7 +1544,7 @@ fn candidate_fairness_contract(
     let (c, cfg) = candidate_config(&dir, base_policy, settings.clone());
     candidate_book(&c);
     let t0 = candidate_at(9, 23);
-    let registered = owner_task_enqueue_with_evidence(
+    let registered = task_enqueue_with_evidence(
         &c,
         &cfg,
         "grok-4.7",
@@ -1572,8 +1572,8 @@ fn candidate_fairness_contract(
     .unwrap();
     assert_eq!(candidate["status"], "queued");
     let mut book = super::super::super::open_book(&c).unwrap();
-    let mut runtime = OwnerResearchRuntime::default();
-    let started = tick_owner_tasks_with_runner(
+    let mut runtime = ResearchRuntime::default();
+    let started = tick_tasks_with_runner(
         &mut book,
         &c,
         &cfg,
@@ -1676,7 +1676,7 @@ fn candidate_fairness_contract(
     let flagged_record = jobs::load_candidate(&mut queue, &flagged_task, 1).unwrap();
     let cancel = Arc::new(AtomicBool::new(false));
     let (sender, receiver) = std::sync::mpsc::channel();
-    let mut flag_runtime = OwnerResearchRuntime {
+    let mut flag_runtime = ResearchRuntime {
         active: Some((
             ResearchTaskKind::Candidate,
             flagged_task.clone(),
@@ -1684,9 +1684,9 @@ fn candidate_fairness_contract(
             Arc::clone(&cancel),
             receiver,
         )),
-        ..OwnerResearchRuntime::default()
+        ..ResearchRuntime::default()
     };
-    tick_owner_tasks_with_runner(
+    tick_tasks_with_runner(
         &mut flag_book,
         &flag_c,
         &flag_cfg,
@@ -1709,7 +1709,7 @@ fn candidate_fairness_contract(
         "task TTL expiry must not set the operator-cancel flag"
     );
     candidate_cancel(&flag_c, &flag_cfg, &flagged_task, 1, t0 + 6).unwrap();
-    tick_owner_tasks_with_runner(
+    tick_tasks_with_runner(
         &mut flag_book,
         &flag_c,
         &flag_cfg,
@@ -1891,7 +1891,7 @@ fn candidate_recovery_contract(
     candidate_book(&c);
     let candidate = settings.candidate_compute.as_ref().unwrap();
     let t0 = candidate_at(9, 23);
-    drop(open_queue_for_owner(&settings, &c.directory.join("model"), true).unwrap());
+    drop(open_queue(&settings, &c.directory.join("model"), true).unwrap());
     let mut db = candidate_queue(&c, &cfg);
 
     let submit = |db: &mut Connection, key: &str, source: &str, at: i64| {
@@ -2739,7 +2739,7 @@ fn candidate_execution_recovery_contract(
     }
     let (c, cfg) = candidate_config(&dir, base_policy, settings.clone());
     candidate_execution_book(&c);
-    drop(open_queue_for_owner(&settings, &c.directory.join("model"), true).unwrap());
+    drop(open_queue(&settings, &c.directory.join("model"), true).unwrap());
     let mut db = candidate_queue(&c, &cfg);
     let t0 = candidate_at(9, 23);
     let hypothesis = "AAA should rank above BBB on frozen current-session features";

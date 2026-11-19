@@ -116,7 +116,7 @@ fn candidate_observation_submit(
     let binding = book_binding(c)?;
     let session = c.session.to_string();
     let policy_sha256 = digest(&super::super::super::super::planner::policy_bytes(cfg)?);
-    let mut db = open_queue_for_owner(settings, &c.directory.join("model"), true)?;
+    let mut db = open_queue(settings, &c.directory.join("model"), true)?;
     let original = match jobs::load_candidate(&mut db, &obs.source_task_id, obs.source_revision) {
         Ok(task) => task,
         Err(_) => return Ok(not_dispatched("candidate_observation_source_missing")),
@@ -875,7 +875,7 @@ pub(crate) fn candidate_submit(
             ),
         ),
     };
-    let mut db = open_queue_for_owner(settings, &c.directory.join("model"), true)?;
+    let mut db = open_queue(settings, &c.directory.join("model"), true)?;
     let latest = jobs::latest_candidate_for_key(&mut db, &session, &binding, &args.task_key)
         .map_err(|_| "candidate_task_state_unavailable")?;
     let resolved_parent_ref = match args.parent_ref.as_deref() {
@@ -1191,7 +1191,7 @@ pub(super) fn candidate_task(
         .research_tools
         .as_ref()
         .ok_or("harness_analysis_disabled")?;
-    let mut db = open_queue_for_owner(settings, &c.directory.join("model"), false)?;
+    let mut db = open_queue(settings, &c.directory.join("model"), false)?;
     let record = jobs::load_candidate(&mut db, task_id, revision)
         .map_err(|error| candidate_load_error(&db, error))?;
     if record.spec.session != c.session.to_string() || record.spec.book_binding != book_binding(c)?

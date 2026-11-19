@@ -425,7 +425,7 @@ impl ResearchSettings {
 /// Open the existing durable research queue under a short identity/creation
 /// lock. The lock is released before callers execute or poll a sandbox so
 /// enqueue/status/cancel operations can keep using SQLite while work runs.
-pub(crate) fn open_queue_for_owner(
+pub(crate) fn open_queue(
     settings: &ResearchSettings,
     authority: &Path,
     create_if_missing: bool,

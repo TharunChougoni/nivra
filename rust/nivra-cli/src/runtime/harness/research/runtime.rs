@@ -25,7 +25,7 @@ pub(crate) struct ResearchLaunch {
 pub(crate) struct LaunchBook {
     pub halted: bool,
     pub stopped: bool,
-    pub owner_decision_pending: bool,
+    pub decision_pending: bool,
     pub context_unavailable: bool,
 }
 
@@ -34,7 +34,7 @@ impl ResearchLaunch {
         let runnable = !book.halted && !book.stopped;
         let usable = runnable && !book.context_unavailable;
         Self {
-            registered: usable && !book.owner_decision_pending,
+            registered: usable && !book.decision_pending,
             candidate: usable,
             reason: if book.context_unavailable {
                 "controller_session_end_unavailable"
@@ -42,7 +42,7 @@ impl ResearchLaunch {
                 "book_halted"
             } else if book.stopped {
                 "book_stopped"
-            } else if book.owner_decision_pending {
+            } else if book.decision_pending {
                 "owner_decision_pending"
             } else {
                 "ready"
@@ -62,7 +62,7 @@ pub(crate) type ActiveResearch = (
 );
 
 #[derive(Default)]
-pub(crate) struct OwnerResearchRuntime {
+pub(crate) struct ResearchRuntime {
     pub(crate) active: Option<ActiveResearch>,
     pub(crate) terminal_cursor: Option<jobs::TaskCursor>,
     pub(crate) candidate_terminal_cursor: Option<jobs::TaskCursor>,
@@ -71,7 +71,7 @@ pub(crate) struct OwnerResearchRuntime {
     pub(crate) lifecycle: Option<Value>,
 }
 
-impl OwnerResearchRuntime {
+impl ResearchRuntime {
     pub(crate) fn observe_channel(&mut self) {
         let Some((kind, task_id, revision, _, receiver)) = self.active.as_ref() else {
             return;
@@ -175,7 +175,7 @@ pub(crate) fn drive_task(
     revision: u32,
 ) -> std::result::Result<(), &'static str> {
     let result = (|| -> Result<()> {
-        let mut db = open_queue_for_owner(&settings, &authority, false)?;
+        let mut db = open_queue(&settings, &authority, false)?;
         let task = jobs::load_scoped(&mut db, &task_id, revision)
             .map_err(|_| "research_task_unavailable")?;
         if task.status == jobs::TaskState::Pending && task.job.attempts == 0 {
@@ -413,12 +413,12 @@ pub(crate) fn candidate_operator_cancel(record: &jobs::CandidateTaskRecord) -> b
 /// Low-priority controller tick: terminal events are deduped by the owner
 /// ledger. Registered launch keeps the old owner/model-worker gate; candidate
 /// launch uses the typed book gate and never recovers an ambiguous attempt.
-pub(crate) fn tick_owner_tasks(
+pub(crate) fn tick_tasks(
     db: &mut Connection,
     c: &Config,
     cfg: &PlannerConfig,
     launch: ResearchLaunch,
-    runtime: &mut OwnerResearchRuntime,
+    runtime: &mut ResearchRuntime,
     now: i64,
 ) -> Result<Value> {
     let stage_root = cfg
@@ -426,20 +426,20 @@ pub(crate) fn tick_owner_tasks(
         .as_ref()
         .map(|settings| settings.stage_root.clone())
         .unwrap_or_default();
-    tick_owner_tasks_with_runner(db, c, cfg, launch, runtime, now, move || {
+    tick_tasks_with_runner(db, c, cfg, launch, runtime, now, move || {
         Box::new(bubblewrap::CandidateRunner::new(stage_root.clone()))
     })
 }
 
-/// Testable variant of [`tick_owner_tasks`] with an explicit owned-unit runner
+/// Testable variant of [`tick_tasks`] with an explicit owned-unit runner
 /// factory. Production uses [`bubblewrap::CandidateRunner`]; tests use a fake
 /// that never invokes systemd.
-pub(crate) fn tick_owner_tasks_with_runner(
+pub(crate) fn tick_tasks_with_runner(
     db: &mut Connection,
     c: &Config,
     cfg: &PlannerConfig,
     launch: ResearchLaunch,
-    runtime: &mut OwnerResearchRuntime,
+    runtime: &mut ResearchRuntime,
     now: i64,
     mut runner_for: impl FnMut() -> Box<dyn worker::CandidateUnitRunner + Send> + Send + 'static,
 ) -> Result<Value> {
@@ -448,7 +448,7 @@ pub(crate) fn tick_owner_tasks_with_runner(
     };
     let binding = book_binding(c)?;
     runtime.observe_channel();
-    let Ok(mut queue) = open_queue_for_owner(settings, &c.directory.join("model"), false) else {
+    let Ok(mut queue) = open_queue(settings, &c.directory.join("model"), false) else {
         return Ok(json!({"status":"unavailable"}));
     };
     if let Some((task_id, revision, cancel)) = runtime.active_candidate_cancel()
@@ -494,7 +494,7 @@ pub(crate) fn tick_owner_tasks_with_runner(
     }) {
         let status = task_state_name(row.status);
         let terminal_at_ms = row.terminal_at_ms.ok_or("research_terminal_time_missing")?;
-        super::super::super::redecision::enqueue_owner_research_event(
+        super::super::super::redecision::enqueue_research_event(
             db,
             c,
             &row.spec.task_id,
@@ -576,7 +576,7 @@ pub(crate) fn tick_owner_tasks_with_runner(
         let terminal_at_ms = row
             .terminal_at_ms
             .ok_or("candidate_terminal_time_missing")?;
-        super::super::super::redecision::enqueue_owner_research_event_kind(
+        super::super::super::redecision::enqueue_research_event_kind(
             db,
             c,
             &row.spec.task_id,

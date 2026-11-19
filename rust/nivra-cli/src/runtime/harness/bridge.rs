@@ -146,7 +146,7 @@ impl<'a> Bridge<'a> {
         };
         Ok(Ok(match tool {
             Tool::ResearchRequest(args) => requests.post(turn, &args.question, args.refs, now)?,
-            Tool::OwnerResearchEnqueue(args) => research::owner_task_enqueue_with_evidence(
+            Tool::ResearchEnqueue(args) => research::task_enqueue_with_evidence(
                 c,
                 cfg,
                 model,
@@ -159,17 +159,17 @@ impl<'a> Bridge<'a> {
                 now,
                 None,
             )?,
-            Tool::OwnerResearchStatus(task_id, revision) => match requests.status(&task_id)? {
+            Tool::ResearchTaskStatus(task_id, revision) => match requests.status(&task_id)? {
                 Some(request) => request,
-                None => research::owner_task_status(c, cfg, &task_id, revision, now)?,
+                None => research::research_task_status(c, cfg, &task_id, revision, now)?,
             },
-            Tool::OwnerResearchResult(task_id, revision) => match requests.result(&task_id)? {
+            Tool::ResearchTaskResult(task_id, revision) => match requests.result(&task_id)? {
                 Some(answer) => answer,
-                None => research::owner_task_result(c, cfg, &task_id, revision, now)?,
+                None => research::research_task_result(c, cfg, &task_id, revision, now)?,
             },
-            Tool::OwnerResearchCancel(task_id, revision) => match requests.cancel(&task_id, now)? {
+            Tool::ResearchTaskCancel(task_id, revision) => match requests.cancel(&task_id, now)? {
                 Some(request) => request,
-                None => research::owner_task_cancel(c, cfg, &task_id, revision, now)?,
+                None => research::research_task_cancel(c, cfg, &task_id, revision, now)?,
             },
             Tool::CandidateSubmit(args) => candidate(research::candidate_submit(
                 c, cfg, model, 0, turn, args, now, None,

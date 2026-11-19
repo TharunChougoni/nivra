@@ -27,7 +27,7 @@ pub(crate) fn data_tool_definitions(limits: &ToolsSettings) -> Result<Vec<Value>
     Ok(tools)
 }
 
-fn owner_research_tool_definitions() -> Vec<Value> {
+fn research_task_tool_definitions() -> Vec<Value> {
     vec![
         function(
             "research_task_enqueue",
@@ -209,7 +209,7 @@ pub(super) fn candidate_tools_enabled(cfg: &PlannerConfig) -> bool {
 pub(crate) fn granted_tool_definitions(owner: GrantedTools) -> Vec<Value> {
     let mut tools = Vec::new();
     if owner.research {
-        tools.extend(owner_research_tool_definitions());
+        tools.extend(research_task_tool_definitions());
     }
     if owner.candidate {
         tools.extend(owner_candidate_tool_definitions(
@@ -285,14 +285,14 @@ fn unique_instrument_keys(keys: Vec<String>, max: usize) -> Result<Vec<String>> 
     }
     Ok(unique)
 }
-fn owner_task_key_ok(value: &str) -> bool {
+fn task_key_ok(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 48
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
-fn owner_task_id_ok(value: &str) -> bool {
+fn task_id_ok(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
@@ -300,7 +300,7 @@ fn owner_task_id_ok(value: &str) -> bool {
 }
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct OwnerResearchEnqueueArgs {
+pub(super) struct ResearchEnqueueArgs {
     pub(super) task_key: String,
     pub(super) goal: String,
     pub(super) analysis_id: String,
@@ -308,7 +308,7 @@ pub(super) struct OwnerResearchEnqueueArgs {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct OwnerResearchTaskArgs {
+struct ResearchTaskArgs {
     /// Legacy same-session selector. Nullable only for the explicitly gated
     /// `candidate_result` source-observation mode; every other caller requires
     /// both fields.
@@ -363,10 +363,10 @@ pub(super) enum Tool {
     Snapshot(Vec<String>),
     Context(Vec<String>),
     Features(Vec<String>),
-    OwnerResearchEnqueue(OwnerResearchEnqueueArgs),
-    OwnerResearchStatus(String, u32),
-    OwnerResearchResult(String, u32),
-    OwnerResearchCancel(String, u32),
+    ResearchEnqueue(ResearchEnqueueArgs),
+    ResearchTaskStatus(String, u32),
+    ResearchTaskResult(String, u32),
+    ResearchTaskCancel(String, u32),
     CandidateSubmit(research::CandidateSubmitArgs),
     CandidateStatus(String, u32),
     CandidateResult(Option<String>, Option<u32>, Option<String>),
@@ -523,8 +523,8 @@ pub(super) fn checked_call_with(
             Tool::Session
         }
         "research_task_enqueue" => {
-            let a: OwnerResearchEnqueueArgs = serde_json::from_value(args)?;
-            if !owner_task_key_ok(&a.task_key)
+            let a: ResearchEnqueueArgs = serde_json::from_value(args)?;
+            if !task_key_ok(&a.task_key)
                 || a.goal.trim().is_empty()
                 || a.goal.len() > 1024
                 || a.goal.chars().any(char::is_control)
@@ -537,23 +537,23 @@ pub(super) fn checked_call_with(
             {
                 return Err("harness_owner_research_args_invalid".into());
             }
-            Tool::OwnerResearchEnqueue(a)
+            Tool::ResearchEnqueue(a)
         }
         "research_task_status" | "research_task_result" | "research_task_cancel" => {
-            let a: OwnerResearchTaskArgs = serde_json::from_value(args)?;
+            let a: ResearchTaskArgs = serde_json::from_value(args)?;
             if a.observation_ref.is_some() {
                 return Err("harness_owner_research_args_invalid".into());
             }
             let (Some(task_id), Some(revision)) = (a.task_id, a.revision) else {
                 return Err("harness_owner_research_task_id_invalid".into());
             };
-            if !owner_task_id_ok(&task_id) || revision == 0 {
+            if !task_id_ok(&task_id) || revision == 0 {
                 return Err("harness_owner_research_task_id_invalid".into());
             }
             match name {
-                "research_task_status" => Tool::OwnerResearchStatus(task_id, revision),
-                "research_task_result" => Tool::OwnerResearchResult(task_id, revision),
-                _ => Tool::OwnerResearchCancel(task_id, revision),
+                "research_task_status" => Tool::ResearchTaskStatus(task_id, revision),
+                "research_task_result" => Tool::ResearchTaskResult(task_id, revision),
+                _ => Tool::ResearchTaskCancel(task_id, revision),
             }
         }
         "candidate_submit" => {
@@ -561,7 +561,7 @@ pub(super) fn checked_call_with(
             Tool::CandidateSubmit(a)
         }
         "candidate_status" | "candidate_result" | "candidate_cancel" => {
-            let a: OwnerResearchTaskArgs = serde_json::from_value(args)?;
+            let a: ResearchTaskArgs = serde_json::from_value(args)?;
             if name != "candidate_result" && a.observation_ref.is_some() {
                 return Err("harness_owner_research_args_invalid".into());
             }
@@ -582,7 +582,7 @@ pub(super) fn checked_call_with(
                 let (Some(task_id), Some(revision)) = (a.task_id.clone(), a.revision) else {
                     return Err("harness_owner_research_args_invalid".into());
                 };
-                if !owner_task_id_ok(&task_id) || revision == 0 {
+                if !task_id_ok(&task_id) || revision == 0 {
                     return Err("harness_owner_research_task_id_invalid".into());
                 }
                 match name {

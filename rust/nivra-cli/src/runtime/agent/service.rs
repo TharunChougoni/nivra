@@ -13,7 +13,7 @@ use super::triggers::{
 };
 use super::{AgentMode, AgentSettings, Lane};
 use crate::runtime::planner::{self, Backend, PlannerConfig};
-use crate::runtime::{Config, Connection, Result, decision_evidence, decision_owner, redecision};
+use crate::runtime::{Config, Connection, Result, decision, decision_evidence, redecision};
 use nivra_core::execution::{Instrument, Portfolio, Scanner};
 use nivra_core::feature_store::FeatureStore;
 use serde_json::{Value, json};
@@ -648,7 +648,7 @@ fn commit_done(
     else {
         return Err("agent_paper_no_validated_decision".into());
     };
-    let mut context = decision_owner::Context {
+    let mut context = decision::Context {
         db,
         portfolio: cycle.portfolio,
         instruments: cycle.instruments,
@@ -680,7 +680,7 @@ mod tests {
     #[test]
     fn a_review_waits_for_context_before_claiming_the_seal() {
         let dir = tempfile::tempdir().unwrap();
-        let (c, mut cfg) = crate::runtime::decision_owner::decision_fixture_config(dir.path());
+        let (c, mut cfg) = crate::runtime::decision::decision_fixture_config(dir.path());
         cfg.decision_evidence = Some(decision_evidence::Settings {
             max_age_ms: 0,
             ..Default::default()

@@ -266,7 +266,7 @@ pub(crate) fn drive_candidate_with_unit_and_machine(
     let mut db = {
         let mut attempt = 0u32;
         loop {
-            match open_queue_for_owner(&settings, &authority, false) {
+            match open_queue(&settings, &authority, false) {
                 Ok(db) => break db,
                 Err(_) if attempt < 200 => {
                     attempt = attempt.saturating_add(1);

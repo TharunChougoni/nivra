@@ -17,7 +17,7 @@ fn registered_research_waits_only_for_the_book_and_a_pending_owner_decision() {
     // A queued or in-flight owner decision still keeps registered research
     // out of the way; candidate compute is unaffected, as before.
     let owner = ResearchLaunch::for_book(LaunchBook {
-        owner_decision_pending: true,
+        decision_pending: true,
         ..Default::default()
     });
     assert!(!owner.registered && owner.candidate);
