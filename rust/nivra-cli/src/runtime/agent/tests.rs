@@ -320,6 +320,20 @@ fn args(name: &str) -> Value {
 /// bypasses its validation).
 #[test]
 fn every_lane_tool_round_trips_through_the_bridge() {
+    // `nivra agent-check` loads this fixture at run time only, so a config
+    // shape change would otherwise break it without failing any test.
+    let fixture: Value = serde_json::from_slice(
+        &std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/agent-check.json"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    serde_json::from_value::<planner::PlannerConfig>(fixture["planner"].clone())
+        .expect("agent-check fixture planner matches the current planner shape");
+    serde_json::from_value::<Config>(fixture["paper"].clone())
+        .expect("agent-check fixture paper config matches the current config shape");
     let dir = tempfile::tempdir().unwrap();
     let (c, cfg) = all_tools(dir.path());
     let settings = settings(100, 10.0);
