@@ -38,7 +38,10 @@ const runtime = await ModelRuntime.create({
   authPath: join(agentDir, "auth.json"),
   modelsPath: join(agentDir, "models.json"),
   allowModelNetwork: false,
-  refreshOnCreate: false,
+  // Apply the catalog already downloaded into models-store.json (by
+  // `pi update --models`) so models newer than the pinned built-ins resolve.
+  // With the network off this reads only that file.
+  refreshOnCreate: true,
 });
 // Preflight: is each model in pi's catalog, and does its provider have
 // credentials? pi reports only presence; no credential value leaves it and no
