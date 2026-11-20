@@ -7,7 +7,7 @@ use super::lanes::{self, LaneRunner, TurnContext};
 use super::paper;
 use super::protocol::{TurnStatus, Usage};
 use super::requests::Requests;
-use super::tools::PlanAttempt;
+use super::tools::{PlanAttempt, Verdict};
 use super::triggers::{
     Observation, Phase, Ranked, Trigger, TriggerEngine, TriggerKind, ranker_registry,
 };
@@ -95,6 +95,8 @@ struct Done {
     plan: Option<(String, PlanAttempt)>,
     paper_input: Option<Value>,
     review: Option<String>,
+    /// The gate's answer; `None` when the gate turn ended without one.
+    verdict: Option<Verdict>,
     error: Option<String>,
     /// The agent is restarting; the batch may run again from this time.
     retry_at_ms: Option<i64>,
@@ -112,7 +114,20 @@ pub(crate) struct LaneService {
     pending_claim: Option<redecision::Claim>,
     hold_until_ms: i64,
     agenda: Option<String>,
+    /// Entry triggers the gate escalated; the next dispatch runs them on the
+    /// decision lane without screening them again.
+    escalated: Option<Vec<Trigger>>,
     status: Value,
+}
+
+/// The trigger queue a lane's batch returns to: gate batches are decision
+/// triggers that have not been screened yet.
+fn queue(lane: Lane) -> Lane {
+    if lane == Lane::Gate {
+        Lane::Decision
+    } else {
+        lane
+    }
 }
 
 fn append(c: &Config, file: &str, line: &Value) -> Result<()> {
@@ -150,6 +165,7 @@ fn run(runner: &mut LaneRunner<'_>, job: &mut Work) -> Done {
         plan: None,
         paper_input: None,
         review: None,
+        verdict: None,
         error: None,
         retry_at_ms: None,
     };
@@ -187,6 +203,18 @@ fn run(runner: &mut LaneRunner<'_>, job: &mut Work) -> Done {
                         &mut job.context,
                     )?;
                     done.turns.push(turn_summary(&turn));
+                }
+            }
+            Lane::Gate => {
+                let turn = runner.turn(
+                    Lane::Gate,
+                    trigger,
+                    json!(job.brief.render()?),
+                    &mut job.context,
+                )?;
+                done.turns.push(turn_summary(&turn));
+                if turn.outcome.status == TurnStatus::Ok {
+                    done.verdict = turn.verdict;
                 }
             }
             Lane::Review => {
@@ -257,6 +285,7 @@ impl LaneService {
             pending_claim: None,
             hold_until_ms: 0,
             agenda: None,
+            escalated: None,
             status: json!({"status":"idle"}),
         })
     }
@@ -366,7 +395,9 @@ impl LaneService {
                 &json!({"event":"fired","lane":trigger.kind.lane(),"trigger":trigger}),
             )?;
         }
-        if self.busy.is_some_and(|lane| lane != Lane::Decision)
+        if self
+            .busy
+            .is_some_and(|lane| !matches!(lane, Lane::Decision | Lane::Gate))
             && phase.trading()
             && self.fraction(Lane::Decision, &spent) < 1.0
             && self.engine.decision_waiting()
@@ -399,14 +430,20 @@ impl LaneService {
         spent: &BTreeMap<Lane, Usage>,
     ) -> Result<()> {
         let c = cycle.c;
-        let Some((lane, triggers)) = self.engine.next() else {
-            return Ok(());
+        let (lane, triggers) = match self.escalated.take() {
+            Some(triggers) => (Lane::Decision, triggers),
+            None => {
+                let Some((lane, triggers)) = self.engine.next() else {
+                    return Ok(());
+                };
+                (self.screen(c, lane, &triggers, spent)?, triggers)
+            }
         };
         let Ok(settings) = self.settings.lane(lane) else {
             return self.skip(c, lane, &triggers, "agent_lane_not_configured");
         };
         let p = cycle.portfolio;
-        if lane == Lane::Decision {
+        if matches!(lane, Lane::Decision | Lane::Gate) {
             if !phase.trading() || p.halted || p.stopped || p.closed {
                 return self.skip(c, lane, &triggers, "agent_book_not_trading");
             }
@@ -419,7 +456,9 @@ impl LaneService {
                 return self.skip(c, lane, &triggers, "agent_no_eligible_evidence");
             }
         }
-        if self.fraction(lane, spent) >= 1.0 {
+        if self.fraction(lane, spent) >= 1.0
+            || (lane == Lane::Gate && self.fraction(Lane::Decision, spent) >= 1.0)
+        {
             return self.skip(c, lane, &triggers, "agent_budget_exhausted");
         }
         let Some(jobs) = self.jobs.as_ref() else {
@@ -432,7 +471,7 @@ impl LaneService {
                 let entry = json!({"event":"deferred","lane":lane,"at_ms":cycle.now,
                     "reason":crate::runtime::harness::failure_reason(error.as_ref()),
                     "retry_at_ms":self.hold_until_ms,"triggers":triggers});
-                self.engine.requeue(lane, triggers);
+                self.engine.requeue(queue(lane), triggers);
                 return append(c, "triggers.ndjson", &entry);
             }
         };
@@ -474,6 +513,7 @@ impl LaneService {
             }
             Lane::Research => json!({"kind":triggers[0].kind}),
             Lane::Review => json!({"kind":"review","session":c.session.to_string()}),
+            Lane::Gate => json!({"kind":"gate"}),
             Lane::Decision => Value::Null,
         };
         let brief = Brief::build(&facts, budget, task, &triggers);
@@ -512,7 +552,7 @@ impl LaneService {
                 if let Some(claim) = &claim {
                     paper::refuse(db, c, claim, "agent_worker_busy")?;
                 } else {
-                    self.engine.requeue(lane, triggers);
+                    self.engine.requeue(queue(lane), triggers);
                 }
                 return Ok(());
             }
@@ -538,6 +578,36 @@ impl LaneService {
             "triggers.ndjson",
             &json!({"event":"dispatched","lane":lane,"at_ms":cycle.now,"triggers":triggers}),
         )
+    }
+
+    /// The lane a decision batch runs on first: the gate when one is
+    /// configured with budget left and every trigger is an entry candidate.
+    /// Fills, position risk and the scheduled turns always reach the decision
+    /// lane directly. An exhausted gate passes its batches through.
+    fn screen(
+        &self,
+        c: &Config,
+        lane: Lane,
+        triggers: &[Trigger],
+        spent: &BTreeMap<Lane, Usage>,
+    ) -> Result<Lane> {
+        if lane != Lane::Decision
+            || !self.settings.lanes.contains_key(&Lane::Gate)
+            || !triggers
+                .iter()
+                .all(|trigger| trigger.kind == TriggerKind::EntryCandidate)
+        {
+            return Ok(lane);
+        }
+        if self.fraction(Lane::Gate, spent) >= 1.0 {
+            append(
+                c,
+                "triggers.ndjson",
+                &json!({"event":"gate_bypassed","reason":"agent_budget_exhausted","triggers":triggers}),
+            )?;
+            return Ok(Lane::Decision);
+        }
+        Ok(Lane::Gate)
     }
 
     fn context(&self, cycle: &Cycle<'_>) -> Result<TurnContext> {
@@ -581,7 +651,26 @@ impl LaneService {
         if let Some(retry_at) = done.retry_at_ms {
             self.hold_until_ms = retry_at;
             if !paper_decision {
-                self.engine.requeue(done.lane, done.triggers.clone());
+                self.engine.requeue(queue(done.lane), done.triggers.clone());
+            }
+        } else if done.lane == Lane::Gate {
+            // A gate that failed or gave no verdict escalates: a broken screen
+            // must not silence entry triggers. The journal says which it was.
+            let (escalate, reason) = match &done.verdict {
+                Some(verdict) => (verdict.escalate, verdict.reason.as_str()),
+                None => (
+                    true,
+                    done.error.as_deref().unwrap_or("agent_gate_no_verdict"),
+                ),
+            };
+            append(
+                c,
+                "triggers.ndjson",
+                &json!({"event":"gated","at_ms":cycle.now,"escalate":escalate,
+                    "verdict":done.verdict.is_some(),"reason":reason,"triggers":done.triggers}),
+            )?;
+            if escalate {
+                self.escalated = Some(done.triggers.clone());
             }
         }
         let paper_status = if let Some(claim) = self.pending_claim.as_ref() {
@@ -715,6 +804,122 @@ mod tests {
         let deferred: Value = serde_json::from_str(journal.lines().last().unwrap()).unwrap();
         assert_eq!(deferred["event"], "deferred");
         assert_eq!(deferred["retry_at_ms"], cycle.now + CONTEXT_RETRY_MS);
+        service.stop();
+    }
+
+    #[test]
+    fn the_gate_screens_only_entry_candidates_and_escalates_unless_it_declines() {
+        let dir = tempfile::tempdir().unwrap();
+        let (c, mut cfg) = crate::runtime::decision::decision_fixture_config(dir.path());
+        let agent = cfg.agent.as_mut().unwrap();
+        let mut gate = agent.lanes[&Lane::Decision].clone();
+        gate.daily_calls = 2;
+        agent.lanes.insert(Lane::Gate, gate);
+        let mut service = LaneService::start(&cfg).unwrap();
+        let entry = || {
+            vec![Trigger::new(
+                TriggerKind::EntryCandidate,
+                "entered_top_k",
+                1,
+            )]
+        };
+        let mut spent = BTreeMap::new();
+
+        assert_eq!(
+            service
+                .screen(&c, Lane::Decision, &entry(), &spent)
+                .unwrap(),
+            Lane::Gate
+        );
+        let mut mixed = entry();
+        mixed.push(Trigger::new(TriggerKind::Fill, "fill_batch", 1));
+        assert_eq!(
+            service.screen(&c, Lane::Decision, &mixed, &spent).unwrap(),
+            Lane::Decision
+        );
+        spent.insert(
+            Lane::Gate,
+            Usage {
+                calls: 2,
+                ..Usage::default()
+            },
+        );
+        assert_eq!(
+            service
+                .screen(&c, Lane::Decision, &entry(), &spent)
+                .unwrap(),
+            Lane::Decision
+        );
+
+        let portfolio = crate::runtime::tests::test_portfolio();
+        let scanner = Scanner::default();
+        let store = FeatureStore::new(Default::default()).unwrap();
+        let cycle = Cycle {
+            c: &c,
+            cfg: &cfg,
+            now: 20_000,
+            minute: 600,
+            sealed: false,
+            portfolio: &portfolio,
+            instruments: &[],
+            ranking: &[],
+            ranked_at: 0,
+            decision_ready: true,
+            scanner: &scanner,
+            store: &store,
+            index: None,
+        };
+        let mut db = Connection::open_in_memory().unwrap();
+        let done = |verdict: Option<Verdict>, error: Option<&str>| Done {
+            lane: Lane::Gate,
+            triggers: entry(),
+            turns: Vec::new(),
+            plan: None,
+            paper_input: None,
+            review: None,
+            verdict,
+            error: error.map(str::to_owned),
+            retry_at_ms: None,
+        };
+        let verdict = |escalate| {
+            Some(Verdict {
+                escalate,
+                reason: "depth".into(),
+            })
+        };
+        service
+            .settle(&cycle, &mut db, done(verdict(false), None))
+            .unwrap();
+        assert!(service.escalated.is_none());
+        service
+            .settle(&cycle, &mut db, done(verdict(true), None))
+            .unwrap();
+        assert_eq!(service.escalated.take(), Some(entry()));
+        // A failed screen must not silence the triggers.
+        service
+            .settle(&cycle, &mut db, done(None, Some("agent_turn_timeout")))
+            .unwrap();
+        assert_eq!(service.escalated.take(), Some(entry()));
+
+        let journal = std::fs::read_to_string(lanes::root(&c).join("triggers.ndjson")).unwrap();
+        let events: Vec<Value> = journal
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let kinds: Vec<(&str, Option<bool>)> = events
+            .iter()
+            .map(|e| (e["event"].as_str().unwrap(), e["escalate"].as_bool()))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ("gate_bypassed", None),
+                ("gated", Some(false)),
+                ("gated", Some(true)),
+                ("gated", Some(true))
+            ]
+        );
+        assert_eq!(events[3]["reason"], "agent_turn_timeout");
         service.stop();
     }
 }

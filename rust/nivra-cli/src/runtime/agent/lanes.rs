@@ -3,7 +3,7 @@ use super::brief::Brief;
 use super::client::{Agent, Allowance, TurnOutcome, TurnRequest};
 use super::protocol::{SessionRef, TurnStatus, Usage};
 use super::requests::Requests;
-use super::tools::{LaneHost, PlanAttempt, lane_definitions};
+use super::tools::{LaneHost, PlanAttempt, Verdict, lane_definitions};
 use super::{AgentSettings, Lane, ModelSpec};
 use crate::runtime::harness::{Bridge, LaneGrant};
 use crate::runtime::lane_queue::{LaneMessage, MessageBody, TransitionReason};
@@ -148,6 +148,7 @@ impl Ledger {
 pub(crate) struct LaneTurn {
     pub outcome: TurnOutcome,
     pub plan: Option<PlanAttempt>,
+    pub verdict: Option<Verdict>,
 }
 
 pub(crate) struct LaneRunner<'a> {
@@ -406,7 +407,7 @@ impl<'a> LaneRunner<'a> {
                 LaneGrant {
                     workspace: match lane {
                         Lane::Research => WorkspaceScope::ResearchSandbox,
-                        Lane::Decision | Lane::Review => WorkspaceScope::Decision,
+                        Lane::Decision | Lane::Review | Lane::Gate => WorkspaceScope::Decision,
                     },
                     model_id: &model_id,
                     requests: &self.requests,
@@ -416,6 +417,7 @@ impl<'a> LaneRunner<'a> {
             plan_inputs: (lane == Lane::Decision)
                 .then_some((&context.portfolio, context.instruments.as_slice())),
             plan: None,
+            verdict: None,
             on_usage: Some(Box::new(move |usage: &Usage| {
                 // A failed checkpoint only loses crash accounting; the turn's
                 // final usage is still charged when it settles.
@@ -443,6 +445,7 @@ impl<'a> LaneRunner<'a> {
             trigger: trigger.clone(),
             brief,
             tools: lane_definitions(self.cfg, lane, requests_served)?,
+            compact_at_tokens: lane_settings.compact_at_tokens,
         };
         let allowance = Allowance {
             calls: lane_settings.daily_calls,
@@ -457,6 +460,7 @@ impl<'a> LaneRunner<'a> {
                 preempt.load(Ordering::Acquire)
             });
         let plan = host.plan.take();
+        let verdict = host.verdict.take();
         drop(host);
         let mut outcome = match result {
             Ok(outcome) => outcome,
@@ -500,7 +504,7 @@ impl<'a> LaneRunner<'a> {
             "turn_id":id,"lane":lane,"trigger":trigger,"at_ms":now,
             "status":outcome.status,"error":outcome.error,"model":outcome.model,"provider":outcome.provider,
             "usage":outcome.usage,"session_file":outcome.session_file,"prompt_sha256":outcome.prompt_sha256,
-            "tool_calls":outcome.tool_calls,"plan":plan,"elapsed_ms":outcome.elapsed_ms,
+            "tool_calls":outcome.tool_calls,"plan":plan,"verdict":verdict,"elapsed_ms":outcome.elapsed_ms,
             "restarts":self.agent.restarts(),"text_sha256":digest(outcome.text.as_bytes())
         });
         if let Some(fallback) = &outcome.fallback {
@@ -516,7 +520,11 @@ impl<'a> LaneRunner<'a> {
             );
         }
         self.journal(&crate::runtime::transcript::redact(&line))?;
-        Ok(LaneTurn { outcome, plan })
+        Ok(LaneTurn {
+            outcome,
+            plan,
+            verdict,
+        })
     }
 
     /// A decision turn. Its brief carries undelivered research answers; they

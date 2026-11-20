@@ -3,8 +3,8 @@
 
 export const PROTOCOL_VERSION = 1;
 
-export type Lane = "decision" | "research" | "review";
-export const LANES: readonly Lane[] = ["decision", "research", "review"];
+export type Lane = "decision" | "research" | "review" | "gate";
+export const LANES: readonly Lane[] = ["decision", "research", "review", "gate"];
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export type JsonObject = { [key: string]: JsonValue };
@@ -35,6 +35,8 @@ export interface TurnRequest {
   trigger: JsonObject;
   brief: JsonValue;
   tools: ToolSpec[];
+  /** Context tokens at which pi compacts this lane's session, for every model it uses. */
+  compact_at_tokens?: number;
 }
 
 export interface ToolResultMessage {
@@ -135,6 +137,11 @@ function tools(value: unknown): ToolSpec[] {
   });
 }
 
+function compactAt(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) throw new Error("protocol_field_invalid:compact_at_tokens");
+  return value;
+}
+
 /** Parse one inbound line. Unknown types and versions are refused, never guessed. */
 export function parseInbound(line: string): Inbound {
   const value: unknown = JSON.parse(line);
@@ -156,6 +163,7 @@ export function parseInbound(line: string): Inbound {
         trigger: value.trigger as JsonObject,
         brief: (value.brief ?? null) as JsonValue,
         tools: tools(value.tools),
+        ...(value.compact_at_tokens == null ? {} : { compact_at_tokens: compactAt(value.compact_at_tokens) }),
       };
     }
     case "tool_result":

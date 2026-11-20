@@ -2322,3 +2322,14 @@ body:has([role="dialog"][data-state="open"]) .workspace-content {
 .session-note small {
   color: var(--faint);
 }
+
+.lane-usage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-bottom: 8px;
+}
+.tool-failed {
+  color: var(--danger);
+  font-weight: 600;
+}

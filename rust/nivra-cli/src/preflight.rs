@@ -84,19 +84,30 @@ fn agent(settings: &AgentSettings) -> Result<PathBuf, &'static str> {
     if !settings.entry.is_file() {
         return Err("preflight_agent_entry_missing");
     }
-    let installed = settings
+    let package = settings
         .entry
         .ancestors()
-        .find(|dir| dir.join("package.json").is_file())
-        .is_some_and(|package| {
-            package
-                .join("node_modules/@earendil-works/pi-coding-agent/package.json")
-                .is_file()
-        });
+        .find(|dir| dir.join("package.json").is_file());
+    let installed = package.is_some_and(|package| {
+        package
+            .join("node_modules/@earendil-works/pi-coding-agent/package.json")
+            .is_file()
+    });
     if !installed {
         return Err("preflight_agent_modules_missing");
     }
-    if settings.prompts.as_ref().is_some_and(|dir| !dir.is_dir()) {
+    // The agent reads `<lane>.md` from `--prompts`, or from its package's
+    // `prompts/`; a lane without one fails every turn.
+    let prompts = settings
+        .prompts
+        .clone()
+        .or_else(|| package.map(|package| package.join("prompts")));
+    if !prompts.is_some_and(|dir| {
+        settings
+            .lanes
+            .keys()
+            .all(|lane| dir.join(format!("{}.md", lane.as_str())).is_file())
+    }) {
         return Err("preflight_agent_prompts_missing");
     }
     let (dir, uid) = writable(&settings.agent_dir, "preflight_agent_dir_not_writable")?;
@@ -384,6 +395,10 @@ mod tests {
         fs::create_dir_all(&modules).unwrap();
         fs::write(package.join("package.json"), "{}").unwrap();
         fs::write(modules.join("package.json"), "{}").unwrap();
+        let prompts = package.join("prompts");
+        fs::create_dir(&prompts).unwrap();
+        fs::write(prompts.join("decision.md"), "plan").unwrap();
+        fs::write(prompts.join("review.md"), "review").unwrap();
         // `sh` stands in for node; the entry records its query and replies.
         let entry = package.join("main.js");
         fs::write(
@@ -467,6 +482,11 @@ mod tests {
         let readonly = inspect(&config, Some(&unit));
         fs::set_permissions(agent_dir, fs::Permissions::from_mode(0o700)).unwrap();
         assert_eq!(readonly, Err("preflight_agent_dir_not_writable"));
+        fs::remove_file(prompts.join("review.md")).unwrap();
+        assert_eq!(
+            inspect(&config, Some(&unit)),
+            Err("preflight_agent_prompts_missing")
+        );
         fs::remove_file(modules.join("package.json")).unwrap();
         assert_eq!(
             inspect(&config, Some(&unit)),

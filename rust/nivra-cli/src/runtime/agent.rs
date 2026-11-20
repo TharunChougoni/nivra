@@ -29,16 +29,20 @@ pub(crate) enum Lane {
     Decision,
     Research,
     Review,
+    /// A cheap screen in front of the decision lane for entry candidates. It
+    /// only answers escalate or not; it never plans or trades.
+    Gate,
 }
 
 impl Lane {
     #[cfg(test)]
-    pub(crate) const ALL: [Lane; 3] = [Lane::Decision, Lane::Research, Lane::Review];
+    pub(crate) const ALL: [Lane; 4] = [Lane::Decision, Lane::Research, Lane::Review, Lane::Gate];
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Lane::Decision => "decision",
             Lane::Research => "research",
             Lane::Review => "review",
+            Lane::Gate => "gate",
         }
     }
 }
@@ -86,6 +90,11 @@ pub(crate) struct LaneSettings {
     pub turn_timeout_ms: u64,
     #[serde(default = "default_max_tool_calls")]
     pub max_tool_calls: usize,
+    /// Context size in tokens at which pi compacts the lane session. Without
+    /// it pi compacts only 16k tokens short of the model's window, which on a
+    /// long-context model keeps every call paying for a near-full context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_at_tokens: Option<u64>,
 }
 
 fn default_turn_timeout_ms() -> u64 {
@@ -143,6 +152,8 @@ impl AgentSettings {
             && self.agent_dir.is_absolute()
             && self.prompts.as_ref().is_none_or(|p| p.is_absolute())
             && !self.lanes.is_empty()
+            // The gate only screens decision turns.
+            && (!self.lanes.contains_key(&Lane::Gate) || self.lanes.contains_key(&Lane::Decision))
             && self.lanes.values().all(|lane| {
                 lane.model.valid()
                     && lane.fallback.as_ref().is_none_or(|fallback| {
@@ -155,6 +166,9 @@ impl AgentSettings {
                     && lane.daily_cost_usd > 0.0
                     && (1_000..=3_600_000).contains(&lane.turn_timeout_ms)
                     && (1..=200).contains(&lane.max_tool_calls)
+                    && lane
+                        .compact_at_tokens
+                        .is_none_or(|tokens| (32_000..=2_000_000).contains(&tokens))
             })
             && self.pass_env.len() <= 16
             && self.pass_env.iter().all(|name| {

@@ -1287,6 +1287,47 @@ export interface ToolsResponse extends Availability {
   next?: string | null;
   execution_authorized?: false;
 }
+export interface AgentUsage {
+  input?: number;
+  output?: number;
+  cache_read?: number;
+  cost_usd?: number;
+  calls?: number;
+}
+export interface AgentTurn {
+  turn_id: string;
+  lane: "decision" | "research" | "review" | "gate" | string;
+  at_ms?: number;
+  status?: string;
+  error?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  elapsed_ms?: number;
+  usage?: AgentUsage | null;
+  fallback?: { to?: { id?: string }; reason?: string } | null;
+  trigger?: {
+    kind?: string | null;
+    reason?: string | null;
+    instruments?: string[];
+  };
+  tool_calls?: { name: string; ok: boolean; error?: string | null }[] | null;
+  plan?: {
+    status?: string;
+    stance?: string | null;
+    actions?: number;
+    error?: string | null;
+  } | null;
+  verdict?: { escalate: boolean; reason: string } | null;
+}
+export interface AgentResponse extends Availability {
+  v?: number;
+  turns?: AgentTurn[];
+  total?: number;
+  next?: string | null;
+  triggers?: Record<string, number>;
+  usage?: { date?: string; lanes?: Record<string, AgentUsage> } | null;
+  execution_authorized?: false;
+}
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "request_failed";
 }

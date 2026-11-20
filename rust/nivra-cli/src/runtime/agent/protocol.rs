@@ -25,6 +25,8 @@ pub(crate) enum ToAgent<'a> {
         trigger: &'a Value,
         brief: &'a Value,
         tools: &'a [Value],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        compact_at_tokens: Option<u64>,
     },
     ToolResult {
         v: u32,

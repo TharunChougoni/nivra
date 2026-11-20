@@ -10,6 +10,7 @@ agent service, settings and verification commands.
 | Decision | `planner.agent.lanes.decision` provider and model | Data tools and `plan`; selects paper action, size and holding period |
 | Research | `planner.agent.lanes.research` provider and model | Data tools, workspace, registered analysis and ranker backtests; answers the decision lane's research requests |
 | Review | `planner.agent.lanes.review` provider and model | Data tools; one redacted review after the session seal, carried as next-session memory |
+| Gate | Optional `planner.agent.lanes.gate` provider and model | Read-only data tools and `verdict`; screens entry-candidate batches before the decision lane |
 
 ## Triggers
 
@@ -20,6 +21,17 @@ next batch under the highest-priority kind. Rust builds the brief from frozen
 controller evidence and publishes only the tools the lane may call. No eligible
 evidence means no model call. A due turn is skipped, never invented, when the lane
 is unconfigured, its budget is exhausted or the book is not trading.
+
+With a gate lane configured, a decision batch made only of entry candidates
+first runs a gate turn. The gate calls `verdict` with `escalate` and a reason.
+On `escalate:true` the next dispatch runs the same batch on the decision lane
+without screening it again; on `false` the batch ends there. A gate turn that
+fails or ends without a verdict escalates, so a broken screen never silences
+entry triggers. A batch with a fill, position risk or scheduled trigger goes
+straight to the decision lane, and so does every batch once the gate's own
+budget is exhausted. The gate holds no paper claim. `triggers.ndjson` records
+each outcome as `gated` (with `escalate`, `verdict` and `reason`) or
+`gate_bypassed`.
 
 The research lane serves the decision lane's `research` requests. Rust delivers
 each completed answer in a later decision brief and marks it delivered once that
@@ -48,11 +60,14 @@ pi-facing name comes first and the Rust name follows in parentheses.
 - `portfolio`, `decisions` and `session`: cash, holdings and exit intents, bounded
   prior decisions, and the clock, market phase and trigger.
 - `intraday` (`get_intraday_context`): the frozen minute evidence described below.
+  It is offered only when `planner.decision_evidence` is configured.
+- `verdict`: gate lane only. Records whether the batch reaches the decision lane.
 - `plan`: decision lane only. Rust validates identity, allowlist, cash, fees,
   sizes and exits and returns per-action verdicts. A validated plan is a proposal,
   never an order.
 - `research`, `research_status`, `research_result` and `research_cancel`: the
   durable research request queue. Only the decision lane may queue a request.
+  `refs` holds up to eight ids, dates or instrument keys.
 - `analysis`, `run`, `backtest` and its status, result and cancel tools, `quotes`,
   and `list`/`read`/`write`/`install`: registered analysis, ranker backtests,
   archived quote receipts (`planner.research_tools.quote_capture`) and the
@@ -107,6 +122,13 @@ planner load. Pi reports usage per turn; Rust charges it to the lane's daily
 allowance in `model/agent/usage.json` and journals the turn. A turn cut off by a
 crash is charged once from its in-flight checkpoint. A lane allowance is
 operational, never a position, loss, exposure or holding-period cap.
+
+`compact_at_tokens` (32,000–2,000,000) sets the context size at which pi
+compacts a lane session, for the primary and the fallback alike. Without it pi
+compacts 16,384 tokens short of the model's window. That lets a 1M-token model
+carry a near-full context on every call, and lets `gpt-6.2-sol` cross its
+272k-token price tier. pi keeps the most recent fifth of the threshold (at least
+20,000 tokens) verbatim and summarizes the rest.
 
 The lane service runs at most one turn at a time. A turn beyond its wall limit is
 aborted. Provider, schema or timeout failures mean no new trade for that trigger

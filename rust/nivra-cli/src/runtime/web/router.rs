@@ -17,6 +17,8 @@ pub(super) enum Route {
     Alerts(Query),
     /// Bounded orchestrator web-tool call record (#222).
     Tools(Query),
+    /// The pi lane turns, tool calls, gate verdicts and lane spend.
+    Agent(Query),
     Series(Query),
     Events(Query),
     Backtest,
@@ -158,6 +160,7 @@ pub(super) fn parse(line: &str) -> Result<Route, &'static str> {
                     &["date", "cursor", "limit"],
                 )?))
             }
+            "/api/v1/agent" => Ok(Route::Agent(Query::parse(raw, &["cursor", "limit"])?)),
             "/api/v1/series" => Ok(Route::Series(Query::parse(
                 raw,
                 &["instrument", "kind", "from", "to", "limit"],

@@ -5,6 +5,8 @@ import type {
   ModelOutput,
   TranscriptEvent,
   ToolsResponse,
+  AgentResponse,
+  AgentTurn,
 } from "./types";
 import React, { useEffect, useRef, useState } from "react";
 import {
@@ -513,7 +515,8 @@ function useToolCalls(date: string) {
 }
 function WebToolActivity() {
   const [state] = useWorkspace();
-  const date = state.summary?.session || state.sessions?.items?.[0]?.id?.date || "";
+  const date =
+    state.summary?.session || state.sessions?.items?.[0]?.id?.date || "";
   const calls = useToolCalls(date),
     rows = calls.value?.calls || [];
   return (
@@ -537,7 +540,11 @@ function WebToolActivity() {
           getKey={(r) => `${r.run}:${r.turn}:${r.call}`}
           rows={rows}
           columns={[
-            { key: "tool", label: "Tool", render: (r) => r.tool || "Not reported" },
+            {
+              key: "tool",
+              label: "Tool",
+              render: (r) => r.tool || "Not reported",
+            },
             {
               key: "query",
               label: "Query / URL",
@@ -575,6 +582,136 @@ function WebToolActivity() {
           </span>
         </div>
       )}
+    </Panel>
+  );
+}
+const LANE_TURNS_POLL_MS = 15_000;
+
+function turnOutcome(t: AgentTurn) {
+  if (t.verdict)
+    return (t.verdict.escalate ? "Escalate · " : "Pass · ") + t.verdict.reason;
+  if (t.plan)
+    return (
+      (t.plan.status === "validated" ? "" : (t.plan.status || "plan") + " · ") +
+      (t.plan.stance || "") +
+      (t.plan.actions ? ` · ${count(t.plan.actions)} actions` : "")
+    );
+  return t.error || "—";
+}
+
+/** The pi lane turns from the book's own journals: newest first. */
+export function LaneTurns() {
+  const [state, app] = useWorkspace(),
+    token = state.token,
+    [result, setResult] = useState<{
+      value: AgentResponse | null;
+      state: "loading" | "ready" | "error";
+    }>({ value: null, state: "loading" });
+  useEffect(() => {
+    let active = true;
+    if (!token) return;
+    const load = () =>
+      Promise.resolve(app.api.agent({ limit: 100 }))
+        .then((value) => active && setResult({ value, state: "ready" }))
+        .catch(() => active && setResult((v) => ({ ...v, state: "error" })));
+    void load();
+    const timer = window.setInterval(load, LANE_TURNS_POLL_MS);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [token]);
+  const turns = result.value?.turns || [],
+    lanes = result.value?.usage?.lanes || {},
+    triggers = result.value?.triggers || {};
+  return (
+    <Panel
+      title="Lane turns"
+      note="pi decision, gate, research and review turns from this session's journal, with each tool call and outcome. Display evidence only; no order authority."
+      actions={
+        <span className="caption">
+          {count(result.value?.total ?? 0)} turns · gate{" "}
+          {count(triggers.gate_escalated ?? 0)} escalated /{" "}
+          {count(triggers.gate_declined ?? 0)} passed
+        </span>
+      }
+    >
+      {result.state === "error" && (
+        <Notice error>The lane journal is unavailable.</Notice>
+      )}
+      <div className="lane-usage">
+        {Object.entries(lanes).map(([lane, u]) => (
+          <span key={lane} className="caption">
+            {lane}: {count(u.calls ?? 0)} calls · {amount(u.cost_usd ?? 0)} USD
+          </span>
+        ))}
+      </div>
+      <Table
+        getKey={(t) => t.turn_id}
+        rows={turns}
+        empty={
+          result.state === "loading"
+            ? "Loading lane turns…"
+            : "No lane turns yet"
+        }
+        columns={[
+          {
+            key: "at_ms",
+            label: "Time · IST",
+            render: (t) => datetime(t.at_ms),
+          },
+          { key: "lane", label: "Lane", render: (t) => t.lane },
+          {
+            key: "model",
+            label: "Model",
+            render: (t) =>
+              t.fallback ? `${t.model} (fallback)` : t.model || "—",
+          },
+          {
+            key: "trigger",
+            label: "Trigger",
+            render: (t) =>
+              [
+                t.trigger?.reason || t.trigger?.kind,
+                ...(t.trigger?.instruments || []).map(
+                  (k) => k.split("|")[1] || k,
+                ),
+              ]
+                .filter(Boolean)
+                .join(" · "),
+          },
+          {
+            key: "tools",
+            label: "Tools",
+            render: (t) =>
+              (t.tool_calls || []).map((c, i) => (
+                <span
+                  key={i}
+                  className={c.ok ? "tool-ok" : "tool-failed"}
+                  title={c.error || ""}
+                >
+                  {(i ? " " : "") + c.name + (c.ok ? "" : "✗")}
+                </span>
+              )),
+          },
+          { key: "outcome", label: "Outcome", render: turnOutcome },
+          {
+            key: "status",
+            label: "Status",
+            render: (t) => <Status value={t.status} />,
+          },
+          {
+            key: "elapsed_ms",
+            label: "Took",
+            render: (t) => duration(t.elapsed_ms),
+          },
+          {
+            key: "cost",
+            label: "Cost",
+            render: (t) => amount(t.usage?.cost_usd ?? 0),
+          },
+        ]}
+      />
     </Panel>
   );
 }
@@ -662,6 +799,7 @@ export default function Models({ selectedRun }: { selectedRun?: string }) {
   return (
     <>
       <ModelRoster />
+      <LaneTurns />
       <WebToolActivity />
       <Panel
         title="Run archive"

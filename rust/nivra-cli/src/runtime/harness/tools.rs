@@ -630,6 +630,11 @@ pub(super) fn checked_call_with(
 pub(crate) fn bridge_definitions(cfg: &PlannerConfig, lane_requests: bool) -> Result<Vec<Value>> {
     let limits = cfg.effective_tools();
     let mut tools = data_tool_definitions(&limits)?;
+    // Intraday context needs the decision-evidence policy; without it every
+    // call would fail, so the tool is not offered.
+    if cfg.decision_evidence.is_none() {
+        tools.retain(|tool| tool["name"] != "get_intraday_context");
+    }
     let candidate = candidate_tools_enabled(cfg);
     let web = cfg.web_tools.as_ref().filter(|web| web.enabled);
     let analysis = cfg.research_tools.is_some();

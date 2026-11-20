@@ -7,7 +7,7 @@ import { createInterface } from "node:readline";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { LaneAgent } from "../src/agent.js";
+import { compactionSettings, LaneAgent } from "../src/agent.js";
 import { FAKE_FALLBACK_MODEL, FAKE_MODEL, FAKE_PROVIDER, type FakeScript, installFake } from "../src/fake.js";
 import { fallbackReason } from "../src/fallback.js";
 import { type JsonObject, type Outbound, PROTOCOL_VERSION, parseInbound, type ToolSpec, type TurnRequest } from "../src/protocol.js";
@@ -295,5 +295,17 @@ test("the check mode reports catalog and credential presence without a turn", as
       { provider: "mistral", id: "deepseek-v4-1-flash-1017", known: true, auth: true },
       { provider: "openai-codex", id: "no-such-model", known: false, auth: false },
     ],
+  });
+});
+
+test("a lane compaction threshold becomes a per-model reserve for the primary and fallback", () => {
+  const model = (provider: string, id: string, contextWindow: number) => ({ provider, id, contextWindow }) as unknown as Parameters<typeof compactionSettings>[1][number];
+  assert.deepEqual(compactionSettings(undefined, [model("mistral", "flash", 1_048_576)]), { enabled: true });
+  const settings = compactionSettings(300_000, [model("mistral", "flash", 1_048_576), model("openai-codex", "sol", 500_000), model("mistral", "small", 128_000)]);
+  assert.deepEqual(settings.modelOverrides, {
+    "mistral/flash": { reserveTokens: 748_576, keepRecentTokens: 60_000 },
+    "openai-codex/sol": { reserveTokens: 200_000, keepRecentTokens: 60_000 },
+    // A window smaller than the threshold keeps pi's own reserve.
+    "mistral/small": { reserveTokens: 16_384, keepRecentTokens: 60_000 },
   });
 });

@@ -14,7 +14,7 @@ pub(crate) fn meta(
         "paper_only":view["paper_only"].as_bool().unwrap_or(!live),"live_enabled":live,
         "broker":{"data":"upstox","orders":order_authority(live)},"account":view["account"].as_str().map(|alias| super::super::super::transcript::redact(&serde_json::json!(alias))),
         "roles":["digest","orchestrator"],
-        "capabilities":["summary","portfolio","positions","orders","fills","plans","scanner","instruments","sessions","health","approvals","alerts","series","runs","events","tools","backtest"],
+        "capabilities":["summary","portfolio","positions","orders","fills","plans","scanner","instruments","sessions","health","approvals","alerts","series","agent","events","tools","backtest"],
         "limits":{"sse_max_streams":settings.sse_max_streams,"sse_heartbeat_ms":settings.sse_heartbeat_ms,"longpoll_hold_ms":settings.longpoll_hold_ms,"blob_slice_max_bytes":settings.blob_slice_max_bytes,"transcript_max_bytes":settings.transcript_max_bytes,"transcript_text_max_bytes":settings.transcript_text_max_bytes,"transcript_args_max_bytes":settings.transcript_args_max_bytes,"series_max_points":settings.series_max_points,"series_max_range_ms":settings.series_max_range_ms,"equity_max_points":settings.equity_max_points,"equity_sample_interval_ms":settings.equity_sample_interval_ms,"price_batch_instruments":settings.price_batch_instruments,"price_batch_interval_ms":settings.price_batch_interval_ms}
     });
     drop(view);
@@ -250,4 +250,115 @@ pub(crate) fn tool_calls(
         }
         Err(reason) => error("503 Service Unavailable", &reason.to_string()),
     }
+}
+
+/// Bytes of a lane journal the dashboard reads, newest last.
+const AGENT_JOURNAL_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+fn agent_journal(
+    root: &Path,
+    file: &str,
+) -> std::result::Result<Vec<serde_json::Value>, &'static str> {
+    let path = root.join("model").join("agent").join(file);
+    match std::fs::symlink_metadata(&path) {
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
+            Err("agent_journal_unavailable")
+        }
+        Ok(_) => {
+            let bytes = crate::read_bounded(&path, AGENT_JOURNAL_MAX_BYTES)
+                .map_err(|_| "agent_journal_unavailable")?;
+            Ok(bytes
+                .split(|b| *b == b'\n')
+                .filter_map(|line| serde_json::from_slice(line).ok())
+                .collect())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(_) => Err("agent_journal_unavailable"),
+    }
+}
+
+/// One journalled pi turn, without its brief or model text: lane, model,
+/// outcome, usage, tool calls, the plan's stance and the gate's verdict.
+fn agent_turn_row(turn: &serde_json::Value) -> serde_json::Value {
+    let trigger = &turn["trigger"];
+    let instruments: Vec<&serde_json::Value> = trigger["triggers"]
+        .as_array()
+        .map(|batch| {
+            batch
+                .iter()
+                .filter_map(|t| t.get("instrument_key"))
+                .collect()
+        })
+        .unwrap_or_default();
+    let plan = &turn["plan"];
+    serde_json::json!({
+        "turn_id":turn["turn_id"],"lane":turn["lane"],"at_ms":turn["at_ms"],
+        "status":turn["status"],"error":turn["error"],"provider":turn["provider"],"model":turn["model"],
+        "elapsed_ms":turn["elapsed_ms"],"usage":turn["usage"],"fallback":turn["fallback"],
+        "trigger":{"kind":trigger["kind"],"reason":trigger["reason"],"instruments":instruments},
+        "tool_calls":turn["tool_calls"],
+        "plan":if plan.is_null() { serde_json::Value::Null } else {
+            serde_json::json!({"status":plan["status"],"stance":plan["plan"]["stance"],
+                "actions":plan["plan"]["actions"].as_array().map_or(0, Vec::len),"error":plan["error"]})
+        },
+        "verdict":turn["verdict"]
+    })
+}
+
+pub(crate) fn agent_turns(head: &str, query: router::Query, root: Option<&Path>) -> Response {
+    let Some(root) = root else {
+        return error("503 Service Unavailable", "session_unavailable");
+    };
+    let limit = match query.get("limit") {
+        Some(value) => match value.parse::<usize>() {
+            Ok(limit) if (1..=200).contains(&limit) => limit,
+            _ => return error("400 Bad Request", "agent_limit_invalid"),
+        },
+        None => 50,
+    };
+    let offset = match query.get("cursor") {
+        Some(value) => match value.parse::<usize>() {
+            Ok(offset) if offset <= 100_000 => offset,
+            _ => return error("400 Bad Request", "agent_cursor_invalid"),
+        },
+        None => 0,
+    };
+    let (turns, triggers) = match (
+        agent_journal(root, "turns.ndjson"),
+        agent_journal(root, "triggers.ndjson"),
+    ) {
+        (Ok(turns), Ok(triggers)) => (turns, triggers),
+        _ => return error("503 Service Unavailable", "agent_journal_unavailable"),
+    };
+    let total = turns.len();
+    let page: Vec<serde_json::Value> = turns
+        .iter()
+        .rev()
+        .skip(offset)
+        .take(limit)
+        .map(agent_turn_row)
+        .collect();
+    let next = (offset + page.len() < total).then(|| (offset + page.len()).to_string());
+    let mut events = std::collections::BTreeMap::<String, u64>::new();
+    for line in &triggers {
+        let key = match (line["event"].as_str(), line["escalate"].as_bool()) {
+            (Some("gated"), Some(true)) => "gate_escalated".to_owned(),
+            (Some("gated"), _) => "gate_declined".to_owned(),
+            (Some(event), _) => event.to_owned(),
+            _ => continue,
+        };
+        *events.entry(key).or_default() += 1;
+    }
+    let usage = std::fs::read(root.join("model").join("agent").join("usage.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .map_or(
+            serde_json::Value::Null,
+            |usage| serde_json::json!({"date":usage["date"],"lanes":usage["lanes"]}),
+        );
+    json_reply(
+        head,
+        serde_json::json!({"v":1,"turns":page,"total":total,"next":next,"triggers":events,
+            "usage":usage,"execution_authorized":false}),
+    )
 }

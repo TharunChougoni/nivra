@@ -1,6 +1,6 @@
 # pi lanes
 
-Nivra uses pi for the decision, research, and review lanes. Pi owns providers,
+Nivra uses pi for the decision, research, review, and optional gate lanes. Pi owns providers,
 conversation state, tool calls, compaction, and usage reports. Rust builds the
 briefs, publishes tools per lane, schedules turns, and enforces lane budgets.
 
@@ -65,6 +65,28 @@ the cost pi reports for it. A decision claim accepts a plan from the primary or
 the configured fallback. The fallback is part of the planner policy, so set it
 before the session starts. A book already bound to the earlier policy needs the
 reviewed config-apply transition.
+
+## Gate
+
+The optional gate lane is a cheap, fast screen for entry-candidate triggers, so
+frequent market coverage does not spend the decision model's quota. Use a
+long-context, low-cache-cost model with a small tool cap and a compaction
+threshold, for example:
+
+```json
+"gate": {
+  "model": { "provider": "mistral", "id": "deepseek-v4-1-flash-1017", "thinking": "low" },
+  "daily_calls": 2000,
+  "daily_cost_usd": 3.0,
+  "turn_timeout_ms": 60000,
+  "max_tool_calls": 8,
+  "compact_at_tokens": 300000
+}
+```
+
+The gate session keeps its earlier verdicts, so it does not rescreen unchanged
+evidence. See [lane tools](LANE_TOOLS.md#triggers) for how verdicts route
+batches.
 
 ## Decision
 

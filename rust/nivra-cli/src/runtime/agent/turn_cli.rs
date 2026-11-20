@@ -20,6 +20,7 @@ pub(crate) enum LaneArg {
     Decision,
     Research,
     Review,
+    Gate,
 }
 
 #[derive(clap::Args)]
@@ -39,6 +40,7 @@ fn turn(args: &Args) -> Result<(bool, Value)> {
         LaneArg::Decision => Lane::Decision,
         LaneArg::Research => Lane::Research,
         LaneArg::Review => Lane::Review,
+        LaneArg::Gate => Lane::Gate,
     };
     let bytes = crate::read_bounded(&args.config, 16_384).map_err(|_| "config_unreadable")?;
     let c: Config = serde_json::from_slice(&bytes).map_err(|_| "config_invalid")?;
@@ -112,6 +114,7 @@ fn turn(args: &Args) -> Result<(bool, Value)> {
         Lane::Decision => Value::Null,
         Lane::Research => json!({"kind":"manual"}),
         Lane::Review => json!({"kind":"review","session":c.session.to_string()}),
+        Lane::Gate => json!({"kind":"gate"}),
     };
     let brief = Brief::build(&facts, budget, task, &triggers);
     if args.dry {
@@ -129,7 +132,7 @@ fn turn(args: &Args) -> Result<(bool, Value)> {
             "brief":serde_json::from_str::<Value>(&brief.render()?)?}),
         ));
     }
-    if lane == Lane::Decision
+    if matches!(lane, Lane::Decision | Lane::Gate)
         && (crate::runtime::local(now).date_naive() != c.session
             || !brief.session.phase.trading()
             || portfolio.halted
@@ -167,12 +170,9 @@ fn turn(args: &Args) -> Result<(bool, Value)> {
         Lane::Research if !runner.requests.queued(now, 1)?.is_empty() => {
             runner.research_requests(&trigger, &brief, &mut context)?
         }
-        Lane::Research => vec![runner.turn(
-            Lane::Research,
-            trigger,
-            json!(brief.render()?),
-            &mut context,
-        )?],
+        Lane::Research | Lane::Gate => {
+            vec![runner.turn(lane, trigger, json!(brief.render()?), &mut context)?]
+        }
         Lane::Review => {
             if spent.calls >= lane_settings.daily_calls
                 || spent.cost_usd >= lane_settings.daily_cost_usd

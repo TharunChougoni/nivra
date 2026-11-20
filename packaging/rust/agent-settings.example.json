@@ -13,7 +13,8 @@
       "daily_calls": 300,
       "daily_cost_usd": 10.0,
       "turn_timeout_ms": 180000,
-      "max_tool_calls": 40
+      "max_tool_calls": 40,
+      "compact_at_tokens": 200000
     },
     "research": {
       "model": {
@@ -34,6 +35,18 @@
       "daily_cost_usd": 1.0,
       "turn_timeout_ms": 180000,
       "max_tool_calls": 40
+    },
+    "gate": {
+      "model": {
+        "provider": "mistral",
+        "id": "deepseek-v4-1-flash-1017",
+        "thinking": "low"
+      },
+      "daily_calls": 2000,
+      "daily_cost_usd": 3.0,
+      "turn_timeout_ms": 60000,
+      "max_tool_calls": 8,
+      "compact_at_tokens": 300000
     }
   }
 }

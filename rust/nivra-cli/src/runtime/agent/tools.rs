@@ -12,11 +12,13 @@ use serde_json::{Value, json};
 const D: Lane = Lane::Decision;
 const R: Lane = Lane::Research;
 const V: Lane = Lane::Review;
+const G: Lane = Lane::Gate;
 
 pub(crate) struct BridgeTool {
     /// The name pi and the model see.
     pub name: &'static str,
-    /// The existing Rust tool that executes it; `None` for `plan`.
+    /// The existing Rust tool that executes it; `None` for `plan` and
+    /// `verdict`, which the lane host answers itself.
     pub rust: Option<&'static str>,
     pub lanes: &'static [Lane],
 }
@@ -34,20 +36,25 @@ const fn tool(name: &'static str, rust: &'static str, lanes: &'static [Lane]) ->
 /// stays out of the research lane: a research turn may not queue research for
 /// itself. Writes, runs, installs and backtests belong to the research lane.
 pub(crate) const TOOLS: &[BridgeTool] = &[
-    tool("evidence", "read_evidence", &[D, R, V]),
-    tool("snapshot", "get_market_snapshot", &[D, R, V]),
-    tool("prospects", "get_scanner_prospects", &[D, R, V]),
-    tool("rank", "rank_universe", &[D, R, V]),
-    tool("features", "get_instrument_features", &[D, R, V]),
-    tool("intraday", "get_intraday_context", &[D, R, V]),
-    tool("portfolio", "get_portfolio", &[D, R, V]),
+    tool("evidence", "read_evidence", &[D, R, V, G]),
+    tool("snapshot", "get_market_snapshot", &[D, R, V, G]),
+    tool("prospects", "get_scanner_prospects", &[D, R, V, G]),
+    tool("rank", "rank_universe", &[D, R, V, G]),
+    tool("features", "get_instrument_features", &[D, R, V, G]),
+    tool("intraday", "get_intraday_context", &[D, R, V, G]),
+    tool("portfolio", "get_portfolio", &[D, R, V, G]),
     tool("decisions", "get_recent_decisions", &[D, R, V]),
-    tool("session", "get_session_status", &[D, R, V]),
+    tool("session", "get_session_status", &[D, R, V, G]),
     tool("analysis", "research_task_enqueue", &[D, R, V]),
     BridgeTool {
         name: "plan",
         rust: None,
         lanes: &[D],
+    },
+    BridgeTool {
+        name: "verdict",
+        rust: None,
+        lanes: &[G],
     },
     tool("research", "request_research", &[D]),
     tool("research_status", "research_task_status", &[D, R, V]),
@@ -67,6 +74,22 @@ pub(crate) const TOOLS: &[BridgeTool] = &[
     tool("fetch", "web_fetch", &[D, R]),
     tool("news", "news_lookup", &[D, R]),
 ];
+
+fn verdict_definition() -> Value {
+    json!({
+        "name":"verdict",
+        "description":"Finish the screen: escalate=true runs the decision lane on these triggers now; escalate=false lets them pass without a decision turn. It never plans or trades.",
+        "parameters":{
+            "type":"object",
+            "properties":{
+                "escalate":{"type":"boolean"},
+                "reason":{"type":"string","minLength":1,"maxLength":400}
+            },
+            "required":["escalate","reason"],
+            "additionalProperties":false
+        }
+    })
+}
 
 fn plan_definition() -> Value {
     let decimal = json!({"type":["string","null"],"maxLength":32});
@@ -123,6 +146,7 @@ pub(crate) fn lane_definitions(
         .iter()
         .filter(|tool| tool.lanes.contains(&lane))
         .filter_map(|tool| match tool.rust {
+            None if tool.name == "verdict" => Some(verdict_definition()),
             None => Some(plan_definition()),
             Some(name) => rust.iter().find(|definition| definition["name"] == name).map(
                 |definition| {
@@ -156,11 +180,38 @@ pub(crate) struct LaneHost<'a> {
     pub bridge: Bridge<'a>,
     pub plan_inputs: Option<(&'a Portfolio, &'a [Instrument])>,
     pub plan: Option<PlanAttempt>,
+    /// The gate lane's last `verdict` this turn.
+    pub verdict: Option<Verdict>,
     /// Called with the turn's usage so far, so a crash still charges it.
     pub on_usage: Option<UsageCheckpoint<'a>>,
 }
 
+/// The gate's answer for one batch of entry triggers.
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
+pub(crate) struct Verdict {
+    pub escalate: bool,
+    pub reason: String,
+}
+
 impl LaneHost<'_> {
+    fn verdict(&mut self, args: &Value) -> std::result::Result<Value, String> {
+        let verdict: Verdict =
+            serde_json::from_value(args.clone()).map_err(|_| "agent_verdict_invalid")?;
+        let reason = verdict.reason.trim();
+        if reason.is_empty() || reason.chars().count() > 400 {
+            return Err("agent_verdict_invalid".into());
+        }
+        let verdict = Verdict {
+            escalate: verdict.escalate,
+            reason: crate::runtime::transcript::redact(&json!(reason))
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+        };
+        self.verdict = Some(verdict.clone());
+        Ok(json!({"status":"recorded","escalate":verdict.escalate}))
+    }
+
     fn plan(&mut self, args: &Value) -> std::result::Result<Value, String> {
         let (portfolio, instruments) = self.plan_inputs.ok_or("agent_plan_unavailable")?;
         match planner::validate(&args.to_string(), portfolio, instruments) {
@@ -202,6 +253,7 @@ impl ToolHost for LaneHost<'_> {
             .ok_or("agent_tool_not_in_lane")?;
         match tool.rust {
             Some(rust) => self.bridge.call(call_id, rust, args),
+            None if tool.name == "verdict" => self.verdict(args),
             None => self.plan(args),
         }
     }

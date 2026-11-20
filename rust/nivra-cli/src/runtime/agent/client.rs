@@ -37,6 +37,7 @@ pub(crate) struct TurnRequest {
     pub trigger: Value,
     pub brief: Value,
     pub tools: Vec<Value>,
+    pub compact_at_tokens: Option<u64>,
 }
 
 /// What a turn may still spend: model requests and US dollars.
@@ -350,6 +351,7 @@ impl AgentClient {
             trigger: &request.trigger,
             brief: &request.brief,
             tools: &request.tools,
+            compact_at_tokens: request.compact_at_tokens,
         })?;
         let mut deadline = started + allowance.timeout;
         let mut aborted: Option<&'static str> = None;

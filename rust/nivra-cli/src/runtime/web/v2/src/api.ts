@@ -21,6 +21,7 @@ import type {
   RunsResponse,
   RunResponse,
   ToolsResponse,
+  AgentResponse,
 } from "./types";
 // Authenticated JSON/text reads with ETag revalidation. No mutations exist here.
 export class ApiError extends Error {
@@ -115,6 +116,8 @@ export function createApi({ fetchImpl, getToken, onUnauthorized }: ApiOptions) {
       get<SessionResponse>("/api/v1/session" + query({ date })),
     tools: (parameters?: Query) =>
       get<ToolsResponse>("/api/v1/tools" + query(parameters)),
+    agent: (parameters?: Query) =>
+      get<AgentResponse>("/api/v1/agent" + query(parameters)),
     series: (parameters?: Query) =>
       get<SeriesResponse>("/api/v1/series" + query(parameters)),
     example: () => get<ReplayExample>("/api/v1/backtest/example"),

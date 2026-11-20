@@ -5,6 +5,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
   type AgentSessionEvent,
+  type CompactionSettings,
   createAgentSession,
   createExtensionRuntime,
   type ModelRuntime,
@@ -91,6 +92,29 @@ function bridgeCallId(raw: string, seen: Set<string>): string {
   for (let n = 2; seen.has(id); n++) id = `${base}-${n}`;
   seen.add(id);
   return id;
+}
+
+/** pi's built-in reserve: it compacts this many tokens short of the window. */
+const PI_RESERVE_TOKENS = 16_384;
+
+/**
+ * pi compacts when context exceeds `contextWindow - reserveTokens`. Its default
+ * reserve lets a 1M-token model grow to ~1M before compacting, so every call
+ * pays for a near-full context. A lane threshold becomes a per-model reserve,
+ * so the primary and the fallback both compact at the same size, and the kept
+ * recent tail stays a fraction of it.
+ */
+export function compactionSettings(compactAt: number | undefined, models: Model<string>[]): CompactionSettings {
+  const settings: CompactionSettings = { enabled: true };
+  if (compactAt === undefined) return settings;
+  const keepRecentTokens = Math.max(20_000, Math.floor(compactAt / 5));
+  settings.modelOverrides = Object.fromEntries(
+    models.map((model) => [
+      `${model.provider}/${model.id}`,
+      { reserveTokens: Math.max(PI_RESERVE_TOKENS, model.contextWindow - compactAt), keepRecentTokens },
+    ]),
+  );
+  return settings;
 }
 
 /** Stable facts first and the trigger last, so a cached prefix survives the most turns. */
@@ -221,7 +245,7 @@ export class LaneAgent {
     };
   }
 
-  private async laneSession(turn: TurnRequest, model: Model<string>): Promise<AgentSession> {
+  private async laneSession(turn: TurnRequest, model: Model<string>, fallback: Model<string> | undefined): Promise<AgentSession> {
     const key = toolsKey(turn.tools);
     const current = this.sessions.get(turn.lane);
     if (current && current.date === turn.session.date && current.dir === turn.session.dir && current.toolsKey === key) {
@@ -245,7 +269,10 @@ export class LaneAgent {
       tools: turn.tools.map((tool) => tool.name),
       customTools: turn.tools.map((tool) => this.bridgeTool(tool)),
       sessionManager,
-      settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
+      settingsManager: SettingsManager.inMemory({
+        compaction: compactionSettings(turn.compact_at_tokens, fallback ? [model, fallback] : [model]),
+        retry: { enabled: true, maxRetries: 2 },
+      }),
     });
     this.sessions.set(turn.lane, { date: turn.session.date, dir: turn.session.dir, toolsKey: key, session });
     return session;
@@ -381,7 +408,7 @@ export class LaneAgent {
     let session: AgentSession | undefined;
     let unsubscribe = () => {};
     try {
-      session = await this.laneSession(request, model);
+      session = await this.laneSession(request, model, fallbackModel || undefined);
       await useModel(session, model, request.model.thinking);
       // An abort that arrived while the session was being opened has no
       // running prompt to cancel; honour it before any model call.

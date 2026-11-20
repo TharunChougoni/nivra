@@ -158,6 +158,12 @@ fn bounded_id(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"_-:./".contains(&b))
 }
 
+/// A research reference: an id, a date or an instrument key such as
+/// `NSE_EQ|INE002A01018`.
+fn bounded_ref(value: &str) -> bool {
+    bounded_id(&value.replace('|', "_"))
+}
+
 impl MessageBody {
     pub(crate) const fn kind(&self) -> MessageKind {
         match self {
@@ -168,10 +174,15 @@ impl MessageBody {
     }
     pub(crate) fn validate(&self) -> Result<()> {
         let ok = match self {
+            // The model reads this error; name the field it must fix.
             Self::ResearchRequest { question, refs } => {
-                bounded_text(question, MAX_QUESTION_CHARS)
-                    && refs.len() <= 8
-                    && refs.iter().all(|r| bounded_id(r))
+                if !bounded_text(question, MAX_QUESTION_CHARS) {
+                    return Err("lane_message_question_invalid".into());
+                }
+                if refs.len() > 8 || !refs.iter().all(|r| bounded_ref(r)) {
+                    return Err("lane_message_refs_invalid".into());
+                }
+                true
             }
             Self::ResearchResult {
                 request_id,

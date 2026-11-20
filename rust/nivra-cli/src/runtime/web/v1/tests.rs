@@ -719,3 +719,53 @@ fn price_batch_is_bounded_session_tagged_and_has_no_model_cursor_id() {
     assert_eq!(items[0]["execution_authority"], false);
     assert_eq!(items[0]["price_kind"], "receipt_price");
 }
+
+#[test]
+fn agent_route_pages_pi_turns_newest_first_with_gate_counts() {
+    let dir = tempfile::tempdir().unwrap();
+    let agent = dir.path().join("model/agent");
+    std::fs::create_dir_all(&agent).unwrap();
+    let turn = |id: &str, lane: &str, extra: serde_json::Value| {
+        let mut line = serde_json::json!({"turn_id":id,"lane":lane,"at_ms":1,"status":"ok",
+            "trigger":{"kind":"entry_candidate","triggers":[{"instrument_key":"NSE_EQ|A"}]},
+            "tool_calls":[{"name":"snapshot","ok":true}],"usage":{"calls":2},"brief":"never served"});
+        line.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        line.to_string()
+    };
+    std::fs::write(
+        agent.join("turns.ndjson"),
+        [
+            turn("gate-1", "gate", serde_json::json!({"verdict":{"escalate":true,"reason":"depth"}})),
+            turn("decision-1", "decision", serde_json::json!({"plan":{"status":"validated","plan":{"stance":"flat","actions":[]}}})),
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        agent.join("triggers.ndjson"),
+        "{\"event\":\"gated\",\"escalate\":true}\n{\"event\":\"gated\",\"escalate\":false}\n{\"event\":\"fired\"}\n",
+    )
+    .unwrap();
+    let get = |target: &str| {
+        let Ok(router::Route::Agent(query)) = router::parse(&format!("GET {target} HTTP/1.1"))
+        else {
+            panic!("agent route");
+        };
+        let reply = agent_turns("", query, Some(dir.path()));
+        serde_json::from_slice::<serde_json::Value>(&reply.body).unwrap()
+    };
+    let first = get("/api/v1/agent?limit=1");
+    assert_eq!(first["total"], 2);
+    assert_eq!(first["next"], "1");
+    assert_eq!(first["turns"][0]["turn_id"], "decision-1");
+    assert_eq!(first["turns"][0]["plan"]["stance"], "flat");
+    assert_eq!(first["turns"][0]["trigger"]["instruments"][0], "NSE_EQ|A");
+    assert!(first["turns"][0].get("brief").is_none());
+    assert_eq!(first["triggers"]["gate_escalated"], 1);
+    assert_eq!(first["triggers"]["gate_declined"], 1);
+    let second = get("/api/v1/agent?limit=1&cursor=1");
+    assert_eq!(second["turns"][0]["verdict"]["escalate"], true);
+    assert!(second["next"].is_null());
+}

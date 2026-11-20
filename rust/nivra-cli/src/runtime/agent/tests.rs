@@ -116,6 +116,7 @@ fn lane_settings(daily_calls: u64, daily_cost_usd: f64) -> LaneSettings {
         daily_cost_usd,
         turn_timeout_ms: 10_000,
         max_tool_calls: 40,
+        compact_at_tokens: None,
     }
 }
 
@@ -141,6 +142,12 @@ fn all_tools(dir: &std::path::Path) -> (Config, planner::PlannerConfig) {
         CandidateComputeSettings, CandidateDataset, CandidateDatasetKind, ResearchSettings,
     };
     let (c, mut cfg) = crate::runtime::decision::decision_fixture_config(dir);
+    let fragment: Value = serde_json::from_str(include_str!(
+        "../../../../../packaging/rust/decision-evidence.fragment.json"
+    ))
+    .unwrap();
+    cfg.decision_evidence =
+        Some(serde_json::from_value(fragment["decision_evidence"].clone()).unwrap());
     let install_hash = crate::runtime::digest(b"print(1)");
     cfg.workspace = Some(
         serde_json::from_value(json!({
@@ -293,7 +300,10 @@ fn args(name: &str) -> Value {
             json!({"task_key":"gap-fade","goal":"Does the gap fade?","analysis_id":"none","dataset_id":"none"})
         }
         "plan" => json!({"actions":[],"stance":"hold","notes":"no edge"}),
-        "research" => json!({"question":"Does the gap fade survive costs?","refs":null}),
+        "verdict" => json!({"escalate":false,"reason":"one tick, no depth"}),
+        "research" => {
+            json!({"question":"Does the gap fade survive costs?","refs":["2026-11-20","NSE_EQ|INE0ECP01024"]})
+        }
         "research_status" | "research_result" | "research_cancel" | "backtest_status"
         | "backtest_result" | "backtest_cancel" => task,
         "quotes" => json!({"instrument_keys":["NSE_EQ|A"],"from_ms":0,"to_ms":1}),
@@ -411,8 +421,21 @@ fn every_lane_tool_round_trips_through_the_bridge() {
             }
         }
         assert_eq!(turn.plan.is_some(), lane == Lane::Decision);
+        assert_eq!(turn.verdict.is_some(), lane == Lane::Gate);
     }
     assert!(mismatches.is_empty(), "{mismatches:#?}");
+    // Without the decision-evidence policy every intraday call would fail, so
+    // no lane is offered the tool.
+    let mut bare = cfg.clone();
+    bare.decision_evidence = None;
+    for lane in Lane::ALL {
+        assert!(
+            lane_definitions(&bare, lane, true)
+                .unwrap()
+                .iter()
+                .all(|tool| tool["name"] != "intraday")
+        );
+    }
 }
 
 #[test]
