@@ -11,8 +11,40 @@ import type {
   Position,
   ScannerRow,
   SummaryResponse,
+  WorkspaceState,
 } from "./types";
 import { count, numeric } from "./data";
+
+// ----------------------------------------------------------- condition
+type Issue = WorkspaceState["issues"][number];
+/** The one workspace-wide state the chrome explains, highest precedence first. */
+export type Condition =
+  | { kind: "starting" }
+  | { kind: "halted"; stopped: boolean; reason: string | null }
+  | { kind: "research"; detached: Issue[] }
+  | { kind: "closed" }
+  | { kind: "degraded"; missing: Issue[] }
+  | { kind: "nominal" };
+export function conditionOf(
+  state: Pick<WorkspaceState, "summary" | "issues" | "snapshotState">,
+): Condition {
+  const s = state.summary,
+    phase = s?.state?.phase;
+  if (s?.status === "starting" || phase === "starting")
+    return { kind: "starting" };
+  if (s?.state?.halted || s?.state?.stopped)
+    return {
+      kind: "halted",
+      stopped: !s.state.halted,
+      reason: s.state.stop_classification ?? null,
+    };
+  if (s?.status === "research_only" || phase === "research_only")
+    return { kind: "research", detached: state.issues };
+  if (s?.state?.closed) return { kind: "closed" };
+  if (state.snapshotState === "unavailable")
+    return { kind: "degraded", missing: state.issues };
+  return { kind: "nominal" };
+}
 
 // ---------------------------------------------------------------- mode
 export type Mode =

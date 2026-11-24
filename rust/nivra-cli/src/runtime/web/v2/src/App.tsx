@@ -3,7 +3,15 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   ArrowRight,
   ArrowUpRight,
+  Eye,
+  EyeOff,
+  KeyRound,
+  Loader,
   LockKeyhole,
+  Radio,
+  ShieldCheck,
+  Sparkles,
+  Wallet,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
@@ -11,6 +19,8 @@ import {
   Search,
   X,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { ApiError } from "./api";
 import {
   clock,
   datetime,
@@ -22,7 +32,9 @@ import {
   sessionKey,
   sessions,
 } from "./data";
-import { instrumentLabel, modeOf } from "./model";
+import { conditionOf, instrumentLabel, modeOf } from "./model";
+import { StateBanner } from "./StateBanner";
+import { LogoMark } from "./Logo";
 import type { Mode } from "./model";
 import {
   Button,
@@ -42,27 +54,55 @@ import type { Connection, SummaryResponse, WorkspaceState } from "./types";
 function Brand() {
   return (
     <a href="#/overview" className="brand" aria-label="Nivra overview">
+      <LogoMark size={18} />
       Nivra <b>/ ops</b>
     </a>
   );
 }
+type LoginError = { title: string; body: string };
+function loginError(e: unknown): LoginError {
+  if (e instanceof ApiError && e.status === 401)
+    return {
+      title: "Token rejected",
+      body: "The dashboard answered but did not accept this token. Check the token file for this installation and retry.",
+    };
+  if (e instanceof ApiError)
+    return {
+      title: `Dashboard error${e.status ? ` · HTTP ${e.status}` : ""}`,
+      body: `The dashboard answered with ${e.code}. Nothing was unlocked.`,
+    };
+  if (e instanceof Error && /enter a dashboard token/i.test(e.message))
+    return { title: "Token required", body: e.message };
+  return {
+    title: "Dashboard unreachable",
+    body: "Connection refused or unavailable. Check that the dashboard is running on this host, then retry.",
+  };
+}
+const LOGIN_FEATURES: [LucideIcon, string, string][] = [
+  [Wallet, "Paper account", "Positions, fills and the continuing book"],
+  [Sparkles, "pi lane turns", "Decision, gate, research and review evidence"],
+  [Radio, "Market observations", "Original quotes with their receipt time"],
+];
 function Login() {
   const [state, app] = useWorkspace(),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+    [reveal, setReveal] = useState(false),
+    [length, setLength] = useState(0),
+    [error, setError] = useState<LoginError | null>(null);
+  const connecting = busy || (!!state.token && !state.meta);
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
-    setError("");
+    setError(null);
     const form = e.currentTarget;
     const token = new FormData(form).get("token");
     form.reset();
+    setLength(0);
+    setReveal(false);
     try {
       await app.authenticate(token);
-    } catch {
-      setError(
-        "Connection refused or unavailable. Check the dashboard token and retry.",
-      );
+    } catch (failure) {
+      setError(loginError(failure));
     } finally {
       setBusy(false);
     }
@@ -71,48 +111,115 @@ function Login() {
     <div className="login-layout">
       <div className="login-brand">
         <Brand />
-        <span>PRIVATE WORKSPACE</span>
+        <span className="login-badges">
+          <span className="mode-pill">PAPER ONLY</span>
+          <span>READ-ONLY WORKSPACE</span>
+        </span>
       </div>
       <main className="login-content">
-        <span className="eyebrow">NIVRA / OWNER ACCESS</span>
-        <h1>
-          Every decision.
-          <br />
-          <span>The evidence behind it.</span>
-        </h1>
-        <p>
-          Connect to inspect the account, pi lane turns and original market
-          observations.
-        </p>
-        <form onSubmit={submit} aria-label="Connect to Nivra">
-          <label>
-            Dashboard token
-            <input
-              name="token"
-              id="token"
-              type="password"
-              autoComplete="off"
-              required
-              minLength={32}
-              placeholder="Enter this installation’s token"
-            />
-          </label>
-          <Notice error>{error}</Notice>
-          <Button
-            className="button-primary"
-            disabled={busy || (!!state.token && !state.meta)}
-          >
-            {busy || state.token ? "Connecting…" : "Unlock workspace"}
-            <ArrowRight size={14} />
-          </Button>
-        </form>
-        <small>
-          The token stays in this browser tab. Broker and model credentials do
-          not belong here.
-        </small>
+        <section className="login-hero">
+          <LogoMark size={46} animated className="login-logo" />
+          <span className="eyebrow">NIVRA / OWNER ACCESS</span>
+          <h1>
+            Every decision.
+            <br />
+            <span>The evidence behind it.</span>
+          </h1>
+          <p>
+            Connect to inspect the account, pi lane turns and original market
+            observations.
+          </p>
+          <ul className="login-features">
+            {LOGIN_FEATURES.map(([Icon, title, note]) => (
+              <li key={title}>
+                <span aria-hidden="true">
+                  <Icon size={15} />
+                </span>
+                <div>
+                  <strong>{title}</strong>
+                  <small>{note}</small>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+        <section
+          className={"login-card" + (error ? " has-error" : "")}
+          aria-busy={connecting}
+        >
+          <header>
+            <span className="login-lock" aria-hidden="true">
+              <LockKeyhole size={16} />
+            </span>
+            <div>
+              <h2>Unlock the workspace</h2>
+              <small>Paste the token this installation generated.</small>
+            </div>
+          </header>
+          <form onSubmit={submit} aria-label="Connect to Nivra">
+            <label htmlFor="token">
+              Dashboard token
+              <span className="login-count num">
+                {length ? `${length} chars` : ""}
+              </span>
+            </label>
+            <div className="token-field">
+              <KeyRound size={14} aria-hidden="true" />
+              <input
+                name="token"
+                id="token"
+                type={reveal ? "text" : "password"}
+                autoComplete="off"
+                spellCheck={false}
+                required
+                minLength={32}
+                disabled={connecting}
+                placeholder="Enter this installation’s token"
+                onChange={(e) => {
+                  setLength(e.target.value.trim().length);
+                  if (error) setError(null);
+                }}
+              />
+              <button
+                type="button"
+                className="token-reveal"
+                aria-label={reveal ? "Hide token" : "Show token"}
+                title={reveal ? "Hide token" : "Show token"}
+                onClick={() => setReveal((v) => !v)}
+              >
+                {reveal ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
+            </div>
+            {error && (
+              <Notice error title={error.title}>
+                {error.body}
+              </Notice>
+            )}
+            <Button
+              className="button-primary login-submit"
+              disabled={connecting}
+            >
+              {connecting ? (
+                <>
+                  <Loader size={14} className="spin" /> Connecting…
+                </>
+              ) : (
+                <>
+                  Unlock workspace <ArrowRight size={14} />
+                </>
+              )}
+            </Button>
+          </form>
+          <footer>
+            <ShieldCheck size={13} aria-hidden="true" />
+            The token stays in this browser tab. Broker and model credentials do
+            not belong here.
+          </footer>
+        </section>
       </main>
       <div className="login-footer">
         <span>Authenticated evidence · client-side workspace</span>
+        <span>No orders can be placed from this dashboard</span>
       </div>
     </div>
   );
@@ -408,23 +515,23 @@ export default function App() {
   // During controller startup the v1 view is not published yet: health and
   // summary report `starting` while every projection is still `*_not_reported`.
   // That is a loading state, not missing evidence, so retry until it publishes.
-  const starting =
-    state.summary?.status === "starting" ||
-    state.summary?.state?.phase === "starting";
+  const condition = conditionOf(state),
+    starting = condition.kind === "starting";
   useEffect(() => {
     if (!starting) return;
     const timer = setInterval(() => void app.refresh(), 1000);
     return () => clearInterval(timer);
   }, [starting, app]);
+  const locked = !state.meta;
   useEffect(() => {
-    document.title = (live ? "LIVE · " : "Nivra · ") + title;
-    let icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    document.title =
+      (live ? "LIVE · " : "Nivra · ") + (locked ? "Unlock workspace" : title);
+    // Live mode swaps the brand favicon for a solid live-colour dot; any
+    // other mode restores the brand mark that index.html ships.
+    const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (!icon) return;
+    icon.dataset.brand ??= icon.href;
     if (live) {
-      if (!icon) {
-        icon = document.createElement("link");
-        icon.rel = "icon";
-        document.head.append(icon);
-      }
       const fill = getComputedStyle(document.documentElement)
         .getPropertyValue("--live")
         .trim();
@@ -433,8 +540,8 @@ export default function App() {
         encodeURIComponent(
           `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="${fill}"/></svg>`,
         );
-    } else icon?.remove();
-  }, [live, title]);
+    } else icon.href = icon.dataset.brand;
+  }, [live, title, locked]);
   function toggleCompact() {
     const next = !compact;
     setCompact(next);
@@ -452,7 +559,10 @@ export default function App() {
   return (
     <div
       className={
-        "shell" + (compact ? " nav-compact" : "") + (live ? " live" : "")
+        "shell" +
+        (compact ? " nav-compact" : "") +
+        (live ? " live" : "") +
+        ` state-${condition.kind}`
       }
     >
       <StatusBar
@@ -468,10 +578,22 @@ export default function App() {
         counts={counts}
         onCollapse={toggleCompact}
       />
+      <div
+        className={
+          "load-bar" + (state.snapshotState === "loading" ? " active" : "")
+        }
+        role="progressbar"
+        aria-label="Loading evidence"
+        aria-hidden={state.snapshotState !== "loading"}
+      />
       <main className="content" id="main-content">
         <div className="page-head">
-          <h1>{title}</h1>
-          <p>{nav?.blurb}</p>
+          <h1 key={"t" + route.name} className="page-title">
+            {title}
+          </h1>
+          <p key={"b" + route.name} className="page-blurb">
+            {nav?.blurb}
+          </p>
           <div className="page-tools">
             <button
               className="kv row-link"
@@ -500,31 +622,24 @@ export default function App() {
             )}
           </div>
         </div>
-        <Notice error>{state.error}</Notice>
-        {starting ? (
-          <Notice>
-            Controller starting: the v1 evidence view is not published yet.
-            Missing values stay unknown; this page retries automatically.
-          </Notice>
-        ) : (
-          state.snapshotState === "unavailable" && (
-            <Notice>
-              Unavailable v1 evidence:{" "}
-              {state.issues
-                .map((issue) => `${issue.source} (${issue.reason})`)
-                .join(" · ") || "unknown source"}
-              . Missing values stay unknown; no zero, healthy or complete state
-              is inferred.
-            </Notice>
-          )
-        )}
-        {Page ? (
-          <Page key={route.name} />
-        ) : (
-          <Empty title="Page not found">
-            Choose a section from the workspace navigation.
-          </Empty>
-        )}
+        <Notice error title="Request failed">
+          {state.error}
+        </Notice>
+        <StateBanner
+          key={condition.kind}
+          condition={condition}
+          refreshing={state.snapshotState === "loading"}
+          onRefresh={() => void app.refresh()}
+        />
+        <div className="page-body" key={route.name}>
+          {Page ? (
+            <Page />
+          ) : (
+            <Empty title="Page not found">
+              Choose a section from the workspace navigation.
+            </Empty>
+          )}
+        </div>
       </main>
       <Dialog.Root
         open={command}

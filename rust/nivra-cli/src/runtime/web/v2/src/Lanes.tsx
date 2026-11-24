@@ -138,6 +138,24 @@ function LaneCards({ turns }: { turns: AgentTurn[] }) {
     budgets = new Map<string, LaneBudget>(
       (health.value?.readiness?.models?.roles ?? []).map((b) => [b.role, b]),
     );
+  const missing =
+    state.agentState === "error" || state.agentState === "unavailable";
+  if (missing && !turns.length)
+    return (
+      <Panel title="Lanes" note="No lane journal loaded">
+        <Empty
+          tone={state.agentState === "error" ? "failed" : "unavailable"}
+          title={
+            state.agentState === "error"
+              ? "The pi lane journal could not be read"
+              : "The pi lane journal is not reported"
+          }
+        >
+          Turn counts, latency, tokens and cost stay unknown until the journal
+          is available. No lane is shown as idle or healthy without evidence.
+        </Empty>
+      </Panel>
+    );
   return (
     <Panel
       title="Lanes"
@@ -542,12 +560,13 @@ export default function Lanes() {
   );
   return (
     <>
-      {(state.agentState === "error" || state.agentState === "unavailable") && (
-        <Notice error>
-          The pi lane journal is{" "}
-          {state.agentState === "error" ? "unavailable" : "not reported"}.
-        </Notice>
-      )}
+      {(state.agentState === "error" || state.agentState === "unavailable") &&
+        turns.length > 0 && (
+          <Notice error>
+            The pi lane journal is{" "}
+            {state.agentState === "error" ? "unavailable" : "not reported"}.
+          </Notice>
+        )}
       {coverage.label && (
         <Notice>
           Lane journal: {coverage.label}. Counts below cover the loaded turns

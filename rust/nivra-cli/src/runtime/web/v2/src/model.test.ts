@@ -8,6 +8,7 @@ import type {
   SummaryResponse,
 } from "./types";
 import {
+  conditionOf,
   equityStats,
   instrumentLabel,
   journalCoverage,
@@ -334,5 +335,34 @@ test("a truncated journal is reported as newest N with the rest not loaded, neve
   assert.equal(
     journalCoverage({ turns: rows, truncated: true }).label,
     "showing newest 2; older turns not loaded",
+  );
+});
+
+test("workspace condition: a halted book outranks research mode, which outranks missing sources", () => {
+  const missing = [
+    {
+      source: "portfolio",
+      state: "unavailable" as const,
+      reason: "portfolio_not_reported",
+    },
+  ];
+  const at = (summary: SummaryResponse | null) =>
+    conditionOf({ summary, issues: missing, snapshotState: "unavailable" })
+      .kind;
+  assert.equal(at({ status: "starting" }), "starting");
+  assert.equal(
+    at({ status: "research_only", state: { halted: true } }),
+    "halted",
+  );
+  assert.equal(at({ status: "research_only" }), "research");
+  assert.equal(at({ state: { closed: true } }), "closed");
+  assert.equal(at({ status: "running" }), "degraded");
+  assert.equal(
+    conditionOf({
+      summary: { status: "running" },
+      issues: [],
+      snapshotState: "ready",
+    }).kind,
+    "nominal",
   );
 });

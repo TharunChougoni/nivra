@@ -319,6 +319,10 @@
     flex-wrap: wrap;
     min-width: 0;
   }
+  .page-head p {
+    flex-basis: 100%;
+    order: 3;
+  }
   .session-select,
   .session-select select {
     min-width: 0;

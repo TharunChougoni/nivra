@@ -21,6 +21,7 @@ import {
   usd,
 } from "./data";
 import {
+  conditionOf,
   equityStats,
   instrumentIndex,
   instrumentLabel,
@@ -35,6 +36,7 @@ import {
   InstrumentCell,
   KpiStrip,
   LaneSwatch,
+  NAV,
   Panel,
   Segments,
   Status,
@@ -68,7 +70,52 @@ const kindGroup = (p: Position) => {
       : "cash";
 };
 
+const RESEARCH_DESTINATIONS = [
+  "backtest",
+  "strategies",
+  "sessions",
+  "instruments",
+  "health",
+];
+/** Research-only dashboards have no book: show what can be inspected instead. */
+function ResearchOverview() {
+  return (
+    <Panel
+      title="Available in research mode"
+      note="Sections that work without an attached paper book"
+    >
+      <div className="destination-grid">
+        {RESEARCH_DESTINATIONS.flatMap((id) => {
+          const item = NAV.find((n) => n.id === id);
+          if (!item) return [];
+          const Icon = item.icon;
+          return [
+            <a key={id} href={"#/" + id} className="destination">
+              <span className="destination-icon" aria-hidden="true">
+                <Icon size={16} />
+              </span>
+              <strong>
+                {item.label} <ArrowUpRight size={12} />
+              </strong>
+              <small>{item.blurb}</small>
+            </a>,
+          ];
+        })}
+      </div>
+    </Panel>
+  );
+}
+
 export default function Overview() {
+  const [state] = useWorkspace();
+  return conditionOf(state).kind === "research" ? (
+    <ResearchOverview />
+  ) : (
+    <BookOverview />
+  );
+}
+
+function BookOverview() {
   const [state, app] = useWorkspace(),
     [view, setView] = useState("equity"),
     [kind, setKind] = useState("all"),

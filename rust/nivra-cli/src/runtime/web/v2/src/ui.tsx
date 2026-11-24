@@ -14,6 +14,11 @@ import {
   HeartPulse,
   ScanLine,
   X,
+  Inbox,
+  CloudOff,
+  OctagonX,
+  Info,
+  TriangleAlert,
 } from "lucide-react";
 import { words } from "./data";
 import { STAGES, instrumentLabel } from "./model";
@@ -139,19 +144,50 @@ export function Status({
     </span>
   );
 }
+export type EmptyTone = "empty" | "unavailable" | "failed";
+const EMPTY_ICON: Record<EmptyTone, LucideIcon> = {
+  empty: Inbox,
+  unavailable: CloudOff,
+  failed: OctagonX,
+};
+/** Tone from the title when a call site does not say: failures and missing
+    sources must not look like an honest "nothing happened yet". */
+function emptyTone(title: React.ReactNode): EmptyTone {
+  const text = typeof title === "string" ? title : "";
+  if (/fail|error|reject|refused|invalid/i.test(text)) return "failed";
+  if (
+    /unavailable|not reported|not loaded|not present|missing|no .*(source|evidence)/i.test(
+      text,
+    )
+  )
+    return "unavailable";
+  return "empty";
+}
 export function Empty({
   title = "No records",
   children,
+  icon,
+  tone,
+  action,
 }: {
   title?: React.ReactNode;
   children?: React.ReactNode;
-  /** Accepted for call-site compatibility; empty states carry no icon. */
   icon?: LucideIcon;
+  tone?: EmptyTone;
+  action?: React.ReactNode;
 }) {
+  const kind = tone ?? emptyTone(title),
+    Icon = icon ?? EMPTY_ICON[kind];
   return (
-    <div className="empty">
-      <strong>{title}</strong>
-      <p>{children || "No evidence has been supplied for this view."}</p>
+    <div className={`empty empty-${kind}`}>
+      <span className="empty-icon" aria-hidden="true">
+        <Icon size={16} />
+      </span>
+      <div>
+        <strong>{title}</strong>
+        <p>{children || "No evidence has been supplied for this view."}</p>
+        {action && <div className="empty-action">{action}</div>}
+      </div>
     </div>
   );
 }
@@ -400,18 +436,29 @@ export function Drawer({
 export function Notice({
   children,
   error,
+  tone = error ? "error" : "warn",
+  title,
 }: {
   children?: React.ReactNode;
   error?: boolean;
+  tone?: "info" | "warn" | "error";
+  title?: React.ReactNode;
 }) {
-  return children ? (
+  if (!children) return null;
+  const Icon =
+    tone === "error" ? OctagonX : tone === "warn" ? TriangleAlert : Info;
+  return (
     <div
-      className={`notice ${error ? "notice-error" : ""}`}
-      role={error ? "alert" : "status"}
+      className={`notice notice-${tone}`}
+      role={tone === "error" ? "alert" : "status"}
     >
-      {children}
+      <Icon size={14} aria-hidden="true" />
+      <div>
+        {title && <strong>{title}</strong>}
+        <div>{children}</div>
+      </div>
     </div>
-  ) : null;
+  );
 }
 export type KpiItem = [
   label: string,
@@ -420,7 +467,22 @@ export type KpiItem = [
   options?: { tone?: "pos" | "neg" | "warn"; title?: string },
 ];
 /** One bordered row of cells. A `—` value is unknown, never zero; the note says why. */
-export function KpiStrip({ items }: { items: KpiItem[] }) {
+export function KpiStrip({
+  items,
+  emptyTitle = "No values recorded",
+}: {
+  items: KpiItem[];
+  emptyTitle?: string;
+}) {
+  if (items.length > 1 && items.every(([, value]) => value === "—"))
+    return (
+      <div className="kpis kpis-empty">
+        <Empty title={emptyTitle} tone="unavailable">
+          None of {items.map(([name]) => name).join(", ")} has a recorded value
+          in this snapshot. Unknown is shown as unknown, never as zero.
+        </Empty>
+      </div>
+    );
   return (
     <div className="kpis">
       {items.map(([name, value, note, options]) => (
@@ -432,7 +494,17 @@ export function KpiStrip({ items }: { items: KpiItem[] }) {
           }
         >
           <span>{name}</span>
-          <strong className={options?.tone ?? ""}>{value}</strong>
+          {/* Keyed on the shown value so a changed number re-runs its tick. */}
+          <strong
+            key={
+              typeof value === "string" || typeof value === "number"
+                ? value
+                : undefined
+            }
+            className={options?.tone ?? ""}
+          >
+            {value}
+          </strong>
           <small>{note}</small>
         </div>
       ))}

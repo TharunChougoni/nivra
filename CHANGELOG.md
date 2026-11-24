@@ -1,5 +1,20 @@
 # Source snapshot
 
+## 0.12.3 — 2026-11-24
+
+The dashboard explains its state. A banner at the top of each page says when
+the controller is starting, the book is halted or stopped, the session has
+closed, sources are missing, or the dashboard runs research only, and links
+to the next useful section. A research-only Overview lists the sections that
+work without a paper book instead of empty values. Empty, unavailable and
+failed views have distinct boxes, and a strip with no recorded values shows
+one empty state.
+
+The unlock page names the failure: a rejected token, an unreachable dashboard
+or a dashboard error. The workspace has a brand mark and favicon, page
+metadata that keeps it out of search indexes, higher text contrast, and
+entrance and data-arrival animations that respect reduced motion.
+
 ## 0.12.2 — 2026-11-24
 
 The updater now leaves the paper controller stopped during a reviewed

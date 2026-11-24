@@ -516,6 +516,7 @@ export interface SummaryResponse extends Envelope {
     closed?: boolean | null;
     health?: string | null;
     phase?: string | null;
+    stop_classification?: string | null;
   };
   market_feed?: MarketFeed | null;
   readiness?: Readiness | null;
