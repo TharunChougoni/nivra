@@ -1420,7 +1420,7 @@ strict Clippy, `cargo test --workspace`, `check-release`).
 6. Run `target/x86_64-unknown-linux-musl/release/nivra self-check --expected-version vX.Y.Z`.
 7. Run `target/debug/nivra-tools release-artifact --tag vX.Y.Z --binary target/x86_64-unknown-linux-musl/release/nivra --output dist`.
 8. Install `nivra-analysis` as `dist/nivra-analysis-x86_64-unknown-linux-musl` and write its `.sha256`.
-9. Publish the seven files locally as the tree of `refs/release-assets/vX.Y.Z`;
+9. Publish the five files locally as the tree of `refs/release-assets/vX.Y.Z`;
    do not also dispatch the GitHub workflow for that tag. The empty-ref check and
    `--force-with-lease` make a duplicate publish fail without replacing assets:
 
@@ -1433,7 +1433,6 @@ strict Clippy, `cargo test --workspace`, `check-release`).
    git read-tree --empty
    for file in nivra-x86_64-unknown-linux-musl \
        nivra-x86_64-unknown-linux-musl.sha256 release.json \
-       default-prompts.json default-prompts.sha256 \
        nivra-analysis-x86_64-unknown-linux-musl \
        nivra-analysis-x86_64-unknown-linux-musl.sha256; do
      blob=$(git hash-object -w "dist/$file")

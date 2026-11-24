@@ -42,7 +42,7 @@ import type { Connection, SummaryResponse, WorkspaceState } from "./types";
 function Brand() {
   return (
     <a href="#/overview" className="brand" aria-label="Nivra overview">
-      nivra <b>/ ops</b>
+      Nivra <b>/ ops</b>
     </a>
   );
 }

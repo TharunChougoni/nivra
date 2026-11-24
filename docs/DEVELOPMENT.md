@@ -87,18 +87,18 @@ paper host.
    (retained 30 days) is required; missing or expired artifacts fail closed and
    require rerunning exact-commit CI. If the asset ref exists, recovery verifies
    it instead. Never move a tag to repair a failed run.
-5. Verify the seven published files, including `default-prompts.json` and its
-   checksum, immutable `refs/release-assets/vX.Y.Z`,
-   `release.json` source SHA/target and all three SHA-256 files. The updater installs
-   at its next eligible window. Research registrations separately pin their
-   runtime hash and never silently follow a new engine.
+5. Verify the five published files (the musl `nivra` and `nivra-analysis`,
+   `release.json` and both SHA-256 files) and the immutable
+   `refs/release-assets/vX.Y.Z` source SHA/target. The updater installs at its
+   next eligible window. Research registrations separately pin their runtime
+   hash and never silently follow a new engine.
 
 Once `refs/release-assets/vX.Y.Z` exists, its assets are immutable and the
 publication is resumable. The asset ref becomes available to the installed updater
 before the GitHub release attachment step completes, so a failed release step
 can leave an installable partial publication. Rerunning the failed release job
 or dispatching **Fast musl release** verifies the annotated tag, exact source
-commit, exact five legacy or seven current files, `release.json`, checksums and
+commit, exact seven legacy or five current files, `release.json`, checksums and
 the binary self-check, then creates the missing GitHub release or uploads only missing
 byte-identical attachments. It never moves a tag or the asset ref, overwrites an
 existing attachment, rebuilds over an existing asset ref, or accepts mismatched
