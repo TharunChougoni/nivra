@@ -1,4 +1,22 @@
 use super::*;
+
+#[test]
+fn real_updater_keeps_the_controller_stopped_when_requested() {
+    let mut host = host::RealHost {
+        agent: ureq::Agent::new_with_defaults(),
+        current: PathBuf::new(),
+        token_file: PathBuf::new(),
+        remote: String::new(),
+        cache: PathBuf::new(),
+        paper: PathBuf::new(),
+        now: None,
+        operator_stopped: false,
+    };
+    assert!(!host.keep_stopped());
+    host.operator_stopped = true;
+    assert!(host.keep_stopped());
+}
+
 struct Fake {
     home: PathBuf,
     now: chrono::DateTime<chrono::FixedOffset>,
