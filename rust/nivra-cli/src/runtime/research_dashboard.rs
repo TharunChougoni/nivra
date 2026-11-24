@@ -43,7 +43,7 @@ pub fn entry(token_file: &Path, config: Option<&Path>) -> ExitCode {
                     if let Ok(mut value) = view.lock() {
                         *value = next.clone();
                     }
-                    web::update_prepared_summary(&next);
+                    web::update_prepared_summary(&next, None);
                 }
             })
     })();

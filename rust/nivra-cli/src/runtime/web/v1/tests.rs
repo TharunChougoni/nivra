@@ -279,6 +279,39 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
             .expect("summary gzip must contain JSON, not a nested gzip stream"),
         plain
     );
+    assert_eq!(plain["revisions"], revisions(&view.lock().unwrap(), None));
+
+    // Loop clocks move no revision; a new fill moves only the projections
+    // that read fills; an identical summary is announced once.
+    let snapshot = view.lock().unwrap().clone();
+    let mut later = snapshot.clone();
+    later["as_of_ms"] = serde_json::json!(snapshot["as_of_ms"].as_i64().unwrap_or(0) + 2000);
+    later["controller_heartbeat"] = serde_json::json!({"version":1,"completed_at_ms":2});
+    later["operational_health"]["captured_at_ms"] = serde_json::json!(902_000);
+    assert_eq!(revisions(&later, None), revisions(&snapshot, None));
+    later["portfolio"]["fills"] = serde_json::json!([{"fee":"1.00"}]);
+    let (before, after) = (revisions(&snapshot, None), revisions(&later, None));
+    let moved = before
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(name, revision)| after[name.as_str()] != **revision)
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(moved, ["portfolio", "fills", "sessions"]);
+    let cursor = nivra_cli::event_feed::snapshot(0)["next"].as_u64().unwrap();
+    publish_summary(&later, None);
+    publish_summary(&later, None);
+    let etag = get_prepared_summary().unwrap().etag.clone();
+    let announced = nivra_cli::event_feed::snapshot(cursor)["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["etag"] == etag.as_str())
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(announced.len(), 1);
+    assert_eq!(announced[0]["revisions"], after);
     reset_prepared_summary();
 
     let health_reply = health("", &view);

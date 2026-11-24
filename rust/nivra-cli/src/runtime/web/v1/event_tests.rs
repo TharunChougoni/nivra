@@ -133,9 +133,15 @@ fn streams_are_capped_send_increasing_frames_and_heartbeats_without_blocking_sta
     ] {
         feed.publish(json!({"kind":kind,"text":text,"archive_run":"harness-digest-1-fixture","execution_authority":false}));
     }
-    feed.publish(json!({"kind":"summary_changed","etag":"\"0123456789abcdef\""}));
+    let revisions = json!({"fills":"0011223344556677"});
+    feed.publish(
+        json!({"kind":"summary_changed","etag":"\"0123456789abcdef\"","revisions":revisions}),
+    );
     for client in &mut clients {
-        let terminator = format!("data: {}\n\n", json!({"etag":"\"0123456789abcdef\""}));
+        let terminator = format!(
+            "data: {}\n\n",
+            json!({"etag":"\"0123456789abcdef\"","revisions":revisions})
+        );
         let text = until(client, &terminator);
         let ids: Vec<u64> = text
             .lines()
@@ -150,7 +156,10 @@ fn streams_are_capped_send_increasing_frames_and_heartbeats_without_blocking_sta
             .collect();
         assert_eq!(payloads.len(), 5);
         assert_eq!(payloads[0]["archive_run"], "harness-digest-1-fixture");
-        assert_eq!(payloads[4], json!({"etag":"\"0123456789abcdef\""}));
+        assert_eq!(
+            payloads[4],
+            json!({"etag":"\"0123456789abcdef\"","revisions":revisions})
+        );
         assert!(until(client, ": heartbeat\n\n").contains(": heartbeat"));
     }
     // No source event disappeared while all three subscribers were open.

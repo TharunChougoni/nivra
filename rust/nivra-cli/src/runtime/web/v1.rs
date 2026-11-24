@@ -8,12 +8,14 @@ use router::Route;
 mod book;
 mod market;
 mod ops;
+mod revision;
 mod series;
 mod stream;
 mod summary;
 use book::*;
 use market::*;
 use ops::*;
+use revision::*;
 use series::*;
 #[cfg(test)]
 pub(crate) use stream::TestFeed;
@@ -21,8 +23,8 @@ use stream::*;
 pub(crate) use stream::{poll_events, start_sse, wants_sse};
 #[cfg(test)]
 pub(crate) use summary::reset_prepared_summary;
-pub(crate) use summary::update_prepared_summary;
 use summary::*;
+pub(crate) use summary::{publish_summary, update_prepared_summary};
 
 pub(crate) fn error(code: &'static str, reason: &str) -> Response {
     response(
@@ -45,7 +47,7 @@ pub(crate) fn dispatch(
 ) -> Response {
     match route {
         Ok(Route::Meta) => meta(head, view, settings),
-        Ok(Route::Summary) => summary(head, view),
+        Ok(Route::Summary) => summary(head, view, session_root),
         Ok(Route::Portfolio) => portfolio(head, view),
         Ok(Route::Positions(query)) => positions(head, query, view),
         Ok(Route::Orders(query)) => orders(head, query, view),

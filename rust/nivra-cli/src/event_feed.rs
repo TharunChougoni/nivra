@@ -45,7 +45,9 @@ fn push(event: Value) {
     }
     CHANGED.notify_all();
 }
-pub fn summary_changed(etag: &str) {
+/// `revisions` maps each projection name to its content revision, so a
+/// client refetches only the projections whose revision moved.
+pub fn summary_changed(etag: &str, revisions: &Value) {
     if etag.len() != 18
         || !etag.starts_with('"')
         || !etag.ends_with('"')
@@ -54,7 +56,7 @@ pub fn summary_changed(etag: &str) {
         return;
     }
     push(
-        json!({"kind":"summary_changed","etag":etag,"archive_run":null,"execution_authority":false}),
+        json!({"kind":"summary_changed","etag":etag,"revisions":revisions,"archive_run":null,"execution_authority":false}),
     );
 }
 pub fn snapshot(after: u64) -> Value {
@@ -107,11 +109,13 @@ mod tests {
             snapshot(before)
         });
         std::thread::sleep(std::time::Duration::from_millis(20));
-        summary_changed("\"0123456789abcdef\"");
-        summary_changed("not-an-etag");
+        summary_changed("\"0123456789abcdef\"", &json!({"fills":"0011223344556677"}));
+        summary_changed("not-an-etag", &json!({}));
         let seen = waiter.join().unwrap();
         let events = seen["events"].as_array().unwrap();
-        assert!(events.iter().any(|e| e["kind"] == "summary_changed"));
+        assert!(events.iter().any(
+            |e| e["kind"] == "summary_changed" && e["revisions"]["fills"] == "0011223344556677"
+        ));
         assert!(events.iter().all(|e| e["etag"] != "not-an-etag"));
     }
 }

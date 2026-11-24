@@ -171,7 +171,7 @@ pub(crate) fn sse_frame(event: &serde_json::Value, epoch: &serde_json::Value) ->
         _ => "run_event",
     };
     let body = if kind == "summary_changed" {
-        serde_json::json!({"etag":event["etag"]})
+        serde_json::json!({"etag":event["etag"],"revisions":event["revisions"]})
     } else {
         let mut body = event.clone();
         body["epoch"] = epoch.clone();

@@ -1873,8 +1873,7 @@ impl<'a> Controller<'a> {
             v_json["index_feeds"] = self.index_context.json();
         }
         *self.view.lock().map_err(|_| Fail::new("dashboard_lock"))? = v_json.clone();
-        let prepared_summary = super::super::web::update_prepared_summary(&v_json);
-        nivra_cli::event_feed::summary_changed(&prepared_summary.etag);
+        super::super::web::publish_summary(&v_json, Some(&c.directory));
         Ok(interval_ms)
     }
 

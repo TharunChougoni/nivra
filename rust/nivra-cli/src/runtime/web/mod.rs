@@ -17,7 +17,7 @@ use std::{
     },
     time::Instant,
 };
-pub(crate) use v1::update_prepared_summary;
+pub(crate) use v1::{publish_summary, update_prepared_summary};
 const MAX_BODY: usize = 12 * 1024 * 1024;
 struct Asset {
     bytes: &'static [u8],

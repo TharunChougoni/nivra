@@ -88,12 +88,18 @@ pub(crate) fn health_at(head: &str, view: &Arc<Mutex<serde_json::Value>>, now_ms
     let Ok(view) = view.lock() else {
         return error("503 Service Unavailable", "status_unavailable");
     };
+    let body = health_body(&view, now_ms);
+    drop(view);
+    json_reply(head, body)
+}
+
+pub(super) fn health_body(view: &serde_json::Value, now_ms: i64) -> serde_json::Value {
     let p = &view["portfolio"];
-    let alerts = derived_alerts(&view);
-    let mut body = envelope(&view);
+    let alerts = derived_alerts(view);
+    let mut body = envelope(view);
     body["status"] = view["status"].clone();
     body["controller_liveness"] = serde_json::json!(
-        crate::runtime::operational_health::controller_liveness(&view, now_ms)
+        crate::runtime::operational_health::controller_liveness(view, now_ms)
     );
     if let Some(operational) = view.get("operational_health") {
         body["operational_health"] = operational.clone();
@@ -141,8 +147,7 @@ pub(crate) fn health_at(head: &str, view: &Arc<Mutex<serde_json::Value>>, now_ms
     });
     body["alerts"] = serde_json::json!(alerts);
     body["alert_count"] = serde_json::json!(alerts.len());
-    drop(view);
-    json_reply(head, body)
+    body
 }
 pub(crate) fn alerts(
     head: &str,
@@ -251,6 +256,9 @@ pub(crate) fn tool_calls(
         Err(reason) => error("503 Service Unavailable", &reason.to_string()),
     }
 }
+
+/// Files under `model/agent` that `/api/v1/agent` reads.
+pub(super) const AGENT_FILES: [&str; 3] = ["turns.ndjson", "triggers.ndjson", "usage.json"];
 
 /// Bytes of a lane journal the dashboard reads, newest last.
 const AGENT_JOURNAL_MAX_BYTES: u64 = 16 * 1024 * 1024;

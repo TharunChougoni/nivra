@@ -124,13 +124,35 @@ pub(crate) struct PreparedSummary {
     pub(crate) json: String,
     pub(crate) gz: Vec<u8>,
     pub(crate) etag: String,
+    pub(crate) revisions: serde_json::Value,
 }
 
 static PREPARED_SUMMARY: std::sync::RwLock<Option<Arc<PreparedSummary>>> =
     std::sync::RwLock::new(None);
 
-pub(crate) fn update_prepared_summary(view: &serde_json::Value) -> Arc<PreparedSummary> {
-    let body = build_summary_envelope(view);
+pub(crate) fn update_prepared_summary(
+    view: &serde_json::Value,
+    root: Option<&Path>,
+) -> Arc<PreparedSummary> {
+    replace_prepared_summary(view, root).0
+}
+
+/// Prepares the summary and announces it on the event feed, unless it is
+/// byte-identical to the one already announced.
+pub(crate) fn publish_summary(view: &serde_json::Value, root: Option<&Path>) {
+    let (prepared, previous) = replace_prepared_summary(view, root);
+    if previous.is_none_or(|previous| previous.etag != prepared.etag) {
+        nivra_cli::event_feed::summary_changed(&prepared.etag, &prepared.revisions);
+    }
+}
+
+fn replace_prepared_summary(
+    view: &serde_json::Value,
+    root: Option<&Path>,
+) -> (Arc<PreparedSummary>, Option<Arc<PreparedSummary>>) {
+    let revisions = revisions(view, root);
+    let mut body = build_summary_envelope(view);
+    body["revisions"] = revisions.clone();
     let body = super::super::super::transcript::redact(&body);
     let text = body.to_string();
     let etag = format!("\"{}\"", &digest(text.as_bytes())[..16]);
@@ -139,13 +161,14 @@ pub(crate) fn update_prepared_summary(view: &serde_json::Value) -> Arc<PreparedS
         json: text,
         gz,
         etag,
+        revisions,
     });
     let mut lock = match PREPARED_SUMMARY.write() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
-    *lock = Some(Arc::clone(&prepared));
-    prepared
+    let previous = lock.replace(Arc::clone(&prepared));
+    (prepared, previous)
 }
 
 pub(crate) fn get_prepared_summary() -> Option<Arc<PreparedSummary>> {
@@ -219,14 +242,18 @@ pub(crate) fn build_summary_envelope(view: &serde_json::Value) -> serde_json::Va
     body
 }
 
-pub(crate) fn summary(head: &str, view: &Arc<Mutex<serde_json::Value>>) -> Response {
+pub(crate) fn summary(
+    head: &str,
+    view: &Arc<Mutex<serde_json::Value>>,
+    root: Option<&Path>,
+) -> Response {
     let prepared = if let Some(p) = get_prepared_summary() {
         p
     } else {
         let Ok(view) = view.lock() else {
             return error("503 Service Unavailable", "status_unavailable");
         };
-        update_prepared_summary(&view)
+        update_prepared_summary(&view, root)
     };
     let matched = values(head, "if-none-match") == [prepared.etag.as_str()];
     if matched {
