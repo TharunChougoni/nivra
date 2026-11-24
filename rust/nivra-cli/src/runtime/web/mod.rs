@@ -515,6 +515,7 @@ fn serve(
         equity,
         instrument_catalog,
         streams: Arc::new(AtomicUsize::new(0)),
+        price_batches: Arc::default(),
         #[cfg(test)]
         event_feed: None,
     }))?;
@@ -539,6 +540,7 @@ struct Ctx {
     equity: Option<Arc<Mutex<EquitySeries>>>,
     instrument_catalog: Option<Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
     streams: Arc<AtomicUsize>,
+    price_batches: Arc<v1::PriceBatches>,
     #[cfg(test)]
     event_feed: Option<Arc<v1::TestFeed>>,
 }
@@ -695,6 +697,7 @@ mod tests {
                 equity: None,
                 instrument_catalog: None,
                 streams: Arc::new(AtomicUsize::new(0)),
+                price_batches: Arc::default(),
                 event_feed: None,
                 settings: DashboardSettings {
                     workers,

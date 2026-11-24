@@ -725,7 +725,7 @@ fn series_projects_receipt_bars_and_equity_without_volume() {
     }
 }
 #[test]
-fn price_batch_is_bounded_session_tagged_and_has_no_model_cursor_id() {
+fn price_batches_are_shared_bounded_and_send_only_moved_receipts() {
     let date = NaiveDate::from_ymd_opt(2026, 10, 29).unwrap();
     let mut store =
         FeatureStore::new(nivra_core::feature_store::FeatureStoreSettings::default()).unwrap();
@@ -735,30 +735,60 @@ fn price_batch_is_bounded_session_tagged_and_has_no_model_cursor_id() {
             .observe(key, price, minute_to_millis(date, minute).unwrap())
             .unwrap();
     }
-    let features = Arc::new(Mutex::new(store));
+    let features = Mutex::new(store);
     let settings = DashboardSettings {
         price_batch_instruments: 2,
         ..DashboardSettings::default()
     };
-    let (seq, frame) = price_batch_frame(&features, &settings, 7, 1_760_000_000_000).unwrap();
-    assert_eq!(seq, 7);
-    let text = String::from_utf8(frame).unwrap();
-    assert!(text.starts_with("event: price_batch\ndata: "));
-    assert!(!text.contains("\nid:"));
-    let data = text
-        .lines()
-        .find_map(|line| line.strip_prefix("data: "))
+    let batches = PriceBatches::default();
+    let start = Instant::now();
+    let frame = |sent: u64, at: Duration| {
+        let (seq, frame) =
+            batches.next_frame(&features, &settings, sent, start + at, 1_760_000_000_000)?;
+        let text = String::from_utf8(frame.to_vec()).unwrap();
+        assert!(text.starts_with("event: price_batch\ndata: "));
+        assert!(!text.contains("\nid:"));
+        let data = text.lines().find_map(|line| line.strip_prefix("data: "))?;
+        Some((
+            seq,
+            serde_json::from_str::<serde_json::Value>(data).unwrap(),
+        ))
+    };
+    let keys = |body: &serde_json::Value| {
+        body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["instrument_key"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let (seq, first) = frame(0, Duration::ZERO).unwrap();
+    assert_eq!(seq, 1);
+    assert_eq!(first["session"], "2026-10-29");
+    assert_eq!(first["full"], true);
+    assert_eq!(first["source"], "receipt_derived_feature_store");
+    assert_eq!(first["price_kind"], "receipt_price");
+    assert_eq!(first["execution_authority"], false);
+    assert_eq!(keys(&first), ["C", "B"]);
+    assert_eq!(first["items"][0]["last_price"], 30.0);
+    // A second stream inside the interval shares the same batch.
+    assert_eq!(frame(0, Duration::from_millis(10)).unwrap().1, first);
+    assert!(frame(1, Duration::from_millis(10)).is_none());
+    // No moved receipt: no new batch and no frame.
+    assert!(frame(1, Duration::from_secs(3)).is_none());
+    features
+        .lock()
+        .unwrap()
+        .observe("A", 11.0, minute_to_millis(date, 558).unwrap())
         .unwrap();
-    let body: serde_json::Value = serde_json::from_str(data).unwrap();
-    assert_eq!(body["session"], "2026-10-29");
-    assert_eq!(body["batch_seq"], 7);
-    assert_eq!(body["source"], "receipt_derived_feature_store");
-    let items = body["items"].as_array().unwrap();
-    assert_eq!(items.len(), 2);
-    assert_eq!(items[0]["instrument_key"], "C");
-    assert_eq!(items[1]["instrument_key"], "B");
-    assert_eq!(items[0]["execution_authority"], false);
-    assert_eq!(items[0]["price_kind"], "receipt_price");
+    let (seq, delta) = frame(1, Duration::from_secs(6)).unwrap();
+    assert_eq!(seq, 2);
+    assert_eq!(delta["full"], false);
+    assert_eq!(keys(&delta), ["A"]);
+    // A new stream, or one that missed a batch, gets the full snapshot.
+    let (seq, full) = frame(0, Duration::from_secs(6)).unwrap();
+    assert_eq!(seq, 2);
+    assert_eq!(keys(&full), ["A", "C"]);
 }
 
 #[test]

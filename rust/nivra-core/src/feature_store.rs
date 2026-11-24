@@ -269,20 +269,26 @@ impl FeatureStore {
         self.bars.get(key)
     }
 
-    /// Most recently observed instruments first. The last bar close is the
-    /// latest receipt price, not a certified exchange close or a volume.
+    /// The `limit` most recently observed instruments, in no order, so a
+    /// caller holding the store lock does not pay for sorting. The last bar
+    /// close is the latest receipt price, not a certified exchange close or
+    /// a volume. Ties on receipt time keep the lowest instrument keys.
     pub fn latest_prices(&self, limit: usize) -> Vec<(String, f64, i64)> {
         let mut rows = self
             .last_receipts
             .iter()
-            .filter_map(|(key, receipt)| {
-                let bar = self.bars.get(key)?.back()?;
-                Some((key.clone(), bar.close, *receipt))
-            })
+            .filter_map(|(key, receipt)| Some((key, self.bars.get(key)?.back()?.close, *receipt)))
             .collect::<Vec<_>>();
-        rows.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
-        rows.truncate(limit);
-        rows
+        if limit == 0 {
+            return Vec::new();
+        }
+        if rows.len() > limit {
+            rows.select_nth_unstable_by(limit - 1, |a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(b.0)));
+            rows.truncate(limit);
+        }
+        rows.into_iter()
+            .map(|(key, close, receipt)| (key.clone(), close, receipt))
+            .collect()
     }
 
     pub fn ignored_out_of_order(&self) -> u64 {
@@ -476,19 +482,24 @@ mod tests {
     }
 
     #[test]
-    fn latest_prices_are_receipt_ordered_and_bounded() {
+    fn latest_prices_keep_the_newest_receipts_and_are_bounded() {
         let mut store = FeatureStore::new(FeatureStoreSettings::default()).unwrap();
         store.observe("old", 10.0, receipt(555, 0)).unwrap();
         store.observe("new", 20.0, receipt(556, 0)).unwrap();
         store.observe("new", 21.0, receipt(556, 30_000)).unwrap();
+        let mut rows = store.latest_prices(10);
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(
-            store.latest_prices(10),
+            rows,
             vec![
                 ("new".to_owned(), 21.0, receipt(556, 30_000)),
                 ("old".to_owned(), 10.0, receipt(555, 0)),
             ]
         );
-        assert_eq!(store.latest_prices(1).len(), 1);
+        assert_eq!(
+            store.latest_prices(1),
+            vec![("new".to_owned(), 21.0, receipt(556, 30_000))]
+        );
         assert!(store.latest_prices(0).is_empty());
         store.reset_for_session(NaiveDate::from_ymd_opt(2026, 10, 28).unwrap());
         assert!(store.latest_prices(10).is_empty());

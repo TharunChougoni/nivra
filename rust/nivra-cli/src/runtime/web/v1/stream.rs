@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeMap;
 
 #[derive(Clone)]
 pub(crate) enum EventSource {
@@ -179,46 +180,121 @@ pub(crate) fn sse_frame(event: &serde_json::Value, epoch: &serde_json::Value) ->
     };
     Some(format!("id: {seq}\nevent: {kind}\ndata: {body}\n\n").into_bytes())
 }
+/// The latest display price batch, built at most once per interval and
+/// shared by every stream. A stream that sent the previous batch gets only
+/// the instruments whose receipt time moved; any other stream gets the full
+/// snapshot. `batch_seq` advances only when a batch carries a change, so a
+/// skipped sequence still means the client missed prices.
+#[derive(Default)]
+pub(crate) struct PriceBatches(Mutex<BatchState>);
+#[derive(Default)]
+struct BatchState {
+    /// Last issued sequence; it never restarts, even across sessions.
+    seq: u64,
+    batch: Option<PriceBatch>,
+}
+struct PriceBatch {
+    seq: u64,
+    built: Instant,
+    session: Option<String>,
+    receipts: BTreeMap<String, i64>,
+    full: Arc<[u8]>,
+    delta: Arc<[u8]>,
+}
+impl PriceBatches {
+    /// The frame to send after the stream's last sent `batch_seq` (0 when
+    /// none), with that frame's sequence.
+    pub(crate) fn next_frame(
+        &self,
+        features: &Mutex<FeatureStore>,
+        settings: &DashboardSettings,
+        sent: u64,
+        now: Instant,
+        now_ms: i64,
+    ) -> Option<(u64, Arc<[u8]>)> {
+        let mut state = self.0.lock().ok()?;
+        let BatchState { seq, batch } = &mut *state;
+        let interval = Duration::from_millis(settings.price_batch_interval_ms);
+        if batch.as_ref().is_none_or(|b| now >= b.built + interval) {
+            let (mut rows, session) = {
+                let store = features.lock().ok()?;
+                let rows = store.latest_prices(settings.price_batch_instruments);
+                (rows, store.session().map(|date| date.to_string()))
+            };
+            rows.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+            let previous = batch.take().filter(|b| b.session == session);
+            let changed = rows
+                .iter()
+                .filter(|(key, _, receipt)| {
+                    previous
+                        .as_ref()
+                        .is_none_or(|b| b.receipts.get(key) != Some(receipt))
+                })
+                .collect::<Vec<_>>();
+            *batch = match previous {
+                Some(mut previous) if changed.is_empty() => {
+                    previous.built = now;
+                    Some(previous)
+                }
+                _ if rows.is_empty() => None,
+                _ => {
+                    *seq += 1;
+                    let frame = |full: bool, items: &[&(String, f64, i64)]| {
+                        price_batch_frame(*seq, now_ms, &session, full, items)
+                    };
+                    Some(PriceBatch {
+                        seq: *seq,
+                        built: now,
+                        full: frame(true, &rows.iter().collect::<Vec<_>>()),
+                        delta: frame(false, &changed),
+                        receipts: rows.iter().map(|(k, _, r)| (k.clone(), *r)).collect(),
+                        session,
+                    })
+                }
+            };
+        }
+        let batch = batch.as_ref()?;
+        match batch.seq {
+            seq if seq == sent => None,
+            seq if sent > 0 && seq == sent + 1 => Some((seq, Arc::clone(&batch.delta))),
+            seq => Some((seq, Arc::clone(&batch.full))),
+        }
+    }
+}
 /// Price batches carry their own sequence; omitting `id:` keeps the model
 /// stream cursor independent from display-only prices.
-pub(crate) fn price_batch_frame(
-    features: &Arc<Mutex<FeatureStore>>,
-    settings: &DashboardSettings,
-    batch_seq: u64,
-    now: i64,
-) -> Option<(u64, Vec<u8>)> {
-    let store = features.lock().ok()?;
-    let rows = store.latest_prices(settings.price_batch_instruments);
-    if rows.is_empty() {
-        return None;
-    }
-    let session = store.session().map(|date| date.to_string());
-    drop(store);
+fn price_batch_frame(
+    seq: u64,
+    now_ms: i64,
+    session: &Option<String>,
+    full: bool,
+    rows: &[&(String, f64, i64)],
+) -> Arc<[u8]> {
     let items = rows
-        .into_iter()
+        .iter()
         .map(|(instrument_key, last_price, receipt_ms)| {
             serde_json::json!({
                 "instrument_key": instrument_key,
                 "last_price": last_price,
                 "receipt_ms": receipt_ms,
-                "price_kind": "receipt_price",
-                "execution_authority": false
             })
         })
         .collect::<Vec<_>>();
     let body = serde_json::json!({
         "v": 1,
-        "batch_seq": batch_seq,
-        "as_of_ms": now,
+        "batch_seq": seq,
+        "as_of_ms": now_ms,
         "session": session,
+        "full": full,
         "items": items,
+        "price_kind": "receipt_price",
+        "execution_authority": false,
         "source": "receipt_derived_feature_store",
         "note": "Display evidence only; receipt prices are not executable quotes."
     });
-    Some((
-        batch_seq,
-        format!("event: price_batch\ndata: {body}\n\n").into_bytes(),
-    ))
+    format!("event: price_batch\ndata: {body}\n\n")
+        .into_bytes()
+        .into()
 }
 pub(crate) fn start_sse(
     mut stream: TcpStream,
@@ -293,15 +369,18 @@ pub(crate) fn start_sse(
                     next_heartbeat = now + heartbeat;
                 }
                 if now >= next_batch {
-                    if let Some(features) = ctx.features.as_ref() {
-                        let next = batch_seq.saturating_add(1);
-                        if let Some((seq, frame)) =
-                            price_batch_frame(features, &ctx.settings, next, millis())
-                        {
-                            batch_seq = seq;
-                            if stream.write_all(&frame).is_err() {
-                                return;
-                            }
+                    if let Some(features) = ctx.features.as_ref()
+                        && let Some((seq, frame)) = ctx.price_batches.next_frame(
+                            features,
+                            &ctx.settings,
+                            batch_seq,
+                            now,
+                            millis(),
+                        )
+                    {
+                        batch_seq = seq;
+                        if stream.write_all(&frame).is_err() {
+                            return;
                         }
                     }
                     next_batch = now + batch_interval;

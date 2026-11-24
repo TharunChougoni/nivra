@@ -21,7 +21,7 @@ use series::*;
 #[cfg(test)]
 pub(crate) use stream::TestFeed;
 use stream::*;
-pub(crate) use stream::{poll_events, start_sse, wants_sse};
+pub(crate) use stream::{PriceBatches, poll_events, start_sse, wants_sse};
 #[cfg(test)]
 pub(crate) use summary::reset_prepared_summary;
 use summary::*;

@@ -10,6 +10,7 @@ fn ctx(feed: Arc<TestFeed>, streams: usize) -> Ctx {
         equity: None,
         instrument_catalog: None,
         streams: Arc::new(AtomicUsize::new(0)),
+        price_batches: Arc::default(),
         event_feed: Some(feed),
         settings: DashboardSettings {
             workers: 1,
