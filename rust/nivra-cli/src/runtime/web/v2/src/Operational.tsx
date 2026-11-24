@@ -11,7 +11,7 @@ import type {
   SupervisorOperationalStatus,
 } from "./types";
 import { amount, count, datetime, projectedStatus, words } from "./data";
-import { Empty, Facts, MetricStrip, Notice, Panel, Status, Table } from "./ui";
+import { Empty, Facts, KpiStrip, Notice, Panel, Status, Table } from "./ui";
 import {
   actualScoring,
   captureBudget,
@@ -164,7 +164,7 @@ function PaperFinancialPanel({
       title="Paper financial status"
       note="Published paper book values. This is not a P&L, profitability or operating qualification."
     >
-      <MetricStrip
+      <KpiStrip
         items={[
           [
             "Capital",

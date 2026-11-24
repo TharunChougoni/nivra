@@ -1,0 +1,142 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+}
+body {
+  background: var(--bg-0);
+  color: var(--fg-0);
+  font: 12px/1.45 var(--sans);
+  font-feature-settings: "tnum";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+h1,
+h2,
+h3,
+h4,
+p,
+dl,
+dd,
+figure,
+pre {
+  margin: 0;
+}
+h1,
+h2,
+h3 {
+  font-weight: 600;
+}
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--fg-0);
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+button {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+input,
+select,
+textarea {
+  background: var(--bg-0);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  padding: 3px 7px;
+  min-width: 0;
+}
+select {
+  color-scheme: dark;
+}
+::placeholder {
+  color: var(--fg-3);
+}
+code,
+pre,
+kbd,
+.num,
+.mono,
+time {
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+code {
+  background: var(--bg-2);
+  border-radius: 2px;
+  padding: 0 3px;
+  overflow-wrap: anywhere;
+}
+pre {
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  overflow: auto;
+  max-height: 60vh;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--fg-1);
+}
+kbd {
+  border: 1px solid var(--line-2);
+  border-radius: 2px;
+  padding: 0 4px;
+  color: var(--fg-2);
+  font-size: 10px;
+}
+:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+::selection {
+  background: var(--accent-bg);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) transparent;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.muted {
+  color: var(--fg-2);
+}
+.caption,
+.footnote {
+  color: var(--fg-2);
+  font-size: 10.5px;
+}
+.pos,
+.buy-text {
+  color: var(--pos);
+}
+.neg,
+.sell-text {
+  color: var(--neg);
+}
+.warn {
+  color: var(--warn);
+}

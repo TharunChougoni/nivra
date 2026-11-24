@@ -1,0 +1,32 @@
+/* Design tokens only. The workspace is dark-only and deliberately muted.
+   --live is reserved for live-mode chrome and must not be used elsewhere. */
+:root {
+  color-scheme: dark;
+  --bg-0: #08090b;
+  --bg-1: #0d0f12;
+  --bg-2: #121519;
+  --bg-3: #181c21;
+  --line: #1c2026;
+  --line-2: #262b33;
+  --fg-0: #d5d9de;
+  --fg-1: #959ca6;
+  --fg-2: #636a74;
+  --fg-3: #3f454d;
+  --accent: #7d93ab;
+  --accent-bg: #7d93ab14;
+  --pos: #7c9e87;
+  --neg: #b9847a;
+  --warn: #ad9461;
+  --live: #c2944c;
+  --lane-decision: #8399bb;
+  --lane-gate: #a79a76;
+  --lane-research: #86a294;
+  --lane-review: #9d8cae;
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --radius: 5px;
+  --radius-sm: 3px;
+  --nav-w: 200px;
+  --bar-h: 34px;
+  --ticker-h: 26px;
+}

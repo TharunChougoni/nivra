@@ -4,7 +4,12 @@ import App from "./App";
 import { Context } from "./ui";
 import { createController } from "./controller";
 import "uplot/dist/uPlot.min.css";
-import "./styles.css";
+import "./tokens.css";
+import "./base.css";
+import "./layout.css";
+import "./components.css";
+import "./charts.css";
+import "./pages.css";
 export function mountApp(
   doc: Document,
   win: import("./cache").BrowserWindow,

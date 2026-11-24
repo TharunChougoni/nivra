@@ -446,18 +446,12 @@ test("client renders every section, archived books and private lock state", asyn
     await until(() => document.querySelector("#token"));
     await app.authenticate("fixture-only");
     await until(() =>
-      document.querySelector(".metric-strip")?.textContent?.includes("5,000"),
+      document.querySelector(".kpis")?.textContent?.includes("5,000"),
     );
+    assert.equal(document.querySelectorAll(".nav a").length, 9);
+    assert.equal(document.querySelector('.nav a[href="#/chat"]'), null);
     assert.equal(
-      document.querySelectorAll(".workspace-sidebar nav a").length,
-      8,
-    );
-    assert.equal(
-      document.querySelector('.workspace-sidebar nav a[href="#/chat"]'),
-      null,
-    );
-    assert.equal(
-      [...document.querySelectorAll(".workspace-sidebar nav a")].some((v) =>
+      [...document.querySelectorAll(".nav a")].some((v) =>
         v.textContent?.includes("Chat"),
       ),
       false,
@@ -479,7 +473,7 @@ test("client renders every section, archived books and private lock state", asyn
       await until(
         () =>
           document
-            .querySelector(`.workspace-sidebar a[href="#/${section}"]`)
+            .querySelector(`.nav a[href="#/${section}"]`)
             ?.getAttribute("aria-current") === "page",
       );
       if (section === "lanes") {
@@ -592,16 +586,11 @@ test("client renders every section, archived books and private lock state", asyn
         assert.ok(document.body.textContent?.includes("Disabled"));
         assert.ok(document.body.textContent?.includes("Order broker"));
         assert.ok(document.body.textContent?.includes("Display only"));
-        assert.ok(
-          document
-            .querySelector(".broker-banner")
-            ?.textContent?.includes("fixture-upstox"),
-        );
+        const bar = document.querySelector(".statusbar")?.textContent || "";
+        assert.ok(bar.includes("fixture-upstox"));
+        assert.ok(bar.includes("PAPER"));
         // The paper ledger is the explicit order authority, not "Not reported".
-        assert.match(
-          document.querySelector(".broker-banner")?.textContent || "",
-          /Orders\s+paper/,
-        );
+        assert.match(bar, /orders\s*paper/);
       }
     }
     location.hash = "#/portfolio";
@@ -625,7 +614,7 @@ test("client renders every section, archived books and private lock state", asyn
     select.value = "fixture-broker|private-fixture|2026-10-28";
     select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
     await until(() =>
-      document.querySelector(".metric-strip")?.textContent?.includes("4,990"),
+      document.querySelector(".kpis")?.textContent?.includes("4,990"),
     );
     app.lock();
     await until(() => document.querySelector("#token"));

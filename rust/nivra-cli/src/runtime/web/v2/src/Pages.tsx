@@ -71,7 +71,7 @@ import {
   Empty,
   Facts,
   Instrument,
-  MetricStrip,
+  KpiStrip,
   Notice,
   Panel,
   Segments,
@@ -236,7 +236,7 @@ export function Overview() {
   return (
     <>
       <BookContinuity summary={s} portfolio={state.portfolio} />
-      <MetricStrip
+      <KpiStrip
         items={[
           ["Account equity", amount(f.equity), "Cash + recorded marks"],
           ["Available cash", amount(f.cash), "Continuing paper account"],
@@ -512,7 +512,7 @@ export function Portfolio() {
         : null;
   return (
     <>
-      <MetricStrip
+      <KpiStrip
         items={[
           ["Account equity", amount(f.equity), "Recorded checkpoint"],
           ["Cash", amount(f.cash), "Continuing cash balance"],
@@ -1101,7 +1101,7 @@ export function Scanner() {
           : "No matching observations";
   return (
     <>
-      <MetricStrip
+      <KpiStrip
         items={[
           [
             "Coverage scope",
@@ -1733,7 +1733,7 @@ export function Sessions() {
           .filter(Boolean)
           .join(" / ")}
       >
-        <MetricStrip
+        <KpiStrip
           items={[
             ["Cash", amount(f.cash)],
             ["Net P&L · flat", amount(f.net)],
@@ -2109,7 +2109,7 @@ export function Backtest() {
           >
             {result ? (
               <>
-                <MetricStrip
+                <KpiStrip
                   items={[
                     [
                       "Net P&L · flat",

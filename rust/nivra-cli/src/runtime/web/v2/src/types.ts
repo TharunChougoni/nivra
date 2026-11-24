@@ -471,7 +471,19 @@ export interface OwnerResearchView {
   workspace_ref_count?: number | null;
   workspace_snapshot_sha256?: string | null;
 }
+/** Content hash per projection, excluding loop clocks. */
+export type RevisionName =
+  | "portfolio"
+  | "fills"
+  | "plans"
+  | "scanner"
+  | "sessions"
+  | "health"
+  | "alerts"
+  | "agent";
+export type Revisions = Partial<Record<RevisionName, string>>;
 export interface SummaryResponse extends Envelope {
+  revisions?: Revisions;
   research_library?: {
     status?: string;
     items?: ResearchCandidate[];
@@ -1037,6 +1049,7 @@ export interface PriceItem {
 }
 export interface StreamEvent {
   kind: string;
+  revisions?: Revisions;
   event?: string;
   seq?: number;
   epoch?: string | number;
@@ -1144,6 +1157,11 @@ export type ProjectionStates = {
 };
 export interface WorkspaceState extends ProjectionData, ProjectionStates {
   token: string;
+  /** pi lane journal: display evidence, never an order authority. */
+  agent: AgentResponse | null;
+  agentState: LoadState;
+  /** Latest receipt price per instrument from `price_batch` frames. */
+  quotes: Record<string, { at: number; price: number }>;
   meta: MetaResponse | null;
   snapshotState: LoadState;
   issues: { source: string; state: LoadState; reason: string }[];

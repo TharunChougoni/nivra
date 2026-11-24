@@ -11,6 +11,8 @@ import type {
   StreamEvent,
   LoadState,
   Fetch,
+  Revisions,
+  RevisionName,
 } from "./types";
 import { errorMessage, PROJECTION_NAMES } from "./types";
 import type { BrowserWindow, EvidenceCache } from "./cache";
@@ -81,6 +83,9 @@ export function createController(
     scannerState: "idle",
     sessions: null,
     sessionsState: "idle",
+    agent: null,
+    agentState: "idle",
+    quotes: {},
     snapshotState: "idle",
     issues: [],
     received: null,
@@ -99,7 +104,11 @@ export function createController(
   let epoch = 0;
   let stream: ReturnType<typeof createEventStream> | null = null;
   let pending: Promise<ProjectionResults> | null = null;
-  let dirty = false,
+  let agentPending: Promise<void> | null = null;
+  // Revision of each projection as last fetched, per the summary's `revisions`.
+  let fetched: Revisions = {};
+  let dirty: Pace | null = null,
+    agentDirty = false,
     stopped = false,
     gap = false,
     chartDeferred = false,
@@ -206,7 +215,10 @@ export function createController(
     stream?.stop();
     stream = null;
     pending = null;
-    dirty = false;
+    agentPending = null;
+    fetched = {};
+    dirty = null;
+    agentDirty = false;
     gap = false;
     chartDeferred = false;
     lastConnection = "";
@@ -277,6 +289,9 @@ export function createController(
       plansState: "error",
       scannerState: "error",
       sessionsState: "error",
+      agent: null,
+      agentState: "idle",
+      quotes: {},
       points: [],
       equityPoints: [],
       series: emptySeries(),
@@ -286,25 +301,60 @@ export function createController(
       ...patch,
     };
   }
-  async function refresh() {
+  const PARALLEL = [
+    "portfolio",
+    "fills",
+    "plans",
+    "scanner",
+    "sessions",
+  ] as const;
+  type Read = (typeof PARALLEL)[number];
+  const reads: { [K in Read]: () => Promise<ProjectionData[K]> } = {
+    portfolio: () => api.portfolio(),
+    fills: () => api.fills({ limit: 500 }),
+    plans: () => api.plans(),
+    scanner: () => api.scanner({ segment: "prospects", limit: 500 }),
+    sessions: () => api.sessions({ limit: 200 }),
+  };
+  /**
+   * "all": every projection (Refresh, gap, visibility, older backends).
+   * "changed": only projections whose summary revision differs from the one
+   * last fetched; every projection when the summary carries no revisions.
+   */
+  async function reload(pace: Pace) {
     if (!state.token || !state.meta || stopped) return;
     if (pending) {
-      dirty = true;
+      dirty = dirty === "all" || pace === "all" ? "all" : "changed";
       return pending;
     }
     const generation = epoch;
     set({ snapshotState: "loading", error: "" });
     const task = (async () => {
-      const [summary, portfolio, fills, plans, scanner, sessions] =
-        await Promise.all([
-          settle(api.summary()),
-          settle(api.portfolio()),
-          settle(api.fills({ limit: 500 })),
-          settle(api.plans()),
-          settle(api.scanner({ segment: "prospects", limit: 500 })),
-          settle(api.sessions({ limit: 200 })),
-        ]);
-      return { summary, portfolio, fills, plans, scanner, sessions };
+      const summary = settle(api.summary());
+      let wanted: readonly Read[] = PARALLEL;
+      const started = {} as {
+        [K in Read]?: Promise<ReadResult<ProjectionData[K]>>;
+      };
+      const start = <K extends Read>(name: K) => {
+        started[name] = settle(reads[name]()) as never;
+      };
+      if (pace === "all") PARALLEL.forEach(start);
+      else {
+        const first = await summary;
+        const revisions = first.ok ? first.value.revisions : undefined;
+        wanted = PARALLEL.filter(
+          (name) =>
+            !revisions ||
+            revisions[name] === undefined ||
+            revisions[name] !== fetched[name] ||
+            state[`${name}State`] !== "ready",
+        );
+        wanted.forEach(start);
+      }
+      const done = await Promise.all(wanted.map((name) => started[name]));
+      const result: ProjectionResults = { summary: await summary };
+      wanted.forEach((name, i) => Object.assign(result, { [name]: done[i] }));
+      return result;
     })();
     pending = task;
     try {
@@ -331,6 +381,7 @@ export function createController(
       }
       const identity = summaryIdentity(summary);
       if (state.summary && identity !== summaryIdentity(state.summary)) {
+        fetched = {};
         set({
           points: [],
           equityPoints: [],
@@ -338,15 +389,20 @@ export function createController(
           priceBatchSeq: 0,
           watch: "",
           session: "",
+          quotes: {},
         });
         void evidence.clear();
       }
-      const issues: WorkspaceState["issues"] = [];
+      const attempted = new Set<string>(Object.keys(result));
+      const issues: WorkspaceState["issues"] = state.issues.filter(
+        (issue) => !attempted.has(issue.source),
+      );
       const patch: Partial<WorkspaceState> = {};
       for (const name of PROJECTION_NAMES) {
         const entry = result[name];
+        if (!entry) continue;
         const value = entry.ok ? entry.value : null;
-        assignProjection(patch, result, name);
+        Object.assign(patch, { [name]: value });
         if (!entry.ok) {
           patch[`${name}State`] = "error";
           issues.push({
@@ -363,12 +419,17 @@ export function createController(
           });
         } else {
           patch[`${name}State`] = "ready";
+          // Only a successful read advances the fetched revision, so a failed
+          // projection is retried on the next change.
+          const revision = summary.revisions?.[name as RevisionName];
+          if (name !== "summary" && revision !== undefined)
+            fetched = { ...fetched, [name]: revision };
         }
       }
+      const current = { ...state, ...patch };
       const portfolio =
-        patch.portfolioState === "ready" ? (patch.portfolio ?? null) : null;
-      const scanner =
-        patch.scannerState === "ready" ? (patch.scanner ?? null) : null;
+        current.portfolioState === "ready" ? current.portfolio : null;
+      const scanner = current.scannerState === "ready" ? current.scanner : null;
       const observed = observe(summary, portfolio, scanner);
       // A controller in its startup phase has not published the v1 view yet;
       // that is a loading state, not unavailable evidence (#20).
@@ -389,11 +450,18 @@ export function createController(
         // Each selector keeps only its own successful source. `observe` starts
         // from previous tab-local points, so clear explicitly when its source
         // projection failed instead of letting the old array survive.
-        points: patch.scannerState === "ready" ? observed.points : [],
+        points: current.scannerState === "ready" ? observed.points : [],
         equityPoints:
-          patch.portfolioState === "ready" ? observed.equityPoints : [],
+          current.portfolioState === "ready" ? observed.equityPoints : [],
       };
       set(loaded);
+      if (
+        pace === "all" ||
+        !summary.revisions ||
+        summary.revisions.agent === undefined ||
+        summary.revisions.agent !== fetched.agent
+      )
+        void loadAgent(summary.revisions?.agent);
       const first = Array.isArray(scanner?.items)
         ? scanner.items[0]?.instrument_key
         : null;
@@ -424,11 +492,46 @@ export function createController(
       if (pending === task) {
         pending = null;
         if (dirty) {
-          dirty = false;
-          void refresh();
+          const next = dirty;
+          dirty = null;
+          void reload(next);
         }
       }
     }
+  }
+  const refresh = () => reload("all");
+  /** The pi lane journal. Display evidence; reloaded on `revisions.agent`, `run_ended` and visibility. */
+  async function loadAgent(revision?: string) {
+    if (!state.token || !state.meta || stopped) return;
+    if (agentPending) {
+      agentDirty = true;
+      return agentPending;
+    }
+    const generation = epoch;
+    if (!state.agent) set({ agentState: "loading" });
+    const task: Promise<void> = (async () => {
+      try {
+        const body = await api.agent({ limit: 300 });
+        if (generation !== epoch || stopped) return;
+        set({
+          agent: body?.unavailable ? null : body,
+          agentState: body?.unavailable ? "unavailable" : "ready",
+        });
+        if (revision !== undefined && !body?.unavailable)
+          fetched = { ...fetched, agent: revision };
+      } catch {
+        if (generation === epoch && !stopped) set({ agentState: "error" });
+      }
+    })().finally(() => {
+      if (agentPending !== task) return;
+      agentPending = null;
+      if (agentDirty) {
+        agentDirty = false;
+        void loadAgent(revision);
+      }
+    });
+    agentPending = task;
+    return task;
   }
   function onEvent(event: StreamEvent) {
     if (stopped || !state.token) return;
@@ -440,7 +543,7 @@ export function createController(
       const session = state.summary?.session;
       if (event.session && session && event.session !== session) {
         chartDeferred = true;
-        void refresh();
+        void reload("all");
         return;
       }
       const merged = mergePriceBatch(
@@ -459,6 +562,7 @@ export function createController(
         priceBatchSeq: merged.seq,
         points: tab.points,
         series: { ...state.series, price: merged.points },
+        quotes: mergeQuotes(state.quotes, event),
       });
       if (merged.gap) void loadSeries();
       return;
@@ -471,8 +575,13 @@ export function createController(
       events: [...state.events, event].slice(-256),
       revision: state.revision + 1,
     });
-    if (["summary_changed", "gap"].includes(event.kind) && !win.document.hidden)
-      void refresh();
+    if (win.document.hidden) return;
+    if (event.kind === "gap") void reload("all");
+    else if (event.kind === "summary_changed") {
+      // A payload that names the revisions we already hold needs no reads.
+      if (event.revisions && sameRevisions(event.revisions, fetched)) return;
+      void reload("changed");
+    } else if (event.kind === "run_ended") void loadAgent();
   }
   async function authenticate(value: unknown) {
     const generation = ++epoch;
@@ -515,7 +624,7 @@ export function createController(
   }
   const visible = () => {
     if (win.document.hidden || !state.meta) return;
-    void refresh();
+    void reload("all");
     if (chartDeferred) {
       chartDeferred = false;
       loadSeries();
@@ -531,6 +640,7 @@ export function createController(
     },
     authenticate,
     refresh,
+    loadAgent: () => loadAgent(),
     lock,
     loadSeries,
     start: () => {
@@ -570,23 +680,36 @@ export function createController(
   };
 }
 
+type Pace = "all" | "changed";
 type ReadResult<T> = { ok: true; value: T } | { ok: false; error: string };
 type ProjectionResults = {
-  [K in ProjectionName]: ReadResult<NonNullable<ProjectionData[K]>>;
+  summary: ReadResult<NonNullable<ProjectionData["summary"]>>;
+} & {
+  [K in Exclude<ProjectionName, "summary">]?: ReadResult<
+    NonNullable<ProjectionData[K]>
+  >;
 };
+function sameRevisions(event: Revisions, held: Revisions) {
+  const names = Object.keys(event) as RevisionName[];
+  return names.length > 0 && names.every((name) => event[name] === held[name]);
+}
+/** Latest receipt price per instrument from a (possibly partial) price batch. */
+function mergeQuotes(quotes: WorkspaceState["quotes"], event: StreamEvent) {
+  const next = { ...quotes };
+  for (const item of event.items || []) {
+    const key = item?.instrument_key,
+      at = numeric(item?.receipt_ms),
+      price = numeric(item?.last_price);
+    if (!key || at === null || price === null || price <= 0) continue;
+    if ((next[key]?.at ?? 0) <= at) next[key] = { at, price };
+  }
+  return next;
+}
 async function settle<T>(read: Promise<T>): Promise<ReadResult<T>> {
   try {
     return { ok: true, value: await read };
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }
-}
-function assignProjection<K extends ProjectionName>(
-  patch: Partial<ProjectionData>,
-  results: ProjectionResults,
-  name: K,
-) {
-  const entry = results[name];
-  patch[name] = entry.ok ? entry.value : null;
 }
 export type Controller = ReturnType<typeof createController>;

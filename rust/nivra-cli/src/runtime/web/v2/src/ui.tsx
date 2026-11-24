@@ -4,59 +4,116 @@ import React, { createContext, useContext, useSyncExternalStore } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Tabs from "@radix-ui/react-tabs";
 import {
-  ArrowUpRight,
-  PanelLeft,
+  LayoutDashboard,
+  Wallet,
+  Layers,
   Sparkles,
-  Columns3,
-  CalendarDays,
-  Search,
   Workflow,
   FlaskConical,
-  CircleDot,
+  CalendarDays,
+  HeartPulse,
+  ScanLine,
   X,
-  ChevronRight,
-  Activity,
-  RefreshCw,
-  MoreHorizontal,
-  ChevronsUpDown,
-  Command,
-  ArrowDown,
-  FileText,
-  Clock,
-  ExternalLink,
 } from "lucide-react";
 import { words } from "./data";
+import type { RouteName } from "./data";
 export const Context = createContext<Controller | null>(null);
 export function useWorkspace() {
   const app = useContext(Context);
   if (!app) throw new Error("Workspace provider missing");
   return [useSyncExternalStore(app.subscribe, app.getSnapshot), app] as const;
 }
-export const NAV: [string, string, LucideIcon][] = [
-  ["overview", "Overview", PanelLeft],
-  ["portfolio", "Portfolio & fills", Columns3],
-  ["lanes", "pi lanes", Sparkles],
-  ["sessions", "Sessions", CalendarDays],
-  ["scanner", "Market scanner", Search],
-  ["strategies", "Strategies", Workflow],
-  ["backtest", "Backtest lab", FlaskConical],
-  ["health", "System health", CircleDot],
+export interface NavItem {
+  id: RouteName;
+  label: string;
+  icon: LucideIcon;
+  /** One line under the page title. */
+  blurb: string;
+}
+export const NAV_GROUPS: { group: string; items: NavItem[] }[] = [
+  {
+    group: "TRADE",
+    items: [
+      {
+        id: "overview",
+        label: "Overview",
+        icon: LayoutDashboard,
+        blurb: "Book, equity, pi lanes and order flow at a glance",
+      },
+      {
+        id: "portfolio",
+        label: "Portfolio & fills",
+        icon: Wallet,
+        blurb: "Positions, order lifecycle, recorded fills and plans",
+      },
+      {
+        id: "instruments",
+        label: "Instruments & F&O",
+        icon: Layers,
+        blurb:
+          "Verified cash catalog, derivatives metadata and contract chains",
+      },
+    ],
+  },
+  {
+    group: "AGENTS",
+    items: [
+      {
+        id: "lanes",
+        label: "pi lanes",
+        icon: Sparkles,
+        blurb:
+          "pi decision, gate, research and review turns · display evidence only",
+      },
+    ],
+  },
+  {
+    group: "MARKET",
+    items: [
+      {
+        id: "scanner",
+        label: "Scanner",
+        icon: ScanLine,
+        blurb: "Fresh prospects, missing coverage and screening reasons",
+      },
+    ],
+  },
+  {
+    group: "RESEARCH",
+    items: [
+      {
+        id: "strategies",
+        label: "Strategies",
+        icon: Workflow,
+        blurb: "Recorded strategy references and the research library",
+      },
+      {
+        id: "backtest",
+        label: "Backtest lab",
+        icon: FlaskConical,
+        blurb: "Deterministic replay of a supplied strategy artifact",
+      },
+    ],
+  },
+  {
+    group: "SYSTEM",
+    items: [
+      {
+        id: "sessions",
+        label: "Sessions",
+        icon: CalendarDays,
+        blurb: "Archived and current paper sessions",
+      },
+      {
+        id: "health",
+        label: "Health",
+        icon: HeartPulse,
+        blurb: "Transport, feed, protection and live readiness",
+      },
+    ],
+  },
 ];
-export {
-  ArrowUpRight,
-  X,
-  ChevronRight,
-  Activity,
-  RefreshCw,
-  MoreHorizontal,
-  ChevronsUpDown,
-  Command,
-  ArrowDown,
-  FileText,
-  Clock,
-  ExternalLink,
-  Search,
-};
+export const NAV: NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 export function Status({
   value,
   children,
@@ -83,17 +140,14 @@ export function Status({
 export function Empty({
   title = "No records",
   children,
-  icon: Icon = FileText,
 }: {
   title?: React.ReactNode;
   children?: React.ReactNode;
+  /** Accepted for call-site compatibility; empty states carry no icon. */
   icon?: LucideIcon;
 }) {
   return (
     <div className="empty">
-      <span className="empty-icon">
-        <Icon size={19} />
-      </span>
       <strong>{title}</strong>
       <p>{children || "No evidence has been supplied for this view."}</p>
     </div>
@@ -113,16 +167,38 @@ export function Panel({
   className?: string;
 }) {
   return (
-    <section className={`surface ${className}`}>
-      <header className="surface-head">
-        <div>
-          <h2>{title}</h2>
-          {note && <p>{note}</p>}
-        </div>
-        {actions && <div className="surface-actions">{actions}</div>}
+    <section className={`panel ${className}`}>
+      <header className="panel-head">
+        <h2>{title}</h2>
+        {note && <span className="note">{note}</span>}
+        {actions && <div className="panel-actions">{actions}</div>}
       </header>
       {children}
     </section>
+  );
+}
+export function Tag({
+  children,
+  tone,
+  title,
+}: {
+  children: React.ReactNode;
+  tone?: "pos" | "neg" | "warn";
+  title?: string;
+}) {
+  return (
+    <span className={`tag ${tone ?? ""}`} title={title}>
+      {children}
+    </span>
+  );
+}
+export function LaneSwatch({ lane }: { lane: string }) {
+  const known = ["decision", "gate", "research", "review"].includes(lane);
+  return (
+    <span className={`lane-swatch ${known ? "lane-" + lane : ""}`}>
+      <i />
+      {lane}
+    </span>
   );
 }
 export function Button({
@@ -141,13 +217,19 @@ export function Button({
 export function IconButton({
   label,
   icon: Icon,
+  className = "",
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
   label: string;
   icon: LucideIcon;
 }) {
   return (
-    <button className="icon-button" aria-label={label} title={label} {...props}>
+    <button
+      className={`icon-button ${className}`}
+      aria-label={label}
+      title={label}
+      {...props}
+    >
       <Icon size={16} />
     </button>
   );
@@ -179,6 +261,8 @@ export interface Column<T> {
   key: string;
   label: React.ReactNode;
   render?: (row: T) => React.ReactNode;
+  /** Numeric column: right-aligned, monospaced, tabular. */
+  num?: boolean;
 }
 export interface TableProps<T> {
   columns: Column<T>[];
@@ -210,7 +294,7 @@ export function Table<T>({
         <thead>
           <tr>
             {columns.map((c) => (
-              <th key={c.key} scope="col">
+              <th key={c.key} scope="col" className={c.num ? "r" : ""}>
                 {c.label}
               </th>
             ))}
@@ -223,7 +307,7 @@ export function Table<T>({
               className={selected === getKey(row, i) ? "selected" : ""}
             >
               {columns.map((c, j) => (
-                <td key={c.key}>
+                <td key={c.key} className={c.num ? "r num" : ""}>
                   {onSelect && j === 0 ? (
                     <button className="row-link" onClick={() => onSelect(row)}>
                       {c.render ? c.render(row) : cell(row, c.key)}
@@ -321,17 +405,26 @@ export function Notice({
     </div>
   ) : null;
 }
-export function MetricStrip({
-  items,
-}: {
-  items: [string, React.ReactNode, React.ReactNode?][];
-}) {
+export type KpiItem = [
+  label: string,
+  value: React.ReactNode,
+  note?: React.ReactNode,
+  options?: { tone?: "pos" | "neg" | "warn"; title?: string },
+];
+/** One bordered row of cells. A `—` value is unknown, never zero; the note says why. */
+export function KpiStrip({ items }: { items: KpiItem[] }) {
   return (
-    <div className="metric-strip">
-      {items.map(([name, value, note]) => (
-        <div key={name}>
+    <div className="kpis">
+      {items.map(([name, value, note, options]) => (
+        <div
+          key={name}
+          className={`kpi ${value === "—" ? "unknown" : ""}`}
+          title={
+            options?.title ?? (value === "—" ? String(note ?? "") : undefined)
+          }
+        >
           <span>{name}</span>
-          <strong>{value}</strong>
+          <strong className={options?.tone ?? ""}>{value}</strong>
           <small>{note}</small>
         </div>
       ))}

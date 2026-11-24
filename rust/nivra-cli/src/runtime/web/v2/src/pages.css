@@ -1,0 +1,330 @@
+/* Login */
+.login-layout {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  background: var(--bg-0);
+}
+.login-brand,
+.login-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  color: var(--fg-2);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+}
+.login-content {
+  align-self: center;
+  justify-self: center;
+  width: min(420px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.login-content h1 {
+  font-size: 20px;
+  line-height: 1.25;
+}
+.login-content h1 span {
+  color: var(--fg-2);
+}
+.login-content p,
+.login-content small {
+  color: var(--fg-2);
+}
+.login-content form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.login-content label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--fg-1);
+}
+.login-content input {
+  padding: 7px 9px;
+}
+.eyebrow {
+  color: var(--fg-3);
+  font: 10px var(--mono);
+  letter-spacing: 0.12em;
+}
+/* Overview */
+.kpi-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.lane-rows {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+.lane-row {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 2px;
+}
+.lane-row:last-child {
+  border-bottom: 0;
+}
+.lane-row .top,
+.lane-row .sub {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+.lane-row .sub {
+  color: var(--fg-2);
+  font-size: 10.5px;
+}
+.lane-row .sub span:last-child {
+  color: var(--fg-1);
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lane-row .sub span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lane-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.lane-card {
+  padding: 9px 10px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  margin: 0 -1px -1px 0;
+  min-width: 0;
+}
+.lane-card .top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.lane-card .kv-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--fg-2);
+  font-size: 10.5px;
+  margin-top: 2px;
+}
+.lane-card .kv-row span:last-child {
+  color: var(--fg-1);
+  font-family: var(--mono);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.steps {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+}
+.steps i {
+  height: 6px;
+  width: 20px;
+  background: transparent;
+  border: 1px solid var(--fg-3);
+  border-radius: 1px;
+  display: inline-block;
+}
+.steps i.done {
+  background: var(--fg-1);
+  border-color: var(--fg-1);
+}
+.steps i.simulated {
+  border: 1px dashed var(--fg-1);
+}
+.steps i.failed {
+  background: var(--neg);
+  border-color: var(--neg);
+}
+.steps i.absent {
+  border-color: var(--line-2);
+  opacity: 0.5;
+}
+.steps i.pending {
+  border-color: var(--fg-2);
+}
+.funnel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+}
+.funnel-row {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr) 54px;
+  gap: 8px;
+  align-items: center;
+  color: var(--fg-1);
+}
+.funnel-row .bar {
+  height: 8px;
+  background: var(--bg-2);
+  border-radius: 1px;
+  overflow: hidden;
+}
+.funnel-row .bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  opacity: 0.7;
+}
+.funnel-row .n {
+  text-align: right;
+  font-family: var(--mono);
+}
+.turn-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* Strategies, lab, health */
+.strategy-header,
+.health-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+  flex-wrap: wrap;
+}
+.strategy-header h2,
+.health-summary h2 {
+  font-size: 13px;
+  margin: 2px 0;
+}
+.strategy-header p,
+.health-summary p {
+  color: var(--fg-2);
+}
+.strategy-header > div:last-child {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+.health-summary {
+  justify-content: flex-start;
+}
+.health-summary > .status {
+  margin-left: auto;
+}
+.health-symbol {
+  color: var(--fg-2);
+}
+.lab-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 899px) {
+  .lab-layout {
+    grid-template-columns: 1fr;
+  }
+}
+.lab-run {
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.lab-input .notice {
+  margin: 0 10px 10px;
+}
+.file-drop {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--fg-1);
+}
+.file-drop p {
+  color: var(--fg-2);
+}
+.file-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px dashed var(--line-2);
+  border-radius: var(--radius-sm);
+}
+.file-choice small {
+  color: var(--fg-2);
+  overflow-wrap: anywhere;
+}
+.lab-results .kpis {
+  margin: 10px;
+}
+/* Instruments */
+.instrument-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.instrument-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-2);
+}
+.instrument-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.instrument-summary > strong {
+  font-size: 18px;
+}
+.instrument-summary > span {
+  color: var(--fg-2);
+}
+.lane-usage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  padding: 6px 10px;
+}
+.status-pin {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-3);
+  display: inline-block;
+}
+.status-pin.ready {
+  background: var(--pos);
+}
+.status-pin.unavailable,
+.status-pin.loading {
+  background: var(--warn);
+}
+.status-pin.error {
+  background: var(--neg);
+}
