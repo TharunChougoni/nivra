@@ -2,8 +2,10 @@
   "sources": {
     "index.html": "4defb52fcbd0b64e732c0c6029b5e8d8c73540902bd2e6c9cd704ceea59fe4ad",
     "package-lock.json": "4d2150111baca3dcb2be706e04066b40b0bc379690076a9c313c7978f2097c86",
-    "package.json": "c48e8dc84412eae0968164733ee563ac3083d1c4d66ddf2335ff0a9c1dac6659",
+    "package.json": "c81ce8920374b86ab33e8f7197727ff8533ffb6a8fb3df8b20b8e5722d9587a2",
     "scripts/manifest.ts": "c8f2694395ea6f48c116c9769a56456d7af8c7dd729ac477f3b741ff18f44f81",
+    "scripts/mock-api.ts": "d763add46ac4c03b228f9f9cd7def33a366e46a28c7f600521d5943d603000ee",
+    "scripts/mock-data.ts": "f19e4b8b2e36da169cea16380e0f4897cbe72295c699a171d44e219a0c9816d7",
     "src/App.tsx": "dd00cf08e9cdd072470c11e0cf26f52ac054a1d8dfc466a96c3129292cdf9b9a",
     "src/Chart.tsx": "fdf492d1da7d97c7089b6fd895713ac028ee7d0bdd1715c6bbcabdb5ee06c1b6",
     "src/Models.tsx": "b8f1a3ea7dda867d2bc1c8bab0fa17e024695cfca8d30d182c381e008555ab0a",
@@ -26,14 +28,14 @@
     "src/research.test.ts": "724242120b5ca1f27ca497bd282bbbb7fc9a55a13242e241b42f8a4b971c2ff6",
     "src/research.ts": "6a9b8930eaac24783b6c5f1d1e5e8ba2660612166b2005520a901e68a8ccb122",
     "src/security.test.ts": "5ab7f3d35489bf9f3eaa6fe1399071d07c462cf5c73417cc5f5c4e064afcb45e",
-    "src/styles.css": "8b9483c1a48136f2517e0aef0397ad827fef48e2a2a7367703dd8e773bf76188",
+    "src/styles.css": "e9f73add11c5873044787b3fe1e217660a72f574da79157905e0c37c118955fc",
     "src/theme.ts": "9683e9849b56225a454f9483e547a3af2fad756e47a8108b62e68a57f1fe5d83",
     "src/types.ts": "56eac19f04af8e597e90c07693c0ea25b5a001ac2c8144dc84fea136d4749bd0",
     "src/ui.tsx": "2ded5095ad87b93da345b97ec29f9614f32e1d059f1d04031328ae8162f1428d",
     "src/vite-env.d.ts": "65996936fbb042915f7b74a200fcdde7e410f32a669b1ab9597cfaa4b0faddb5",
     "src/workspace.test.tsx": "dbaeb0c5070c4beee75ac1c0ffa972e8c41ef8f1b895082c894f406ce0fd0360",
     "tsconfig.json": "943a43b87a471100620f3d265c065987eb958b7f0f7b410ab3f3a0ccf5a406cb",
-    "vite.config.ts": "396575dbde8c88214d3e934ea9fe8bea3638e238b2cc67abb33332a2af500c75"
+    "vite.config.ts": "9c4a7bd1a7f9a43e1c7e155f43103a1342fd647981d2681913cd5e0a9d20f4b8"
   },
   "assets": {
     "LICENSES.txt": "4d6b5933ec22b8f9b9243f369650ca858b121b7e168aefea9ea5879bd461542b",
