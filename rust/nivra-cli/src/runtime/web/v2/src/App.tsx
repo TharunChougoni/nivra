@@ -490,7 +490,9 @@ export default function App() {
                 >
                   {records.map((r) => (
                     <option key={sessionKey(r)} value={sessionKey(r)}>
-                      {r.id?.date} · {r.id?.account} · {r.id?.broker}
+                      {[r.id?.date, r.id?.account, r.id?.broker]
+                        .filter(Boolean)
+                        .join(" · ") || "Session not reported"}
                     </option>
                   ))}
                 </select>
