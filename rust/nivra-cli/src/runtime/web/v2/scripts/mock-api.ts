@@ -5,6 +5,7 @@
 //
 // Routes the real backend no longer serves (approvals, session, runs, blobs,
 // prompts) answer 404 here too.
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Plugin } from "vite";
 import {
@@ -49,6 +50,19 @@ function send(
 const fail = (res: ServerResponse, status: number, error: string) =>
   send(res, status, { v: 1, error });
 
+/** Content hash of a projection, ignoring loop clocks (as the real backend does). */
+const CLOCKS = new Set([
+  "as_of_ms",
+  "observed_at_ms",
+  "captured_at_ms",
+  "checked_at_ms",
+]);
+const revisionOf = (body: unknown) =>
+  createHash("sha1")
+    .update(JSON.stringify(body, (k, v) => (CLOCKS.has(k) ? undefined : v)))
+    .digest("hex")
+    .slice(0, 12);
+
 export function mockApi(options: { seed?: number } = {}): Plugin {
   const data: MockData = createMockData(options.seed);
   const boot = Date.now();
@@ -60,10 +74,21 @@ export function mockApi(options: { seed?: number } = {}): Plugin {
     [];
   const subscribers = new Set<(frame: string) => void>();
 
+  const revisions = (now: number, wall: number) => ({
+    portfolio: revisionOf(projections.portfolio(data, now)),
+    fills: revisionOf(projections.fills(data, now)),
+    plans: revisionOf(projections.plans(data, now)),
+    scanner: revisionOf(projections.scanner(data, now, "prospects")),
+    sessions: revisionOf(sessionsAt(data, now)),
+    health: revisionOf(healthAt(data, now, wall)),
+    alerts: revisionOf(alertsAt(data, now)),
+    agent: revisionOf(agentAt(data, now, 1).total),
+  });
+
   function publish(name: string, body: Record<string, unknown>) {
     const seq = ++eventSeq;
     const event = { ...body, seq, epoch: EPOCH };
-    const frame = `id: ${seq}\nevent: ${name}\ndata: ${JSON.stringify(name === "summary_changed" ? { etag: `"mock-${seq}"`, epoch: EPOCH } : event)}\n\n`;
+    const frame = `id: ${seq}\nevent: ${name}\ndata: ${JSON.stringify(name === "summary_changed" ? { etag: `"mock-${seq}"`, epoch: EPOCH, revisions: body.revisions } : event)}\n\n`;
     ring.push({ seq, frame, event });
     if (ring.length > 256) ring.shift();
     subscribers.forEach((write) => write(frame));
@@ -152,7 +177,10 @@ export function mockApi(options: { seed?: number } = {}): Plugin {
       case "meta":
         return send(res, 200, metaFor(data));
       case "summary":
-        return send(res, 200, projections.summary(data, now, wall));
+        return send(res, 200, {
+          ...projections.summary(data, now, wall),
+          revisions: revisions(now, wall),
+        });
       case "portfolio":
         return send(res, 200, projections.portfolio(data, now));
       case "positions": {
@@ -320,7 +348,11 @@ export function mockApi(options: { seed?: number } = {}): Plugin {
     apply: "serve",
     configureServer(server) {
       const summaryTimer = setInterval(
-        () => publish("summary_changed", { kind: "summary_changed" }),
+        () =>
+          publish("summary_changed", {
+            kind: "summary_changed",
+            revisions: revisions(virtualNow(), Date.now()),
+          }),
         SUMMARY_MS,
       );
       const runTimer = setInterval(startLiveRun, LIVE_RUN_PERIOD_MS);

@@ -465,6 +465,7 @@ test("client renders every section, archived books and private lock state", asyn
       "portfolio",
       "sessions",
       "scanner",
+      "instruments",
       "strategies",
       "backtest",
       "health",
@@ -491,6 +492,14 @@ test("client renders every section, archived books and private lock state", asyn
         );
       }
       if (section === "scanner") {
+        await until(() => document.querySelector(".row-link"));
+        // The metadata catalog moved to its own page.
+        assert.equal(
+          document.body.textContent?.includes("Instrument catalog"),
+          false,
+        );
+      }
+      if (section === "instruments") {
         await until(() =>
           document.body.textContent?.includes("Instrument catalog"),
         );
@@ -938,6 +947,147 @@ test("controller starting renders a retrying loading state instead of unavailabl
       document.body.textContent?.includes("Unavailable v1 evidence"),
     );
     assert.ok(document.body.textContent?.includes("portfolio_not_reported"));
+  } finally {
+    app.stop();
+    root.unmount();
+    dom.window.close();
+  }
+});
+const GLOBALS = [
+  "window",
+  "document",
+  "Node",
+  "HTMLElement",
+  "Element",
+  "Event",
+  "CustomEvent",
+  "MutationObserver",
+  "getComputedStyle",
+  "location",
+  "localStorage",
+  "NodeFilter",
+] as const;
+test("#/lanes shows lane cards, the turn table and the turn drawer from the journal", async () => {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "http://localhost/#/lanes",
+    pretendToBeVisual: true,
+  });
+  for (const key of GLOBALS)
+    Object.defineProperty(globalThis, key, {
+      value:
+        key === "getComputedStyle"
+          ? dom.window.getComputedStyle.bind(dom.window)
+          : dom.window[key],
+      configurable: true,
+      writable: true,
+    });
+  globalThis.addEventListener = dom.window.addEventListener.bind(dom.window);
+  globalThis.removeEventListener = dom.window.removeEventListener.bind(
+    dom.window,
+  );
+  const { App, Context } = await loadApp();
+  const { createRoot } = await import("react-dom/client");
+  const turns = [
+    {
+      turn_id: "gate-1",
+      lane: "gate",
+      at_ms: envelope.as_of_ms - 2000,
+      status: "ok",
+      model: "gate-model",
+      elapsed_ms: 900,
+      usage: {
+        input: 100,
+        output: 20,
+        cache_read: 5,
+        cost_usd: 0.02,
+        calls: 1,
+      },
+      trigger: { kind: "price_move", instruments: ["NSE_EQ|RELIANCE"] },
+      verdict: { escalate: true, reason: "spread tight" },
+    },
+    {
+      turn_id: "decision-1",
+      lane: "decision",
+      at_ms: envelope.as_of_ms - 1000,
+      status: "failed",
+      error: "provider timeout",
+      model: "primary-model",
+      fallback: { to: { id: "backup-model" }, reason: "timeout" },
+      elapsed_ms: 4100,
+      usage: {
+        input: 900,
+        output: 300,
+        cache_read: 50,
+        cost_usd: 0.31,
+        calls: 2,
+      },
+      tool_calls: [
+        { name: "positions", ok: true },
+        { name: "quote", ok: false, error: "stale receipt" },
+      ],
+      plan: { status: "validated", stance: "hold", actions: 0 },
+    },
+  ];
+  const fetch = fetchFixture({
+    "/api/v1/agent": () =>
+      json({
+        v: 1,
+        turns,
+        total: 2,
+        triggers: { gate_escalated: 1 },
+        usage: {
+          lanes: {
+            gate: {
+              input: 100,
+              output: 20,
+              cache_read: 5,
+              cost_usd: 0.02,
+              calls: 1,
+            },
+            decision: {
+              input: 900,
+              output: 300,
+              cache_read: 50,
+              cost_usd: 0.31,
+              calls: 2,
+            },
+          },
+        },
+        execution_authorized: false,
+      }),
+  });
+  const app = createController(dom.window, { connect: false, fetch });
+  const root = createRoot(document.getElementById("root")!);
+  root.render(
+    <Context.Provider value={app}>
+      <App />
+    </Context.Provider>,
+  );
+  try {
+    await app.authenticate("fixture-only");
+    await until(() => document.querySelectorAll(".lane-card").length === 4);
+    const cards = [...document.querySelectorAll(".lane-card")].map(
+      (c) => c.textContent || "",
+    );
+    // fixed lane order, totals from the API usage block
+    assert.ok(cards[0].startsWith("decision"));
+    assert.ok(cards[0].includes("$0.31"));
+    assert.ok(cards[0].includes("1 · 1"), "failed and fallback counts");
+    assert.ok(cards[1].startsWith("gate"));
+    // a lane with no turns keeps unknown latency instead of 0 ms
+    assert.ok(cards[2].includes("— / —"));
+    const rows = [...document.querySelectorAll("tbody tr")].filter((r) =>
+      r.textContent?.includes("primary-model"),
+    );
+    assert.equal(rows.length, 1);
+    assert.ok(rows[0].textContent?.includes("fallback"));
+    assert.ok(rows[0].querySelector(".tool-failed"));
+    rows[0].querySelector<HTMLButtonElement>(".row-link")!.click();
+    await until(() => document.querySelector(".drawer"));
+    const drawer = document.querySelector(".drawer")!.textContent || "";
+    assert.ok(drawer.includes("provider timeout"));
+    assert.ok(drawer.includes("backup-model"));
+    assert.ok(drawer.includes("stale receipt"));
   } finally {
     app.stop();
     root.unmount();

@@ -68,8 +68,16 @@ export interface Fill {
   expected_price?: Decimal;
   slippage_bps?: Decimal;
 }
+export interface Greeks {
+  delta?: Decimal | null;
+  gamma?: Decimal | null;
+  theta?: Decimal | null;
+  vega?: Decimal | null;
+}
 export interface Position {
   instrument?: Instrument;
+  /** Only when the source recorded them; never computed here. */
+  greeks?: Greeks | null;
   margin?: InstrumentMargin | null;
   units?: Decimal;
   entry?: Decimal;

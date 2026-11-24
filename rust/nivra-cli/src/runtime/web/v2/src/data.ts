@@ -32,6 +32,14 @@ export const amount = (v: unknown) =>
         currency: "INR",
         maximumFractionDigits: 2,
       }).format(Number(v));
+export const usd = (v: unknown) =>
+  numeric(v) === null
+    ? "—"
+    : "$" +
+      Number(v).toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: Math.abs(Number(v)) < 1 ? 4 : 2,
+      });
 export const count = (v: unknown) =>
   numeric(v) === null
     ? "—"
@@ -224,6 +232,24 @@ export function finance(r?: SessionRecord | null) {
     positionsKnown,
     fills,
     exposure,
+    // Long and short legs both consume exposure; unknown marks stay unknown.
+    gross: marked
+      ? positions.reduce(
+          (sum, v) => sum + Math.abs(Number(v.units) * Number(v.mark)),
+          0,
+        )
+      : null,
+    unrealized:
+      positionsKnown &&
+      positions.every((v) =>
+        [v.mark, v.entry, v.units].every((x) => numeric(x) !== null),
+      )
+        ? positions.reduce(
+            (sum, v) =>
+              sum + (Number(v.mark) - Number(v.entry)) * Number(v.units),
+            0,
+          )
+        : null,
     equity:
       declaredEquity !== null
         ? declaredEquity

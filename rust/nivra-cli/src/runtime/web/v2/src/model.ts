@@ -7,9 +7,12 @@ import type {
   Instrument,
   MetaResponse,
   PlansResponse,
+  Point,
+  Position,
+  ScannerRow,
   SummaryResponse,
 } from "./types";
-import { numeric } from "./data";
+import { count, numeric } from "./data";
 
 // ---------------------------------------------------------------- mode
 export type Mode =
@@ -356,4 +359,76 @@ export function laneStats(
       ),
     };
   });
+}
+
+// ---------------------------------------------------- equity statistics
+export interface EquityStats {
+  count: number;
+  first: Point | null;
+  last: Point | null;
+  /** Last recorded checkpoint minus the first, both from the plotted series. */
+  dayNet: number | null;
+  /** Deepest peak-to-trough fall in percent (negative), from recorded points only. */
+  maxDrawdownPct: number | null;
+  troughAt: number | null;
+}
+export function equityStats(points: Point[] | null | undefined): EquityStats {
+  const valid = (points ?? []).filter(
+    (p) => p.value !== null && !p.carried && !p.gap,
+  );
+  const first = valid[0] ?? null,
+    last = valid.at(-1) ?? null;
+  let peak = -Infinity,
+    worst = 0,
+    trough: number | null = null;
+  for (const p of valid) {
+    peak = Math.max(peak, p.value!);
+    const fall = peak > 0 ? ((p.value! - peak) / peak) * 100 : 0;
+    if (fall < worst) {
+      worst = fall;
+      trough = p.at;
+    }
+  }
+  return {
+    count: valid.length,
+    first,
+    last,
+    dayNet: valid.length >= 2 ? last!.value! - first!.value! : null,
+    maxDrawdownPct: valid.length >= 2 ? worst : null,
+    troughAt: trough,
+  };
+}
+
+// --------------------------------------------------- instrument index
+/** Recorded instrument metadata by key, from every projection that carries it. */
+export function instrumentIndex(sources: {
+  positions?: Position[];
+  fills?: Fill[] | null;
+  scanner?: ScannerRow[] | null;
+}): Map<string, InstrumentRecord> {
+  const index = new Map<string, InstrumentRecord>();
+  const add = (key: string | undefined, rec: InstrumentRecord | undefined) => {
+    if (key && rec && !index.has(key)) index.set(key, rec);
+  };
+  for (const p of sources.positions ?? []) add(p.instrument?.key, p.instrument);
+  for (const f of sources.fills ?? []) add(f.instrument?.key, f.instrument);
+  for (const r of sources.scanner ?? [])
+    add(r.instrument_key, {
+      ...r.instrument,
+      symbol: r.instrument?.symbol ?? r.symbol,
+    });
+  return index;
+}
+
+/** One line for a lane turn: gate verdict, plan status or error. */
+export function turnOutcome(t: AgentTurn) {
+  if (t.verdict)
+    return (t.verdict.escalate ? "escalate · " : "pass · ") + t.verdict.reason;
+  if (t.plan)
+    return (
+      (t.plan.status === "validated" ? "" : (t.plan.status || "plan") + " · ") +
+      (t.plan.stance || "") +
+      (t.plan.actions ? ` · ${count(t.plan.actions)} actions` : "")
+    );
+  return t.error || t.status || "—";
 }

@@ -212,7 +212,7 @@ export function TimeChart(props: TimeChartProps) {
                 side: 1,
                 stroke: c["--fg-2"],
                 font: FONT,
-                size: 64,
+                size: 72,
                 grid: { stroke: c["--line"], width: 0.5 },
                 ticks: { show: false },
                 values: (_, ticks) =>
@@ -357,4 +357,6 @@ export function TimeChart(props: TimeChartProps) {
   );
 }
 const compact = (v: number) =>
-  v.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+  v.toLocaleString("en-IN", {
+    maximumFractionDigits: Math.abs(v) >= 1000 ? 0 : 2,
+  });

@@ -11,7 +11,8 @@ import type {
   StrategyReference,
   ReplayPayload,
   ReplayResult,
-  Instrument as InstrumentRecord,
+  HealthResponse,
+  Instrument as UniverseInstrument,
 } from "./types";
 import { errorMessage } from "./types";
 import type { Api } from "./api";
@@ -39,6 +40,11 @@ import {
 } from "lucide-react";
 import Chart from "./Chart";
 import Lanes from "./Lanes";
+import Instruments from "./Instruments";
+import Overview from "./Overview";
+import { useRead, useRevision } from "./reads";
+import { instrumentIndex, modeOf, orderTracks } from "./model";
+import type { InstrumentRecord, OrderTrack } from "./model";
 import { BookContinuity, OperationalPanel } from "./Operational";
 import {
   amount,
@@ -71,7 +77,9 @@ import {
   Empty,
   Facts,
   Instrument,
+  InstrumentCell,
   KpiStrip,
+  Steps,
   Notice,
   Panel,
   Segments,
@@ -84,10 +92,7 @@ const fillColumns: Column<Fill>[] = [
     key: "instrument",
     label: "Instrument",
     render: (v) => (
-      <Instrument
-        symbol={v.instrument?.symbol}
-        instrumentKey={v.instrument?.key}
-      />
+      <InstrumentCell record={v.instrument} fallback={v.instrument?.key} />
     ),
   },
   {
@@ -99,16 +104,26 @@ const fillColumns: Column<Fill>[] = [
       </span>
     ),
   },
-  { key: "units", label: "Units", render: (v) => count(v.units) },
-  { key: "price", label: "Fill price", render: (v) => amount(v.price) },
-  { key: "fee", label: "Fees", render: (v) => amount(v.fee) },
+  { key: "units", label: "Units", num: true, render: (v) => count(v.units) },
+  {
+    key: "price",
+    label: "Fill price",
+    num: true,
+    render: (v) => amount(v.price),
+  },
+  { key: "fee", label: "Fees", num: true, render: (v) => amount(v.fee) },
   {
     key: "decision_id",
     label: "Decision",
     render: (v) =>
       v.decision_id ? <code>{v.decision_id}</code> : "Not recorded",
   },
-  { key: "at", label: "Recorded · IST", render: (v) => datetime(v.at) },
+  {
+    key: "at",
+    label: "Recorded · IST",
+    num: true,
+    render: (v) => datetime(v.at),
+  },
 ];
 function Ledger({
   fills,
@@ -166,246 +181,6 @@ function percentPoints(value?: number | null) {
     ? `${value.toFixed(2)}%`
     : "Not reported";
 }
-function useRead<T extends Availability>(
-  load: (api: Api) => Promise<T>,
-  key = "",
-) {
-  const [state, app] = useWorkspace(),
-    [result, setResult] = useState<{ value: T | null; state: LoadState }>({
-      value: null,
-      state: "idle",
-    }),
-    token = state.token;
-  useEffect(() => {
-    let active = true;
-    if (!token) {
-      setResult({ value: null, state: "idle" });
-      return;
-    }
-    setResult({ value: null, state: "loading" });
-    Promise.resolve(load(app.api))
-      .then((value) => {
-        if (!active) return;
-        setResult({
-          value,
-          state: value?.unavailable ? "unavailable" : "ready",
-        });
-      })
-      .catch(() => {
-        if (active) setResult({ value: null, state: "error" });
-      });
-    return () => {
-      active = false;
-    };
-  }, [token, key]);
-  return result;
-}
-export function Overview() {
-  const [state, app] = useWorkspace(),
-    [view, setView] = useState("price");
-  const r = app.record(),
-    f = finance(r),
-    s = state.summary;
-  const prospects = Array.isArray(state.scanner?.items)
-    ? state.scanner.items
-    : [];
-  useEffect(() => {
-    if (!state.watch && prospects[0]?.instrument_key)
-      app.watch(prospects[0].instrument_key);
-  }, [prospects, state.watch]);
-  const current = currentSession(state, state.meta),
-    historical = sessionKey(r) !== sessionKey(current);
-  const series = state.series || {};
-  const priceSeries = series.price?.length ? series.price : state.points;
-  const equitySeries = series.equity?.length
-    ? series.equity
-    : state.equityPoints;
-  const points = historical
-    ? []
-    : view === "equity"
-      ? equitySeries
-      : priceSeries;
-  const activeSeries = view === "equity" ? series.equity : series.price;
-  const seriesState =
-    view === "equity" ? series.equityState : series.priceState;
-  const cached =
-    !!activeSeries?.length &&
-    (view === "equity" ? series.equityCached : series.priceCached);
-  const selected = prospects.find((v) => v.instrument_key === state.watch);
-  const fills = Array.isArray(state.fills?.items) ? state.fills.items : null;
-  return (
-    <>
-      <BookContinuity summary={s} portfolio={state.portfolio} />
-      <KpiStrip
-        items={[
-          ["Account equity", amount(f.equity), "Cash + recorded marks"],
-          ["Available cash", amount(f.cash), "Continuing paper account"],
-          [
-            "Net P&L · flat book",
-            amount(f.net),
-            f.positions.length
-              ? "Withheld while holdings remain"
-              : "After recorded simulated fees",
-          ],
-          [
-            "Positions / fills",
-            `${f.positionsKnown ? f.positions.length : "—"} / ${fills ? fills.length : "—"}`,
-            "Recorded paper execution",
-          ],
-        ]}
-      />
-      <div className="overview-layout">
-        <div className="overview-primary">
-          <Panel
-            title="Market & account"
-            note={
-              historical
-                ? "Selected archive · no live history inferred"
-                : "Explore original observations, not a reconstructed market day."
-            }
-            actions={
-              <Segments
-                value={view}
-                onChange={setView}
-                items={[
-                  ["price", "Market price"],
-                  ["equity", "Account equity"],
-                ]}
-                label="Chart series"
-              />
-            }
-          >
-            <div className="instrument-toolbar">
-              {view === "price" ? (
-                <>
-                  <label className="instrument-picker">
-                    <ScanLine size={14} />
-                    <select
-                      aria-label="Chart instrument"
-                      value={state.watch}
-                      onChange={(e) => app.watch(e.target.value)}
-                    >
-                      {!prospects.length && (
-                        <option value="">No instruments supplied</option>
-                      )}
-                      {prospects.map((p) => (
-                        <option key={p.instrument_key} value={p.instrument_key}>
-                          {p.symbol || p.instrument_key}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <span className="caption">
-                    {selected?.price_kind
-                      ? words(selected.price_kind)
-                      : "Screening observations"}{" "}
-                    · not executable depth
-                  </span>
-                </>
-              ) : (
-                <span className="caption">
-                  Account mark observations · no daily allocations summed as
-                  wealth
-                </span>
-              )}
-            </div>
-            <Chart
-              points={points}
-              coverage={
-                view === "equity" ? series.equityCoverage : series.priceCoverage
-              }
-              label={
-                view === "price"
-                  ? selected?.symbol || "Selected instrument"
-                  : "Account equity"
-              }
-              source={
-                historical
-                  ? "Archive has no chart history"
-                  : cached
-                    ? "Cached series · stale · original receipt timestamps"
-                    : activeSeries?.length
-                      ? view === "equity"
-                        ? series.equitySource
-                          ? "Recorded portfolio checkpoints · exact timestamps"
-                          : "This tab · original observation timestamps"
-                        : series.priceSource
-                          ? "Receipt-minute bars · display evidence, not certified exchange OHLCV"
-                          : "Live receipt-price batches · this tab"
-                      : "This tab · original observation timestamps"
-              }
-              height={300}
-              emptyTitle={
-                view === "equity"
-                  ? "Account-equity series unavailable"
-                  : "Price series unavailable"
-              }
-              emptyDetail={
-                historical
-                  ? "The selected session exposes a checkpoint only."
-                  : view === "equity"
-                    ? seriesState === "loading" || seriesState === "idle"
-                      ? "Loading originally recorded portfolio checkpoints. Daily allocations are never summed as wealth."
-                      : "No recorded account-equity checkpoints are available for this session. New checkpoints will appear with their original times."
-                    : seriesState === "loading" || seriesState === "idle"
-                      ? "Loading receipt-minute observations from the authenticated series API."
-                      : "No receipt-minute bars are available yet. Missing minutes remain missing; no synthetic candles are drawn."
-              }
-            />
-          </Panel>
-        </div>
-        <aside className="overview-rail">
-          <Panel title="Session readiness">
-            <ReadinessItem
-              icon={Radio}
-              label="Controller"
-              value={s?.readiness?.status}
-              description={words(s?.readiness?.reason)}
-            />
-            <ReadinessItem
-              icon={Database}
-              label="History preparation"
-              value={(s?.readiness?.history || s?.history_preparation)?.status}
-              description="Provider-empty history stays partial"
-            />
-            <ReadinessItem
-              icon={ScanLine}
-              label="Scanner"
-              value={
-                state.scanner
-                  ? state.scanner.unavailable
-                    ? "unavailable"
-                    : "observed"
-                  : "unknown"
-              }
-              description={
-                state.scanner?.coverage
-                  ? `${count(state.scanner.coverage.fresh)} fresh / ${count(state.scanner.coverage.universe)} supplied`
-                  : "Coverage not reported"
-              }
-            />
-            <a className="rail-link" href="#/health">
-              Inspect system health <ArrowRight size={13} />
-            </a>
-          </Panel>
-          <Panel title="Paper book">
-            <Facts
-              items={[
-                ["Session", r?.id?.date],
-                ["State", words(r?.status || r?.phase)],
-                ["Recorded fees", amount(f.fees)],
-                ["Planner", words(state.plans?.planner?.status)],
-              ]}
-            />
-            <div className="rail-foot">
-              <ShieldCheck size={13} /> Original two-second financial gate
-            </div>
-          </Panel>
-        </aside>
-      </div>
-    </>
-  );
-}
 export function Portfolio() {
   const [state, app] = useWorkspace(),
     r = app.record(),
@@ -418,7 +193,8 @@ export function Portfolio() {
   const fills = fillsFor(state, r),
     plans = plansFor(state, r),
     current = currentSession(state, state.meta),
-    historical = sessionKey(r) !== sessionKey(current);
+    historical = sessionKey(r) !== sessionKey(current),
+    mode = modeOf(state.meta, state.summary);
   const classes = instrumentClasses(
     tab === "fills" ? fills || [] : tab === "positions" ? f.positions : [],
   );
@@ -438,15 +214,10 @@ export function Portfolio() {
       key: "instrument",
       label: "Instrument",
       render: (p) => (
-        <Instrument
-          symbol={p.instrument?.symbol}
-          sub={[p.instrument?.key, classLabel(instrumentClass(p))]
-            .filter(Boolean)
-            .join(" · ")}
-        />
+        <InstrumentCell record={p.instrument} fallback={p.instrument?.key} />
       ),
     },
-    { key: "units", label: "Units", render: (p) => count(p.units) },
+    { key: "units", label: "Units", num: true, render: (p) => count(p.units) },
     {
       key: "lots",
       label: "Lots",
@@ -457,11 +228,12 @@ export function Portfolio() {
           : "Not reported";
       },
     },
-    { key: "entry", label: "Entry", render: (p) => amount(p.entry) },
-    { key: "mark", label: "Mark", render: (p) => amount(p.mark) },
+    { key: "entry", label: "Entry", num: true, render: (p) => amount(p.entry) },
+    { key: "mark", label: "Mark", num: true, render: (p) => amount(p.mark) },
     {
       key: "value",
       label: "Marked value",
+      num: true,
       render: (p) =>
         numeric(p.mark) !== null && numeric(p.units) !== null
           ? amount(Number(p.mark) * Number(p.units))
@@ -470,6 +242,7 @@ export function Portfolio() {
     {
       key: "pnl",
       label: "Unrealized P&L",
+      num: true,
       render: (p) =>
         [p.mark, p.entry, p.units].every((v) => numeric(v) !== null)
           ? amount((Number(p.mark) - Number(p.entry)) * Number(p.units))
@@ -529,6 +302,7 @@ export function Portfolio() {
             onChange={setTab}
             items={[
               ["positions", "Positions"],
+              ["orders", "Order lifecycle"],
               ["fills", "Fills"],
               ["plans", "Plans & validation"],
             ]}
@@ -554,6 +328,17 @@ export function Portfolio() {
         )}
         {tab === "plans" ? (
           <Plans plans={plans} fills={fills} />
+        ) : tab === "orders" ? (
+          <OrderLifecycle
+            tracks={orderTracks(plans, fills, mode)}
+            index={instrumentIndex({
+              positions: f.positions,
+              fills,
+              scanner: state.scanner?.items,
+            })}
+            paper={mode.kind === "paper"}
+            historical={historical}
+          />
         ) : (
           <>
             <div className="filter-bar">
@@ -854,6 +639,79 @@ export function Portfolio() {
           )}
         </Panel>
       </Drawer>
+    </>
+  );
+}
+function OrderLifecycle({
+  tracks,
+  index,
+  paper,
+  historical,
+}: {
+  tracks: OrderTrack[];
+  index: Map<string, InstrumentRecord>;
+  paper: boolean;
+  historical: boolean;
+}) {
+  return (
+    <>
+      <Table
+        rows={tracks}
+        getKey={(t, i) => `${t.decisionId}:${t.instrument}:${t.at_ms}:${i}`}
+        empty={
+          historical
+            ? "Archived sessions carry fills only; no plan lifecycle is recorded"
+            : "No plan actions or fills recorded"
+        }
+        columns={[
+          {
+            key: "at",
+            label: "Recorded · IST",
+            num: true,
+            render: (t) => (t.at_ms ? datetime(t.at_ms) : "—"),
+          },
+          {
+            key: "instrument",
+            label: "Instrument",
+            render: (t) => (
+              <InstrumentCell
+                record={t.instrument ? index.get(t.instrument) : undefined}
+                fallback={t.instrument}
+              />
+            ),
+          },
+          {
+            key: "side",
+            label: "Side",
+            render: (t) => (
+              <span className={t.side === "buy" ? "buy-text" : "sell-text"}>
+                {t.side ? t.side.toUpperCase() : "—"}
+              </span>
+            ),
+          },
+          {
+            key: "stages",
+            label: "Stages",
+            render: (t) => <Steps track={t} />,
+          },
+          { key: "outcome", label: "State" },
+          {
+            key: "decision",
+            label: "Decision",
+            render: (t) =>
+              t.decisionId ? <code>{t.decisionId}</code> : "Not recorded",
+          },
+        ]}
+      />
+      <div className="panel-foot">
+        <span>
+          intent → validated → submitted → acknowledged → filled.{" "}
+          {paper
+            ? "Paper: submit and ACK are simulated by the ledger (dashed) and shown only beside a recorded fill."
+            : "Submit and ACK come from recorded order events only."}
+        </span>
+        <span>An ACK is never a fill; only a fill record marks filled.</span>
+      </div>
     </>
   );
 }
@@ -1268,342 +1126,7 @@ export function Scanner() {
           <pre>{JSON.stringify(selected, null, 2)}</pre>
         </details>
       </Drawer>
-      <VerifiedCatalog />
     </>
-  );
-}
-function catalogTick(row: CatalogInstrument) {
-  return row.tick != null && row.tick_unit
-    ? `${row.tick} ${row.tick_unit}`
-    : row.provider_tick != null
-      ? `${row.provider_tick} provider units`
-      : "Not reported";
-}
-const catalogColumns: Column<CatalogInstrument>[] = [
-  {
-    key: "symbol",
-    label: "Symbol",
-    render: (row) => (
-      <Instrument
-        symbol={row.symbol ?? undefined}
-        instrumentKey={row.instrument_key}
-      />
-    ),
-  },
-  { key: "segment", label: "Segment" },
-  { key: "kind", label: "Class", render: (row) => classLabel(row.kind) },
-  {
-    key: "lot_size",
-    label: "Units / lot",
-    render: (row) =>
-      row.lot_size == null ? "Not reported" : String(row.lot_size),
-  },
-  {
-    key: "expiry_ms",
-    label: "Expiry",
-    render: (row) => datetime(row.expiry_ms),
-  },
-  { key: "tick", label: "Tick", render: catalogTick },
-];
-function VerifiedCatalog() {
-  const [state] = useWorkspace(),
-    [cursor, setCursor] = useState(0),
-    [segment, setSegment] = useState(""),
-    [kind, setKind] = useState(""),
-    [search, setSearch] = useState(""),
-    [selected, setSelected] = useState<CatalogInstrument | null>(null),
-    catalog = useRead(
-      (api) =>
-        api.instruments({
-          scope: "all",
-          cursor,
-          limit: 50,
-          ...(segment ? { market_segment: segment } : {}),
-          ...(kind ? { kind } : {}),
-          ...(search ? { q: search } : {}),
-        }),
-      `${cursor}:${segment}:${kind}:${search}:${state.summary?.binding ?? state.summary?.session ?? ""}:${state.summary?.instrument_display?.status ?? ""}:${state.summary?.instrument_display?.source_sha256 ?? ""}:${state.scanner?.coverage?.universe ?? ""}`,
-    ),
-    response = catalog.value,
-    rows = response?.items || [];
-  useEffect(() => {
-    setSelected(null);
-    setCursor(0);
-  }, [state.summary?.binding, state.summary?.session]);
-  return (
-    <>
-      <Panel
-        title="Instrument catalog"
-        note="Captured BOD metadata · cash execution allowlist is separate · quotes and margins are not inferred"
-        actions={
-          <div className="panel-actions">
-            <Button
-              disabled={cursor === 0}
-              onClick={() => setCursor(Math.max(0, cursor - 50))}
-            >
-              Previous
-            </Button>
-            <Button
-              disabled={response?.next == null}
-              onClick={() => setCursor(response?.next ?? cursor)}
-            >
-              Next
-            </Button>
-          </div>
-        }
-      >
-        <div className="filter-bar">
-          <label>
-            Market segment{" "}
-            <select
-              aria-label="Catalog segment"
-              value={segment}
-              onChange={(e) => {
-                setSegment(e.target.value);
-                setCursor(0);
-              }}
-            >
-              <option value="">All captured segments</option>
-              {Object.entries(response?.segments || {}).map(([name, n]) => (
-                <option key={name} value={name}>
-                  {name} ({count(n)})
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Instrument class{" "}
-            <select
-              aria-label="Catalog class"
-              value={kind}
-              onChange={(e) => {
-                setKind(e.target.value);
-                setCursor(0);
-              }}
-            >
-              <option value="">All recorded classes</option>
-              {Object.entries(response?.kinds || {}).map(([name, n]) => (
-                <option key={name} value={name}>
-                  {classLabel(name)} ({count(n)})
-                </option>
-              ))}
-            </select>
-          </label>
-          <input
-            aria-label="Search catalog"
-            placeholder="Symbol, key or underlying…"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setCursor(0);
-            }}
-          />
-        </div>
-        {catalog.state === "idle" || catalog.state === "loading" ? (
-          <p className="panel-note">Loading instrument metadata…</p>
-        ) : catalog.state === "unavailable" ? (
-          <p className="panel-note">
-            Display catalog unavailable · {words(response?.reason)}
-          </p>
-        ) : catalog.state === "error" ? (
-          <p className="panel-note">Instrument catalog request failed.</p>
-        ) : (
-          <>
-            <Facts
-              items={[
-                ["Source", response?.source],
-                ["Coverage", words(response?.coverage_kind)],
-                ["Source received", datetime(response?.received_at_ms)],
-                ["Matching rows", count(response?.total)],
-                ["Rows read", count(response?.rows_seen)],
-                ["Rejected / ambiguous rows", count(response?.rejected_rows)],
-              ]}
-            />
-            <Table
-              columns={catalogColumns}
-              rows={rows}
-              getKey={(row) => row.instrument_key}
-              onSelect={setSelected}
-              empty="No captured instruments match these filters"
-            />
-            {response?.source_hashes && (
-              <details className="raw-evidence">
-                <summary>Inspect catalog source hashes</summary>
-                <Facts
-                  items={Object.entries(response.source_hashes).map(
-                    ([name, hash]) => [name, hash],
-                  )}
-                />
-              </details>
-            )}
-          </>
-        )}
-      </Panel>
-      <Drawer
-        open={!!selected}
-        onClose={() => setSelected(null)}
-        title={selected?.symbol || "Instrument metadata"}
-        description={selected?.instrument_key}
-      >
-        <Facts
-          items={[
-            ["Class", classLabel(selected?.kind)],
-            ["Segment", selected?.segment],
-            ["Exchange", selected?.exchange],
-            ["Provider type", selected?.instrument_type],
-            ["Underlying", selected?.underlying_key],
-            ["Expiry", datetime(selected?.expiry_ms)],
-            [
-              "Strike · provider value",
-              selected?.strike == null
-                ? "Not reported"
-                : String(selected.strike),
-            ],
-            [
-              "Units per lot",
-              selected?.lot_size == null
-                ? "Not reported"
-                : String(selected.lot_size),
-            ],
-            ["Tick", selected ? catalogTick(selected) : null],
-            [
-              "Cash allowlist",
-              selected?.cash_execution_verified
-                ? "Verified cash identity; fresh execution checks still required"
-                : "Display only",
-            ],
-            [
-              "Margin",
-              selected?.margin?.display_only &&
-              selected.margin.instrument_key === selected.instrument_key
-                ? amount(selected.margin.total_margin)
-                : "Not captured",
-            ],
-            ["Quote", "Not captured by BOD catalog"],
-          ]}
-        />
-        {selected?.underlying_key && selected.expiry_ms && (
-          <ContractChain
-            key={`${selected.segment}:${selected.underlying_key}:${selected.expiry_ms}`}
-            instrument={selected}
-          />
-        )}
-      </Drawer>
-    </>
-  );
-}
-function ContractChain({ instrument }: { instrument: CatalogInstrument }) {
-  const [cursor, setCursor] = useState(0),
-    chain = useRead(
-      (api) =>
-        api.instrumentChain({
-          underlying_key: instrument.underlying_key!,
-          expiry_ms: instrument.expiry_ms!,
-          market_segment: instrument.segment,
-          cursor,
-          limit: 50,
-        }),
-      `${instrument.instrument_key}:${cursor}`,
-    ),
-    response = chain.value;
-  const leg = (
-    row: CatalogInstrument | null | undefined,
-    ambiguous?: boolean,
-  ) =>
-    ambiguous ? (
-      "Ambiguous contracts"
-    ) : row ? (
-      <>
-        <Instrument
-          symbol={row.symbol ?? undefined}
-          instrumentKey={row.instrument_key}
-        />
-        <small>
-          {row.lot_size == null ? "Not reported" : String(row.lot_size)} units /
-          lot
-        </small>
-      </>
-    ) : (
-      "Not captured"
-    );
-  const columns: Column<ContractStrike>[] = [
-    {
-      key: "call",
-      label: "Call",
-      render: (row) => leg(row.call, row.ambiguous_call),
-    },
-    {
-      key: "strike",
-      label: "Strike · provider value",
-      render: (row) => String(row.strike),
-    },
-    {
-      key: "put",
-      label: "Put",
-      render: (row) => leg(row.put, row.ambiguous_put),
-    },
-  ];
-  return (
-    <Panel
-      title="F&O contract chain"
-      note="Captured contract definitions only · missing legs stay unknown · no quote, margin or execution authority"
-      actions={
-        <div className="panel-actions">
-          <Button
-            disabled={cursor === 0}
-            onClick={() => setCursor(Math.max(0, cursor - 50))}
-          >
-            Previous strikes
-          </Button>
-          <Button
-            disabled={response?.next == null}
-            onClick={() => setCursor(response?.next ?? cursor)}
-          >
-            Next strikes
-          </Button>
-        </div>
-      }
-    >
-      {chain.state === "loading" || chain.state === "idle" ? (
-        <p className="panel-note">Loading contract chain…</p>
-      ) : chain.state === "unavailable" ? (
-        <p className="panel-note">
-          Contract chain unavailable · {words(response?.reason)}
-        </p>
-      ) : chain.state === "error" ? (
-        <p className="panel-note">Contract chain request failed.</p>
-      ) : (
-        <>
-          <Facts
-            items={[
-              ["Source", response?.source],
-              ["Received", datetime(response?.received_at_ms)],
-              ["Strikes", count(response?.total)],
-              [
-                "Contracts without usable strikes",
-                count(response?.unavailable_strikes),
-              ],
-            ]}
-          />
-          <Table
-            columns={columns}
-            rows={response?.items || []}
-            getKey={(row) => String(row.strike)}
-            empty="No matching strikes were captured"
-          />
-          <p className="panel-note">
-            Futures: {count(response?.futures_total)} recorded
-            {response?.futures_truncated ? " · list truncated" : ""}
-          </p>
-          <Table
-            columns={catalogColumns}
-            rows={response?.futures || []}
-            getKey={(row) => row.instrument_key}
-            empty="No matching futures were captured"
-          />
-        </>
-      )}
-    </Panel>
   );
 }
 function columnsInstrument(): Column<ScannerRow> {
@@ -2006,7 +1529,7 @@ export function Backtest() {
           label: files.manifest.name,
         };
         payload.synthetic = (
-          (JSON.parse(payload.manifest) as { universe?: InstrumentRecord[] })
+          (JSON.parse(payload.manifest) as { universe?: UniverseInstrument[] })
             .universe || []
         ).some((v) => /^(SYNTHETIC|TEST)\|/.test(v.key || ""));
       }
@@ -2160,10 +1683,69 @@ export function Backtest() {
     </>
   );
 }
+function LiveReadiness({ health }: { health: HealthResponse | null }) {
+  const [state] = useWorkspace();
+  const mode = modeOf(state.meta, state.summary);
+  const liveEnabled =
+    health?.live_enabled ??
+    state.summary?.live_enabled ??
+    state.meta?.live_enabled;
+  return (
+    <Panel
+      title="Live readiness"
+      note="read-only · this workspace has no live controls"
+    >
+      <Facts
+        items={[
+          [
+            "Mode",
+            mode.kind === "paper"
+              ? "PAPER"
+              : mode.kind === "live"
+                ? "LIVE"
+                : "MODE UNKNOWN · meta missing or contradictory",
+          ],
+          [
+            "Order broker identity",
+            mode.kind === "live"
+              ? mode.orderBroker
+              : state.meta?.broker?.orders || "Not reported",
+          ],
+          ["Market data broker", state.meta?.broker?.data || "Not reported"],
+          [
+            "Account",
+            (mode.kind === "live" ? mode.account : state.meta?.account) ||
+              "Not reported",
+          ],
+          [
+            "live_enabled",
+            liveEnabled === undefined || liveEnabled === null
+              ? "Not reported"
+              : String(liveEnabled),
+          ],
+          [
+            "paper_only",
+            state.meta?.paper_only === undefined
+              ? "Not reported"
+              : String(state.meta.paper_only),
+          ],
+          [
+            "Activation",
+            "Needs a separate explicit live mandate; a tag, install or passing build never authorizes a session",
+          ],
+          ["Dashboard authority", "Display only"],
+        ]}
+      />
+    </Panel>
+  );
+}
 export function Health() {
   const [state] = useWorkspace(),
-    health = useRead((api) => api.health(), "health"),
-    alerts = useRead((api) => api.alerts({ limit: 100 }), "alerts"),
+    health = useRead((api) => api.health(), useRevision("health")),
+    alerts = useRead(
+      (api) => api.alerts({ limit: 100 }),
+      useRevision("alerts"),
+    ),
     s = state.summary,
     h =
       health.value?.history_preparation ||
@@ -2410,6 +1992,7 @@ export function Health() {
           />
         )}
       </Panel>
+      <LiveReadiness health={health.value} />
       <div className="cols-2">
         <Panel title="Financial protection">
           <Facts
@@ -2488,6 +2071,7 @@ function ActivityIcon() {
 }
 export const PAGES: Record<string, React.ComponentType> = {
   overview: Overview,
+  instruments: Instruments,
   portfolio: Portfolio,
   scanner: Scanner,
   sessions: Sessions,

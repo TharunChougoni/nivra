@@ -348,3 +348,150 @@ test("a pending equity read cannot publish into the next paper session", async (
   app.stop();
   dom.window.close();
 });
+// A fetch fake whose summary carries `revisions` and whose event feed is a
+// queue of poll batches (the SSE endpoint answers 503, so the stream polls).
+function revisionFixture() {
+  const requests: string[] = [];
+  const queue: unknown[][] = [];
+  let revisions: Record<string, string> | undefined = {
+    portfolio: "p1",
+    fills: "f1",
+    plans: "l1",
+    scanner: "s1",
+    sessions: "n1",
+    agent: "a1",
+  };
+  const fetch = async (url: string) => {
+    if (url.startsWith("/api/v1/events")) {
+      if (!url.includes("poll=1")) return new Response(null, { status: 503 });
+      return json({ events: queue.shift() ?? [] });
+    }
+    const path = url.split("?")[0];
+    requests.push(path);
+    if (path === "/api/v1/meta") return json({ mode: "paper" });
+    if (path === "/api/v1/agent")
+      return json({ turns: [], total: 0, usage: { lanes: {} } });
+    if (path === "/api/v1/series") return json({ points: [], coverage: null });
+    const all = projections({});
+    const body = all[path] as Record<string, unknown>;
+    return json(path === "/api/v1/summary" ? { ...body, revisions } : body);
+  };
+  return {
+    requests,
+    fetch,
+    emit: (events: unknown[], next?: Record<string, string>) => {
+      if (next) revisions = next;
+      queue.push(events);
+    },
+    set: (next: Record<string, string> | undefined) => (revisions = next),
+    get revisions() {
+      return revisions;
+    },
+  };
+}
+const projectionReads = (requests: string[]) =>
+  requests.filter((p) =>
+    [
+      "/api/v1/portfolio",
+      "/api/v1/fills",
+      "/api/v1/plans",
+      "/api/v1/scanner",
+      "/api/v1/sessions",
+      "/api/v1/agent",
+    ].includes(p),
+  );
+test("summary_changed refetches only the projections whose revision changed", async () => {
+  const dom = new JSDOM("", {
+    url: "http://localhost",
+    pretendToBeVisual: true,
+  });
+  const fx = revisionFixture();
+  const app = createController(dom.window, { fetch: fx.fetch });
+  await app.authenticate("fixture");
+  await wait(() => app.getSnapshot().snapshotState === "ready");
+  await wait(() => app.getSnapshot().agentState === "ready");
+  assert.equal(projectionReads(fx.requests).length, 6);
+  // Only fills changed: summary and fills are read; nothing else is.
+  fx.requests.length = 0;
+  fx.emit(
+    [
+      {
+        seq: 1,
+        kind: "summary_changed",
+        revisions: { ...fx.revisions, fills: "f2" },
+      },
+    ],
+    {
+      ...fx.revisions!,
+      fills: "f2",
+    },
+  );
+  await wait(() => fx.requests.includes("/api/v1/fills"));
+  await wait(() => app.getSnapshot().snapshotState === "ready");
+  assert.deepEqual(projectionReads(fx.requests), ["/api/v1/fills"]);
+  assert.ok(fx.requests.includes("/api/v1/summary"));
+  // The agent revision changes: the lane journal reloads, projections do not.
+  fx.requests.length = 0;
+  fx.emit([{ seq: 2, kind: "summary_changed" }], {
+    ...fx.revisions!,
+    agent: "a2",
+  });
+  await wait(() => fx.requests.includes("/api/v1/agent"));
+  assert.deepEqual(projectionReads(fx.requests), ["/api/v1/agent"]);
+  app.stop();
+  dom.window.close();
+});
+test("a summary_changed naming held revisions reads nothing; Refresh still reads everything", async () => {
+  const dom = new JSDOM("", {
+    url: "http://localhost",
+    pretendToBeVisual: true,
+  });
+  const fx = revisionFixture();
+  const app = createController(dom.window, { fetch: fx.fetch });
+  await app.authenticate("fixture");
+  await wait(() => app.getSnapshot().agentState === "ready");
+  fx.requests.length = 0;
+  fx.emit([{ seq: 1, kind: "summary_changed", revisions: fx.revisions }]);
+  await wait(() => app.getSnapshot().events.length > 0);
+  await new Promise((r) => setTimeout(r, 120));
+  assert.deepEqual(
+    fx.requests.filter((p) => p !== "/api/v1/events"),
+    [],
+  );
+  await app.refresh();
+  assert.equal(projectionReads(fx.requests).length, 6);
+  app.stop();
+  dom.window.close();
+});
+test("without revisions every summary_changed refetches every projection", async () => {
+  const dom = new JSDOM("", {
+    url: "http://localhost",
+    pretendToBeVisual: true,
+  });
+  const fx = revisionFixture();
+  fx.set(undefined);
+  const app = createController(dom.window, { fetch: fx.fetch });
+  await app.authenticate("fixture");
+  await wait(() => app.getSnapshot().agentState === "ready");
+  fx.requests.length = 0;
+  fx.emit([{ seq: 1, kind: "summary_changed" }]);
+  await wait(() => projectionReads(fx.requests).length === 6);
+  app.stop();
+  dom.window.close();
+});
+test("run_ended reloads the lane journal without touching projections", async () => {
+  const dom = new JSDOM("", {
+    url: "http://localhost",
+    pretendToBeVisual: true,
+  });
+  const fx = revisionFixture();
+  const app = createController(dom.window, { fetch: fx.fetch });
+  await app.authenticate("fixture");
+  await wait(() => app.getSnapshot().agentState === "ready");
+  fx.requests.length = 0;
+  fx.emit([{ seq: 1, kind: "run_ended", run: "r1" }]);
+  await wait(() => fx.requests.includes("/api/v1/agent"));
+  assert.deepEqual(projectionReads(fx.requests), ["/api/v1/agent"]);
+  app.stop();
+  dom.window.close();
+});

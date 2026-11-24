@@ -16,6 +16,8 @@ import {
   X,
 } from "lucide-react";
 import { words } from "./data";
+import { STAGES, instrumentLabel } from "./model";
+import type { InstrumentRecord, OrderTrack } from "./model";
 import type { RouteName } from "./data";
 export const Context = createContext<Controller | null>(null);
 export function useWorkspace() {
@@ -429,5 +431,51 @@ export function KpiStrip({ items }: { items: KpiItem[] }) {
         </div>
       ))}
     </div>
+  );
+}
+/** Five-cell order lifecycle bar. Simulated stages are dashed; ACK is never a fill. */
+export function Steps({ track }: { track: OrderTrack }) {
+  return (
+    <span
+      className="steps"
+      role="img"
+      aria-label={STAGES.map((s) => `${s} ${track.stages[s]}`).join(", ")}
+    >
+      {STAGES.map((stage) => (
+        <i
+          key={stage}
+          className={track.stages[stage]}
+          title={`${stage}: ${track.stages[stage]}`}
+        />
+      ))}
+    </span>
+  );
+}
+/** Label from recorded fields, with a kind tag and expiry when it is a derivative. */
+export function InstrumentCell({
+  record,
+  fallback,
+}: {
+  record?: InstrumentRecord | null;
+  fallback?: string | null;
+}) {
+  const label = instrumentLabel(record ?? { key: fallback ?? undefined });
+  return (
+    <span className="instrument">
+      <span className="row">
+        <strong>{label.primary}</strong>
+        {label.kind !== "unknown" && (
+          <Tag>
+            {label.kind === "call"
+              ? "CE"
+              : label.kind === "put"
+                ? "PE"
+                : label.kind === "future"
+                  ? "FUT"
+                  : label.kind.toUpperCase()}
+          </Tag>
+        )}
+      </span>
+    </span>
   );
 }
