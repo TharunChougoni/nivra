@@ -1,5 +1,36 @@
 use super::*;
 
+fn archived_feature_snapshots(
+    path: &Path,
+    sha256: &str,
+    session: &str,
+    replay: &ScorerReplaySettings,
+    now: i64,
+) -> std::result::Result<Vec<nivra_core::strategy::FeatureSnapshot>, String> {
+    let bytes = crate::read_bounded(path, 4 * 1024 * 1024)
+        .map_err(|_| "candidate_archived_dataset_unreadable")?;
+    if digest(&bytes) != sha256 {
+        return Err("candidate_archived_dataset_hash_mismatch".into());
+    }
+    let snapshots: Vec<nivra_core::strategy::FeatureSnapshot> =
+        serde_json::from_slice(&bytes).map_err(|_| "candidate_archived_dataset_invalid")?;
+    if snapshots.is_empty()
+        || snapshots.len() > 10_000
+        || snapshots
+            .windows(2)
+            .any(|w| w[0].observed_ms >= w[1].observed_ms)
+        || snapshots.iter().any(|snapshot| {
+            snapshot.observed_ms < 0
+                || snapshot.observed_ms > now
+                || !archival_candidate_window(session, snapshot.observed_ms)
+                || snapshot.lookback_samples != replay.lookback_samples
+        })
+    {
+        return Err("candidate_archived_dataset_invalid".into());
+    }
+    Ok(snapshots)
+}
+
 /// Freeze and admit one prospective observation over a verified original
 /// candidate. The original supplies source/params/features/result provenance;
 /// the model declares the observation units, research capital, costs, holding
@@ -106,11 +137,10 @@ fn candidate_observation_submit(
     {
         return Ok(not_dispatched("candidate_horizon_invalid"));
     }
-    if !candidate
-        .datasets
-        .iter()
-        .any(|dataset| dataset.dataset_id == args.dataset_id)
-    {
+    if !candidate.datasets.iter().any(|dataset| {
+        dataset.dataset_id == args.dataset_id
+            && dataset.kind == CandidateDatasetKind::CurrentSessionFeatures
+    }) {
         return Ok(not_dispatched("candidate_dataset_unknown"));
     }
     let binding = book_binding(c)?;
@@ -172,7 +202,7 @@ fn candidate_observation_submit(
         return Ok(not_dispatched("candidate_observation_source_changed"));
     }
     let previous_session = candidate_previous_trading_session(c);
-    let snapshots = match super::super::super::super::paper_replay::scorer_snapshots_bounded(
+    let snapshots = match super::super::super::super::paper_replay::session_feature_snapshots(
         &c.directory,
         c.session,
         previous_session,
@@ -677,13 +707,13 @@ pub(crate) fn candidate_submit(
     if params_bytes.len() > candidate.max_params_bytes as usize {
         return Ok(not_dispatched("candidate_params_invalid"));
     }
-    if !candidate
+    let Some(dataset) = candidate
         .datasets
         .iter()
-        .any(|dataset| dataset.dataset_id == args.dataset_id)
-    {
+        .find(|dataset| dataset.dataset_id == args.dataset_id)
+    else {
         return Ok(not_dispatched("candidate_dataset_unknown"));
-    }
+    };
     let windows = jobs::CandidateWindows {
         training_from_ms: args.training_from_ms,
         training_to_ms: args.training_to_ms,
@@ -744,17 +774,32 @@ pub(crate) fn candidate_submit(
         }
     }
     let previous_session = candidate_previous_trading_session(c);
-    let snapshots = match super::super::super::super::paper_replay::scorer_snapshots_bounded(
-        &c.directory,
-        c.session,
-        previous_session,
-        candidate.replay.max_snapshots,
-        candidate.replay.max_age_ms,
-        candidate.replay.lookback_samples,
-        now,
-    ) {
+    let archived_window =
+        archival_candidate_window(&c.session.to_string(), windows.selection_to_ms);
+    let snapshots = match &dataset.kind {
+        CandidateDatasetKind::CurrentSessionFeatures => {
+            super::super::super::super::paper_replay::session_feature_snapshots(
+                &c.directory,
+                c.session,
+                previous_session,
+                candidate.replay.max_snapshots,
+                candidate.replay.max_age_ms,
+                candidate.replay.lookback_samples,
+                now,
+            )
+            .map_err(|_| "candidate_dataset_unavailable".to_owned())
+        }
+        CandidateDatasetKind::ArchivedFeatureSnapshots { path, sha256 } if archived_window => {
+            if args.execution.is_some() {
+                return Ok(not_dispatched("candidate_archived_execution_unavailable"));
+            }
+            archived_feature_snapshots(path, sha256, &c.session.to_string(), &candidate.replay, now)
+        }
+        _ => return Ok(not_dispatched("candidate_dataset_window_mismatch")),
+    };
+    let snapshots = match snapshots {
         Ok(snapshots) => snapshots,
-        Err(_) => return Ok(not_dispatched("candidate_dataset_unavailable")),
+        Err(reason) => return Ok(not_dispatched(&reason)),
     };
     let selection = snapshots
         .into_iter()
@@ -765,6 +810,9 @@ pub(crate) fn candidate_submit(
         .collect::<Vec<_>>();
     if selection.len() < candidate.replay.min_valid_snapshots {
         return Ok(not_dispatched("candidate_dataset_insufficient"));
+    }
+    if selection.len() > candidate.replay.max_snapshots {
+        return Ok(not_dispatched("candidate_dataset_too_many_snapshots"));
     }
     let dataset_bytes = serde_json::to_vec(&selection)?;
     if dataset_bytes.len() > 4 * 1024 * 1024 {

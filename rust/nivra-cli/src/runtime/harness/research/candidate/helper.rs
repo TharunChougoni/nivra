@@ -908,11 +908,7 @@ pub(crate) fn candidate_result_envelope(
             }
         }
     }
-    let evidence_scope = if is_observation {
-        nivra_cli::candidate_execution::OBSERVATION_SCOPE
-    } else {
-        CANDIDATE_EVIDENCE_SCOPE
-    };
+    let evidence_scope = candidate_evidence_scope(&task.spec, is_observation);
     let unit_proof_sha256 = proof.proof_sha256.clone();
     Ok(CandidateResultV1 {
         version: 2,
@@ -1267,12 +1263,7 @@ pub(super) fn verify_candidate_result_envelope(
         || result_at_ms < launch.started_ms
         || (!allow_late && result_at_ms >= launch.task_deadline_ms)
         || result.result_kind != expected_result_kind
-        || result.evidence_scope
-            != if is_observation {
-                nivra_cli::candidate_execution::OBSERVATION_SCOPE
-            } else {
-                CANDIDATE_EVIDENCE_SCOPE
-            }
+        || result.evidence_scope != candidate_evidence_scope(task, is_observation)
         || !result.partial_evidence
         || result.promotion_authorized
         || result.activation_authorized

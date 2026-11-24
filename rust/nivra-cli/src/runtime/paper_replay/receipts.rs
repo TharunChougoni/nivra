@@ -328,7 +328,7 @@ pub(crate) fn execution_tape_bounded(
 /// Candidate freeze path: only quote receipts whose original source time is at
 /// or before the submitted host clock enter the dataset. Later ticks cannot
 /// mutate the frozen bytes because the caller stores them before admission.
-pub(crate) fn scorer_snapshots_bounded(
+pub(crate) fn session_feature_snapshots(
     source: &Path,
     session: NaiveDate,
     previous_session: Option<NaiveDate>,

@@ -66,10 +66,11 @@ pub(crate) struct CandidateDataset {
     pub dataset_id: String,
     pub kind: CandidateDatasetKind,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum CandidateDatasetKind {
     CurrentSessionFeatures,
+    ArchivedFeatureSnapshots { path: PathBuf, sha256: String },
 }
 /// Reviewed opt-in after-cost cash replay over the existing action-tape engine.
 /// Omission preserves every historical policy byte and advertises no execution
@@ -294,6 +295,15 @@ impl CandidateComputeSettings {
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
                 || !aliases.insert(&dataset.dataset_id)
+            {
+                return Err("candidate_dataset_invalid");
+            }
+            if let CandidateDatasetKind::ArchivedFeatureSnapshots { path, sha256 } = &dataset.kind
+                && (nivra_store::private_path::file_path_ok(path).is_err()
+                    || sha256.len() != 64
+                    || !sha256
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
             {
                 return Err("candidate_dataset_invalid");
             }

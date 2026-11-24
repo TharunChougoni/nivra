@@ -33,6 +33,22 @@ const CANDIDATE_ABI: &str = "scorer_replay_v1";
 const CANDIDATE_ENGINE: &str = "sadr_sandbox::score_source";
 const CANDIDATE_RESULT_KIND: &str = "ranking_diagnostic";
 const CANDIDATE_EVIDENCE_SCOPE: &str = "current_session_selection_window";
+const ARCHIVED_CANDIDATE_EVIDENCE_SCOPE: &str = "archived_feature_selection_window";
+
+fn archival_candidate_window(session: &str, to_ms: i64) -> bool {
+    chrono::DateTime::parse_from_rfc3339(&format!("{session}T00:00:00+05:30"))
+        .is_ok_and(|midnight| to_ms < midnight.timestamp_millis())
+}
+
+fn candidate_evidence_scope(task: &jobs::CandidateTaskV1, is_observation: bool) -> &'static str {
+    if is_observation {
+        nivra_cli::candidate_execution::OBSERVATION_SCOPE
+    } else if archival_candidate_window(&task.session, task.windows.selection_to_ms) {
+        ARCHIVED_CANDIDATE_EVIDENCE_SCOPE
+    } else {
+        CANDIDATE_EVIDENCE_SCOPE
+    }
+}
 const CANDIDATE_HELPER_ABI: &str = "candidate_helper_v1";
 /// Bounded failure record written when the helper cannot produce an accepted
 /// result within the recorded cap. It carries the code, the hash and the byte
@@ -778,6 +794,7 @@ fn bridge_candidate_result(
     // prospective forward shadow automatically; that needs a separate owner
     // decision and is not part of this result.
     if result.execution.is_none()
+        && result.evidence_scope == CANDIDATE_EVIDENCE_SCOPE
         && state == "replayed"
         && result.report.qualified()
         && let Some(last) = result.report.ticks.last()

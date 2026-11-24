@@ -131,6 +131,21 @@ enum Command {
     HistoryBackfill {
         #[arg(long)]
         config: PathBuf,
+        /// Check actual candle coverage without calling the history provider.
+        #[arg(long)]
+        check_only: bool,
+        /// Prepare the dated cash universe from public sources before checking or downloading.
+        #[arg(long)]
+        prepare_universe: bool,
+    },
+    /// Export historical scanner features from the sealed paper book.
+    ScannerArchive {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u32).range(1..=60))]
+        max_snapshots: u32,
     },
     /// Summarize an explicitly selected saved timing stream, without session actions.
     ProtectionTimings { path: PathBuf },
@@ -516,7 +531,16 @@ fn main() -> ExitCode {
         } => alert::entry(config.as_deref(), test, event),
         Command::Preflight { config, unit_file } => preflight::entry(&config, unit_file.as_deref()),
         Command::Backtest { manifest, events } => backtest::entry(&manifest, &events),
-        Command::HistoryBackfill { config } => runtime::history_download::backfill_entry(&config),
+        Command::HistoryBackfill {
+            config,
+            check_only,
+            prepare_universe,
+        } => runtime::history_download::backfill_entry(&config, check_only, prepare_universe),
+        Command::ScannerArchive {
+            config,
+            output,
+            max_snapshots,
+        } => runtime::paper_replay::scanner_archive_entry(&config, &output, max_snapshots as usize),
         Command::HistoryDownload {
             config,
             output,

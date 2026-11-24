@@ -73,6 +73,15 @@ pi-facing name comes first and the Rust name follows in parentheses.
   archived quote receipts (`planner.research_tools.quote_capture`) and the
   bounded workspace. Results are advisory and never place, size or promote a
   paper trade.
+- Each backtest publishes the configured dataset IDs. To expose an archived
+  ranking dataset, register a `research_tools.candidate_compute.datasets`
+  entry with `kind: {"archived_feature_snapshots":{"path":"ABSOLUTE_PRIVATE_PATH","sha256":"FILE_SHA256"}}`.
+  Create a private snapshot file from a stopped controller's sealed book with
+  `nivra scanner-archive --config PAPER_CONFIG --output NEW_FILE`, or from a
+  captured manifest with `strategy-lab export-features`. The host checks the file hash, original
+  snapshot clocks and lookback before freezing the selected window. Archived
+  snapshots must precede the active paper date. This dataset supports ranking
+  diagnostics. After-cost cash replay uses the current session's original quote tape.
 - `search`, `fetch` and `news`: opt-in tools under `planner.web_tools`. Private,
   loopback, credential-bearing and redirecting URLs are refused. Each call is
   appended to the session's `model/web-tools.ndjson` record. Results are untrusted

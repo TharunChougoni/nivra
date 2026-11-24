@@ -327,21 +327,52 @@ pub(crate) use download::*;
 /// Explicit manual acquisition is separate from the automatic pre-open window.
 /// Use the same reviewed-session gap coalescing and original quota, without
 /// relaxing the automatic worker's deadline or creating any financial state.
-pub fn backfill_entry(path: &Path) -> ExitCode {
-    let result = (|| -> Result<()> {
+pub fn backfill_entry(path: &Path, check_only: bool, prepare_universe: bool) -> ExitCode {
+    let result = (|| -> Result<bool> {
         let c: Config = serde_json::from_slice(
             &crate::read_bounded(path, 32768).map_err(|_| "history_config")?,
         )?;
         let c = super::rollover::current(&c)?;
         c.validate()?;
-        data::verify_journal(&c)?;
-        let instruments = wide::history_instruments(&c)?;
+        let instruments = if prepare_universe {
+            wide::prepare_history_instruments(&c)?
+        } else {
+            wide::history_instruments(&c)?
+        };
+        let session_clock =
+            chrono::DateTime::parse_from_rfc3339(&format!("{}T00:00:00+05:30", c.session))?
+                .timestamp_millis();
         let request = wide::preparation_request(
             &c,
             &instruments,
-            millis(),
+            session_clock,
             super::preparation::PreparationWindow::PreOpen,
         )?;
+        if check_only {
+            let report = super::preparation::coverage_report(
+                &request.history_root,
+                &instruments,
+                &request.required_sessions,
+                request.target_session,
+                request.previous_session,
+            );
+            println!(
+                "{}",
+                json!({
+                    "status": report.status,
+                    "target_session": report.target_session,
+                    "previous_session": report.previous_session,
+                    "instruments": report.instruments,
+                    "ready_instruments": report.ready_instruments,
+                    "required_bars": report.required_bars,
+                    "observed_bars": report.observed_bars,
+                    "missing_bars": report.missing_bars,
+                    "failure": report.failure,
+                })
+            );
+            return Ok(report.status == super::preparation::CoverageStatus::Ready);
+        }
+        data::verify_journal(&c)?;
         let start = *request
             .required_sessions
             .first()
@@ -363,13 +394,12 @@ pub fn backfill_entry(path: &Path) -> ExitCode {
             None,
             Some(&c),
         )?;
-        Ok(())
+        println!("history_backfill_complete; original receipts preserved");
+        Ok(true)
     })();
     match result {
-        Ok(()) => {
-            println!("history_backfill_complete; original receipts preserved");
-            ExitCode::SUCCESS
-        }
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::from(2),
         Err(error) => {
             eprintln!(
                 "history_backfill_failed: {}; original receipts preserved",

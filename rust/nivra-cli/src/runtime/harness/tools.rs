@@ -126,9 +126,9 @@ pub(super) fn owner_candidate_tool_definitions(
         "parent_task_id"
     ]);
     let description = if execution {
-        "Queue one immutable candidate version for asynchronous replay in the existing no-network sandbox. Source runs only through the reviewed scorer ABI over frozen current-session features; it cannot read host paths, use the network, spend trading capital, promote or activate a strategy. The optional execution argument is a JSON-object string that additionally requests the reviewed after-cost cash replay over the frozen original quote tape; it declares research sizing, holding, capital and costs only and never authorizes a broker order; its parameters.hypothesis must equal the submit hypothesis and its windows must equal the submit windows. A changed task_key content needs an explicit parent_task_id. This call acknowledges durable queueing, not execution."
+        "Queue one immutable candidate version for asynchronous replay in the existing no-network sandbox. Source runs only through the reviewed scorer ABI over registered feature snapshots; it cannot read host paths, use the network, spend trading capital, promote or activate a strategy. The optional execution argument is a JSON-object string that additionally requests the reviewed after-cost cash replay over the frozen current-session quote tape; it declares research sizing, holding, capital and costs only and never authorizes a broker order; its parameters.hypothesis must equal the submit hypothesis and its windows must equal the submit windows. A changed task_key content needs an explicit parent_task_id. This call acknowledges durable queueing, not execution."
     } else {
-        "Queue one immutable score-only candidate version for asynchronous replay in the existing no-network sandbox. Source runs only through the reviewed scorer ABI over frozen current-session features; it cannot read host paths, use the network, spend trading capital, promote or activate a strategy. A changed task_key content needs an explicit parent_task_id. This call acknowledges durable queueing, not execution."
+        "Queue one immutable score-only candidate version for asynchronous replay in the existing no-network sandbox. Source runs only through the reviewed scorer ABI over registered feature snapshots; it cannot read host paths, use the network, spend trading capital, promote or activate a strategy. A changed task_key content needs an explicit parent_task_id. This call acknowledges durable queueing, not execution."
     };
     if execution {
         properties["execution"] = json!({"type":["string","null"],"minLength":2,"maxLength":65536});
@@ -658,6 +658,23 @@ pub(crate) fn bridge_definitions(cfg: &PlannerConfig, lane_requests: bool) -> Re
     };
     tools.extend(granted_tool_definitions(owner));
     tools.retain(|tool| analysis || tool["name"] != "research_task_enqueue");
+    if let Some(candidate) = cfg
+        .research_tools
+        .as_ref()
+        .and_then(|research| research.candidate_compute.as_ref())
+        .filter(|candidate| candidate.enabled)
+        && let Some(submit) = tools
+            .iter_mut()
+            .find(|tool| tool["name"] == "candidate_submit")
+    {
+        submit["parameters"]["properties"]["dataset_id"]["enum"] = json!(
+            candidate
+                .datasets
+                .iter()
+                .map(|dataset| &dataset.dataset_id)
+                .collect::<Vec<_>>()
+        );
+    }
     Ok(tools)
 }
 

@@ -1312,5 +1312,11 @@ pub(super) fn pending_orders(_p: &Portfolio) -> u64 {
 pub(super) fn history_instruments(c: &Config) -> Result<Vec<Instrument>> {
     Ok(universe::cached(c)?.instruments)
 }
+
+pub(super) fn prepare_history_instruments(c: &Config) -> Result<Vec<Instrument>> {
+    let _lock = rollover::controller_lock(c)?;
+    let client = data::Client::new(&c.market_data_transport)?;
+    Ok(universe::prepare(&client, c)?.instruments)
+}
 #[cfg(test)]
 mod tests;

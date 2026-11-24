@@ -29,6 +29,15 @@ changes the automatic worker's pre-open window/deadline. Inspect coverage after
 completion: newly listed/unavailable instruments or empty responses may still
 lack the required bars.
 
+Use `history-backfill --config PAPER_CONFIG --check-only` to check the
+effective session's exact dated universe and trading-day window. It returns
+success only when every required bar is present. For a prepared successor
+config whose dated universe has not been frozen, add `--prepare-universe` to
+fetch the public security metadata and bind it before the check. This takes the
+controller lock and creates no paper book or model calls. Use the same cache
+for checking, catch-up and startup. Older replay shards may stay in a separate
+archive while the operational cache retains the original receipt bytes.
+
 Intervals: `minutes`, `days`, `both` (default). Omitted dates select yesterday in
 IST and the preceding twelve calendar months; use explicit inclusive dates for
 reproducibility. The runtime resolves the current dated book even if config still

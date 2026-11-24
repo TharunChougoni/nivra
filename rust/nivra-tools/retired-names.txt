@@ -108,7 +108,7 @@
 5	scorer	rust/nivra-cli/src/runtime/harness/research/candidate/reconcile.rs
 2	scorer	rust/nivra-cli/src/runtime/harness/research/candidate/result.rs
 1	scorer	rust/nivra-cli/src/runtime/harness/research/candidate/status.rs
-6	scorer	rust/nivra-cli/src/runtime/harness/research/candidate/submit.rs
+5	scorer	rust/nivra-cli/src/runtime/harness/research/candidate/submit.rs
 6	scorer	rust/nivra-cli/src/runtime/harness/research/carry.rs
 7	scorer	rust/nivra-cli/src/runtime/harness/research/continuation.rs
 11	scorer	rust/nivra-cli/src/runtime/harness/research/continuation/episode.rs
@@ -117,7 +117,7 @@
 6	scorer	rust/nivra-cli/src/runtime/harness/research/settings.rs
 12	scorer	rust/nivra-cli/src/runtime/harness/research/tests.rs
 2	scorer	rust/nivra-cli/src/runtime/harness/tools.rs
-29	scorer	rust/nivra-cli/src/runtime/paper_replay/receipts.rs
+28	scorer	rust/nivra-cli/src/runtime/paper_replay/receipts.rs
 3	scorer	rust/nivra-cli/src/runtime/strategy_results.rs
 2	scorer	rust/nivra-cli/src/runtime/web/v2/src/research-panels.test.tsx
 2	scorer	rust/nivra-cli/src/runtime/web/v2/src/research.ts

@@ -1793,6 +1793,88 @@ fn candidate_future_contract(
     assert_eq!(late["items"][0]["state"], "eligible");
 }
 
+#[test]
+fn archived_ranker_replay_uses_pinned_evidence_without_opening_a_shadow() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = root.path().join("analysis-runtime");
+    fs::write(&runtime, b"nivra-analysis-fixture").unwrap();
+    let base_settings = settings(root.path(), &runtime);
+    let (_, base) = owner_fixture(root.path(), &base_settings);
+    let mut settings = candidate_settings(root.path(), &base_settings);
+    let path = root.path().join("archive.json");
+    let archived_at = candidate_at_on("2026-10-15", 9, 21);
+    let archived = json!([{
+        "observed_ms": archived_at,
+        "rows": [{
+            "key": "NSE_EQ|INE000000001",
+            "features": {"price": 100.0, "traded_value": 2_000_000.0,
+                         "absolute_move_bps": 250.0, "circuit_distance_bps": 500.0}
+        }]
+    }]);
+    let bytes = serde_json::to_vec(&archived).unwrap();
+    fs::write(&path, &bytes).unwrap();
+    settings
+        .candidate_compute
+        .as_mut()
+        .unwrap()
+        .datasets
+        .push(CandidateDataset {
+            dataset_id: "prior-day".into(),
+            kind: CandidateDatasetKind::ArchivedFeatureSnapshots {
+                path: path.clone(),
+                sha256: digest(&bytes),
+            },
+        });
+    if !candidate_sandbox_ready(&settings) {
+        return;
+    }
+    let (c, cfg) = candidate_config(root.path(), &base, settings);
+    candidate_book(&c);
+    let now = candidate_at(9, 21);
+    let submit = || {
+        let mut args = candidate_submit_args("archive-replay", CANDIDATE_SOURCE, None);
+        args.dataset_id = "prior-day".into();
+        args.training_from_ms = archived_at - 60_000;
+        args.training_to_ms = archived_at - 60_000;
+        args.selection_from_ms = archived_at;
+        args.selection_to_ms = archived_at;
+        candidate_submit(
+            &c,
+            &cfg,
+            "fixture-model",
+            1,
+            "turn-archive",
+            args,
+            now,
+            None,
+        )
+        .unwrap()
+    };
+    fs::write(&path, b"[]").unwrap();
+    assert_eq!(
+        submit()["reason"],
+        "candidate_archived_dataset_hash_mismatch"
+    );
+    fs::write(&path, bytes).unwrap();
+    let submitted = submit();
+    assert_eq!(submitted["status"], "queued", "{submitted}");
+    let id = submitted["task"]["task_id"].as_str().unwrap();
+    candidate_drive(&c, &cfg, id, move || now + 1);
+    let result = candidate_result(&c, &cfg, id, 1, now + 2).unwrap();
+    assert_eq!(
+        result["result"]["evidence_scope"],
+        "archived_feature_selection_window"
+    );
+    assert_eq!(
+        result["result"]["report"]["ticks"][0]["observed_ms"],
+        archived_at
+    );
+    assert_eq!(
+        candidate_status(&c, &cfg, id, 1, now + 2).unwrap()["lifecycle"]["state"],
+        "replayed"
+    );
+}
+
 fn candidate_failed_report_contract(
     root: &Path,
     base_settings: &ResearchSettings,
