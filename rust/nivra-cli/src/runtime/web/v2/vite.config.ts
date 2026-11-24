@@ -1,6 +1,5 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
 import type { PluginOption } from "vite";
 // Dev-only fixture API (`npm run dev:mock`). Never registered for `vite build`.
 async function mockPlugins(
@@ -11,7 +10,7 @@ async function mockPlugins(
 }
 export default defineConfig(async ({ command }) => ({
   base: "/",
-  plugins: [react(), tailwindcss(), ...(await mockPlugins(command))],
+  plugins: [react(), ...(await mockPlugins(command))],
   build: {
     outDir: "bundle",
     emptyOutDir: true,

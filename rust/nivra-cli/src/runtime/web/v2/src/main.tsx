@@ -5,10 +5,6 @@ import { Context } from "./ui";
 import { createController } from "./controller";
 import "uplot/dist/uPlot.min.css";
 import "./styles.css";
-import { initializeTheme } from "./theme";
-
-if (typeof document !== "undefined")
-  initializeTheme(document, () => window.localStorage);
 export function mountApp(
   doc: Document,
   win: import("./cache").BrowserWindow,

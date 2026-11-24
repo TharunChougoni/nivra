@@ -17,7 +17,6 @@ import {
   projectSeries,
   reconcileSeries,
   route,
-  identities,
   sessions,
   strategyLinkFor,
   strategyReferences,
@@ -239,49 +238,14 @@ test("display downsampling preserves extrema, endpoints and explicit gaps", () =
     points.slice(0, 4),
   );
 });
-test("two identities and bounded archive routes", () => {
-  const ids = identities({
-    readiness: {
-      models: {
-        roles: [
-          { role: "digest", model: "luna", remaining_current: 10 },
-          {
-            role: "orchestrator",
-            model: "one-access-identity",
-            remaining_current: 10,
-          },
-        ],
-      },
-    },
-  });
-  assert.equal(ids.length, 2);
-  assert.equal(ids[1].label, "Orchestrator");
-  assert.equal(ids[1].role!.model, "one-access-identity");
-  assert.deepEqual(route("#/runs/harness-digest-1"), {
-    name: "models",
-    run: "harness-digest-1",
-  });
-  assert.deepEqual(route("#/runs/../secret"), { name: "missing" });
+test("retired model and run routes land on the pi lanes; unknown routes stay missing", () => {
+  assert.deepEqual(route("#/models"), { name: "lanes" });
+  assert.deepEqual(route("#/runs/harness-digest-1"), { name: "lanes" });
+  assert.deepEqual(route("#/runs"), { name: "lanes" });
+  assert.deepEqual(route("#/lanes"), { name: "lanes" });
+  assert.deepEqual(route("#/instruments"), { name: "instruments" });
   assert.deepEqual(route("#/now"), { name: "missing" });
   assert.deepEqual(route("#/chat"), { name: "missing" });
-});
-test("approval projection identities label digest and orchestrator", () => {
-  const ids = identities({
-    approvals: {
-      identities: [
-        { identity: "digest", role: { role: "digest", model: "luna" } },
-        {
-          identity: "orchestrator",
-          role: { role: "orchestrator", model: "shared" },
-        },
-      ],
-    },
-  });
-  assert.deepEqual(
-    ids.map((v) => v.label),
-    ["Digest", "Orchestrator"],
-  );
-  assert.equal(ids[1].role!.model, "shared");
 });
 test("v1 sessions merge the current projection and preserve archived fill order", () => {
   const state = {

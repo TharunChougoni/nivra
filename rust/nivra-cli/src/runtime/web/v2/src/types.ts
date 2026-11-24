@@ -1,6 +1,6 @@
 // Wire projections from ../v1.rs: envelope(), meta(), summary(), portfolio(),
-// fills(), plans(), scanner(), instruments(), sessions(), health(), approvals(),
-// alerts(), series(), run() and poll_source(). Decimal amounts stay strings on
+// fills(), plans(), scanner(), instruments(), sessions(), health(), alerts(),
+// series(), agent() and poll_source(). Decimal amounts stay strings on
 // the wire.
 // Optional/null fields preserve unavailable and older retained projections.
 export type Decimal = string | number;
@@ -27,13 +27,9 @@ export interface MetaResponse extends Envelope {
   roles?: string[];
   capabilities?: string[];
   limits?: {
-    blob_slice_max_bytes?: number;
     sse_max_streams?: number;
     sse_heartbeat_ms?: number;
     longpoll_hold_ms?: number;
-    transcript_max_bytes?: number;
-    transcript_text_max_bytes?: number;
-    transcript_args_max_bytes?: number;
     series_max_points?: number;
     series_max_range_ms?: number;
     equity_max_points?: number;
@@ -669,18 +665,6 @@ export interface SessionRecord extends Availability {
   stale?: boolean;
 }
 export type SessionsResponse = Page<SessionRecord>;
-export interface IdentityApproval {
-  identity: string;
-  role?: RoleApproval | null;
-}
-export interface ApprovalsResponse extends Envelope {
-  models?: { roles?: RoleApproval[] } | null;
-  identities?: IdentityApproval[];
-  planner_enabled?: boolean;
-  current_usage?: Json;
-  future_usage?: Json;
-  note?: string;
-}
 export interface Alert {
   id?: string;
   severity?: string;
@@ -1045,67 +1029,6 @@ export interface Point {
   reason?: string;
   isolated?: boolean;
 }
-export interface RunSummary {
-  run: string;
-  model?: string;
-  role?: string;
-  started_ms?: number;
-  duration_ms?: number;
-  tokens_in?: number;
-  tokens_out?: number;
-  tool_calls?: number;
-  outcome?: string;
-  running?: boolean;
-  trigger?: string | { kind?: string };
-  trigger_kind?: string;
-}
-export interface RunsResponse extends Availability {
-  v?: number;
-  runs?: RunSummary[];
-  next?: string | null;
-}
-// Transcript records are heterogeneous; structured payloads are opaque JSON until inspected.
-export interface TranscriptEvent {
-  kind: string;
-  seq?: number;
-  at_ms?: number;
-  role?: string;
-  model?: string;
-  duration_ms?: number;
-  tokens_in?: number;
-  tokens_out?: number;
-  cost_estimate_inr?: Decimal | null;
-  outcome?: string;
-  sha?: string;
-  blob?: string;
-  bytes?: number;
-  input?: Json;
-  summary?: Json;
-  text?: string;
-  call?: string | number;
-  turn?: number;
-  name?: string;
-  tool?: string;
-  status?: string;
-  args?: Json;
-  args_truncated?: boolean;
-  result?: Json;
-  output?: ModelOutput;
-  value?: ModelOutput;
-  tool_calls?: number;
-  tool_failures?: number;
-}
-export interface ModelOutput {
-  actions?: ModelAction[];
-  [key: string]: Json | ModelAction[] | undefined;
-}
-export interface RunResponse extends Availability {
-  v?: number;
-  run?: string;
-  events?: TranscriptEvent[];
-  running?: boolean;
-  legacy?: boolean;
-}
 export interface PriceItem {
   instrument_key?: string;
   receipt_ms?: number;
@@ -1197,7 +1120,6 @@ export interface ProjectionData {
   plans: PlansResponse | null;
   scanner: ScannerResponse | null;
   sessions: SessionsResponse | null;
-  approvals: ApprovalsResponse | null;
 }
 export type ProjectionName = keyof ProjectionData;
 /** Every v1 projection the workspace reads, in display order. */
@@ -1208,7 +1130,6 @@ export const PROJECTION_NAMES = [
   "plans",
   "scanner",
   "sessions",
-  "approvals",
 ] as const satisfies readonly ProjectionName[];
 type ListedProjection = (typeof PROJECTION_NAMES)[number];
 /** Fails the build when `ProjectionData` gains a name this list does not cover. */
@@ -1248,36 +1169,10 @@ export interface ProjectionSource {
   scanner?: ScannerResponse | null;
   sessions?: SessionsResponse | SessionRecord[] | null;
 }
-export interface IdentitySource {
-  approvals?: ApprovalsResponse | null;
-  identities?: IdentityApproval[];
-  models?: { roles?: RoleApproval[] } | null;
-  readiness?: Readiness | null;
-}
 export interface StrategyReference extends StrategyFields {
   key: string;
   instruments: (string | undefined)[];
   scores: Decimal[];
-}
-export interface SessionNote {
-  id: string;
-  text: string;
-  state: "waiting" | "pinned" | "done" | "superseded" | "cleared" | "expired";
-  keep: boolean;
-  revision: number;
-  created_at_ms: number;
-  updated_at_ms: number;
-  pinned_in?: string | null;
-  updated_by?: string;
-}
-export interface SessionNoteSet {
-  version: number;
-  notes: SessionNote[];
-}
-export interface SessionResponse extends Availability {
-  v: 1;
-  session: string;
-  notes: SessionNoteSet;
 }
 export interface ToolCallRecord {
   v?: number;

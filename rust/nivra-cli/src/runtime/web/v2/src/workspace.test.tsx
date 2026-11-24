@@ -1,9 +1,7 @@
 import type {
   Fetch,
-  RunResponse,
   SummaryResponse,
   PortfolioResponse,
-  ApprovalsResponse,
   ScannerResponse,
   InstrumentCatalogResponse,
   ContractChainResponse,
@@ -12,7 +10,6 @@ import type {
   SessionsResponse,
   HealthResponse,
   AlertsResponse,
-  SessionResponse,
   ToolsResponse,
   OperationalHealth,
 } from "./types";
@@ -108,45 +105,6 @@ const portfolio = {
   halted: false,
   closed: false,
 };
-const approvals = {
-  ...envelope,
-  models: {
-    roles: [
-      {
-        role: "digest",
-        model: "luna",
-        status: "ready",
-        remaining_current: 10,
-      },
-      {
-        role: "orchestrator",
-        model: "shared",
-        status: "ready",
-        remaining_current: 8,
-      },
-    ],
-  },
-  identities: [
-    {
-      identity: "digest",
-      role: {
-        role: "digest",
-        model: "luna",
-        status: "ready",
-        remaining_current: 10,
-      },
-    },
-    {
-      identity: "orchestrator",
-      role: {
-        role: "orchestrator",
-        model: "shared",
-        status: "ready",
-        remaining_current: 8,
-      },
-    },
-  ],
-};
 const scanner = {
   ...envelope,
   segment: "prospects",
@@ -181,7 +139,6 @@ const splits: Record<
   string,
   | SummaryResponse
   | PortfolioResponse
-  | ApprovalsResponse
   | ScannerResponse
   | InstrumentCatalogResponse
   | ContractChainResponse
@@ -190,7 +147,6 @@ const splits: Record<
   | SessionsResponse
   | HealthResponse
   | AlertsResponse
-  | SessionResponse
   | ToolsResponse
 > = {
   "/api/v1/summary": summary,
@@ -332,25 +288,6 @@ const splits: Record<
     ],
     next: null,
   },
-  "/api/v1/session": {
-    v: 1,
-    session: "2026-10-29",
-    notes: {
-      version: 2,
-      notes: [
-        {
-          id: "note-1",
-          text: "Recorded operator note from the session log.",
-          state: "done",
-          keep: true,
-          revision: 3,
-          created_at_ms: envelope.as_of_ms - 2000,
-          updated_at_ms: envelope.as_of_ms - 1000,
-          updated_by: "operator",
-        },
-      ],
-    },
-  },
   "/api/v1/tools": {
     v: 1,
     session: "2026-10-29",
@@ -378,7 +315,6 @@ const splits: Record<
     next: null,
     execution_authorized: false,
   },
-  "/api/v1/approvals": approvals,
   "/api/v1/health": {
     ...envelope,
     live_enabled: false,
@@ -443,7 +379,6 @@ function fetchFixture(
         account: "private-fixture",
         broker: { data: "fixture-upstox", orders: "paper" },
       });
-    if (path === "/api/v1/runs") return json({ runs: [], next: null });
     if (path.startsWith("/api/v1/scanner"))
       return json({
         ...scanner,
@@ -459,7 +394,7 @@ function fetchFixture(
     return json({});
   };
 }
-test("client renders eight sections, two identities, archived books and private lock state", async () => {
+test("client renders every section, archived books and private lock state", async () => {
   const dom = new JSDOM('<div id="root"></div>', {
     url: "http://localhost/",
     pretendToBeVisual: true,
@@ -527,13 +462,12 @@ test("client renders eight sections, two identities, archived books and private 
       ),
       false,
     );
-    assert.equal(document.querySelectorAll(".model-identity").length, 2);
     assert.equal(
       requests.some((url) => url.startsWith("/api/status")),
       false,
     );
     for (const section of [
-      "models",
+      "lanes",
       "portfolio",
       "sessions",
       "scanner",
@@ -548,47 +482,19 @@ test("client renders eight sections, two identities, archived books and private 
             .querySelector(`.workspace-sidebar a[href="#/${section}"]`)
             ?.getAttribute("aria-current") === "page",
       );
-      if (section === "models") {
-        await until(() =>
-          document.querySelector('[aria-label="Model identity"]'),
-        );
-        assert.deepEqual(
-          [...document.querySelectorAll(".model-identity strong")].map(
-            (v) => v.textContent,
-          ),
-          ["Digest", "Orchestrator"],
-        );
-        assert.deepEqual(
-          [
-            ...document.querySelectorAll(
-              '[aria-label="Model identity"] button',
-            ),
-          ].map((v) => v.textContent),
-          ["All identities", "Digest", "Orchestrator"],
-        );
-        const orchestrator = [
-          ...document.querySelectorAll<HTMLButtonElement>(
-            '[aria-label="Model identity"] button',
-          ),
-        ].find((v) => v.textContent === "Orchestrator");
-        assert.ok(orchestrator);
-        orchestrator.dispatchEvent(
-          new dom.window.MouseEvent("mousedown", {
-            bubbles: true,
-            cancelable: true,
-            button: 0,
-          }),
-        );
-        orchestrator.click();
-        await until(() =>
-          requests.some((url) => url.includes("identity=orchestrator")),
-        );
+      if (section === "lanes") {
         await until(() =>
           document.body.textContent?.includes("Web tool activity"),
         );
-        assert.ok(document.body.textContent?.includes("nifty bank"));
+        await until(() => document.body.textContent?.includes("nifty bank"));
         assert.ok(document.body.textContent?.includes("42 ms"));
         assert.ok(requests.some((url) => url.startsWith("/api/v1/tools?")));
+        assert.equal(
+          requests.some((url) =>
+            /\/api\/v1\/(runs|approvals|session)(\?|\/|$)/.test(url),
+          ),
+          false,
+        );
       }
       if (section === "scanner") {
         await until(() =>
@@ -666,26 +572,14 @@ test("client renders eight sections, two identities, archived books and private 
         assert.ok(modes.includes("PAPER"));
         assert.ok(modes.includes("Not reported"));
         document.querySelector<HTMLButtonElement>(".row-link")!.click();
-        await until(() =>
-          document.body.textContent?.includes(
-            "Recorded operator note from the session log.",
-          ),
-        );
-        const notes = [
-          ...document.querySelectorAll<HTMLElement>(".surface"),
-        ].find(
-          (v) =>
-            v.querySelector("h2")?.textContent === "Recorded operator notes",
-        );
-        assert.ok(notes);
+        await until(() => document.querySelector(".drawer"));
         assert.equal(
-          notes.querySelectorAll("button, form, input, textarea").length,
-          0,
+          requests.some((url) => url.startsWith("/api/v1/session?")),
+          false,
         );
-        assert.equal(
-          requests.some((url) => url.startsWith("/api/v1/session?date=")),
-          true,
-        );
+        document
+          .querySelector<HTMLButtonElement>('[aria-label="Close detail"]')!
+          .click();
       }
       if (section === "health") {
         await until(() =>
@@ -743,91 +637,6 @@ test("client renders eight sections, two identities, archived books and private 
     dom.window.close();
   }
 });
-test("archived model text stays inert and full tool evidence is fetched only when expanded", async () => {
-  const dom = new JSDOM('<div id="root"></div>', {
-    url: "http://localhost/#/runs/harness-digest-100-normal",
-    pretendToBeVisual: true,
-  });
-  for (const key of [
-    "window",
-    "document",
-    "Node",
-    "HTMLElement",
-    "Element",
-    "Event",
-    "CustomEvent",
-    "MutationObserver",
-    "getComputedStyle",
-    "location",
-    "localStorage",
-    "NodeFilter",
-  ])
-    Object.defineProperty(globalThis, key, {
-      value:
-        key === "getComputedStyle"
-          ? dom.window.getComputedStyle.bind(dom.window)
-          : dom.window[key],
-      configurable: true,
-      writable: true,
-    });
-  globalThis.addEventListener = dom.window.addEventListener.bind(dom.window);
-  globalThis.removeEventListener = dom.window.removeEventListener.bind(
-    dom.window,
-  );
-  const { App, Context } = await loadApp();
-  const { createRoot } = await import("react-dom/client");
-  const { readFileSync } = await import("node:fs");
-  const fixture = JSON.parse(
-    readFileSync(new URL("../fixtures/accepted.json", import.meta.url), "utf8"),
-  ) as RunResponse;
-  const assistant = fixture.events?.find((v) => v.kind === "assistant_text");
-  assert.ok(assistant);
-  assistant.text = '<img src=x onerror="window.injected=true"> **Recorded**';
-  const reads: string[] = [];
-  const fetch = fetchFixture({
-    "/api/v1/runs/harness-digest-100-normal": () => json(fixture),
-  });
-  const app = createController(dom.window, {
-    connect: false,
-    fetch: async (url) => {
-      reads.push(url);
-      if (url.includes("/blobs/")) return new Response("original full result");
-      return fetch(url);
-    },
-  });
-  const root = createRoot(document.getElementById("root")!);
-  root.render(
-    <Context.Provider value={app}>
-      <App />
-    </Context.Provider>,
-  );
-  try {
-    await app.authenticate("fixture-only");
-    await until(() => document.querySelector(".model-output"));
-    assert.ok(document.querySelector(".prose")?.textContent?.includes("<img"));
-    assert.equal(document.querySelector(".prose img"), null);
-    assert.equal(Reflect.get(dom.window, "injected"), undefined);
-    assert.equal(
-      reads.some((v) => v.includes("/blobs/")),
-      false,
-    );
-    const fold = [...document.querySelectorAll("details")].find((v) =>
-      v.querySelector("summary")?.textContent?.includes("Tool result"),
-    );
-    assert.ok(fold);
-    fold.open = true;
-    fold.dispatchEvent(new dom.window.Event("toggle"));
-    await until(() =>
-      document.body.textContent?.includes("original full result"),
-    );
-    assert.equal(reads.filter((v) => v.includes("/blobs/")).length, 1);
-  } finally {
-    app.stop();
-    root.unmount();
-    dom.window.close();
-  }
-});
-
 test("operational panel keeps the published capture and separates operational evidence", async () => {
   const dom = new JSDOM('<div id="root"></div>', {
     url: "http://localhost/",

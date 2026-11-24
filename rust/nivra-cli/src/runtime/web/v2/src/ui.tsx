@@ -34,8 +34,8 @@ export function useWorkspace() {
 }
 export const NAV: [string, string, LucideIcon][] = [
   ["overview", "Overview", PanelLeft],
-  ["models", "Models", Sparkles],
   ["portfolio", "Portfolio & fills", Columns3],
+  ["lanes", "pi lanes", Sparkles],
   ["sessions", "Sessions", CalendarDays],
   ["scanner", "Market scanner", Search],
   ["strategies", "Strategies", Workflow],

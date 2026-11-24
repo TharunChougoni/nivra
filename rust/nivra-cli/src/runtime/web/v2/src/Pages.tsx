@@ -3,7 +3,6 @@ import type {
   Position,
   SessionRecord,
   PlansResponse,
-  RunSummary,
   Availability,
   LoadState,
   ScannerRow,
@@ -39,7 +38,7 @@ import {
   CircleAlert,
 } from "lucide-react";
 import Chart from "./Chart";
-import Models, { ModelRoster } from "./Models";
+import Lanes from "./Lanes";
 import { BookContinuity, OperationalPanel } from "./Operational";
 import {
   amount,
@@ -51,8 +50,6 @@ import {
   duration,
   finance,
   fillsFor,
-  identityLabels,
-  identities,
   instrumentClass,
   instrumentClasses,
   linkedFills,
@@ -61,7 +58,6 @@ import {
   numeric,
   observation,
   plansFor,
-  runHref,
   sessionKey,
   sessions,
   strategyLinkFor,
@@ -170,27 +166,6 @@ function percentPoints(value?: number | null) {
     ? `${value.toFixed(2)}%`
     : "Not reported";
 }
-function useRecentRuns() {
-  const [state, app] = useWorkspace(),
-    [runs, setRuns] = useState<RunSummary[]>([]);
-  const terminal = state.events
-    .filter((e) => ["run_started", "run_ended"].includes(e.kind))
-    .at(-1)?.seq;
-  useEffect(() => {
-    let active = true;
-    const token = state.token;
-    app.api
-      .runs({ limit: 6 })
-      .then((v) => {
-        if (active && token === app.getSnapshot().token) setRuns(v.runs || []);
-      })
-      .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, [terminal]);
-  return runs;
-}
 function useRead<T extends Availability>(
   load: (api: Api) => Promise<T>,
   key = "",
@@ -232,9 +207,8 @@ export function Overview() {
     f = finance(r),
     s = state.summary;
   const prospects = Array.isArray(state.scanner?.items)
-      ? state.scanner.items
-      : [],
-    recent = useRecentRuns();
+    ? state.scanner.items
+    : [];
   useEffect(() => {
     if (!state.watch && prospects[0]?.instrument_key)
       app.watch(prospects[0].instrument_key);
@@ -379,70 +353,8 @@ export function Overview() {
               }
             />
           </Panel>
-          <Panel
-            title="Decision activity"
-            note="The latest recorded model runs. Select one to follow the evidence."
-            actions={
-              <a href="#/models" className="text-link">
-                Open Models <ArrowUpRight size={13} />
-              </a>
-            }
-          >
-            {recent.length ? (
-              <div className="activity-list">
-                {recent.map((run) => (
-                  <a key={run.run} href={runHref(run.run)}>
-                    <span className={"activity-node " + (run.role || "")}>
-                      <Bot size={14} />
-                    </span>
-                    <div>
-                      <strong>
-                        {words(run.role)}{" "}
-                        <span>{run.model || "Model unknown"}</span>
-                      </strong>
-                      <p>
-                        {typeof run.trigger === "string"
-                          ? run.trigger
-                          : run.trigger?.kind ||
-                            run.trigger_kind ||
-                            "Trigger not reported"}{" "}
-                        · {duration(run.duration_ms)} · {count(run.tool_calls)}{" "}
-                        tools
-                      </p>
-                    </div>
-                    <div className="activity-result">
-                      <Status value={run.running ? "running" : run.outcome} />
-                      <time>{datetime(run.started_ms)}</time>
-                    </div>
-                    <ChevronRight size={14} />
-                  </a>
-                ))}
-              </div>
-            ) : (
-              <Empty title="No recent run evidence">
-                Model activity appears after an eligible run is archived.
-              </Empty>
-            )}
-          </Panel>
         </div>
         <aside className="overview-rail">
-          <Panel
-            title="Model loop"
-            actions={
-              <a href="#/models" aria-label="Inspect models">
-                <ArrowUpRight size={15} />
-              </a>
-            }
-          >
-            <ModelRoster compact />
-            <div className="loop-caption">
-              <span>Evidence</span>
-              <ArrowRight size={12} />
-              <span>Handoff</span>
-              <ArrowRight size={12} />
-              <span>Decision</span>
-            </div>
-          </Panel>
           <Panel title="Session readiness">
             <ReadinessItem
               icon={Radio}
@@ -975,8 +887,8 @@ function Plans({
           Decision <code>{p?.decision_id || "not reported"}</code>
         </span>
         <span>{count(p?.pending_events)} pending events</span>
-        <a href="#/models" className="text-link">
-          Inspect model output <ArrowUpRight size={12} />
+        <a href="#/lanes" className="text-link">
+          Inspect pi lane turns <ArrowUpRight size={12} />
         </a>
       </div>
       <Table
@@ -1220,7 +1132,7 @@ export function Scanner() {
             ]}
           />
           {tab !== "screens" && (
-            <div className="flex items-center gap-2">
+            <div className="row">
               <label className="search-field">
                 <Search size={13} />
                 <input
@@ -1703,40 +1615,6 @@ function columnsInstrument(): Column<ScannerRow> {
     ),
   };
 }
-function SessionNotes({ date }: { date: string }) {
-  const notes = useRead((api) => api.session(date), date),
-    items = notes.value?.notes?.notes || [];
-  return (
-    <Panel
-      title="Recorded operator notes"
-      note="Read-only evidence recorded with this session. Notes are never written from this workspace."
-    >
-      {(notes.state === "idle" || notes.state === "loading") && (
-        <p className="panel-note">Loading recorded notes…</p>
-      )}
-      {(notes.state === "error" || notes.state === "unavailable") && (
-        <Notice error>Recorded notes are unavailable for this session.</Notice>
-      )}
-      {notes.state === "ready" && items.length === 0 && (
-        <Empty>No operator notes were recorded for this session.</Empty>
-      )}
-      {items.length > 0 && (
-        <div className="session-notes">
-          {items.map((note) => (
-            <article className="session-note" key={note.id}>
-              <Status value={note.state}>{note.state}</Status>
-              <p>{note.text}</p>
-              <small>
-                revision {note.revision} · by {note.updated_by || "host"}
-                {note.keep ? " · keep" : ""}
-              </small>
-            </article>
-          ))}
-        </div>
-      )}
-    </Panel>
-  );
-}
 function sessionMode(row: SessionRecord) {
   if (row.mode === "paper" || row.mode === "live")
     return row.mode.toUpperCase();
@@ -1894,9 +1772,8 @@ export function Sessions() {
             ],
           ]}
         />
-        {selected?.id?.date && <SessionNotes date={selected.id.date} />}
         <Button
-          className="button-primary w-full mt-5"
+          className="button-primary button-block"
           icon={ArrowUpRight}
           onClick={() => {
             app.selectSession(sessionKey(selected));
@@ -2071,8 +1948,7 @@ export function Strategies() {
         )}
       </Panel>
       <div className="panel-note">
-        <GitBranch size={14} /> The {identityLabels.orchestrator} model handles
-        strategy and reviews. Research evidence does not authorize automatic
+        <GitBranch size={14} /> Research evidence does not authorize automatic
         promotion.
       </div>
       <Drawer
@@ -2295,13 +2171,7 @@ export function Health() {
       s?.history_preparation,
     feed = health.value?.market_feed || s?.market_feed,
     readiness = health.value?.readiness || s?.readiness,
-    roles = Array.isArray(state.approvals?.models?.roles)
-      ? state.approvals.models.roles
-      : [],
-    attribution = health.value?.activity_attribution,
-    approvalUnavailable =
-      state.approvalsState === "error" ||
-      state.approvalsState === "unavailable";
+    attribution = health.value?.activity_attribution;
   return (
     <>
       <div className="health-summary">
@@ -2311,13 +2181,12 @@ export function Health() {
         <div>
           <h2>Operating evidence</h2>
           <p>
-            Transport, model approvals, feed quality and financial freshness are
-            separate observations.
+            Transport, feed quality and financial freshness are separate
+            observations.
           </p>
         </div>
         <Status value={readiness?.status} />
       </div>
-      <ModelRoster />
       <OperationalPanel
         summary={s}
         portfolio={state.portfolio}
@@ -2330,7 +2199,7 @@ export function Health() {
           summary readiness and feed fields with explicit values are shown.
         </Notice>
       )}
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="cols-2">
         <Panel title="Market data">
           <Facts
             items={[
@@ -2371,7 +2240,7 @@ export function Health() {
       >
         {attribution ? (
           <>
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="cols-2">
               <Facts
                 items={[
                   [
@@ -2458,7 +2327,7 @@ export function Health() {
             <Panel
               title="Experiment attribution"
               note="Recorded selection provenance and associated paper fills; empty rows mean no eligible source attribution was recorded."
-              className="mt-4"
+              className="stack-top"
             >
               <Table
                 rows={attribution.experiment_attributions || []}
@@ -2506,51 +2375,6 @@ export function Health() {
         )}
       </Panel>
       <Panel
-        title="Approval evidence"
-        note="Two identities; digest and orchestrator usage remain separate."
-      >
-        {approvalUnavailable && (
-          <Notice>
-            Approvals projection{" "}
-            {state.approvalsState === "unavailable" ? "unavailable" : "failed"}.
-            Model identities remain visible without inferred allowances.
-          </Notice>
-        )}
-        <Table
-          rows={roles}
-          columns={[
-            {
-              key: "role",
-              label: "Identity / task",
-              render: (v) => (
-                <Instrument symbol={words(v.role)} sub={v.model} />
-              ),
-            },
-            {
-              key: "status",
-              label: "Readiness",
-              render: (v) => <Status value={v.status} />,
-            },
-            {
-              key: "expiry",
-              label: "Approval expiry",
-              render: (v) => datetime(v.credential_check?.approval_expires_at),
-            },
-            {
-              key: "remaining_current",
-              label: "Requests remaining",
-              render: (v) => count(v.remaining_current),
-            },
-            { key: "reason", label: "Reason", render: (v) => words(v.reason) },
-          ]}
-          empty={
-            approvalUnavailable
-              ? "Approval evidence unavailable"
-              : "No role approvals supplied"
-          }
-        />
-      </Panel>
-      <Panel
         title="Derived alerts"
         note="Alerts are derived from the same recorded status view; they are not worker telemetry."
       >
@@ -2586,7 +2410,7 @@ export function Health() {
           />
         )}
       </Panel>
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="cols-2">
         <Panel title="Financial protection">
           <Facts
             items={[
@@ -2662,10 +2486,7 @@ export function Health() {
 function ActivityIcon() {
   return <Radio size={22} />;
 }
-export const PAGES: Record<
-  string,
-  React.ComponentType<{ selectedRun?: string }>
-> = {
+export const PAGES: Record<string, React.ComponentType> = {
   overview: Overview,
   portfolio: Portfolio,
   scanner: Scanner,
@@ -2673,5 +2494,5 @@ export const PAGES: Record<
   strategies: Strategies,
   backtest: Backtest,
   health: Health,
-  models: Models,
+  lanes: Lanes,
 };

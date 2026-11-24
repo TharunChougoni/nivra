@@ -11,15 +11,11 @@ import type {
   ContractChainResponse,
   SessionsResponse,
   HealthResponse,
-  ApprovalsResponse,
   AlertsResponse,
-  SessionResponse,
   SeriesResponse,
   ReplayExample,
   ReplayInput,
   ReplayResponse,
-  RunsResponse,
-  RunResponse,
   ToolsResponse,
   AgentResponse,
 } from "./types";
@@ -55,7 +51,7 @@ export function createApi({ fetchImpl, getToken, onUnauthorized }: ApiOptions) {
   const cache = new Map<string, { etag: string | null; body: unknown }>();
   let generation = 0;
 
-  async function get<T>(path: string, { json = true } = {}): Promise<T> {
+  async function get<T>(path: string): Promise<T> {
     const requestGeneration = generation;
     const headers: Record<string, string> = {};
     const token = getToken();
@@ -75,7 +71,7 @@ export function createApi({ fetchImpl, getToken, onUnauthorized }: ApiOptions) {
     }
     let body = cached?.body;
     if (response.status !== 304) {
-      body = json ? await response.json() : await response.text();
+      body = await response.json();
     }
     if (!response.ok && response.status !== 304) {
       throw new ApiError(
@@ -109,11 +105,8 @@ export function createApi({ fetchImpl, getToken, onUnauthorized }: ApiOptions) {
     sessions: (parameters?: Query) =>
       get<SessionsResponse>("/api/v1/sessions" + query(parameters)),
     health: () => get<HealthResponse>("/api/v1/health"),
-    approvals: () => get<ApprovalsResponse>("/api/v1/approvals"),
     alerts: (parameters?: Query) =>
       get<AlertsResponse>("/api/v1/alerts" + query(parameters)),
-    session: (date?: string) =>
-      get<SessionResponse>("/api/v1/session" + query({ date })),
     tools: (parameters?: Query) =>
       get<ToolsResponse>("/api/v1/tools" + query(parameters)),
     agent: (parameters?: Query) =>
@@ -146,20 +139,6 @@ export function createApi({ fetchImpl, getToken, onUnauthorized }: ApiOptions) {
         );
       return body as ReplayResponse;
     },
-    runs: (parameters?: Query) =>
-      get<RunsResponse>("/api/v1/runs" + query(parameters)),
-    run: (id: string) =>
-      get<RunResponse>(`/api/v1/runs/${encodeURIComponent(id)}`),
-    blob: (id: string, name: string, parameters?: Query) =>
-      get<string>(
-        `/api/v1/runs/${encodeURIComponent(id)}/blobs/${encodeURIComponent(name)}` +
-          query(parameters),
-        { json: false },
-      ),
-    prompt: (sha: string) =>
-      get<string>(`/api/v1/prompts/${encodeURIComponent(sha)}`, {
-        json: false,
-      }),
     clear: () => {
       generation++;
       cache.clear();

@@ -1,8 +1,65 @@
-@import "tailwindcss";
-@source not "../scripts";
-@theme {
-  --font-sans:
-    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+body,
+h1,
+h2,
+h3,
+h4,
+p,
+dl,
+dd,
+figure,
+pre {
+  margin: 0;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.cols-1,
+.cols-2 {
+  display: grid;
+  gap: 16px;
+}
+@media (min-width: 1024px) {
+  .cols-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .span-all {
+    grid-column: span 2;
+  }
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.row-between {
+  justify-content: space-between;
+}
+.pad {
+  padding: 16px;
+}
+.stack-top {
+  margin-top: 16px;
+}
+.button-block {
+  width: 100%;
+  margin-top: 20px;
 }
 :root {
   color-scheme: dark;
@@ -20,23 +77,6 @@
   --warning: #d1ac75;
   --danger: #e28b99;
   --shadow: 0 20px 90px #0007;
-}
-[data-theme="light"] {
-  color-scheme: light;
-  --bg: #f4f5f8;
-  --surface: #fff;
-  --surface-raised: #ecedf3;
-  --sidebar: #f9f9fc;
-  --line: #dce0e9;
-  --line-soft: #e8eaf0;
-  --text: #252a3a;
-  --muted: #687085;
-  --faint: #8890a1;
-  --accent: #5266bb;
-  --accent-fill: #5266bb0b;
-  --warning: #956b2e;
-  --danger: #b14f64;
-  --shadow: 0 20px 90px #20233822;
 }
 * {
   box-sizing: border-box;

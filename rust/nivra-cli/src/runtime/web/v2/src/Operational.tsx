@@ -442,7 +442,7 @@ function SupervisorPanel({
           exposed.
         </Notice>
       )}
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="cols-2">
         <Facts
           items={[
             ["Status", status],
@@ -1163,7 +1163,7 @@ function ObservationPanel({ summary }: { summary?: SummaryResponse | null }) {
           clock; age is not trusted and the source time is not renewed.
         </Notice>
       )}
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="cols-2">
         <Facts
           items={[
             ["Status", observationStatusLabel(value.status)],
@@ -1486,7 +1486,7 @@ function MeasurementPanel({ summary }: { summary?: SummaryResponse | null }) {
           return (
             <div
               key={`${safeHash(item.candidate_id)}-${index}`}
-              className="grid gap-4"
+              className="cols-1"
             >
               <Facts
                 items={[
@@ -1541,7 +1541,7 @@ function MeasurementPanel({ summary }: { summary?: SummaryResponse | null }) {
         return (
           <div
             key={`${safeHash(item.candidate_id)}-${index}`}
-            className="grid gap-4 lg:grid-cols-2"
+            className="cols-2"
           >
             <Facts
               items={[
@@ -1624,7 +1624,7 @@ function MeasurementPanel({ summary }: { summary?: SummaryResponse | null }) {
               ]}
             />
             {continuation && (
-              <div className="lg:col-span-2">
+              <div className="span-all">
                 <Panel
                   title="Continuation receipt detail"
                   note="Typed original quote refs and recorded source clocks. The continuation receipt hash is not the immutable episode projection."
@@ -1708,7 +1708,7 @@ function MeasurementPanel({ summary }: { summary?: SummaryResponse | null }) {
                 </Panel>
               </div>
             )}
-            <div className="lg:col-span-2">
+            <div className="span-all">
               {!pnl.available && (
                 <Notice error>
                   Episode PnL is unavailable: {pnl.reason}. It is not zero and
@@ -1959,7 +1959,7 @@ export function OperationalPanel({
         </Notice>
       )}
       <BookContinuity summary={summary} portfolio={portfolio} />
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="cols-2">
         <PaperFinancialPanel summary={summary} portfolio={portfolio} />
         <ControllerLivenessPanel
           liveness={liveness}
@@ -1968,7 +1968,7 @@ export function OperationalPanel({
           interpret={interpret}
         />
       </div>
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="cols-2">
         <ResearchPanel summary={summary} />
         <SupervisorPanel
           supervisor={operational?.supervisor}

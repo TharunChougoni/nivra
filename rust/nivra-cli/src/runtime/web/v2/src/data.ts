@@ -8,7 +8,6 @@ import type {
   PlansResponse,
   Position,
   ScannerRow,
-  IdentitySource,
   Point,
   SeriesResponse,
   SeriesKind,
@@ -416,29 +415,6 @@ export function strategyLinkFor(
     ) || null
   );
 }
-export const identityLabels: Record<string, string> = {
-  digest: "Digest",
-  orchestrator: "Orchestrator",
-};
-export function identities(source?: IdentitySource | null) {
-  const groups = source?.approvals?.identities || source?.identities;
-  if (Array.isArray(groups) && groups.length)
-    return groups.map((group) => ({
-      id: group.identity,
-      label: identityLabels[group.identity] || words(group.identity),
-      role: group.role || null,
-    }));
-  const roles =
-    source?.approvals?.models?.roles ||
-    source?.models?.roles ||
-    source?.readiness?.models?.roles ||
-    [];
-  return ["digest", "orchestrator"].map((id) => ({
-    id,
-    label: identityLabels[id],
-    role: roles.find((v) => v.role === id),
-  }));
-}
 export function observation(row?: ScannerRow | null) {
   const value = numeric(row?.latest_screening_price ?? row?.latest_sampled_bid);
   const at = numeric(row?.sampled_price_ms ?? row?.sampled_bid_ms);
@@ -664,35 +640,24 @@ export function downsamplePoints(points: Point[], maxPoints = 1200): Point[] {
   }
   return [...keep].sort((a, b) => a - b).map((index) => points[index]);
 }
-export function route(hash: string): { name: string; run?: string } {
+export const ROUTES = [
+  "overview",
+  "portfolio",
+  "instruments",
+  "lanes",
+  "scanner",
+  "strategies",
+  "backtest",
+  "sessions",
+  "health",
+] as const;
+export type RouteName = (typeof ROUTES)[number];
+/** `#/models` and `#/runs/...` are retired pages; they land on the pi lanes. */
+export function route(hash: string): { name: RouteName | "missing" } {
   const raw = String(hash || "").replace(/^#\/?/, "");
   if (!raw) return { name: "overview" };
-  const aliases: Record<string, string> = { runs: "models" };
-  if (raw.startsWith("runs/")) {
-    let id;
-    try {
-      id = decodeURIComponent(raw.slice(5));
-    } catch {
-      return { name: "missing" };
-    }
-    return /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id)
-      ? { name: "models", run: id }
-      : { name: "missing" };
-  }
-  const name = aliases[raw] || raw;
-  return [
-    "overview",
-    "models",
-    "portfolio",
-    "sessions",
-    "scanner",
-    "strategies",
-    "backtest",
-    "health",
-  ].includes(name)
-    ? { name }
-    : { name: "missing" };
-}
-export function runHref(id: string) {
-  return "#/runs/" + encodeURIComponent(id);
+  if (raw === "models" || raw === "runs" || raw.startsWith("runs/"))
+    return { name: "lanes" };
+  const name = ROUTES.find((v) => v === raw);
+  return { name: name || "missing" };
 }

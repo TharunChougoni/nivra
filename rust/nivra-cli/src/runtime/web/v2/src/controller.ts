@@ -1,7 +1,6 @@
 import type {
   WorkspaceState,
   ChartSeries,
-  ApprovalsResponse,
   ProjectionName,
   ProjectionData,
   SummaryResponse,
@@ -52,11 +51,7 @@ const emptySeries = (): ChartSeries => ({
   priceWatermark: null,
   equityWatermark: null,
 });
-type SnapshotProjection = Exclude<ProjectionName, "approvals">;
-// Approvals is an optional legacy projection, read outside the mandatory snapshot.
-const projectionNames = PROJECTION_NAMES.filter(
-  (name): name is SnapshotProjection => name !== "approvals",
-);
+
 type SeriesRead =
   | { kind: "receipt-minute-bar"; instrument: string }
   | { kind: "account-equity" };
@@ -86,8 +81,6 @@ export function createController(
     scannerState: "idle",
     sessions: null,
     sessionsState: "idle",
-    approvals: null,
-    approvalsState: "idle",
     snapshotState: "idle",
     issues: [],
     received: null,
@@ -106,7 +99,6 @@ export function createController(
   let epoch = 0;
   let stream: ReturnType<typeof createEventStream> | null = null;
   let pending: Promise<ProjectionResults> | null = null;
-  let optionalApproval: Promise<ReadResult<ApprovalsResponse>> | null = null;
   let dirty = false,
     stopped = false,
     gap = false,
@@ -214,7 +206,6 @@ export function createController(
     stream?.stop();
     stream = null;
     pending = null;
-    optionalApproval = null;
     dirty = false;
     gap = false;
     chartDeferred = false;
@@ -280,14 +271,12 @@ export function createController(
       plans: null,
       scanner: null,
       sessions: null,
-      approvals: null,
       summaryState: "error",
       portfolioState: "error",
       fillsState: "error",
       plansState: "error",
       scannerState: "error",
       sessionsState: "error",
-      approvalsState: "error",
       points: [],
       equityPoints: [],
       series: emptySeries(),
@@ -318,9 +307,6 @@ export function createController(
       return { summary, portfolio, fills, plans, scanner, sessions };
     })();
     pending = task;
-    // Pi snapshots omit the legacy approvals route. Older hosts may still supply it.
-    const approvalRead = settle(api.approvals());
-    optionalApproval = approvalRead;
     try {
       const result = await task;
       if (generation !== epoch || stopped) return;
@@ -352,14 +338,12 @@ export function createController(
           priceBatchSeq: 0,
           watch: "",
           session: "",
-          approvals: null,
-          approvalsState: "idle",
         });
         void evidence.clear();
       }
       const issues: WorkspaceState["issues"] = [];
       const patch: Partial<WorkspaceState> = {};
-      for (const name of projectionNames) {
+      for (const name of PROJECTION_NAMES) {
         const entry = result[name];
         const value = entry.ok ? entry.value : null;
         assignProjection(patch, result, name);
@@ -410,23 +394,6 @@ export function createController(
           patch.portfolioState === "ready" ? observed.equityPoints : [],
       };
       set(loaded);
-      void approvalRead.then((entry) => {
-        if (
-          generation !== epoch ||
-          stopped ||
-          optionalApproval !== approvalRead
-        )
-          return;
-        const approvals = entry.ok ? entry.value : null;
-        set({
-          approvals,
-          approvalsState: !entry.ok
-            ? "error"
-            : approvals?.unavailable === true
-              ? "unavailable"
-              : "ready",
-        });
-      });
       const first = Array.isArray(scanner?.items)
         ? scanner.items[0]?.instrument_key
         : null;
@@ -605,7 +572,7 @@ export function createController(
 
 type ReadResult<T> = { ok: true; value: T } | { ok: false; error: string };
 type ProjectionResults = {
-  [K in SnapshotProjection]: ReadResult<NonNullable<ProjectionData[K]>>;
+  [K in ProjectionName]: ReadResult<NonNullable<ProjectionData[K]>>;
 };
 async function settle<T>(read: Promise<T>): Promise<ReadResult<T>> {
   try {
@@ -614,7 +581,7 @@ async function settle<T>(read: Promise<T>): Promise<ReadResult<T>> {
     return { ok: false, error: errorMessage(error) };
   }
 }
-function assignProjection<K extends SnapshotProjection>(
+function assignProjection<K extends ProjectionName>(
   patch: Partial<ProjectionData>,
   results: ProjectionResults,
   name: K,

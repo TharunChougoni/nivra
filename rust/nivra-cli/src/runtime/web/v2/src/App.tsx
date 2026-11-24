@@ -6,11 +6,9 @@ import {
   Command,
   LockKeyhole,
   Menu,
-  Moon,
   PanelLeftClose,
   RefreshCw,
   Search,
-  Sun,
   X,
   ChevronRight,
   ArrowRight,
@@ -129,10 +127,7 @@ export default function App() {
     [mobile, setMobile] = useState(false),
     [compact, setCompact] = useState(false),
     [source, setSource] = useState(false),
-    [now, setNow] = useState(Date.now()),
-    [theme, setTheme] = useState(
-      () => document.documentElement.dataset.theme || "dark",
-    );
+    [now, setNow] = useState(Date.now());
   useEffect(() => {
     const change = () => {
       setRoute(parseRoute(location.hash));
@@ -191,16 +186,6 @@ export default function App() {
         );
     } else icon?.remove();
   }, [live, title]);
-  function toggleTheme() {
-    const next = theme === "dark" ? "light" : "dark";
-    document.documentElement.dataset.theme = next;
-    setTheme(next);
-    try {
-      localStorage.setItem("nivraTheme", next);
-    } catch {
-      /* optional preference */
-    }
-  }
   if (!state.meta) return <Login />;
   const record = app.record(),
     records = sessions(state, state.meta),
@@ -288,15 +273,6 @@ export default function App() {
                   ? "Held polling"
                   : "Stream " + state.connection}
             </Status>
-            <IconButton
-              label={
-                theme === "dark"
-                  ? "Switch to light theme"
-                  : "Switch to dark theme"
-              }
-              icon={theme === "dark" ? Sun : Moon}
-              onClick={toggleTheme}
-            />
             <button
               className="icon-button lock"
               onClick={app.lock}
@@ -360,7 +336,7 @@ export default function App() {
             )
           )}
           {Page ? (
-            <Page key={route.name} selectedRun={route.run} />
+            <Page key={route.name} />
           ) : (
             <Empty title="Page not found">
               Choose a section from the workspace navigation.
