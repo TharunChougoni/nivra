@@ -212,15 +212,23 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
     assert_eq!(ord_reply.code, "200 OK");
     let ord_body: serde_json::Value = serde_json::from_slice(&ord_reply.body).unwrap();
     assert_eq!(ord_body["total"], 2);
-    assert_eq!(ord_body["orders"].as_array().unwrap().len(), 2);
+    assert_eq!(ord_body["items"].as_array().unwrap().len(), 2);
     assert_eq!(
-        ord_body["orders"][0]["action"]["instrument_key"],
+        ord_body["items"][0]["action"]["instrument_key"],
         "NSE_EQ|INE002A01018"
     );
-    assert!(ord_body["orders"][1]["action"].is_null());
-    assert!(ord_body["orders"][0].get("fill").is_none());
-    assert!(ord_body["orders"][1].get("fill").is_none());
+    assert!(ord_body["items"][1]["action"].is_null());
+    assert!(ord_body["items"][0].get("fill").is_none());
+    assert!(ord_body["items"][1].get("fill").is_none());
+    assert!(ord_body.get("orders").is_none());
     assert!(ord_body["note"].as_str().unwrap().contains("not fills"));
+    let plans_body: serde_json::Value =
+        serde_json::from_slice(&send(&request("").replace("/api/v1/meta", "/api/v1/plans")).body)
+            .unwrap();
+    assert_eq!(plans_body["actions"].as_array().unwrap().len(), 2);
+    assert_eq!(plans_body["execution"][0]["status"], "paper_simulated");
+    assert!(plans_body["planner"].get("actions").is_none());
+    assert!(plans_body["planner"].get("execution").is_none());
     let date_mismatch =
         send(&request("").replace("/api/v1/meta", "/api/v1/orders?date=2026-10-29"));
     assert_eq!(date_mismatch.code, "200 OK");

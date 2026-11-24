@@ -71,7 +71,6 @@ pub(crate) fn orders(
     let items: Vec<serde_json::Value> = actions
         .map(|arr| arr.iter().rev().skip(offset).take(limit).cloned().collect())
         .unwrap_or_default();
-    body["orders"] = serde_json::json!(items);
     body["items"] = serde_json::json!(items);
     body["execution"] = view["planner"]["execution"].clone();
     body["next"] = if offset.saturating_add(limit) < total {
@@ -176,9 +175,16 @@ pub(crate) fn plans(
         );
     }
     let mut body = envelope(&view);
-    body["planner"] = view["planner"].clone();
-    body["actions"] = view["planner"]["actions"].clone();
-    body["execution"] = view["planner"]["execution"].clone();
+    let mut planner = view["planner"].clone();
+    let mut take = |key: &str| {
+        planner
+            .as_object_mut()
+            .and_then(|fields| fields.shift_remove(key))
+            .unwrap_or_default()
+    };
+    body["actions"] = take("actions");
+    body["execution"] = take("execution");
+    body["planner"] = planner;
     body["note"] = serde_json::json!(
         "Raw actions and host validation are distinct; execution verdicts are not fills."
     );
