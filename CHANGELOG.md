@@ -1,5 +1,17 @@
 # Source snapshot
 
+## 0.12.1 — 2026-11-24
+
+Paper history backfill can check exact candle coverage before startup and
+prepare the dated universe for a new session. Checks for past sessions use
+the original frozen universe.
+
+The research lane can replay hash-pinned historical scanner snapshots in its
+existing sandbox. A stopped controller's sealed paper book can export those
+snapshots for an operator to register. Archived ranking results stay
+retrospective. Current-session after-cost cash replay uses original quote
+receipts.
+
 ## 0.12.0 — 2026-11-24
 
 Pi now owns every model turn. The controller starts the pi agent subprocess,
