@@ -34,7 +34,8 @@ effective session's exact dated universe and trading-day window. It returns
 success only when every required bar is present. For a prepared successor
 config whose dated universe has not been frozen, add `--prepare-universe` to
 fetch the public security metadata and bind it before the check. This takes the
-controller lock and creates no paper book or model calls. Use the same cache
+controller lock and creates no paper book or model calls. A past session
+requires its existing frozen universe. Use the same cache
 for checking, catch-up and startup. Older replay shards may stay in a separate
 archive while the operational cache retains the original receipt bytes.
 

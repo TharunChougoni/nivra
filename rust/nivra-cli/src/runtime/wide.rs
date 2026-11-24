@@ -1314,6 +1314,9 @@ pub(super) fn history_instruments(c: &Config) -> Result<Vec<Instrument>> {
 }
 
 pub(super) fn prepare_history_instruments(c: &Config) -> Result<Vec<Instrument>> {
+    if c.session < local(millis()).date_naive() {
+        return history_instruments(c);
+    }
     let _lock = rollover::controller_lock(c)?;
     let client = data::Client::new(&c.market_data_transport)?;
     Ok(universe::prepare(&client, c)?.instruments)
