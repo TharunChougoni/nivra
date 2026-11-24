@@ -1,5 +1,52 @@
 # Source snapshot
 
+## 0.12.0 — 2026-11-24
+
+Pi now owns every model turn. The controller starts the pi agent subprocess,
+builds bounded briefs, publishes each lane's tools and validates the returned
+TradePlan before the unchanged two-second receipt gate. `planner.agent`
+configures the process and the decision, research, review and optional gate
+lanes: provider, model and thinking level, daily calls and spend, turn timeout,
+tool cap, compaction size and a fallback that runs once after an authentication
+or usage failure that produced no output. Fresh setup writes the pi paper
+planner from reviewed agent settings. Preflight checks the node, entry, package
+dependencies, prompts, an owner-only writable agent directory, known models and
+stored credentials without reading them; release CI now requires the pi agent
+build and tests before it publishes a tag. `agent-check`, `agent-turn` and
+`agent-shadow-report` prove the loop offline with pi's scripted fake provider.
+The legacy harness is removed: the model CLI and provider transports, the
+supervisor and digest/orchestrator lanes, owner tasks, the usage journal, the
+packaged prompt bundle, recorded-reply replay and `host-migrate`. Older journals
+and archive projections stay readable.
+
+Paper scanning keeps deterministic authority. Reviewed research rankers
+register by exact workspace source SHA and bind to a paper trial; research
+claims expire, answers publish atomically and the post-seal review reaches the
+next brief. The optional gate lane screens batches made only of entry-candidate
+triggers on a cheaper model, escalates only a verdict to the decision lane and
+fails open; fills, position risk and scheduled turns skip it.
+
+The dashboard is a rebuilt React/TypeScript workspace: a muted design system,
+one status-bar shell, grouped navigation, a pi lanes view with turn drawer,
+gate funnel and lane budgets, an order lifecycle, an instruments catalog,
+synced equity and drawdown charts, a read-only readiness panel and operational
+health v2. Projections publish their own revisions so a page refetches only
+what changed, price frames arrive as delta batches and the lane journal is
+served as a bounded cached tail. The retired Tailwind/light theme, run,
+transcript and approval views are gone. The brand reads Nivra.
+
+The controller keeps the instrument display catalog as serialized rows with a
+typed index and streams the BOD gzip instead of materializing its JSON, removing
+its two largest heap consumers. `nivra-tools check-release` refuses retired
+harness vocabulary beyond a per-file allowance that may only shrink.
+
+Upgrading from 0.11.x: the planner policy must be the pi lane shape, with the
+agent package, its prompts and an application-owned agent directory under the
+granted state root installed beside the configured node and entry; the retired
+roles are refused. `nivra dashboard --model-config` is now `--config`. Release
+assets no longer include `default-prompts.json`; prompts ship with the agent
+package. Live orders remain disabled.
+
 ## 0.11.1 — 2026-11-18
 
 Raise the local Upstox read caps from the retired shared-journal values
