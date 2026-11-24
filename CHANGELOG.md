@@ -1,5 +1,11 @@
 # Source snapshot
 
+## 0.12.2 — 2026-11-24
+
+The updater now leaves the paper controller stopped during a reviewed
+`--operator-stopped` install. Normal updates accept authenticated health
+responses up to 4 MiB so detailed history readiness can be checked.
+
 ## 0.12.1 — 2026-11-24
 
 Paper history backfill can check exact candle coverage before startup and

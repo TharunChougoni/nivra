@@ -1146,6 +1146,13 @@ continuation. With a separate recovery mandate for a closed flat halted book,
 install first and follow [closed-book recovery](#stop-recovery-and-closed-incidents)
 using the new release. Do not rebind authority with a candidate binary before
 the swap, because an older installed release will re-halt on that authority.
+
+If the installed updater does not honor `--operator-stopped`, stage the binary
+from the verified successor release in a private directory. Check its
+published SHA-256 and exact version, then run that binary's `update` command
+with the same configuration and flags. It verifies the installed release and
+performs the guarded swap.
+
 A closed book refuses both `config-apply` and `resume`. A separately authorized
 successor session binds the reviewed policy during rollover.
 
