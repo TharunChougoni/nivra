@@ -2,8 +2,8 @@
 
 ## Client workspace build
 
-The workspace uses React/Vite/TypeScript with Tailwind, Radix UI, Lucide and
-uPlot. Node 24 is the build/CI environment; Rust serves the committed static
+The workspace uses React/Vite/TypeScript with plain token-based CSS, Radix
+Dialog, Lucide and uPlot. Node 24 is the build/CI environment; Rust serves the committed static
 output. Node is not a runtime dependency of the paper controller. After client
 source/dependency changes:
 
