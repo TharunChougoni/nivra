@@ -1,17 +1,13 @@
 import type { CatalogInstrument, ContractStrike } from "./types";
 import type { Column } from "./ui";
 import React, { useEffect, useState } from "react";
-import { amount, classLabel, count, datetime, duration, words } from "./data";
+import { amount, classLabel, count, datetime, words } from "./data";
 import {
   Button,
   Drawer,
-  Empty,
   Facts,
   Instrument,
-  Notice,
   Panel,
-  Segments,
-  Status,
   Table,
   useWorkspace,
 } from "./ui";

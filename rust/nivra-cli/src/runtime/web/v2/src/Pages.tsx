@@ -3,11 +3,7 @@ import type {
   Position,
   SessionRecord,
   PlansResponse,
-  Availability,
-  LoadState,
   ScannerRow,
-  CatalogInstrument,
-  ContractStrike,
   StrategyReference,
   ReplayPayload,
   ReplayResult,
@@ -15,28 +11,16 @@ import type {
   Instrument as UniverseInstrument,
 } from "./types";
 import { errorMessage } from "./types";
-import type { Api } from "./api";
 import type { Column } from "./ui";
-import type { LucideIcon } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
 import {
-  ArrowRight,
   ArrowUpRight,
   FileUp,
   Download,
-  Check,
-  ChevronRight,
   Radio,
-  TrendingUp,
   Layers,
-  ShieldCheck,
   GitBranch,
-  ScanLine,
-  Database,
-  Bot,
-  Clock,
   Search,
-  CircleAlert,
 } from "lucide-react";
 import Chart from "./Chart";
 import Lanes from "./Lanes";
@@ -45,11 +29,10 @@ import Overview from "./Overview";
 import { useRead, useRevision } from "./reads";
 import { instrumentIndex, modeOf, orderTracks } from "./model";
 import type { InstrumentRecord, OrderTrack } from "./model";
-import { BookContinuity, OperationalPanel } from "./Operational";
+import { OperationalPanel } from "./Operational";
 import {
   amount,
   classLabel,
-  clock,
   count,
   currentSession,
   datetime,
@@ -62,7 +45,6 @@ import {
   linkedPlan,
   lotQuantity,
   numeric,
-  observation,
   plansFor,
   sessionKey,
   sessions,
@@ -147,28 +129,6 @@ function Ledger({
         (fills === null ? "Fill evidence unavailable" : "No recorded fills")
       }
     />
-  );
-}
-function ReadinessItem({
-  icon: Icon,
-  label,
-  value,
-  description,
-}: {
-  icon: LucideIcon;
-  label: string;
-  value?: string | null;
-  description: string;
-}) {
-  return (
-    <div className="readiness-item">
-      <Icon size={15} />
-      <div>
-        <strong>{label}</strong>
-        <p>{description}</p>
-      </div>
-      <Status value={value} />
-    </div>
   );
 }
 function percent(value?: number | null) {
@@ -875,12 +835,14 @@ export function Scanner() {
           {
             key: "price",
             label: "Screening price",
+            num: true,
             render: (r) =>
               amount(r.latest_screening_price ?? r.latest_sampled_bid),
           },
           {
             key: "sample_change_bps",
             label: "Sampled Δ · bps",
+            num: true,
             render: (r) => (
               <span
                 className={
@@ -894,11 +856,13 @@ export function Scanner() {
           {
             key: "sample_count",
             label: "Samples",
+            num: true,
             render: (r) => count(r.sample_count),
           },
           {
             key: "observed_ms",
             label: "Original receipt",
+            num: true,
             render: (r) => datetime(r.observed_ms),
           },
           {

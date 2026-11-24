@@ -6,7 +6,6 @@ import type {
   SessionRecord,
   Fill,
   PlansResponse,
-  Position,
   ScannerRow,
   Point,
   SeriesResponse,
@@ -14,7 +13,6 @@ import type {
   SeriesCoverage,
   StreamEvent,
   StrategyReference,
-  Decimal,
   Instrument,
 } from "./types";
 // Display projections only. Original identity, quote clocks and unknowns survive.

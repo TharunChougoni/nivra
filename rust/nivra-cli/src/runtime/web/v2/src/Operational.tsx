@@ -876,6 +876,7 @@ export function BookContinuity({
       note="Portfolio-first book state. The continuing paper account is unchanged; no new trading risk cap, provider switch or activation control is added."
     >
       <Facts
+        className="facts-strip"
         items={[
           ["Book state", state],
           [

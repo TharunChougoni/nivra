@@ -84,7 +84,7 @@
 .dot.neg {
   background: var(--neg);
 }
-.nav-toggle {
+.statusbar .nav-toggle {
   display: none;
 }
 .ticker {
@@ -203,6 +203,9 @@
   gap: 12px;
   min-width: 0;
 }
+.content > * {
+  flex-shrink: 0;
+}
 .page-head {
   display: flex;
   align-items: baseline;
@@ -293,7 +296,7 @@
   .nav {
     display: none;
   }
-  .nav-toggle {
+  .statusbar .nav-toggle {
     display: inline-flex;
   }
   .content {

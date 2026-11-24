@@ -16,11 +16,9 @@ import {
   finance,
   fillsFor,
   numeric,
-  observation,
   plansFor,
   sessionKey,
   usd,
-  words,
 } from "./data";
 import {
   equityStats,
@@ -102,9 +100,9 @@ export default function Overview() {
   );
   const turns = state.agent?.turns ?? [],
     coverage = journalCoverage(state.agent);
-  const lanes = useMemo(
+  const laneRows = useMemo(
     () => laneStats(turns, state.agent?.usage),
-    [state.agent],
+    [turns, state.agent],
   );
   const spend = Object.values(state.agent?.usage?.lanes ?? {}).reduce<
     number | null
@@ -135,14 +133,14 @@ export default function Overview() {
     [
       "Equity",
       amount(f.equity),
-      f.equity === null ? "No marked book recorded" : "Cash + recorded marks",
+      f.equity === null ? "No marked book recorded" : "cash + marks",
     ],
     [
       "Day P&L net",
       signed(stats.dayNet),
       stats.dayNet === null
         ? "Needs two recorded equity checkpoints"
-        : `since ${clock(stats.first!.at)} checkpoint · after fees`,
+        : `since ${clock(stats.first!.at)} · after fees`,
       { tone: tone(stats.dayNet) },
     ],
     [
@@ -152,7 +150,7 @@ export default function Overview() {
         : signed(numeric(attribution.realized_pnl)),
       attribution?.realized_pnl == null
         ? "Health attribution not loaded"
-        : "Activity attribution",
+        : "attribution",
       { tone: tone(numeric(attribution?.realized_pnl)) },
     ],
     [
@@ -160,15 +158,11 @@ export default function Overview() {
       signed(f.unrealized),
       f.unrealized === null
         ? "A position lacks a recorded mark"
-        : "Recorded marks − entry",
+        : "marks − entry",
       { tone: tone(f.unrealized) },
     ],
-    [
-      "Fees",
-      amount(f.fees),
-      f.fees === null ? "Not recorded" : "Simulated, recorded",
-    ],
-    ["Cash", amount(f.cash), "Continuing balance"],
+    ["Fees", amount(f.fees), f.fees === null ? "Not recorded" : "recorded"],
+    ["Cash", amount(f.cash), "continuing"],
     [
       "Gross exposure",
       amount(f.gross),
@@ -183,14 +177,14 @@ export default function Overview() {
         : `${stats.maxDrawdownPct.toFixed(2)}%`,
       stats.maxDrawdownPct === null
         ? "Needs two recorded equity checkpoints"
-        : `${stats.count} checkpoints${stats.troughAt ? ` · trough ${clock(stats.troughAt)}` : ""}`,
+        : `${stats.count} pts${stats.troughAt ? ` · ${clock(stats.troughAt)}` : ""}`,
       { tone: stats.maxDrawdownPct ? "neg" : undefined },
     ],
     [
       "Fills",
       fills ? count(fills.length) : "—",
       fills
-        ? `${count(rejected)} rejected in current plan`
+        ? `${count(rejected)} rejected · plan`
         : "Fill evidence unavailable",
     ],
     [
@@ -198,7 +192,7 @@ export default function Overview() {
       usd(spend),
       spend === null
         ? "Usage not reported"
-        : (coverage.label ?? `${count(state.agent?.total)} turns today`),
+        : (coverage.label ?? `${count(turns.length)} turns`),
     ],
   ];
   const selected = prospects.find((v) => v.instrument_key === state.watch);
@@ -277,7 +271,6 @@ export default function Overview() {
     },
   ];
   const shown = tracks.slice(0, 8);
-  const laneRows = laneStats(turns, state.agent?.usage);
   return (
     <>
       <BookContinuity summary={s} portfolio={state.portfolio} />

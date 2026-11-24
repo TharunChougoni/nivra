@@ -1,16 +1,7 @@
 import type { AgentTurn } from "./types";
 import type { Column } from "./ui";
 import React, { useEffect, useMemo, useState } from "react";
-import {
-  amount,
-  clock,
-  count,
-  datetime,
-  duration,
-  numeric,
-  usd,
-  words,
-} from "./data";
+import { clock, count, datetime, duration, numeric, usd, words } from "./data";
 import {
   LANE_ORDER,
   journalCoverage,
@@ -314,7 +305,7 @@ function LatencyHistograms({
               items={counts.map((value, i) => ({
                 label: i < EDGES.length ? edgeLabel(EDGES[i]) : "∞",
                 value,
-                title: `${i ? edgeLabel(EDGES[i - 1]) : "0"} – ${i < EDGES.length ? edgeLabel(EDGES[i]) + (i < EDGES.length ? "" : "") : "∞"}: ${value} turns`,
+                title: `${i ? edgeLabel(EDGES[i - 1]) : "0"} – ${i < EDGES.length ? edgeLabel(EDGES[i]) : "∞"}: ${value} turns`,
               }))}
             />
           </div>

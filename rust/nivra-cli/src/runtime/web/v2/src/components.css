@@ -612,3 +612,19 @@ td.wrap {
   border-color: var(--neg);
   color: var(--neg);
 }
+.fact-list.facts-strip {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0;
+  padding: 0;
+}
+.facts-strip > div {
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 1px;
+  padding: 6px 10px;
+  border-right: 1px solid var(--line);
+  border-bottom: 0;
+}
+.facts-strip dd {
+  text-align: left;
+}

@@ -344,9 +344,15 @@ export function Instrument({
     </span>
   );
 }
-export function Facts({ items }: { items: [string, React.ReactNode][] }) {
+export function Facts({
+  items,
+  className = "",
+}: {
+  items: [string, React.ReactNode][];
+  className?: string;
+}) {
   return (
-    <dl className="fact-list">
+    <dl className={`fact-list ${className}`}>
       {items.map(([label, value]) => (
         <div key={label}>
           <dt>{label}</dt>

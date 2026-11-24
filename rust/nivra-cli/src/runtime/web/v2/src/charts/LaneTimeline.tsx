@@ -156,7 +156,12 @@ export default function LaneTimeline({
           );
         })}
         {ticks.map((t) => (
-          <text key={t} x={x(t)} y={height - 3} textAnchor="middle">
+          <text
+            key={t}
+            x={Math.min(x(t), width - 14)}
+            y={height - 3}
+            textAnchor="middle"
+          >
             {clock(t)}
           </text>
         ))}

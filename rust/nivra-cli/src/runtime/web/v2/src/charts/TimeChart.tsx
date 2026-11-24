@@ -1,5 +1,5 @@
 import type uPlot from "uplot";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { clock } from "../data";
 import { readTokens, withAlpha } from "./tokens";
 
@@ -333,16 +333,15 @@ export function TimeChart(props: TimeChartProps) {
       root.replaceChildren();
     };
   }, [shape]);
-  const fingerprint = useMemo(() => props.x, [props.x]);
   useEffect(() => {
     if (props.frozen) return;
     plots.current.forEach((u, i) =>
       u.setData([
-        fingerprint,
+        props.x,
         ...(props.panes[i]?.series.map((s) => s.data) ?? []),
       ] as uPlot.AlignedData),
     );
-  }, [fingerprint, props.panes, props.frozen, ready]);
+  }, [props.x, props.panes, props.frozen, ready]);
   useEffect(() => {
     // Markers and bands are drawn from props; repaint without touching scales.
     plots.current.forEach((u) => u.redraw(false));

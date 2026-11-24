@@ -9,7 +9,6 @@ import type {
   SeriesKind,
   SeriesResponse,
   StreamEvent,
-  LoadState,
   Fetch,
   Revisions,
   RevisionName,
