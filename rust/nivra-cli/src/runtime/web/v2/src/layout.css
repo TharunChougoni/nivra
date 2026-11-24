@@ -67,6 +67,9 @@
 .kv > time {
   color: var(--fg-1);
 }
+.kv-label {
+  font-style: normal;
+}
 .dot {
   width: 6px;
   height: 6px;
@@ -311,6 +314,25 @@
   }
   .brand {
     min-width: 0;
+  }
+  .page-tools {
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+  .session-select,
+  .session-select select {
+    min-width: 0;
+    max-width: 100%;
+  }
+}
+@media (max-width: 599px) {
+  .statusbar {
+    gap: 8px;
+    padding: 0 6px;
+  }
+  .statusbar .kv-label,
+  .brand b {
+    display: none;
   }
 }
 .mobile-nav {

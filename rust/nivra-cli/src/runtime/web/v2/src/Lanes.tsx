@@ -1,4 +1,4 @@
-import type { AgentTurn } from "./types";
+import type { AgentTurn, LaneBudget } from "./types";
 import type { Column } from "./ui";
 import React, { useEffect, useMemo, useState } from "react";
 import { clock, count, datetime, duration, numeric, usd, words } from "./data";
@@ -115,6 +115,17 @@ function WebToolActivity() {
   );
 }
 
+/** Daily budget rows; absent budget fields stay unknown, never zero. */
+function laneBudgetRows(b: LaneBudget | undefined): [string, string][] {
+  if (!b) return [["budget", "not reported"]];
+  const of = (used: string, total: string) => `${used} of ${total}`;
+  return [
+    ["model", [b.provider, b.model].filter(Boolean).join(" · ") || "—"],
+    ["calls today", of(count(b.current_usage), count(b.daily_call_budget))],
+    ["spend today", of(usd(b.current_cost_usd), usd(b.daily_cost_usd))],
+    ["status", words(b.status)],
+  ];
+}
 function LaneCards({ turns }: { turns: AgentTurn[] }) {
   const [state] = useWorkspace();
   const coverage = journalCoverage(state.agent);
@@ -122,6 +133,11 @@ function LaneCards({ turns }: { turns: AgentTurn[] }) {
     () => laneStats(turns, state.agent?.usage),
     [turns, state.agent],
   );
+  // Budgets move only with lane usage, which the agent revision covers.
+  const health = useRead((api) => api.health(), useRevision("agent")),
+    budgets = new Map<string, LaneBudget>(
+      (health.value?.readiness?.models?.roles ?? []).map((b) => [b.role, b]),
+    );
   return (
     <Panel
       title="Lanes"
@@ -152,6 +168,7 @@ function LaneCards({ turns }: { turns: AgentTurn[] }) {
                 ["cache read", count(l.cache_read)],
                 ["cost", usd(l.cost_usd)],
                 ["calls", count(l.calls)],
+                ...laneBudgetRows(budgets.get(l.lane)),
                 [
                   "last",
                   l.last

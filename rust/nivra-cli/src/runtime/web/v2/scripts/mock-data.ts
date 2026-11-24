@@ -6,6 +6,7 @@
 // derives the time-dependent wire projections. Nothing here is shipped: the
 // production bundle never imports this file.
 import type {
+  LaneBudget,
   ActivityAttribution,
   AgentResponse,
   AgentTurn,
@@ -27,7 +28,6 @@ import type {
   ReplayExample,
   ReplayResponse,
   ResearchCandidate,
-  RoleApproval,
   ScannerResponse,
   ScannerRow,
   SeriesResponse,
@@ -1179,7 +1179,7 @@ export function createMockData(
         t,
         {
           kind: "research_due",
-          reason: "owner research cadence",
+          reason: "research cadence",
           instruments: [],
         },
         {
@@ -1258,7 +1258,7 @@ export function createMockData(
             v: 1,
             at_ms: (t.at_ms ?? 0) + 4_000 + ci * 7_000,
             session: day,
-            run: `harness-orchestrator-${ti + 1}`,
+            run: `harness-decision-${ti + 1}`,
             turn: 0,
             call: `call_${ti}_${ci}`,
             tool: c.name,
@@ -1572,25 +1572,6 @@ function drawdownOf(points: EquityPoint[]) {
   return { high, max, maxPct, longest };
 }
 
-const rolesAt = (wall: number): RoleApproval[] => [
-  {
-    role: "digest",
-    model: "gpt-6.1-luna",
-    status: "ready",
-    remaining_current: 142,
-    reason: null,
-    credential_check: { approval_expires_at: wall + 6 * 3_600_000 },
-  },
-  {
-    role: "orchestrator",
-    model: "gpt-6.1-sol",
-    status: "ready",
-    remaining_current: 38,
-    reason: null,
-    credential_check: { approval_expires_at: wall + 6 * 3_600_000 },
-  },
-];
-
 export function metaFor(data: MockData): MetaResponse {
   return {
     v: 1,
@@ -1600,7 +1581,6 @@ export function metaFor(data: MockData): MetaResponse {
     live_enabled: false,
     broker: { data: MOCK_BROKER, orders: "paper" },
     account: MOCK_ACCOUNT,
-    roles: ["digest", "orchestrator"],
     capabilities: [
       "summary",
       "portfolio",
@@ -1978,20 +1958,10 @@ export function agentAt(
         : e.event;
     triggers[k] = (triggers[k] ?? 0) + 1;
   }
-  const more = cursor + page.length < visible.length;
   return {
     v: 1,
     turns: page,
     total: visible.length,
-    ...(more
-      ? {
-          truncated: true,
-          rows_not_loaded: {
-            turns: visible.length - cursor - page.length,
-            triggers: 0,
-          },
-        }
-      : {}),
     next:
       cursor + page.length < visible.length
         ? String(cursor + page.length)
@@ -2118,69 +2088,6 @@ function operationalAt(data: MockData, wall: number): OperationalHealth {
   return {
     version: 1,
     captured_at_ms: wall - 4_000,
-    supervisor: {
-      status: "idle",
-      config: "configured",
-      config_reason: null,
-      config_scope: "loaded_policy_or_static_failure_code",
-      state: "present",
-      enabled: true,
-      parked: null,
-      budget: {
-        configured_daily_calls: 60,
-        charged_calls: data.decisions.length * 2,
-        charged_calls_scope: "provider_usage_projection_not_turn_runs",
-        parked_at_calls: null,
-        exhausted: false,
-        exhausted_scope: "authoritative_current_session_parked_state_only",
-      },
-      context: {
-        reason: "within_limits",
-        reason_known: true,
-        incomplete_reason: null,
-        request_bytes: 212_000,
-        max_request_bytes: 900_000,
-        at_ms: wall - 90_000,
-        retries: 0,
-      },
-      compaction: {
-        reason: "context_budget",
-        reason_known: true,
-        at_ms: wall - 3_600_000,
-      },
-      backoff: {
-        configured_ms: 30_000,
-        retry_limit: 2,
-        enforced: true,
-        enforced_scope: "current_session_context_exhaustion_only",
-        active: false,
-        active_scope: "authoritative_current_session_state_only",
-        earliest_retry_at_ms: null,
-      },
-      last_completed_run: {
-        at_ms: wall - 95_000,
-        age_ms: 95_000,
-        runs: data.turns.length,
-      },
-      pending_source: "no_pending",
-      pending_scope: "checked_bounded_session_log",
-      pending: null,
-      research: {
-        config: "configured",
-        config_reason: null,
-        enabled: true,
-        due: false,
-        state: "idle",
-        reason: "cadence_not_elapsed",
-        evidence_id: "ev-0004",
-        evidence_count: 14,
-        cutoff_ms: wall - 7_200_000,
-        deferred_until_ms: wall + 1_500_000,
-        pending_source: "no_pending",
-        pending: null,
-        as_of_ms: wall - 4_000,
-      },
-    },
     calendar: {
       source: "NSE/CMTR/71775",
       covered_from: "2026-01-01",
@@ -2306,7 +2213,6 @@ function summaryAt(data: MockData, now: number, wall: number): SummaryResponse {
       history: hist,
       lifecycle: { status: "running", reason: "market_open" },
       checked_at_ms: now - 2_000,
-      models: { roles: rolesAt(wall) },
     },
     planner: {
       status: "idle",
@@ -2321,21 +2227,6 @@ function summaryAt(data: MockData, now: number, wall: number): SummaryResponse {
       items: data.candidates,
       truncated: false,
       activation_authorized: false,
-    },
-    owner_research: {
-      version: 1,
-      status: "idle",
-      research_due: false,
-      as_of_ms: wall - 4_000,
-      cutoff_ms: wall - 7_200_000,
-      evidence_count: 14,
-      state_available: true,
-      reason: "cadence_not_elapsed",
-      evidence_id: "ev-0004",
-      deferred_until_ms: wall + 1_500_000,
-      activation_authorized: false,
-      workspace_ref_count: 3,
-      workspace_snapshot_sha256: sha,
     },
     research_tasks: {
       status: "ready",
@@ -2479,6 +2370,37 @@ export function sessionsAt(data: MockData, now: number): SessionsResponse {
   return { ...envelopeFor(data, now), total: items.length, items, next: null };
 }
 
+const LANE_BUDGETS: Record<string, [string, number, number]> = {
+  decision: ["gpt-6.1-sol", 60, 4],
+  gate: ["gemini-3-flash", 200, 1],
+  research: ["claude-sonnet-5", 20, 3],
+  review: ["claude-opus-5", 16, 2],
+};
+function laneBudgetsAt(data: MockData, now: number): LaneBudget[] {
+  const usage = agentAt(data, now).usage?.lanes ?? {};
+  return Object.entries(LANE_BUDGETS).map(([role, [model, calls, usd]]) => {
+    const spent = usage[role];
+    return {
+      role,
+      enabled: true,
+      model,
+      transport: "pi",
+      provider: "openrouter",
+      status: "unknown",
+      reason: "agent_provider_not_checked",
+      daily_call_budget: calls,
+      budget_unit: "request",
+      daily_cost_usd: usd,
+      current_usage: spent?.calls ?? null,
+      current_cost_usd: spent?.cost_usd ?? null,
+      remaining_current: spent ? Math.max(0, calls - (spent.calls ?? 0)) : null,
+      remaining_cost_usd: spent
+        ? Math.max(0, usd - (spent.cost_usd ?? 0))
+        : null,
+    };
+  });
+}
+
 export function healthAt(
   data: MockData,
   now: number,
@@ -2487,6 +2409,8 @@ export function healthAt(
   const s = summaryAt(data, now, wall);
   return {
     ...s,
+    // Health carries the full readiness, including one budget row per lane.
+    readiness: { ...s.readiness, models: { roles: laneBudgetsAt(data, now) } },
     version: "0.0.0-mock",
     activity_attribution: attributionAt(data, now),
     controller_liveness: {

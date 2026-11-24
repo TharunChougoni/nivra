@@ -1029,6 +1029,27 @@ test("#/lanes shows lane cards, the turn table and the turn drawer from the jour
     },
   ];
   const fetch = fetchFixture({
+    // Only the decision lane reports a budget; gate's stays unknown.
+    "/api/v1/health": () =>
+      json({
+        ...envelope,
+        readiness: {
+          models: {
+            roles: [
+              {
+                role: "decision",
+                model: "primary-model",
+                provider: "router",
+                status: "unknown",
+                daily_call_budget: 60,
+                daily_cost_usd: 4,
+                current_usage: 2,
+                current_cost_usd: 0.31,
+              },
+            ],
+          },
+        },
+      }),
     "/api/v1/agent": () =>
       json({
         v: 1,
@@ -1073,6 +1094,19 @@ test("#/lanes shows lane cards, the turn table and the turn drawer from the jour
     assert.ok(cards[0].startsWith("decision"));
     assert.ok(cards[0].includes("$0.31"));
     assert.ok(cards[0].includes("1 · 1"), "failed and fallback counts");
+    await until(() =>
+      (document.querySelector(".lane-card")?.textContent || "").includes(
+        "2 of 60",
+      ),
+    );
+    const budgeted =
+        document.querySelectorAll(".lane-card")[0].textContent || "",
+      unbudgeted = document.querySelectorAll(".lane-card")[1].textContent || "";
+    assert.ok(
+      budgeted.includes("$0.31 of $4.00"),
+      "spend against daily budget",
+    );
+    assert.ok(unbudgeted.includes("not reported"), "absent budget is not zero");
     assert.ok(cards[1].startsWith("gate"));
     // a lane with no turns keeps unknown latency instead of 0 ms
     assert.ok(cards[2].includes("— / —"));

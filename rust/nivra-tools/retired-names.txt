@@ -1,4 +1,3 @@
-1	decide	docs/DASHBOARD.md
 1	decide	docs/DEVELOPMENT.md
 1	decide	docs/STRATEGY_SANDBOX.md
 1	decide	rust/nivra-cli/src/alert/tests.rs
@@ -29,7 +28,6 @@
 3	fact_digest	rust/nivra-store/src/research_jobs.rs
 12	fact_digest	rust/nivra-store/src/strategy_results.rs
 9	fact_digest	rust/nivra-tools/src/retired.rs
-3	harness_run	docs/DASHBOARD.md
 1	harness_run	docs/DEVELOPMENT.md
 1	harness_run	rust/nivra-cli/src/runtime/web_tools/mod.rs
 4	harness_run	rust/nivra-tools/src/retired.rs
@@ -44,12 +42,9 @@
 1	luna	rust/nivra-cli/src/runtime/redecision/lifecycle.rs
 1	luna	rust/nivra-cli/src/runtime/retention.rs
 6	luna	rust/nivra-cli/src/runtime/strategy_results.rs
-2	luna	rust/nivra-cli/src/runtime/web/v2/src/data.test.ts
-2	luna	rust/nivra-cli/src/runtime/web/v2/src/workspace.test.tsx
 2	luna	rust/nivra-cli/src/strategy_archive.rs
 1	luna	rust/nivra-core/src/strategy.rs
 5	luna	rust/nivra-tools/src/retired.rs
-13	orchestrator	docs/DASHBOARD.md
 1	orchestrator	docs/DEVELOPMENT.md
 14	orchestrator	docs/STRATEGY_SANDBOX.md
 1	orchestrator	docs/TESTING.md
@@ -64,12 +59,7 @@
 2	orchestrator	rust/nivra-cli/src/runtime/options/mod.rs
 10	orchestrator	rust/nivra-cli/src/runtime/redecision.rs
 1	orchestrator	rust/nivra-cli/src/runtime/web/router.rs
-2	orchestrator	rust/nivra-cli/src/runtime/web/v1/ops.rs
-3	orchestrator	rust/nivra-cli/src/runtime/web/v2/src/Models.tsx
-2	orchestrator	rust/nivra-cli/src/runtime/web/v2/src/Pages.tsx
-6	orchestrator	rust/nivra-cli/src/runtime/web/v2/src/data.test.ts
-3	orchestrator	rust/nivra-cli/src/runtime/web/v2/src/data.ts
-11	orchestrator	rust/nivra-cli/src/runtime/web/v2/src/workspace.test.tsx
+1	orchestrator	rust/nivra-cli/src/runtime/web/v1/ops.rs
 2	orchestrator	rust/nivra-cli/src/runtime/web_tools/mod.rs
 2	orchestrator	rust/nivra-cli/src/runtime/workspace/mod.rs
 1	orchestrator	rust/nivra-cli/src/strategy_approval.rs
@@ -106,7 +96,6 @@
 15	owner_lane	rust/nivra-tools/src/retired.rs
 1	scorer	docs/ARCHITECTURE.md
 1	scorer	docs/BUILD_PERFORMANCE.md
-5	scorer	docs/DASHBOARD.md
 2	scorer	docs/DEVELOPMENT.md
 5	scorer	docs/OPERATIONS.md
 1	scorer	docs/RESEARCH_WORKER.md
@@ -159,7 +148,6 @@
 24	scorer	rust/nivra-store/src/research_jobs.rs
 28	scorer	rust/nivra-store/src/strategy_results.rs
 2	scorer	rust/nivra-tools/src/retired.rs
-3	supervisor	docs/DASHBOARD.md
 1	supervisor	docs/DEVELOPMENT.md
 1	supervisor	docs/STRATEGY_SANDBOX.md
 10	supervisor	rust/README.md

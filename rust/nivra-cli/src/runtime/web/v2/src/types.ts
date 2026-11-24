@@ -113,13 +113,22 @@ export interface HistoryPreparation {
   target_session?: string;
   failure?: string | null;
 }
-export interface RoleApproval {
+/** One pi lane's readiness and daily budget, from `readiness.models.roles`. */
+export interface LaneBudget {
   role: string;
-  model?: string;
+  enabled?: boolean;
+  model?: string | null;
+  provider?: string | null;
+  transport?: string | null;
   status?: string | null;
-  remaining_current?: number | null;
   reason?: string | null;
-  credential_check?: { approval_expires_at?: number | string | null };
+  daily_call_budget?: number | null;
+  budget_unit?: string | null;
+  daily_cost_usd?: number | null;
+  current_usage?: number | null;
+  current_cost_usd?: number | null;
+  remaining_current?: number | null;
+  remaining_cost_usd?: number | null;
 }
 export interface Readiness {
   status?: string | null;
@@ -127,7 +136,7 @@ export interface Readiness {
   history?: HistoryPreparation | null;
   lifecycle?: { status?: string; reason?: string };
   checked_at_ms?: number;
-  models?: { roles?: RoleApproval[] };
+  models?: { roles?: LaneBudget[] };
 }
 export interface MarketFeed {
   state?: string;

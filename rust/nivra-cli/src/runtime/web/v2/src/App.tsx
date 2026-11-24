@@ -195,11 +195,13 @@ function StatusBar({
       </button>
       <span className="spacer" />
       <span className="kv" title="Age of the last market tick received">
-        <i className={"dot " + feedTone(summary)} /> feed{" "}
+        <i className={"dot " + feedTone(summary)} />{" "}
+        <em className="kv-label">feed</em>
         <span>{tick === null ? "—" : duration(tick)}</span>
       </span>
       <span className="kv">
-        <i className={"dot " + stream} /> stream <span>{streamLabel}</span>
+        <i className={"dot " + stream} /> <em className="kv-label">stream</em>{" "}
+        <span>{streamLabel}</span>
       </span>
       <a className="kv hide-narrow" href="#/health">
         <i
