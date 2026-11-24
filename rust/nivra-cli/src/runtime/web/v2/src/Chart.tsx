@@ -1,9 +1,11 @@
 import type uPlot from "uplot";
 import type { Point, SeriesCoverage } from "./types";
-import React, { useEffect, useRef, useState } from "react";
-import { Crosshair, Maximize2, Pause, Play, TrendingUp } from "lucide-react";
+import React, { useMemo, useState } from "react";
+import { Crosshair, Pause, Play } from "lucide-react";
 import { amount, clock, downsamplePoints, words } from "./data";
 import { Button, Empty, Segments } from "./ui";
+import { TimeChart } from "./charts/TimeChart";
+import type { Band, Marker } from "./charts/TimeChart";
 export function chartData(
   points: Point[],
   range: string,
@@ -32,6 +34,32 @@ export function chartData(
   }
   return [sampled.map((p) => p.at / 1000), values, carried];
 }
+export interface FillMarker {
+  at: number;
+  side: "buy" | "sell";
+}
+const RANGES: [string, string][] = [
+  ["5m", "5m"],
+  ["15m", "15m"],
+  ["1h", "1h"],
+  ["all", "day"],
+];
+/** Value of the last non-null observation at or before `at`. */
+function valueAt(x: number[], values: (number | null)[], at: number) {
+  let lo = 0,
+    hi = x.length - 1,
+    found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (x[mid] * 1000 <= at) {
+      found = mid;
+      lo = mid + 1;
+    } else hi = mid - 1;
+  }
+  for (let i = found; i >= 0; i--) if (values[i] !== null) return values[i];
+  return null;
+}
+/** Price or equity series over TimeChart: gaps, carried minutes and fills. */
 export default function Chart({
   points = [],
   label = "Price",
@@ -40,6 +68,9 @@ export default function Chart({
   height = 280,
   emptyTitle = "Waiting for recorded chart evidence",
   emptyDetail = "The authenticated series read is unavailable or still loading. No synthetic history is drawn.",
+  baseline = null,
+  drawdown = false,
+  markers = [],
 }: {
   points?: Point[];
   label?: string;
@@ -48,214 +79,130 @@ export default function Chart({
   height?: number;
   emptyTitle?: string;
   emptyDetail?: string;
+  /** Session-start reference drawn dashed; also feeds the tooltip's day net. */
+  baseline?: number | null;
+  /** Add a synced drawdown pane computed from the plotted values. */
+  drawdown?: boolean;
+  markers?: FillMarker[];
 }) {
-  const host = useRef<HTMLDivElement>(null),
-    plot = useRef<uPlot | null>(null),
-    latest = useRef(points);
   const [range, setRange] = useState("all"),
     [follow, setFollow] = useState(true),
-    [hover, setHover] = useState<Point | null>(null),
-    [gapHint, setGapHint] = useState<{ reason?: string; left: number } | null>(
-      null,
-    ),
     [failed, setFailed] = useState(false);
-  latest.current = points;
   const valid = points.filter((p) => p.value !== null && !p.carried),
     enough = valid.length >= 2,
-    plotted = chartData(points, range)[0].length,
+    data = useMemo(() => chartData(points, range), [points, range]),
+    plotted = data[0].length,
     historyStart =
       coverage?.store_started_after_open &&
       Number.isFinite(Number(coverage?.store_start_ms))
         ? Number(coverage.store_start_ms)
         : null;
-  const [version, setVersion] = useState(0),
-    [theme, setTheme] = useState(() => document.documentElement.dataset.theme);
-  useEffect(() => {
-    const observer = new MutationObserver(() =>
-      setTheme(document.documentElement.dataset.theme),
-    );
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["data-theme"],
+  const [x, values, carried] = data as [
+    number[],
+    (number | null)[],
+    (number | null)[],
+  ];
+  const peaks = useMemo(() => {
+    let peak = -Infinity;
+    return x.map((_, i) => {
+      const v = values[i] ?? carried[i];
+      if (v === null) return null;
+      peak = Math.max(peak, v);
+      return peak > 0 ? ((v - peak) / peak) * 100 : 0;
     });
-    return () => observer.disconnect();
-  }, []);
-  useEffect(() => {
-    if (!enough || !host.current) return;
-    let disposed = false;
-    let resize: ResizeObserver | undefined;
-    import("uplot")
-      .then(({ default: uPlot }) => {
-        if (disposed || !host.current) return;
-        const styles = getComputedStyle(document.documentElement);
-        const muted = styles.getPropertyValue("--muted").trim(),
-          line = styles.getPropertyValue("--line").trim(),
-          accent = styles.getPropertyValue("--accent").trim();
-        const current = new uPlot(
+  }, [x, values, carried]);
+  const bands = useMemo<Band[]>(
+    () =>
+      points
+        .filter((p) => p.gap && p.value === null)
+        .map((p) => ({
+          from: p.at,
+          to: (p.gapTo ?? p.at) + 60_000,
+          label: "not observed",
+        })),
+    [points],
+  );
+  const placed = useMemo<Marker[]>(
+    () =>
+      markers.flatMap((m) => {
+        const value = valueAt(x, values, m.at);
+        return value === null ? [] : [{ ...m, value }];
+      }),
+    [markers, x, values],
+  );
+  const panes = useMemo(
+    () => [
+      {
+        height: drawdown ? Math.round(height * 0.72) : height,
+        baseline,
+        markers: placed,
+        series: [
           {
-            width: Math.max(200, host.current.clientWidth),
-            height,
-            padding: [18, 18, 0, 0],
-            legend: { show: false },
-            cursor: { drag: { x: true, y: false }, points: { size: 5 } },
-            scales: { x: { time: true } },
-            series: [
-              {},
-              {
-                label,
-                stroke: accent,
-                width: 1.6,
-                fill: accent + "0a",
-                spanGaps: false,
-                points: {
-                  show: true,
-                  filter: (u) => {
-                    const values = u.data[1];
-                    return Array.from(values).flatMap((value, idx) =>
-                      value != null &&
-                      (idx === 0 || values[idx - 1] == null) &&
-                      (idx === values.length - 1 || values[idx + 1] == null)
-                        ? [idx]
-                        : [],
-                    );
-                  },
-                  size: 5,
-                },
-              },
-              {
-                label: `${label} carried`,
-                stroke: muted,
-                width: 1.2,
-                dash: [4, 4],
-                spanGaps: false,
-                points: { show: false },
-              },
-            ],
-            axes: [
-              {
-                stroke: muted,
-                font: "10px system-ui",
-                grid: { show: false },
-                ticks: { show: false },
-                values: (_, ticks) => ticks.map((t) => clock(t * 1000)),
-              },
-              {
-                side: 1,
-                stroke: muted,
-                font: "10px system-ui",
-                size: 62,
-                grid: { stroke: line, width: 0.5 },
-                ticks: { show: false },
-                values: (_, ticks) =>
-                  ticks.map((v) =>
-                    v.toLocaleString("en-IN", { maximumFractionDigits: 2 }),
-                  ),
-              },
-            ],
-            hooks: {
-              setCursor: [
-                (u) => {
-                  const pointer = u.cursor.left;
-                  const at =
-                    pointer == null ? null : u.posToVal(pointer, "x") * 1000;
-                  const gap =
-                    at == null
-                      ? null
-                      : latest.current.find(
-                          (point) =>
-                            point.gap &&
-                            point.value === null &&
-                            at >= point.at &&
-                            at <= (point.gapTo ?? point.at) + 59_999,
-                        );
-                  setGapHint(
-                    gap && pointer != null
-                      ? {
-                          reason: gap.reason,
-                          left: u.valToPos(gap.at / 1000, "x", true),
-                        }
-                      : null,
-                  );
-                  if (gap) {
-                    setHover(null);
-                    return;
-                  }
-                  const i = u.cursor.idx;
-                  const value =
-                    i == null ? null : (u.data[1][i] ?? u.data[2][i]);
-                  setHover(
-                    value == null
-                      ? null
-                      : {
-                          at: u.data[0][i!] * 1000,
-                          value,
-                          carried: u.data[1][i!] == null,
-                        },
-                  );
-                },
+            label,
+            color: "--accent",
+            data: values,
+            area: true,
+            isolatedPoints: true,
+          },
+          {
+            label: `${label} carried`,
+            color: "--fg-2",
+            data: carried,
+            dash: [4, 4],
+            width: 1.2,
+          },
+        ],
+      },
+      ...(drawdown
+        ? [
+            {
+              height: Math.round(height * 0.28),
+              caption: "drawdown %",
+              format: (v: number) => v.toFixed(2),
+              yRange: (min: number): [number, number] => [
+                Math.min(min * 1.15, -0.05),
+                0,
               ],
-              setSelect: [() => setFollow(false)],
-              draw: [
-                (u) => {
-                  const gaps = latest.current.filter(
-                    (point) => point.gap && point.value === null,
-                  );
-                  if (!gaps.length) return;
-                  const ctx = u.ctx,
-                    left = u.bbox.left,
-                    right = left + u.bbox.width;
-                  ctx.save();
-                  for (const gap of gaps) {
-                    const start = u.valToPos(gap.at / 1000, "x", true);
-                    const end = u.valToPos(
-                      ((gap.gapTo ?? gap.at) + 60_000) / 1000,
-                      "x",
-                      true,
-                    );
-                    const x0 = Math.max(left, Math.min(start, end)),
-                      x1 = Math.min(right, Math.max(start, end));
-                    if (x1 - x0 < 1) continue;
-                    ctx.fillStyle = muted;
-                    ctx.globalAlpha = 0.12;
-                    ctx.fillRect(x0, u.bbox.top, x1 - x0, u.bbox.height);
-                    if (x1 - x0 > 55) {
-                      ctx.globalAlpha = 0.65;
-                      ctx.font = "9px system-ui";
-                      ctx.fillText("not observed", x0 + 5, u.bbox.top + 13);
-                    }
-                  }
-                  ctx.restore();
+              series: [
+                {
+                  label: "Drawdown",
+                  color: "--neg",
+                  data: peaks,
+                  area: true,
+                  width: 1,
                 },
               ],
             },
-          },
-          chartData(latest.current, range),
-          host.current,
-        );
-        plot.current = current;
-        if (typeof ResizeObserver !== "undefined") {
-          resize = new ResizeObserver(() =>
-            current.setSize({
-              width: Math.max(200, host.current?.clientWidth || 200),
-              height,
-            }),
-          );
-          resize.observe(host.current);
-        }
-        setVersion((v) => v + 1);
-      })
-      .catch(() => setFailed(true));
-    return () => {
-      disposed = true;
-      resize?.disconnect();
-      plot.current?.destroy();
-      plot.current = null;
-    };
-  }, [enough, height, label, theme]);
-  useEffect(() => {
-    if (follow && plot.current) plot.current.setData(chartData(points, range));
-  }, [points, range, follow, version]);
-  const current = hover || valid.at(-1);
+          ]
+        : []),
+    ],
+    [values, carried, peaks, drawdown, height, baseline, label, placed],
+  );
+  const tooltip = (i: number) => {
+    const at = x[i] * 1000;
+    const gap = points.find(
+      (p) =>
+        p.gap &&
+        p.value === null &&
+        at >= p.at &&
+        at <= (p.gapTo ?? p.at) + 59_999,
+    );
+    if (gap)
+      return {
+        title: `${clock(at)} IST`,
+        rows: [["unobserved", words(gap.reason)]] as [string, string][],
+      };
+    const value = values[i] ?? carried[i];
+    if (value === null || value === undefined) return null;
+    const rows: [string, string][] = [
+      [values[i] === null ? "carried · no trade" : label, amount(value)],
+    ];
+    if (baseline !== null) rows.push(["day net", amount(value - baseline)]);
+    if (drawdown && peaks[i] !== null)
+      rows.push(["drawdown", `${peaks[i]!.toFixed(2)}%`]);
+    return { title: `${clock(at)} IST`, rows };
+  };
+  const current = valid.at(-1);
   return (
     <div className="chart-module">
       <div className="chart-toolbar">
@@ -264,9 +211,6 @@ export default function Chart({
           {label}
           <strong>{current ? amount(current.value) : "—"}</strong>
           <time>{current ? clock(current.at) + " IST" : ""}</time>
-          {current?.carried ? (
-            <span className="chart-carry-tag">carried · no trade</span>
-          ) : null}
         </div>
         <div className="chart-tools">
           <Segments
@@ -275,10 +219,7 @@ export default function Chart({
               setRange(v);
               setFollow(true);
             }}
-            items={["5m", "15m", "1h", "all"].map((v) => [
-              v,
-              v === "all" ? "All" : v,
-            ])}
+            items={RANGES}
             label="Chart time range"
           />
           <Button
@@ -291,24 +232,20 @@ export default function Chart({
       </div>
       {enough && !failed ? (
         <div className="chart-plot">
-          <div
-            ref={host}
-            className="chart-canvas"
-            role="img"
-            aria-label={`${label}, ${valid.length} observations${plotted < points.length ? `, ${plotted} plotted with extrema preserved` : ""}. Drag to zoom; use Follow to reset.`}
+          <TimeChart
+            x={x}
+            panes={panes}
+            bands={bands}
+            tooltip={tooltip}
+            frozen={!follow}
+            onSelect={() => setFollow(false)}
+            onError={() => setFailed(true)}
+            ariaLabel={`${label}, ${valid.length} observations${plotted < points.length ? `, ${plotted} plotted with extrema preserved` : ""}. Drag to zoom; use Follow to reset.`}
           />
-          {gapHint ? (
-            <span className="chart-gap-hint" style={{ left: gapHint.left }}>
-              Unobserved · {words(gapHint.reason)}
-            </span>
-          ) : null}
         </div>
       ) : (
         <div className="chart-unavailable" style={{ minHeight: height }}>
-          <Empty
-            icon={TrendingUp}
-            title={failed ? "Chart could not be loaded" : emptyTitle}
-          >
+          <Empty title={failed ? "Chart could not be loaded" : emptyTitle}>
             {emptyDetail}
             {valid.length === 1
               ? ` One observation: ${amount(valid[0].value)} at ${clock(valid[0].at)} IST.`
