@@ -118,6 +118,14 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
     assert_eq!(body["broker"]["data"], "upstox");
     assert_eq!(body["broker"]["orders"], "paper");
     assert_eq!(body["limits"]["sse_max_streams"], 3);
+    // Every advertised capability is a route.
+    for capability in body["capabilities"].as_array().unwrap() {
+        let line = format!("GET /api/v1/{} HTTP/1.1", capability.as_str().unwrap());
+        assert!(
+            !matches!(router::parse(&line), Ok(router::Route::UnknownV1)),
+            "{line}"
+        );
+    }
     assert!(!String::from_utf8_lossy(&first.body).contains("must-not-be-served"));
     let sessions_reply = send(&request("").replace("/api/v1/meta", "/api/v1/sessions"));
     assert_eq!(sessions_reply.code, "200 OK");

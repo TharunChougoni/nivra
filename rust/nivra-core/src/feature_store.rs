@@ -274,14 +274,14 @@ impl FeatureStore {
     /// close is the latest receipt price, not a certified exchange close or
     /// a volume. Ties on receipt time keep the lowest instrument keys.
     pub fn latest_prices(&self, limit: usize) -> Vec<(String, f64, i64)> {
+        if limit == 0 {
+            return Vec::new();
+        }
         let mut rows = self
             .last_receipts
             .iter()
             .filter_map(|(key, receipt)| Some((key, self.bars.get(key)?.back()?.close, *receipt)))
             .collect::<Vec<_>>();
-        if limit == 0 {
-            return Vec::new();
-        }
         if rows.len() > limit {
             rows.select_nth_unstable_by(limit - 1, |a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(b.0)));
             rows.truncate(limit);
