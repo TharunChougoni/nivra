@@ -667,6 +667,8 @@ fn update_decision_verifies_and_defers_then_activates_or_rolls_back() {
     let mut current: serde_json::Value = serde_json::from_slice(body).unwrap();
     current["as_of_ms"] = serde_json::json!(now_utc().timestamp_millis());
     assert!(paper_health(&serde_json::to_vec(&current).unwrap(), "v0.6.0").is_ok());
+    current["readiness"] = serde_json::json!({"history":{"missing_sessions":"x".repeat(367_000)}});
+    assert!(paper_health(&serde_json::to_vec(&current).unwrap(), "v0.6.0").is_ok());
     let stalled =
         br#"{"v":1,"paper_only":true,"live_enabled":false,"status":"scanning","as_of_ms":1}"#;
     assert!(paper_health(stalled, "v0.6.0").is_err());
@@ -677,7 +679,7 @@ fn update_decision_verifies_and_defers_then_activates_or_rolls_back() {
         br#"{"paper_only":true,"live_enabled":false,"status":"idle"}"#,
         br#"{"paper_only":true,"live_enabled":false,"status":null,"as_of_ms":1000000}"#,
         br#"{"paper_only":false,"live_enabled":false,"status":"idle","as_of_ms":1000000}"#,
-        &vec![b' '; 65537],
+        &vec![b' '; MAX_UPDATE_HEALTH_BYTES + 1],
     ] {
         assert!(paper_health_at(bad, "v0.6.0", now).is_err());
     }

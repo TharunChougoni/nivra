@@ -1212,8 +1212,9 @@ installed release from the current symlink target and binary, including installs
 without VERSION/SOURCE_COMMIT files. Release directories are owner-only 0700,
 binaries 0755 and metadata 0600.
 
-The updater stops the service, atomically flips current, repeats preflight,
-restarts and checks unit/authenticated status. A stop failure, a swap/activation
+The updater stops the service, atomically flips current, and repeats preflight.
+A normal update then restarts the service and checks authenticated health, with
+a 4 MiB response limit for detailed readiness reports. A stop failure, a swap/activation
 failure and a failed health check take the same recovery path: stop the
 candidate, restore the previous pointer if it was swapped, restart and probe the
 previous release, then finalise `pending.json` as the release's

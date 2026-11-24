@@ -194,8 +194,10 @@ pub(crate) fn paper_health(body: &[u8], tag: &str) -> Result<()> {
     paper_health_at(body, tag, now_utc().timestamp_millis())
 }
 
+pub(crate) const MAX_UPDATE_HEALTH_BYTES: usize = 4 * 1024 * 1024;
+
 pub(crate) fn paper_health_at(body: &[u8], tag: &str, now_ms: i64) -> Result<()> {
-    if body.len() > 65536 {
+    if body.len() > MAX_UPDATE_HEALTH_BYTES {
         return Err("update_dashboard_health_failed");
     }
     let view: serde_json::Value =
@@ -610,7 +612,7 @@ impl Host for RealHost {
                 response
                     .body_mut()
                     .as_reader()
-                    .take(65537)
+                    .take((MAX_UPDATE_HEALTH_BYTES + 1) as u64)
                     .read_to_end(&mut body)
                     .map_err(|_| "update_dashboard_health_failed")?;
                 paper_health(&body, tag.trim())
