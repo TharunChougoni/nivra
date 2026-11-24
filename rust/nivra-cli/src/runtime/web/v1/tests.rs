@@ -809,4 +809,58 @@ fn agent_route_pages_pi_turns_newest_first_with_gate_counts() {
     let second = get("/api/v1/agent?limit=1&cursor=1");
     assert_eq!(second["turns"][0]["verdict"]["escalate"], true);
     assert!(second["next"].is_null());
+    assert_eq!(first["truncated"], false);
+
+    // An unchanged journal answers 304; an append moves the agent revision
+    // and is read incrementally, with a torn final line held back.
+    let revision = || revisions(&serde_json::json!({}), Some(dir.path()))["agent"].clone();
+    assert_ne!(revision(), revisions(&serde_json::json!({}), None)["agent"]);
+    let before = revision();
+    let Ok(router::Route::Agent(query)) = router::parse("GET /api/v1/agent HTTP/1.1") else {
+        panic!("agent route");
+    };
+    let etag = agent_turns("", query, Some(dir.path())).etag.unwrap();
+    let Ok(router::Route::Agent(query)) = router::parse("GET /api/v1/agent HTTP/1.1") else {
+        panic!("agent route");
+    };
+    let conditional = format!("GET /api/v1/agent HTTP/1.1\r\nIf-None-Match: {etag}\r\n");
+    assert_eq!(
+        agent_turns(&conditional, query, Some(dir.path())).code,
+        "304 Not Modified"
+    );
+    let mut journal = std::fs::OpenOptions::new()
+        .append(true)
+        .open(agent.join("turns.ndjson"))
+        .unwrap();
+    write!(
+        journal,
+        "\n{}\n{{\"turn_id\":\"torn",
+        turn("decision-2", "decision", serde_json::json!({}))
+    )
+    .unwrap();
+    assert_ne!(revision(), before);
+    let grown = get("/api/v1/agent");
+    assert_eq!(grown["total"], 3);
+    assert_eq!(grown["turns"][0]["turn_id"], "decision-2");
+
+    // A journal past the held window serves its newest rows and says how
+    // many older rows it did not load, instead of failing.
+    let Ok(router::Route::Agent(query)) = router::parse("GET /api/v1/agent HTTP/1.1") else {
+        panic!("agent route");
+    };
+    let large = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(large.path().join("model/agent")).unwrap();
+    std::fs::copy(
+        agent.join("turns.ndjson"),
+        large.path().join("model/agent/turns.ndjson"),
+    )
+    .unwrap();
+    let window = turn("decision-2", "decision", serde_json::json!({})).len() as u64 + 20;
+    let tail: serde_json::Value =
+        serde_json::from_slice(&agent_turns_within("", query, Some(large.path()), window).body)
+            .unwrap();
+    assert_eq!(tail["truncated"], true);
+    assert_eq!(tail["rows_not_loaded"]["turns"], 2);
+    assert_eq!(tail["total"], 1);
+    assert_eq!(tail["turns"][0]["turn_id"], "decision-2");
 }

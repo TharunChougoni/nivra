@@ -6,6 +6,7 @@ use nivra_core::feature_store::FeatureStore;
 use router::Route;
 
 mod book;
+mod journal;
 mod market;
 mod ops;
 mod revision;

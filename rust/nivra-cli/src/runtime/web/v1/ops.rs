@@ -260,34 +260,13 @@ pub(crate) fn tool_calls(
 /// Files under `model/agent` that `/api/v1/agent` reads.
 pub(super) const AGENT_FILES: [&str; 3] = ["turns.ndjson", "triggers.ndjson", "usage.json"];
 
-/// Bytes of a lane journal the dashboard reads, newest last.
+/// Newest bytes of each lane journal the dashboard holds; older rows are
+/// reported as not loaded.
 const AGENT_JOURNAL_MAX_BYTES: u64 = 16 * 1024 * 1024;
-
-fn agent_journal(
-    root: &Path,
-    file: &str,
-) -> std::result::Result<Vec<serde_json::Value>, &'static str> {
-    let path = root.join("model").join("agent").join(file);
-    match std::fs::symlink_metadata(&path) {
-        Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
-            Err("agent_journal_unavailable")
-        }
-        Ok(_) => {
-            let bytes = crate::read_bounded(&path, AGENT_JOURNAL_MAX_BYTES)
-                .map_err(|_| "agent_journal_unavailable")?;
-            Ok(bytes
-                .split(|b| *b == b'\n')
-                .filter_map(|line| serde_json::from_slice(line).ok())
-                .collect())
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(_) => Err("agent_journal_unavailable"),
-    }
-}
 
 /// One journalled pi turn, without its brief or model text: lane, model,
 /// outcome, usage, tool calls, the plan's stance and the gate's verdict.
-fn agent_turn_row(turn: &serde_json::Value) -> serde_json::Value {
+fn agent_turn_row(turn: serde_json::Value) -> serde_json::Value {
     let trigger = &turn["trigger"];
     let instruments: Vec<&serde_json::Value> = trigger["triggers"]
         .as_array()
@@ -313,7 +292,26 @@ fn agent_turn_row(turn: &serde_json::Value) -> serde_json::Value {
     })
 }
 
+/// The gate-count bucket of one trigger journal line, or null.
+fn trigger_event(line: serde_json::Value) -> serde_json::Value {
+    match (line["event"].as_str(), line["escalate"].as_bool()) {
+        (Some("gated"), Some(true)) => "gate_escalated".into(),
+        (Some("gated"), _) => "gate_declined".into(),
+        (Some(event), _) => event.into(),
+        _ => serde_json::Value::Null,
+    }
+}
+
 pub(crate) fn agent_turns(head: &str, query: router::Query, root: Option<&Path>) -> Response {
+    agent_turns_within(head, query, root, AGENT_JOURNAL_MAX_BYTES)
+}
+
+pub(super) fn agent_turns_within(
+    head: &str,
+    query: router::Query,
+    root: Option<&Path>,
+    max_bytes: u64,
+) -> Response {
     let Some(root) = root else {
         return error("503 Service Unavailable", "session_unavailable");
     };
@@ -331,42 +329,45 @@ pub(crate) fn agent_turns(head: &str, query: router::Query, root: Option<&Path>)
         },
         None => 0,
     };
-    let (turns, triggers) = match (
-        agent_journal(root, "turns.ndjson"),
-        agent_journal(root, "triggers.ndjson"),
-    ) {
-        (Ok(turns), Ok(triggers)) => (turns, triggers),
-        _ => return error("503 Service Unavailable", "agent_journal_unavailable"),
+    let dir = root.join("model").join("agent");
+    let read = journal::with_journals(
+        [
+            (dir.join(AGENT_FILES[0]), agent_turn_row as journal::Project),
+            (dir.join(AGENT_FILES[1]), trigger_event),
+        ],
+        max_bytes,
+        |[turns, triggers]| {
+            let total = turns.rows().count();
+            let page: Vec<serde_json::Value> = turns
+                .rows()
+                .rev()
+                .skip(offset)
+                .take(limit)
+                .cloned()
+                .collect();
+            let mut events = std::collections::BTreeMap::<&str, u64>::new();
+            for event in triggers.rows().filter_map(serde_json::Value::as_str) {
+                *events.entry(event).or_default() += 1;
+            }
+            let next = (offset + page.len() < total).then(|| (offset + page.len()).to_string());
+            serde_json::json!({
+                "v":1,"turns":page,"total":total,"next":next,"triggers":events,
+                "truncated":turns.not_loaded + triggers.not_loaded > 0,
+                "rows_not_loaded":{"turns":turns.not_loaded,"triggers":triggers.not_loaded}
+            })
+        },
+    );
+    let Ok(mut body) = read else {
+        return error("503 Service Unavailable", "agent_journal_unavailable");
     };
-    let total = turns.len();
-    let page: Vec<serde_json::Value> = turns
-        .iter()
-        .rev()
-        .skip(offset)
-        .take(limit)
-        .map(agent_turn_row)
-        .collect();
-    let next = (offset + page.len() < total).then(|| (offset + page.len()).to_string());
-    let mut events = std::collections::BTreeMap::<String, u64>::new();
-    for line in &triggers {
-        let key = match (line["event"].as_str(), line["escalate"].as_bool()) {
-            (Some("gated"), Some(true)) => "gate_escalated".to_owned(),
-            (Some("gated"), _) => "gate_declined".to_owned(),
-            (Some(event), _) => event.to_owned(),
-            _ => continue,
-        };
-        *events.entry(key).or_default() += 1;
-    }
-    let usage = std::fs::read(root.join("model").join("agent").join("usage.json"))
+    let usage = std::fs::read(dir.join(AGENT_FILES[2]))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
         .map_or(
             serde_json::Value::Null,
             |usage| serde_json::json!({"date":usage["date"],"lanes":usage["lanes"]}),
         );
-    json_reply(
-        head,
-        serde_json::json!({"v":1,"turns":page,"total":total,"next":next,"triggers":events,
-            "usage":usage,"execution_authorized":false}),
-    )
+    body["usage"] = usage;
+    body["execution_authorized"] = serde_json::json!(false);
+    json_reply(head, body)
 }
