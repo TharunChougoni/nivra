@@ -11,7 +11,13 @@ import {
   usd,
   words,
 } from "./data";
-import { LANE_ORDER, laneStats, turnFailed, turnOutcome } from "./model";
+import {
+  LANE_ORDER,
+  journalCoverage,
+  laneStats,
+  turnFailed,
+  turnOutcome,
+} from "./model";
 import {
   Drawer,
   Empty,
@@ -30,7 +36,6 @@ import LaneTimeline, { laneColor, sessionRange } from "./charts/LaneTimeline";
 import { TimeChart } from "./charts/TimeChart";
 import { useRead, useRevision } from "./reads";
 
-const FALLBACK_POLL_MS = 60_000;
 const PAGE = 100;
 const tokens = (t: AgentTurn) =>
   t.usage ? `${count(t.usage.input)} / ${count(t.usage.output)}` : "—";
@@ -119,14 +124,9 @@ function WebToolActivity() {
   );
 }
 
-function LaneCards({
-  turns,
-  loadedOf,
-}: {
-  turns: AgentTurn[];
-  loadedOf: number | null;
-}) {
+function LaneCards({ turns }: { turns: AgentTurn[] }) {
   const [state] = useWorkspace();
+  const coverage = journalCoverage(state.agent);
   const stats = useMemo(
     () => laneStats(turns, state.agent?.usage),
     [turns, state.agent],
@@ -135,8 +135,8 @@ function LaneCards({
     <Panel
       title="Lanes"
       note={
-        loadedOf !== null && loadedOf > turns.length
-          ? `latency and failures from the ${count(turns.length)} newest of ${count(loadedOf)} turns`
+        coverage.label
+          ? `latency and failures from the ${coverage.label.replace("showing ", "")}`
           : `${count(turns.length)} turns loaded · tokens and cost from API usage totals`
       }
     >
@@ -209,7 +209,14 @@ function GateFunnel({ turns }: { turns: AgentTurn[] }) {
   ];
   const known = stages.filter((s): s is [string, number] => s[1] !== null);
   return (
-    <Panel title="Gate funnel" note="recorded counts only">
+    <Panel
+      title="Gate funnel"
+      note={
+        state.agent?.truncated
+          ? "recorded counts · loaded turns only"
+          : "recorded counts only"
+      }
+    >
       {known.length ? (
         <div className="panel-body">
           <Bars items={known.map(([label, value]) => ({ label, value }))} />
@@ -508,15 +515,11 @@ export default function Lanes() {
     [laneFilter, setLaneFilter] = useState("all"),
     [turn, setTurn] = useState<AgentTurn | null>(null);
   const turns = state.agent?.turns ?? [],
-    total = numeric(state.agent?.total);
-  // The controller reloads on revision change and run_ended. A slow fallback
-  // covers a backend that sends neither, and only while the tab is visible.
+    coverage = journalCoverage(state.agent);
+  // The controller reloads the journal when `revisions.agent` changes, on
+  // run_ended and on visibility; this page only asks once if it never loaded.
   useEffect(() => {
     if (!state.agent && state.agentState === "idle") void app.loadAgent();
-    const timer = setInterval(() => {
-      if (!document.hidden) void app.loadAgent();
-    }, FALLBACK_POLL_MS);
-    return () => clearInterval(timer);
   }, [app]);
   const lanes = useMemo(() => {
     const seen = new Set([...LANE_ORDER, ...turns.map((t) => t.lane)]);
@@ -537,7 +540,13 @@ export default function Lanes() {
           {state.agentState === "error" ? "unavailable" : "not reported"}.
         </Notice>
       )}
-      <LaneCards turns={turns} loadedOf={total} />
+      {coverage.label && (
+        <Notice>
+          Lane journal: {coverage.label}. Counts below cover the loaded turns
+          only; API usage totals are shown as reported.
+        </Notice>
+      )}
+      <LaneCards turns={turns} />
       <Panel
         title="Timeline"
         note="x = session time IST · height = log latency · hollow = failed · ◆ gate escalated"

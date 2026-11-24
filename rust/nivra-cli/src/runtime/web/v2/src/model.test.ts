@@ -10,6 +10,7 @@ import type {
 import {
   equityStats,
   instrumentLabel,
+  journalCoverage,
   laneStats,
   modeOf,
   orderTracks,
@@ -318,5 +319,20 @@ test("equityStats reads drawdown and day net only from recorded checkpoints", ()
       { at: 4, value: 102 },
     ]).maxDrawdownPct,
     0,
+  );
+});
+test("a truncated journal is reported as newest N with the rest not loaded, never as a total", () => {
+  const rows = [turn("gate"), turn("gate")];
+  assert.equal(journalCoverage({ turns: rows, total: 2 }).label, null);
+  const cut = journalCoverage({
+    turns: rows,
+    total: 500,
+    truncated: true,
+    rows_not_loaded: { turns: 498, triggers: 0 },
+  });
+  assert.equal(cut.label, "showing newest 2; 498 older not loaded");
+  assert.equal(
+    journalCoverage({ turns: rows, truncated: true }).label,
+    "showing newest 2; older turns not loaded",
   );
 });

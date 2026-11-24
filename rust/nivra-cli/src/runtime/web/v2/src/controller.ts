@@ -695,7 +695,8 @@ function sameRevisions(event: Revisions, held: Revisions) {
 }
 /** Latest receipt price per instrument from a (possibly partial) price batch. */
 function mergeQuotes(quotes: WorkspaceState["quotes"], event: StreamEvent) {
-  const next = { ...quotes };
+  // A full frame is the whole snapshot; a partial one carries only moved rows.
+  const next = event.full === true ? {} : { ...quotes };
   for (const item of event.items || []) {
     const key = item?.instrument_key,
       at = numeric(item?.receipt_ms),

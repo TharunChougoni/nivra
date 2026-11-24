@@ -294,7 +294,12 @@ function navCounts(
       f.positionsKnown && fills !== null
         ? `${f.positions.length}/${fills}`
         : null,
-    lanes: turns === null ? null : String(turns),
+    lanes:
+      turns === null
+        ? null
+        : state.agent?.truncated
+          ? `${state.agent.turns?.length ?? 0}+`
+          : String(turns),
     health: alerts ? String(alerts) : null,
   } as Record<string, string | null>;
 }

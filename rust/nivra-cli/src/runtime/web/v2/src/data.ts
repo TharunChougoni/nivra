@@ -626,7 +626,7 @@ export function mergePriceBatch(
           at,
           value,
           source: "price_batch",
-          kind: row?.price_kind || "receipt_price",
+          kind: event?.price_kind || row?.price_kind || "receipt_price",
         }
       : null;
   return {

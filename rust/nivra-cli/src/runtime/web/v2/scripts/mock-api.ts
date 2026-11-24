@@ -61,7 +61,7 @@ const revisionOf = (body: unknown) =>
   createHash("sha1")
     .update(JSON.stringify(body, (k, v) => (CLOCKS.has(k) ? undefined : v)))
     .digest("hex")
-    .slice(0, 12);
+    .slice(0, 16);
 
 export function mockApi(options: { seed?: number } = {}): Plugin {
   const data: MockData = createMockData(options.seed);
@@ -88,7 +88,7 @@ export function mockApi(options: { seed?: number } = {}): Plugin {
   function publish(name: string, body: Record<string, unknown>) {
     const seq = ++eventSeq;
     const event = { ...body, seq, epoch: EPOCH };
-    const frame = `id: ${seq}\nevent: ${name}\ndata: ${JSON.stringify(name === "summary_changed" ? { etag: `"mock-${seq}"`, epoch: EPOCH, revisions: body.revisions } : event)}\n\n`;
+    const frame = `id: ${seq}\nevent: ${name}\ndata: ${JSON.stringify(name === "summary_changed" ? { etag: `"mock-${seq}"`, revisions: body.revisions } : event)}\n\n`;
     ring.push({ seq, frame, event });
     if (ring.length > 256) ring.shift();
     subscribers.forEach((write) => write(frame));
@@ -315,21 +315,31 @@ export function mockApi(options: { seed?: number } = {}): Plugin {
     };
     subscribers.add(write);
     let batchSeq = 0;
+    let sent = new Map<string, string>();
     const batch = setInterval(() => {
       const t = virtualNow();
-      const items = data.equities.map((e, i) => ({
+      const rows = data.equities.map((e, i) => ({
         instrument_key: e.key,
         last_price: quoteAt(data, e.key, t).toFixed(2),
         receipt_ms: t - 120 - i * 17,
-        price_kind: "receipt_price",
-        execution_authority: false,
       }));
+      // First frame is a full snapshot; later frames carry only moved rows
+      // and idle intervals send nothing.
+      const full = sent.size === 0;
+      const items = rows.filter(
+        (r) => full || sent.get(r.instrument_key) !== r.last_price,
+      );
+      if (!items.length) return;
+      for (const r of items) sent.set(r.instrument_key, r.last_price);
       const body = {
         v: 1,
         batch_seq: ++batchSeq,
         as_of_ms: t,
         session: data.session,
+        full,
         items,
+        price_kind: "receipt_price",
+        execution_authority: false,
         source: "receipt_derived_feature_store",
         note: "Display evidence only; receipt prices are not executable quotes.",
       };

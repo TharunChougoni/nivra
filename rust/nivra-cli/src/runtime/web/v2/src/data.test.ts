@@ -377,3 +377,36 @@ test("instrument classes and links use only fields recorded by projections", () 
   assert.equal(strategyLinkFor(scanner, "A")!.strategy_scan_id, "scan");
   assert.equal(strategyLinkFor(scanner, "C"), null);
 });
+test("a partial price batch merges per instrument and reads price_kind from the frame", () => {
+  const first = mergePriceBatch(
+    [],
+    {
+      kind: "price_batch",
+      batch_seq: 1,
+      full: true,
+      price_kind: "receipt_price",
+      items: [
+        { instrument_key: "A|1", last_price: "10", receipt_ms: 1000 },
+        { instrument_key: "B|2", last_price: "20", receipt_ms: 1000 },
+      ],
+    },
+    "A|1",
+    0,
+  );
+  assert.equal(first.points[0].kind, "receipt_price");
+  // Only B moved: the watched A series is unchanged and this is not a gap.
+  const second = mergePriceBatch(
+    first.points,
+    {
+      kind: "price_batch",
+      batch_seq: 2,
+      full: false,
+      items: [{ instrument_key: "B|2", last_price: "21", receipt_ms: 2000 }],
+    },
+    "A|1",
+    first.seq,
+  );
+  assert.equal(second.points.length, 1);
+  assert.equal(second.gap, false);
+  assert.equal(second.matched, false);
+});

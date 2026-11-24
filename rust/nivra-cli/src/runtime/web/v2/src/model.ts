@@ -432,3 +432,22 @@ export function turnOutcome(t: AgentTurn) {
     );
   return t.error || t.status || "—";
 }
+
+/** What the loaded lane journal covers. A truncated journal never yields a total. */
+export function journalCoverage(agent: AgentResponse | null | undefined) {
+  const loaded = agent?.turns?.length ?? 0;
+  const truncated = agent?.truncated === true;
+  const total = numeric(agent?.total);
+  const notLoaded = truncated
+    ? (numeric(agent?.rows_not_loaded?.turns) ??
+      (total !== null && total > loaded ? total - loaded : null))
+    : 0;
+  return {
+    loaded,
+    truncated,
+    notLoaded,
+    label: truncated
+      ? `showing newest ${count(loaded)}; ${notLoaded === null ? "older turns" : count(notLoaded) + " older"} not loaded`
+      : null,
+  };
+}

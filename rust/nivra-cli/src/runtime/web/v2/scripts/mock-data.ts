@@ -1692,8 +1692,6 @@ function planAt(data: MockData, now: number): PlansResponse {
         status: "idle",
         decision_id: null,
         pending_events: 0,
-        actions: [],
-        execution: [],
       },
       actions: [],
       execution: [],
@@ -1726,8 +1724,6 @@ function planAt(data: MockData, now: number): PlansResponse {
       pending_events: 0,
       budget_used: { decisions: used },
       budgets: { decisions_per_day: 60 },
-      actions,
-      execution,
     },
     actions,
     execution,
@@ -1982,10 +1978,20 @@ export function agentAt(
         : e.event;
     triggers[k] = (triggers[k] ?? 0) + 1;
   }
+  const more = cursor + page.length < visible.length;
   return {
     v: 1,
     turns: page,
     total: visible.length,
+    ...(more
+      ? {
+          truncated: true,
+          rows_not_loaded: {
+            turns: visible.length - cursor - page.length,
+            triggers: 0,
+          },
+        }
+      : {}),
     next:
       cursor + page.length < visible.length
         ? String(cursor + page.length)

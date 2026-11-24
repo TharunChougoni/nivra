@@ -164,8 +164,6 @@ export interface Planner {
   pending_events?: number;
   budget_used?: Json;
   budgets?: Json;
-  actions?: PlanAction[];
-  execution?: Execution[];
 }
 export interface ResearchCandidate {
   candidate_id: string;
@@ -1058,6 +1056,9 @@ export interface PriceItem {
 export interface StreamEvent {
   kind: string;
   revisions?: Revisions;
+  /** price_batch: a full snapshot (connect or missed batch) vs only moved instruments. */
+  full?: boolean;
+  price_kind?: string;
   event?: string;
   seq?: number;
   epoch?: string | number;
@@ -1264,6 +1265,9 @@ export interface AgentResponse extends Availability {
   total?: number;
   next?: string | null;
   triggers?: Record<string, number>;
+  /** The journal is larger than the page returned; totals are then not complete. */
+  truncated?: boolean;
+  rows_not_loaded?: { turns?: number; triggers?: number } | null;
   usage?: { date?: string; lanes?: Record<string, AgentUsage> } | null;
   execution_authorized?: false;
 }

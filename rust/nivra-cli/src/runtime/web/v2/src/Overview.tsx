@@ -26,6 +26,7 @@ import {
   equityStats,
   instrumentIndex,
   instrumentLabel,
+  journalCoverage,
   laneStats,
   modeOf,
   orderTracks,
@@ -99,7 +100,8 @@ export default function Overview() {
     () => equityStats(historical ? [] : equitySeries),
     [equitySeries, historical],
   );
-  const turns = state.agent?.turns ?? [];
+  const turns = state.agent?.turns ?? [],
+    coverage = journalCoverage(state.agent);
   const lanes = useMemo(
     () => laneStats(turns, state.agent?.usage),
     [state.agent],
@@ -196,7 +198,7 @@ export default function Overview() {
       usd(spend),
       spend === null
         ? "Usage not reported"
-        : `${count(state.agent?.total)} turns today`,
+        : (coverage.label ?? `${count(state.agent?.total)} turns today`),
     ],
   ];
   const selected = prospects.find((v) => v.instrument_key === state.watch);
