@@ -57,13 +57,6 @@ function portfolio(
   };
 }
 
-function health(operational?: OperationalHealth | null): HealthResponse {
-  return {
-    ...envelope,
-    ...(operational ? { operational_health: operational } : {}),
-  } as unknown as HealthResponse;
-}
-
 function text(node: React.ReactElement) {
   const dom = new JSDOM(renderToStaticMarkup(node));
   return dom.window.document.body.textContent || "";
@@ -71,46 +64,6 @@ function text(node: React.ReactElement) {
 
 function markup(node: React.ReactElement) {
   return renderToStaticMarkup(node);
-}
-
-function researchOperational(
-  research: Record<string, unknown>,
-  overrides: Record<string, unknown> = {},
-): OperationalHealth {
-  return {
-    version: 1,
-    captured_at_ms: now - 5_000,
-    supervisor: {
-      status: "idle",
-      config: "configured",
-      config_reason: null,
-      config_scope: "loaded_policy_or_static_failure_code",
-      state: "present",
-      enabled: true,
-      parked: null,
-      budget: {
-        configured_daily_calls: 20,
-        charged_calls: 1,
-        parked_at_calls: null,
-        exhausted: false,
-      },
-      context: null,
-      compaction: null,
-      backoff: {
-        configured_ms: 30_000,
-        retry_limit: 2,
-        enforced: true,
-        active: false,
-        earliest_retry_at_ms: null,
-      },
-      last_completed_run: null,
-      pending_source: "no_pending",
-      pending_scope: "checked_bounded_session_log",
-      pending: null,
-      research,
-      ...overrides,
-    },
-  } as unknown as OperationalHealth;
 }
 
 function observation(overrides: Record<string, unknown> = {}) {
@@ -423,131 +376,6 @@ function libraryItem(measurementValue: Record<string, unknown>) {
     },
   };
 }
-
-test("owner research is absent-safe and never invents disabled or zero", () => {
-  const textValue = text(
-    <OperationalPanel summary={summary()} portfolio={portfolio()} />,
-  );
-  assert.match(textValue, /Owner research/);
-  assert.match(textValue, /Not present in this snapshot/i);
-  assert.doesNotMatch(textValue, /Evidence count\s*0/);
-  assert.doesNotMatch(textValue, /Research state\s*Disabled/);
-});
-
-test("owner research config unavailable is not disabled", () => {
-  const operational = researchOperational({
-    config: "unavailable",
-    config_reason: "planner_config_unavailable",
-    enabled: null,
-    due: null,
-    state: null,
-    reason: "planner_config_unavailable",
-    evidence_count: null,
-    cutoff_ms: null,
-    deferred_until_ms: null,
-    pending_source: "not_checked",
-    pending: null,
-    as_of_ms: now - 5_000,
-  });
-  const textValue = text(
-    <OperationalPanel
-      summary={summary({ operational_health: operational })}
-      portfolio={portfolio()}
-      health={health(operational)}
-    />,
-  );
-  assert.match(textValue, /Config unavailable/);
-  assert.match(textValue, /Planner config unavailable/);
-  assert.match(textValue, /not Disabled/i);
-});
-
-test("owner research invalid version is not interpreted", () => {
-  const textValue = text(
-    <OperationalPanel
-      summary={summary({
-        owner_research: {
-          version: 2,
-          status: "due",
-          evidence_count: 3,
-          as_of_ms: now - 5_000,
-        },
-      })}
-      portfolio={portfolio()}
-    />,
-  );
-  assert.match(textValue, /version 2 is not supported/i);
-  assert.match(textValue, /not interpreted/i);
-  assert.doesNotMatch(textValue, /Research state\s*Due/);
-});
-
-test("owner research future as-of is a clock anomaly", () => {
-  const textValue = text(
-    <OperationalPanel
-      summary={summary({
-        owner_research: {
-          version: 1,
-          status: "awaiting_evidence",
-          reason: "owner_research_no_eligible_evidence",
-          evidence_count: 0,
-          as_of_ms: now + 120_000,
-          cutoff_ms: now + 600_000,
-        },
-      })}
-      portfolio={portfolio()}
-    />,
-  );
-  assert.match(textValue, /Clock anomaly/i);
-  assert.match(textValue, /not trusted/i);
-  assert.doesNotMatch(textValue, /Recent capture/);
-});
-
-test("owner research awaiting evidence states no model call and bounds unknown reasons", () => {
-  const textValue = text(
-    <OperationalPanel
-      summary={summary({
-        owner_research: {
-          version: 1,
-          status: "awaiting_evidence",
-          reason: "provider said /tmp/private-token",
-          evidence_count: 0,
-          as_of_ms: now - 5_000,
-          cutoff_ms: now + 600_000,
-          workspace_refs: ["notes/private.md", "skills/private.md"],
-        },
-      })}
-      portfolio={portfolio()}
-    />,
-  );
-  assert.match(textValue, /No eligible evidence/i);
-  assert.match(textValue, /no model call/i);
-  assert.match(textValue, /Unknown reason/);
-  assert.doesNotMatch(textValue, /tmp\/private-token/);
-  assert.doesNotMatch(textValue, /notes\/private\.md/);
-  // A raw ref array is not the public contract: only the sanitized scalar
-  // count is rendered, and its absence is explicit "Not reported", not 2.
-  assert.match(textValue, /Workspace refs\s*Not reported/);
-  assert.match(textValue, /Workspace snapshot\s*Not reported/);
-
-  const known = text(
-    <OperationalPanel
-      summary={summary({
-        owner_research: {
-          version: 1,
-          status: "awaiting_evidence",
-          reason: "owner_research_no_eligible_evidence",
-          evidence_count: 0,
-          as_of_ms: now - 5_000,
-          cutoff_ms: now + 600_000,
-          workspace_ref_count: 2,
-          workspace_snapshot_sha256: "a".repeat(64),
-        },
-      })}
-      portfolio={portfolio()}
-    />,
-  );
-  assert.match(known, /Workspace refs\s*2/);
-  assert.match(known, /aaaaaaaaaaaa…/);
-});
 
 test("observation queue separates counts and trial debt is a lower bound", () => {
   const observationValue = observation();
@@ -1089,15 +917,6 @@ test("rendered untrusted fields stay bounded and never become private text", () 
     },
   });
   const unsafeSummary = summary({
-    owner_research: {
-      version: 1,
-      status: "awaiting_evidence",
-      reason: "/home/private/reason",
-      evidence_count: 0,
-      as_of_ms: now - 5_000,
-      workspace_refs: ["/home/private/workspace.md"],
-      workspace_ref_count: null,
-    },
     research_tasks: { status: "idle", observation: unsafeObservation },
     research_library: {
       status: "ready",
@@ -1126,46 +945,6 @@ test("rendered untrusted fields stay bounded and never become private text", () 
   assert.doesNotMatch(textValue, /javascript:/);
   assert.match(textValue, /Unknown reason/);
   assert.match(textValue, /Not reported/);
-});
-
-test("workspace count and snapshot come only from public scalars", () => {
-  const absent = text(
-    <OperationalPanel
-      summary={summary({
-        owner_research: {
-          version: 1,
-          status: "awaiting_evidence",
-          reason: "owner_research_no_eligible_evidence",
-          evidence_count: 0,
-          as_of_ms: now - 5_000,
-          workspace_refs: ["/home/private/notes.md", "/home/private/skills.md"],
-        },
-      })}
-      portfolio={portfolio()}
-    />,
-  );
-  assert.match(absent, /Workspace refs\s*Not reported/);
-  assert.doesNotMatch(absent, /\/home\/private/);
-
-  const present = text(
-    <OperationalPanel
-      summary={summary({
-        owner_research: {
-          version: 1,
-          status: "awaiting_evidence",
-          reason: "owner_research_no_eligible_evidence",
-          evidence_count: 0,
-          as_of_ms: now - 5_000,
-          workspace_ref_count: 3,
-          workspace_snapshot_sha256: "c".repeat(64),
-        },
-      })}
-      portfolio={portfolio()}
-    />,
-  );
-  assert.match(present, /Workspace refs\s*3/);
-  assert.match(present, /cccccccccccc…/);
-  assert.match(present, /raw workspace paths are never read/i);
 });
 
 test("measurement never renders private refs or untrusted HTML", () => {

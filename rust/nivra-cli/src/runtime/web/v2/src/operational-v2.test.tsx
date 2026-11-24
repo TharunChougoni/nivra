@@ -13,7 +13,6 @@ import type {
   OperationalHealth,
   PortfolioResponse,
   SummaryResponse,
-  SupervisorOperationalStatus,
 } from "./types";
 
 const now = Date.now();
@@ -72,44 +71,6 @@ function health(
     ...(liveness ? { controller_liveness: liveness } : {}),
     ...(operational ? { operational_health: operational } : {}),
   };
-}
-
-function supervisor(
-  overrides: Record<string, unknown> = {},
-): SupervisorOperationalStatus {
-  return {
-    status: "idle",
-    config: "configured",
-    config_reason: null,
-    config_scope: "loaded_policy_or_static_failure_code",
-    state: "present",
-    enabled: true,
-    parked: null,
-    budget: {
-      configured_daily_calls: 20,
-      charged_calls: 7,
-      charged_calls_scope: "provider_usage_projection_not_turn_runs",
-      parked_at_calls: null,
-      exhausted: false,
-      exhausted_scope: "authoritative_current_session_parked_state_only",
-    },
-    context: null,
-    compaction: null,
-    backoff: {
-      configured_ms: 30_000,
-      retry_limit: 2,
-      enforced: true,
-      enforced_scope: "current_session_context_exhaustion_only",
-      active: false,
-      active_scope: "authoritative_current_session_state_only",
-      earliest_retry_at_ms: null,
-    },
-    last_completed_run: null,
-    pending_source: "no_pending",
-    pending_scope: "checked_bounded_session_log",
-    pending: null,
-    ...overrides,
-  } as SupervisorOperationalStatus;
 }
 
 function calendar(overrides: Record<string, unknown> = {}): CalendarCoverage {
@@ -197,9 +158,8 @@ function operational(
   overrides: Record<string, unknown> = {},
 ): OperationalHealth {
   return {
-    version: 1,
+    version: 2,
     captured_at_ms: now - 5_000,
-    supervisor: supervisor(),
     calendar: calendar(),
     alert_transport: alert(),
     ...overrides,
@@ -234,225 +194,6 @@ function panel(options: {
     />,
   );
 }
-
-const PENDING_SOURCES = [
-  "missing",
-  "no_pending",
-  "pending",
-  "corrupt",
-  "incomplete",
-  "unreadable",
-  "oversize",
-  "non_regular",
-  "symlink",
-  "not_checked",
-];
-const AUTHORITATIVE_PENDING = new Set(["missing", "no_pending"]);
-
-test("pending source matrix: only authoritative absence reads as no pending turn", () => {
-  for (const source of PENDING_SOURCES) {
-    const pending =
-      source === "pending"
-        ? { kind: "post_fill", started_at_ms: now - 5_000, age_ms: 5_000 }
-        : null;
-    const view = panel({
-      operational: operational({
-        supervisor: supervisor({
-          status: source === "pending" ? "pending" : "idle",
-          pending_source: source,
-          pending,
-        }),
-      }),
-    });
-    if (AUTHORITATIVE_PENDING.has(source)) {
-      assert.ok(
-        view.text.includes("No pending turn reported"),
-        `authoritative ${source}`,
-      );
-      assert.equal(view.text.includes("Unknown pending source"), false, source);
-    } else {
-      assert.equal(
-        view.text.includes("No pending turn reported"),
-        false,
-        `unavailable ${source} must not claim no pending turn`,
-      );
-      assert.equal(
-        view.text.includes("Idle"),
-        false,
-        `unavailable ${source} must not read as Idle`,
-      );
-    }
-    if (source === "pending") {
-      assert.ok(view.text.includes("Post fill"), "pending evidence");
-      assert.ok(view.text.includes("Pending turn present"), "pending source");
-    }
-    if (source === "corrupt") {
-      assert.ok(view.text.includes("Session log corrupt"), "corrupt source");
-      assert.ok(view.text.includes("not treated as idle"), "corrupt notice");
-    }
-    if (source === "not_checked") {
-      assert.ok(view.text.includes("Not checked"), "not checked source");
-    }
-  }
-});
-
-test("pending evidence survives an unavailable source without masking it", () => {
-  const view = panel({
-    operational: operational({
-      supervisor: supervisor({
-        status: "unknown",
-        pending_source: "corrupt",
-        pending: {
-          kind: "post_fill",
-          started_at_ms: now - 5_000,
-          age_ms: 5_000,
-        },
-      }),
-    }),
-  });
-  assert.ok(view.text.includes("Post fill"));
-  assert.ok(view.text.includes("Session log corrupt"));
-  assert.ok(view.text.includes("evidence"));
-  assert.equal(view.text.includes("No pending turn reported"), false);
-  assert.equal(view.text.includes("Idle"), false);
-});
-
-test("pending source unknown text is never echoed", () => {
-  const view = panel({
-    operational: operational({
-      supervisor: supervisor({
-        pending_source: "provider raw text /tmp/private-token",
-      }),
-    }),
-  });
-  assert.ok(view.text.includes("Unknown pending source"));
-  assert.equal(view.text.includes("provider raw text"), false);
-  assert.equal(view.text.includes("/tmp/private-token"), false);
-});
-
-test("idle needs present state, configured policy and an authoritative pending source", () => {
-  const idle = panel({ operational: operational() });
-  assert.equal(idle.fact("Status"), "Idle");
-  assert.equal(idle.fact("Pending kind"), "No pending turn reported");
-
-  const missingState = panel({
-    operational: operational({
-      supervisor: supervisor({
-        state: "missing",
-        pending_source: "no_pending",
-      }),
-    }),
-  });
-  assert.equal(missingState.fact("Status"), "Unknown");
-  assert.equal(missingState.text.includes("No pending turn reported"), false);
-
-  const unavailableConfig = panel({
-    operational: operational({
-      supervisor: supervisor({
-        config: "unavailable",
-        config_reason: "planner_usage_unavailable",
-        pending_source: "no_pending",
-      }),
-    }),
-  });
-  assert.equal(unavailableConfig.fact("Status"), "Unknown");
-  assert.equal(
-    unavailableConfig.text.includes("No pending turn reported"),
-    false,
-  );
-});
-
-test("config unavailable is distinct from a genuinely unconfigured supervisor", () => {
-  const unavailable = panel({
-    operational: operational({
-      supervisor: supervisor({
-        status: "unknown",
-        config: "unavailable",
-        config_reason: "planner_usage_unavailable",
-        enabled: false,
-        budget: {
-          configured_daily_calls: 0,
-          charged_calls: 0,
-          parked_at_calls: null,
-          exhausted: null,
-        },
-      }),
-    }),
-  });
-  assert.equal(unavailable.fact("Config source"), "Config unavailable");
-  assert.equal(unavailable.fact("Config failure"), "Planner usage unavailable");
-  assert.equal(unavailable.fact("Enabled"), "Unknown (static fallback)");
-  assert.equal(
-    unavailable.fact("Configured daily calls"),
-    "Unknown (static fallback reports 0)",
-  );
-  assert.equal(unavailable.text.includes("EnabledNo"), false);
-  assert.equal(unavailable.text.includes("Configured daily calls0"), false);
-  assert.ok(unavailable.text.includes("not a disabled policy"));
-  assert.ok(unavailable.text.includes("not zero"));
-
-  const unconfigured = panel({
-    operational: operational({
-      supervisor: supervisor({
-        status: "disabled",
-        config: "not_configured",
-        config_reason: null,
-        state: "not_configured",
-        enabled: null,
-        budget: {
-          configured_daily_calls: null,
-          charged_calls: null,
-          parked_at_calls: null,
-          exhausted: null,
-        },
-        pending_source: "not_checked",
-      }),
-    }),
-  });
-  assert.equal(unconfigured.fact("Config source"), "Not configured");
-  assert.equal(unconfigured.fact("Status"), "Disabled");
-  assert.equal(unconfigured.fact("Pending source"), "Not checked");
-  assert.equal(unconfigured.text.includes("Config unavailable"), false);
-});
-
-test("all six static config failure codes are whitelisted and raw text is dropped", () => {
-  const reasons: [string, string][] = [
-    ["planner_config_unavailable", "Planner config unavailable"],
-    ["planner_usage_unavailable", "Planner usage unavailable"],
-    [
-      "planner_usage_unavailable_recovery_required",
-      "Planner usage unavailable (recovery required)",
-    ],
-    ["planner_authority_invalid", "Planner authority invalid"],
-    [
-      "planner_event_configuration_changed",
-      "Planner event configuration changed",
-    ],
-    ["planner_integrity_failure", "Planner integrity failure"],
-  ];
-  for (const [reason, label] of reasons) {
-    const view = panel({
-      operational: operational({
-        supervisor: supervisor({
-          config: "unavailable",
-          config_reason: reason,
-        }),
-      }),
-    });
-    assert.equal(view.fact("Config failure"), label, reason);
-  }
-  const unknown = panel({
-    operational: operational({
-      supervisor: supervisor({
-        config: "unavailable",
-        config_reason: "provider raw error /tmp/private-token",
-      }),
-    }),
-  });
-  assert.equal(unknown.fact("Config failure"), "Unknown config failure");
-  assert.equal(unknown.text.includes("provider raw error"), false);
-  assert.equal(unknown.text.includes("/tmp/private-token"), false);
-});
 
 test("alert outbox 64-row scope is separate from the retained 3600 s / 20-row window", () => {
   const view = panel({ operational: operational() });
@@ -579,7 +320,8 @@ test("book state uses portfolio-first projectedStatus and never shows a false op
 
 test("unsupported and versionless operational health are not interpreted", () => {
   const unsupported = operational({
-    version: 2,
+    // version 1 is the retired shape
+    version: 1,
     captured_at_ms: now - 5_000,
   });
   const view = panel({
@@ -593,7 +335,7 @@ test("unsupported and versionless operational health are not interpreted", () =>
       loop_generation: 1,
     },
   });
-  assert.ok(view.text.includes("version 2 is not supported"));
+  assert.ok(view.text.includes("version 1 is not supported"));
   assert.ok(view.text.includes("values are not interpreted"));
   assert.equal(view.fact("Published capture"), "Not interpreted");
   assert.equal(view.text.includes("Recent capture"), false);
@@ -641,20 +383,4 @@ test("calendar source is verified only for the known NSE source", () => {
   assert.ok(outside.text.includes("No 2027 data"));
   assert.ok(outside.text.includes("no holiday is guessed"));
   assert.ok(outside.text.includes("30-day operator default warning"));
-});
-
-test("raw config and pending scope text is never rendered", () => {
-  const view = panel({
-    operational: operational({
-      supervisor: supervisor({
-        config_scope: "raw config scope /tmp/private-token",
-        pending_scope: "raw pending scope /tmp/private-token",
-      }),
-    }),
-  });
-  assert.equal(view.text.includes("raw config scope"), false);
-  assert.equal(view.text.includes("raw pending scope"), false);
-  assert.equal(view.text.includes("/tmp/private-token"), false);
-  assert.equal(view.fact("Config scope"), "Not reported");
-  assert.equal(view.fact("Pending scope"), "Not reported");
 });

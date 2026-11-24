@@ -10,15 +10,12 @@ import {
   measurementTimeline,
   money,
   observationState,
-  ownerResearchFrom,
-  ownerResearchVersionState,
   qualificationLabel,
   replayAxes,
   researchReason,
   safeHash,
   trialLowerBound,
   trialMainCount,
-  workspaceRefCount,
 } from "./research";
 import type { EpisodeMeasurement, ObservationTrialFold } from "./types";
 
@@ -221,38 +218,7 @@ test("observation source and version guards stay explicit", () => {
   assert.equal(observationState("not-json"), "unsupported");
 });
 
-test("owner research version and supervisor fallback are explicit", () => {
-  assert.equal(ownerResearchVersionState(undefined), "missing");
-  assert.equal(ownerResearchVersionState({ version: 2 }), "unsupported");
-  assert.equal(ownerResearchVersionState({ version: 1 }), "present");
-  const fallback = ownerResearchFrom(
-    {},
-    {
-      research: {
-        config: "configured",
-        state: "awaiting_evidence",
-        due: false,
-        evidence_count: 0,
-        as_of_ms: 1_000,
-        pending_source: "no_pending",
-      },
-    },
-  );
-  assert.equal(fallback?.status, "awaiting_evidence");
-  assert.equal(fallback?.evidence_count, 0);
-  assert.equal(
-    ownerResearchFrom({ owner_research: { version: 2 } }, null),
-    null,
-  );
-});
-
-test("workspace refs are a public scalar only; raw arrays and paths are ignored", () => {
-  assert.equal(workspaceRefCount({ workspace_ref_count: 3 }), 3);
-  assert.equal(workspaceRefCount({ workspace_ref_count: 0 }), 0);
-  assert.equal(workspaceRefCount({ workspace_ref_count: null }), null);
-  assert.equal(workspaceRefCount(["notes/a.md", "skills/b.md"]), null);
-  assert.equal(workspaceRefCount({ refs: ["a"] }), null);
-  assert.equal(workspaceRefCount("/home/private/notes.md"), null);
+test("hashes are shortened and anything that is not a hash is not reported", () => {
   assert.equal(safeHash("a".repeat(64)), `${"a".repeat(12)}…`);
   assert.equal(safeHash("/home/private/account.json"), "Not reported");
   assert.equal(safeHash("<img src=x>"), "Not reported");
@@ -273,15 +239,15 @@ test("cohort and reason labels are bounded and never claim validation", () => {
   );
   assert.doesNotMatch(cohortStatus("anything"), /validated/i);
   assert.equal(
-    researchReason("owner_research_no_eligible_evidence", true),
-    "No eligible evidence",
+    researchReason("research_lane_min_interval", true),
+    "Waiting between research turns",
   );
   assert.equal(
     researchReason("provider said /tmp/private", true),
     "Unknown reason",
   );
   assert.equal(
-    researchReason("owner_research_no_eligible_evidence", false),
+    researchReason("research_lane_min_interval", false),
     "Unknown reason",
   );
 });

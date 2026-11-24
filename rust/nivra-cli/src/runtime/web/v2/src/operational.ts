@@ -1,125 +1,6 @@
 import { count, duration, numeric } from "./data";
-import type {
-  ControllerLiveness,
-  OperationalHealth,
-  SupervisorOperationalStatus,
-} from "./types";
+import type { ControllerLiveness, OperationalHealth } from "./types";
 
-// The server projects only bounded, static reason codes. The client keeps its
-// own whitelist so an unexpected value can never become visible operator text.
-const SUPERVISOR_REASONS = new Set([
-  "model_response_incomplete",
-  "supervisor_budget_exhausted",
-  "supervisor_call_failed",
-  "supervisor_call_timeout",
-  "supervisor_cancelled",
-  "supervisor_compaction_invalid",
-  "supervisor_config_revision_changed",
-  "supervisor_context_exhausted",
-  "supervisor_context_exhausted_backoff",
-  "supervisor_context_exhausted_no_history",
-  "supervisor_disabled",
-  "supervisor_handoff_pending",
-  "supervisor_lifecycle_receipt_conflict",
-  "supervisor_model_response_incomplete",
-  "supervisor_notes_unavailable",
-  "supervisor_parked_budget",
-  "supervisor_pending_at_handoff",
-  "supervisor_prompt_revision_changed",
-  "supervisor_session_log_failed",
-  "supervisor_settings_invalid",
-  "supervisor_state_corrupt",
-  "supervisor_state_unreadable",
-  "supervisor_state_unwritable",
-  "supervisor_usage_contended",
-  "supervisor_worker_disconnected",
-]);
-const COMPACTION_REASONS = new Set([
-  ...SUPERVISOR_REASONS,
-  "session_notes_changed",
-  "supervisor_action_receipt_failed",
-  "supervisor_harness_citation_ids_invalid",
-  "supervisor_harness_final_tools_invalid",
-  "supervisor_harness_owner_tools_invalid",
-  "supervisor_harness_request_invalid",
-  "supervisor_harness_tool_definitions_changed",
-  "supervisor_harness_tool_invalid",
-  "supervisor_instruction_store_failed",
-  "supervisor_lifecycle_failed",
-  "supervisor_note_expiry_failed",
-  "supervisor_output_invalid",
-  "supervisor_session_note_mark_failed",
-  "supervisor_session_note_marks_invalid",
-]);
-const INCOMPLETE_REASONS = new Set([
-  "max_output_tokens",
-  "content_filter",
-  "other",
-]);
-const PENDING_KINDS = new Set([
-  "session_open",
-  "resume",
-  "change",
-  "pre_close",
-  "post_fill",
-  "failure_streak",
-  "decision",
-  "review",
-  "compaction",
-  "handoff",
-  "aside",
-  "idle",
-]);
-const SUPERVISOR_STATUS: Record<string, string> = {
-  idle: "Idle",
-  pending: "Pending",
-  parked: "Parked",
-  unknown: "Unknown",
-  disabled: "Disabled",
-};
-const SUPERVISOR_STATE: Record<string, string> = {
-  present: "Current session state present",
-  missing: "Current session state missing",
-  other_session: "State belongs to another session",
-  malformed: "Malformed state",
-  unreadable: "Unreadable state",
-  not_configured: "Not configured",
-};
-const SUPERVISOR_CONFIG: Record<string, string> = {
-  configured: "Configured",
-  unavailable: "Config unavailable",
-  not_configured: "Not configured",
-};
-const SUPERVISOR_CONFIG_REASONS: Record<string, string> = {
-  planner_config_unavailable: "Planner config unavailable",
-  planner_usage_unavailable: "Planner usage unavailable",
-  planner_usage_unavailable_recovery_required:
-    "Planner usage unavailable (recovery required)",
-  planner_authority_invalid: "Planner authority invalid",
-  planner_event_configuration_changed: "Planner event configuration changed",
-  planner_integrity_failure: "Planner integrity failure",
-};
-const PENDING_SOURCES: Record<string, string> = {
-  missing: "Session log missing",
-  no_pending: "No pending turn",
-  pending: "Pending turn present",
-  corrupt: "Session log corrupt",
-  incomplete: "Session log incomplete",
-  unreadable: "Session log unreadable",
-  oversize: "Session log oversized",
-  non_regular: "Session log is not a regular file",
-  symlink: "Session log is a symlink",
-  not_checked: "Not checked",
-};
-const AUTHORITATIVE_PENDING_SOURCES = new Set(["missing", "no_pending"]);
-const VERIFIED_CALENDAR_SOURCES = new Set(["NSE/CMTR/71775"]);
-const LIVENESS_STATUS: Record<string, string> = {
-  healthy: "Healthy",
-  unknown: "Unknown",
-  stale: "Stale",
-  future: "Future clock",
-  malformed: "Malformed",
-};
 const ALERT_STORE_STATUS: Record<string, string> = {
   available: "Available",
   missing: "Missing",
@@ -134,6 +15,14 @@ const FAILURE_CATEGORIES: Record<string, string> = {
   informational: "Informational response",
   redirect_or_unexpected: "Redirect or unexpected response",
   unknown: "Unknown category",
+};
+const VERIFIED_CALENDAR_SOURCES = new Set(["NSE/CMTR/71775"]);
+const LIVENESS_STATUS: Record<string, string> = {
+  healthy: "Healthy",
+  unknown: "Unknown",
+  stale: "Stale",
+  future: "Future clock",
+  malformed: "Malformed",
 };
 function sentence(value: string) {
   const text = value.replaceAll("_", " ");
@@ -155,109 +44,13 @@ export function secondsLabel(value: unknown): string {
   const seconds = numeric(value);
   return seconds === null ? "Not reported" : `${seconds} s`;
 }
-export function bytesLabel(value: unknown): string {
-  const bytes = numeric(value);
-  return bytes === null ? "Not reported" : `${count(bytes)} bytes`;
-}
 export function yesNo(value: unknown): string {
   return value === true ? "Yes" : value === false ? "No" : "Not reported";
-}
-export function knownReason(value: unknown, known?: boolean): string {
-  if (
-    known === false ||
-    typeof value !== "string" ||
-    !SUPERVISOR_REASONS.has(value)
-  )
-    return "Unknown reason";
-  return sentence(value);
-}
-export function compactionReason(value: unknown, known?: boolean): string {
-  if (
-    known === false ||
-    typeof value !== "string" ||
-    !COMPACTION_REASONS.has(value)
-  )
-    return "Unknown reason";
-  return sentence(value);
-}
-export function incompleteReason(value: unknown): string {
-  if (typeof value !== "string" || !INCOMPLETE_REASONS.has(value))
-    return "Unknown reason";
-  return sentence(value);
-}
-export function pendingKind(value: unknown): string {
-  if (typeof value !== "string" || !PENDING_KINDS.has(value))
-    return "Unknown kind";
-  return sentence(value);
 }
 export function failureCategory(value: unknown): string {
   return typeof value === "string" && FAILURE_CATEGORIES[value]
     ? FAILURE_CATEGORIES[value]
     : "Unknown category";
-}
-export function configLabel(value: unknown): string {
-  return typeof value === "string"
-    ? SUPERVISOR_CONFIG[value] || "Unknown config source"
-    : "Unknown config source";
-}
-export function configReason(value: unknown): string {
-  return typeof value === "string"
-    ? SUPERVISOR_CONFIG_REASONS[value] || "Unknown config failure"
-    : "Unknown config failure";
-}
-export function configScopeLabel(value: unknown): string {
-  return value === "loaded_policy_or_static_failure_code"
-    ? "Loaded policy or static failure code"
-    : "Not reported";
-}
-export function pendingSourceLabel(value: unknown): string {
-  return typeof value === "string"
-    ? PENDING_SOURCES[value] || "Unknown pending source"
-    : "Unknown pending source";
-}
-export function pendingScopeLabel(value: unknown): string {
-  return value === "checked_bounded_session_log"
-    ? "Checked bounded session log"
-    : "Not reported";
-}
-export function isAuthoritativePendingSource(value: unknown): boolean {
-  return typeof value === "string" && AUTHORITATIVE_PENDING_SOURCES.has(value);
-}
-export function pendingAbsenceAuthoritative(
-  supervisor?: SupervisorOperationalStatus | null,
-): boolean {
-  return (
-    supervisor?.state === "present" &&
-    supervisor?.config === "configured" &&
-    isAuthoritativePendingSource(supervisor?.pending_source)
-  );
-}
-export function supervisorStatus(
-  value: unknown,
-  state?: unknown,
-  config?: unknown,
-  pendingSource?: unknown,
-): string {
-  if (typeof value !== "string") return "Unknown";
-  if (value === "disabled")
-    return config === "unavailable" ? "Unknown" : "Disabled";
-  if (config === "unavailable") return "Unknown";
-  if (state !== "present" || config !== "configured") return "Unknown";
-  if (value === "idle" && !isAuthoritativePendingSource(pendingSource))
-    return "Unknown";
-  if (value === "pending" && pendingSource !== "pending") return "Unknown";
-  if (
-    value === "parked" &&
-    !isAuthoritativePendingSource(pendingSource) &&
-    pendingSource !== "pending"
-  )
-    return "Unknown";
-  return SUPERVISOR_STATUS[value] || "Unknown";
-}
-export function supervisorState(value: unknown): string {
-  return typeof value === "string"
-    ? SUPERVISOR_STATE[value] || "Unknown source"
-    : "Unknown source";
 }
 export function livenessLabel(value: unknown): string {
   return typeof value === "string"
@@ -410,7 +203,7 @@ export function operationalHealthState(
 ): "missing" | "unsupported" | "present" {
   if (value === null || value === undefined) return "missing";
   if (typeof value !== "object" || Array.isArray(value)) return "unsupported";
-  if ((value as { version?: unknown }).version !== 1) return "unsupported";
+  if ((value as { version?: unknown }).version !== 2) return "unsupported";
   return "present";
 }
 export function operationalHealthPresence(

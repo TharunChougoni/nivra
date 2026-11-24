@@ -297,7 +297,7 @@ const splits: Record<
         v: 1,
         at_ms: envelope.as_of_ms,
         session: "2026-10-29",
-        run: "harness-supervisor-fixture",
+        run: "harness-decision-fixture",
         turn: 0,
         call: "call_one",
         tool: "web_search",
@@ -670,37 +670,8 @@ test("operational panel keeps the published capture and separates operational ev
   const { createRoot } = await import("react-dom/client");
   const captured = envelope.as_of_ms;
   const operational: OperationalHealth = {
-    version: 1,
+    version: 2,
     captured_at_ms: captured,
-    supervisor: {
-      status: "idle",
-      config: "configured",
-      config_reason: null,
-      config_scope: "loaded_policy_or_static_failure_code",
-      state: "present",
-      enabled: true,
-      budget: {
-        configured_daily_calls: 20,
-        charged_calls: 7,
-        parked_at_calls: null,
-        exhausted: false,
-      },
-      backoff: {
-        configured_ms: 30_000,
-        retry_limit: 2,
-        enforced: true,
-        active: false,
-        earliest_retry_at_ms: null,
-      },
-      last_completed_run: {
-        at_ms: captured - 60_000,
-        age_ms: 60_000,
-        runs: 3,
-      },
-      pending_source: "no_pending",
-      pending_scope: "checked_bounded_session_log",
-      pending: null,
-    },
     calendar: {
       source: "NSE/CMTR/71775",
       covered_from: "2026-01-01",
@@ -792,14 +763,11 @@ test("operational panel keeps the published capture and separates operational ev
     await until(() =>
       document.body.textContent?.includes("Operational health"),
     );
-    await until(() =>
-      document.body.textContent?.includes("Current session state present"),
-    );
+    await until(() => document.body.textContent?.includes("Sender HTTP 2xx"));
     for (const label of [
       "Paper financial status",
       "Controller liveness",
       "Research & advisory",
-      "Supervisor",
       "Calendar coverage",
       "Alert transport",
     ])

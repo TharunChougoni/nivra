@@ -129,13 +129,9 @@ pub(super) fn health_body(view: &serde_json::Value, now_ms: i64) -> serde_json::
     // Copy the controller's already-captured read-only projections verbatim.
     // This GET never samples a clock, reads the queue/state, recomputes the
     // research status or renews freshness; an absent field stays absent.
-    if let Some(value) = view.get("owner_research") {
-        body["owner_research"] = value.clone();
-    }
     if let Some(value) = view.get("research_tasks") {
         body["research_tasks"] = value.clone();
     }
-    body["owner_review"] = view["owner_review"].clone();
     body["retention"] = view["retention"].clone();
     body["planner"] = serde_json::json!({
         "status":view["planner"]["status"],"budget_used":view["planner"]["budget_used"],

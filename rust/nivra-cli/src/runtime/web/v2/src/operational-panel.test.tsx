@@ -9,7 +9,6 @@ import type {
   OperationalHealth,
   PortfolioResponse,
   SummaryResponse,
-  SupervisorOperationalStatus,
 } from "./types";
 
 const envelope = {
@@ -74,40 +73,8 @@ function text(node: React.ReactElement) {
 }
 function happyOperational(): OperationalHealth {
   return {
-    version: 1,
+    version: 2,
     captured_at_ms: now - 5_000,
-    supervisor: {
-      status: "idle",
-      config: "configured",
-      config_reason: null,
-      config_scope: "loaded_policy_or_static_failure_code",
-      state: "present",
-      enabled: true,
-      parked: null,
-      budget: {
-        configured_daily_calls: 20,
-        charged_calls: 7,
-        charged_calls_scope: "provider_usage_projection_not_turn_runs",
-        parked_at_calls: null,
-        exhausted: false,
-        exhausted_scope: "authoritative_current_session_parked_state_only",
-      },
-      context: null,
-      compaction: null,
-      backoff: {
-        configured_ms: 30_000,
-        retry_limit: 2,
-        enforced: true,
-        enforced_scope: "current_session_context_exhaustion_only",
-        active: false,
-        active_scope: "authoritative_current_session_state_only",
-        earliest_retry_at_ms: null,
-      },
-      last_completed_run: { at_ms: now - 60_000, age_ms: 60_000, runs: 3 },
-      pending_source: "no_pending",
-      pending_scope: "checked_bounded_session_log",
-      pending: null,
-    },
     calendar: {
       source: "NSE/CMTR/71775",
       covered_from: "2026-01-01",
@@ -179,7 +146,7 @@ function happyOperational(): OperationalHealth {
   } as OperationalHealth;
 }
 
-test("operational panel separates paper finance, liveness, research, supervisor, calendar and alerts", () => {
+test("operational panel separates paper finance, liveness, research, calendar and alerts", () => {
   const operational = happyOperational();
   const body = text(
     <OperationalPanel
@@ -202,16 +169,11 @@ test("operational panel separates paper finance, liveness, research, supervisor,
     "Paper financial status",
     "Controller liveness",
     "Research & advisory",
-    "Supervisor",
     "Calendar coverage",
     "Alert transport",
   ])
     assert.ok(body.includes(label), label);
   assert.ok(body.includes("5,000"));
-  assert.ok(body.includes("Idle"));
-  assert.ok(body.includes("Current session state present"));
-  assert.ok(body.includes("Provider usage projection, not turn runs"));
-  assert.ok(body.includes("Charged calls"));
   assert.ok(body.includes("NSE/CMTR/71775"));
   assert.ok(body.includes("2026-12-31 IST"));
   assert.ok(body.includes("Covered"));
@@ -225,58 +187,15 @@ test("operational panel separates paper finance, liveness, research, supervisor,
   assert.ok(body.includes("No delivery guarantee"));
   assert.ok(
     body.includes(
-      "A stale last completed run is not evidence that the supervisor is hung.",
+      "A stale last completed loop is not evidence that the controller is hung.",
     ),
   );
 });
 
 test("operational panel keeps corrupt state, unknown reasons and null counts honest", () => {
   const operational: OperationalHealth = {
-    version: 1,
+    version: 2,
     captured_at_ms: now - 10_000,
-    supervisor: {
-      status: "idle",
-      config: "configured",
-      config_reason: null,
-      config_scope: "loaded_policy_or_static_failure_code",
-      state: "malformed",
-      enabled: null,
-      parked: {
-        reason: "provider said /tmp/private-token",
-        reason_known: false,
-        at_ms: now - 1_000,
-        budget_at_park: null,
-      },
-      budget: {
-        configured_daily_calls: null,
-        charged_calls: null,
-        parked_at_calls: null,
-        exhausted: null,
-      },
-      context: {
-        reason: "raw context error /home/private",
-        reason_known: false,
-        incomplete_reason: "raw incomplete reason",
-        request_bytes: null,
-        max_request_bytes: null,
-        at_ms: null,
-        retries: null,
-      },
-      compaction: {
-        reason: "raw compaction error",
-        reason_known: false,
-        at_ms: null,
-      },
-      backoff: null,
-      last_completed_run: null,
-      pending_source: "corrupt",
-      pending_scope: "checked_bounded_session_log",
-      pending: {
-        kind: "raw pending kind",
-        started_at_ms: null,
-        age_ms: null,
-      },
-    },
     calendar: {
       source: "raw source with spaces",
       covered_from: null,
@@ -332,9 +251,6 @@ test("operational panel keeps corrupt state, unknown reasons and null counts hon
     />,
   );
   assert.ok(body.includes("Unknown"));
-  assert.ok(body.includes("Malformed state"));
-  assert.ok(body.includes("Unknown reason"));
-  assert.ok(body.includes("Unknown kind"));
   assert.ok(body.includes("Not reported"));
   assert.ok(body.includes("No 2027 data"));
   assert.ok(body.includes("4 days past coverage"));
@@ -345,41 +261,14 @@ test("operational panel keeps corrupt state, unknown reasons and null counts hon
   assert.ok(body.includes("Not recorded in retained window"));
   assert.ok(body.includes("Clock anomaly: future-dated delivery rows"));
   assert.equal(body.includes("private-fixture"), false);
-  assert.equal(body.includes("provider said"), false);
-  assert.equal(body.includes("/tmp/private-token"), false);
-  assert.equal(body.includes("raw context error"), false);
-  assert.equal(body.includes("raw compaction error"), false);
-  assert.equal(body.includes("raw pending kind"), false);
   assert.equal(body.includes("raw source with spaces"), false);
   assert.equal(body.includes("raw failure text"), false);
 });
 
-test("operational panel shows disabled supervisor and expiring calendar warnings", () => {
+test("operational panel shows disabled alert transport and expiring calendar warnings", () => {
   const operational: OperationalHealth = {
-    version: 1,
+    version: 2,
     captured_at_ms: now - 5_000,
-    supervisor: {
-      status: "disabled",
-      config: "not_configured",
-      config_reason: null,
-      config_scope: "loaded_policy_or_static_failure_code",
-      state: "not_configured",
-      enabled: null,
-      parked: null,
-      budget: {
-        configured_daily_calls: null,
-        charged_calls: null,
-        parked_at_calls: null,
-        exhausted: null,
-      },
-      context: null,
-      compaction: null,
-      backoff: null,
-      last_completed_run: null,
-      pending_source: "not_checked",
-      pending_scope: "checked_bounded_session_log",
-      pending: null,
-    },
     calendar: {
       source: "NSE/CMTR/71775",
       covered_from: "2026-01-01",
@@ -420,71 +309,10 @@ test("operational panel shows disabled supervisor and expiring calendar warnings
     />,
   );
   assert.ok(body.includes("Disabled"));
-  assert.ok(body.includes("Not configured"));
   assert.ok(body.includes("Expiring"));
   assert.ok(body.includes("30-day operator default warning"));
   assert.ok(body.includes("11 days"));
   assert.ok(body.includes("Counts unavailable"));
-});
-
-test("operational panel shows pending context and scoped backoff", () => {
-  const operational = happyOperational();
-  operational.supervisor = {
-    ...operational.supervisor!,
-    status: "pending",
-    pending_source: "pending",
-    pending: {
-      kind: "post_fill",
-      started_at_ms: now - 5_000,
-      age_ms: 5_000,
-    },
-    context: {
-      reason: "supervisor_context_exhausted",
-      reason_known: true,
-      incomplete_reason: "max_output_tokens",
-      request_bytes: 1024,
-      max_request_bytes: 2048,
-      at_ms: now - 15_000,
-      retries: 2,
-    },
-    compaction: {
-      reason: "supervisor_compaction_invalid",
-      reason_known: true,
-      at_ms: now - 20_000,
-    },
-    backoff: {
-      configured_ms: 30_000,
-      retry_limit: 2,
-      enforced: true,
-      active: true,
-      earliest_retry_at_ms: now + 15_000,
-    },
-  } as SupervisorOperationalStatus;
-  const body = text(
-    <OperationalPanel
-      summary={summary(operational)}
-      portfolio={portfolio()}
-      health={health(undefined, operational)}
-    />,
-  );
-  assert.ok(body.includes("Pending"));
-  assert.ok(body.includes("Post fill"));
-  assert.ok(body.includes("Supervisor context exhausted"));
-  assert.ok(body.includes("Max output tokens"));
-  assert.ok(body.includes("1,024 bytes / 2,048 bytes"));
-  assert.ok(body.includes("Supervisor compaction invalid"));
-  assert.ok(body.includes("Current-session context exhaustion only"));
-  assert.ok(body.includes("Authoritative current-session state only"));
-  const retry =
-    new Intl.DateTimeFormat("en-IN", {
-      timeZone: "Asia/Kolkata",
-      day: "2-digit",
-      month: "short",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    }).format(now + 15_000) + " IST";
-  assert.ok(body.includes(retry));
 });
 
 test("operational panel degrades honestly when an older snapshot omits the projection", () => {

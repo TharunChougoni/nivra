@@ -8,7 +8,6 @@ import type {
   OperationalHealth,
   PortfolioResponse,
   SummaryResponse,
-  SupervisorOperationalStatus,
 } from "./types";
 import { amount, count, datetime, projectedStatus, words } from "./data";
 import { Empty, Facts, KpiStrip, Notice, Panel, Status, Table } from "./ui";
@@ -27,8 +26,6 @@ import {
   continuationQuoteHash,
   continuationQuotePurpose,
   continuationReceiptHash,
-  continuationRecordingSession,
-  continuationSourceSession,
   continuationStateLabel,
   episodeCapital,
   episodeEntryLabel,
@@ -54,19 +51,9 @@ import {
   observationState,
   observationStatusLabel,
   originalMeasurementStatusLabel,
-  ownerResearchFrom,
-  ownerResearchVersionState,
   qualificationLabel,
   replayAxes,
-  researchConfig,
-  researchConfigReason,
-  researchEvidenceId,
-  researchModelCall,
-  researchPendingKind,
-  researchPendingSource,
   researchReason,
-  researchStateLabel,
-  researchWorkspaceSnapshot,
   safeHash,
   safeSession,
   scientificStateLabel,
@@ -78,18 +65,12 @@ import {
   trialReset,
   trialStatusLabel,
   validObservationTimestamp,
-  workspaceRefCount,
 } from "./research";
 import {
   ageLabel,
   alertStoreLabel,
-  bytesLabel,
   calendarOutsideLabel,
   calendarSource,
-  compactionReason,
-  configLabel,
-  configReason,
-  configScopeLabel,
   controllerLivenessFrom,
   countsScopeLabel,
   coverageLabel,
@@ -98,9 +79,7 @@ import {
   exchangeDate,
   failureCategory,
   freshness,
-  incompleteReason,
   isVerifiedCalendarSource,
-  knownReason,
   lastCompletedAt,
   livenessLabel,
   metric,
@@ -109,14 +88,8 @@ import {
   outboxDeadScopeLabel,
   outboxRowScopeLabel,
   outboxScopeLabel,
-  pendingAbsenceAuthoritative,
-  pendingKind,
-  pendingScopeLabel,
-  pendingSourceLabel,
   retainedWindowScopeLabel,
   secondsLabel,
-  supervisorState,
-  supervisorStatus,
   timestampScopeLabel,
   validTimestampMs,
   yesNo,
@@ -295,7 +268,7 @@ function ControllerLivenessPanel({
         </Notice>
       )}
       <p className="caption">
-        A stale last completed run is not evidence that the supervisor is hung.
+        A stale last completed loop is not evidence that the controller is hung.
         Only the published liveness status is used.
       </p>
     </Panel>
@@ -334,251 +307,6 @@ function ResearchPanel({ summary }: { summary?: SummaryResponse | null }) {
           ["Cross-session visualization", "See Cross-session continuity below"],
         ]}
       />
-    </Panel>
-  );
-}
-function SupervisorPanel({
-  supervisor,
-  interpret,
-}: {
-  supervisor?: SupervisorOperationalStatus | null;
-  interpret: boolean;
-}) {
-  if (!interpret || !supervisor)
-    return (
-      <Panel title="Supervisor">
-        <Empty title="Supervisor state unavailable">
-          The snapshot did not include a readable supervisor operational
-          projection. No idle, healthy or zero state is inferred.
-        </Empty>
-      </Panel>
-    );
-  const state = supervisor.state;
-  const statePresent = state === "present";
-  const config = supervisor.config;
-  const configUnavailable = config === "unavailable";
-  const configNotConfigured = config === "not_configured";
-  const status = supervisorStatus(
-    supervisor.status,
-    state,
-    config,
-    supervisor.pending_source,
-  );
-  const pending = supervisor.pending;
-  const pendingSource = supervisor.pending_source;
-  const pendingSourceKnown =
-    pendingSource === "missing" ||
-    pendingSource === "no_pending" ||
-    pendingSource === "pending";
-  const pendingSourceUnavailable = !pendingSourceKnown;
-  const pendingAuthoritative = pendingAbsenceAuthoritative(supervisor);
-  const pendingKindValue = pending
-    ? pendingKind(pending.kind)
-    : pendingAuthoritative
-      ? "No pending turn reported"
-      : "Unknown (source not authoritative)";
-  const parked = supervisor.parked;
-  const budget = supervisor.budget;
-  const context = supervisor.context;
-  const compaction = supervisor.compaction;
-  const backoff = supervisor.backoff;
-  const lastRun = supervisor.last_completed_run;
-  const configuredCalls = budget?.configured_daily_calls;
-  const configuredCallsValue = configUnavailable
-    ? configuredCalls == null
-      ? "Unknown (no static fallback)"
-      : `Unknown (static fallback reports ${metric(configuredCalls)})`
-    : configNotConfigured
-      ? "Not reported"
-      : metric(configuredCalls);
-  const enabledValue = configUnavailable
-    ? "Unknown (static fallback)"
-    : configNotConfigured
-      ? "Not reported"
-      : yesNo(supervisor.enabled);
-  const exhaustedValue = configUnavailable
-    ? "Unknown (static fallback)"
-    : yesNo(budget?.exhausted);
-  return (
-    <Panel
-      title="Supervisor"
-      note="Current-session supervisor state only. Missing, other-session or malformed state is not treated as idle or healthy."
-    >
-      {state !== "present" && supervisor.status !== "disabled" && (
-        <Notice error>
-          Supervisor state is {supervisorState(state).toLowerCase()}; it is not
-          treated as idle or healthy. Published status: {status}.
-        </Notice>
-      )}
-      {configUnavailable && (
-        <Notice error>
-          Planner policy is configured but unavailable:{" "}
-          {configReason(supervisor.config_reason)}. Static fallback caps are not
-          the loaded policy; enabled state and configured daily calls are
-          unknown, not a disabled policy or zero. Published status: {status}.
-        </Notice>
-      )}
-      {configNotConfigured && (
-        <Notice>
-          Supervisor is not configured; this is a disabled policy, not a
-          configured policy that failed to load.
-        </Notice>
-      )}
-      {pendingSourceUnavailable && (
-        <Notice error>
-          Pending source is {pendingSourceLabel(pendingSource)}; absence of a
-          pending turn is not established. This is not treated as idle.
-        </Notice>
-      )}
-      {pending && pendingSourceUnavailable && (
-        <Notice>
-          A checked pending turn is exposed as evidence only; the unavailable
-          source still makes the status non-authoritative.
-        </Notice>
-      )}
-      {pendingSource === "pending" && !pending && (
-        <Notice>
-          Pending source reports a pending turn, but no pending evidence was
-          exposed.
-        </Notice>
-      )}
-      <div className="cols-2">
-        <Facts
-          items={[
-            ["Status", status],
-            ["Config source", configLabel(config)],
-            [
-              "Config failure",
-              configUnavailable
-                ? configReason(supervisor.config_reason)
-                : "Not reported",
-            ],
-            ["Config scope", configScopeLabel(supervisor.config_scope)],
-            ["State source", supervisorState(state)],
-            ["Enabled", enabledValue],
-            ["Pending source", pendingSourceLabel(pendingSource)],
-            ["Pending scope", pendingScopeLabel(supervisor.pending_scope)],
-            ["Pending kind", pendingKindValue],
-            [
-              "Pending started",
-              pending
-                ? datetime(validTimestampMs(pending.started_at_ms))
-                : "Not reported",
-            ],
-            [
-              "Pending age",
-              pending ? ageLabel(pending.age_ms) : "Not reported",
-            ],
-            [
-              "Parked reason",
-              parked
-                ? knownReason(parked.reason, parked.reason_known)
-                : statePresent
-                  ? "Not parked in current-session state"
-                  : "Not reported",
-            ],
-            [
-              "Parked at",
-              parked
-                ? datetime(validTimestampMs(parked.at_ms))
-                : "Not reported",
-            ],
-            [
-              "Budget at park",
-              parked ? metric(parked.budget_at_park) : "Not reported",
-            ],
-            ["Configured daily calls", configuredCallsValue],
-            ["Charged calls", metric(budget?.charged_calls)],
-            ["Charged calls scope", "Provider usage projection, not turn runs"],
-            ["Exhausted", exhaustedValue],
-            [
-              "Exhausted scope",
-              "Authoritative current-session parked state only",
-            ],
-          ]}
-        />
-        <Facts
-          items={[
-            [
-              "Context reason",
-              context
-                ? knownReason(context.reason, context.reason_known)
-                : statePresent
-                  ? "No context-exhaustion record"
-                  : "Not reported",
-            ],
-            [
-              "Incomplete reason",
-              context
-                ? incompleteReason(context.incomplete_reason)
-                : "Not reported",
-            ],
-            [
-              "Context request / max bytes",
-              context
-                ? `${bytesLabel(context.request_bytes)} / ${bytesLabel(context.max_request_bytes)}`
-                : "Not reported",
-            ],
-            [
-              "Context at",
-              context
-                ? datetime(validTimestampMs(context.at_ms))
-                : "Not reported",
-            ],
-            [
-              "Context retries",
-              context ? metric(context.retries) : "Not reported",
-            ],
-            [
-              "Compaction reason",
-              compaction
-                ? compactionReason(compaction.reason, compaction.reason_known)
-                : statePresent
-                  ? "No compaction-failure record"
-                  : "Not reported",
-            ],
-            [
-              "Compaction at",
-              compaction
-                ? datetime(validTimestampMs(compaction.at_ms))
-                : "Not reported",
-            ],
-            ["Backoff configured", durationOrUnknown(backoff?.configured_ms)],
-            ["Backoff retry limit", metric(backoff?.retry_limit)],
-            ["Backoff enforced", yesNo(backoff?.enforced)],
-            [
-              "Backoff enforced scope",
-              "Current-session context exhaustion only",
-            ],
-            ["Backoff active", yesNo(backoff?.active)],
-            [
-              "Backoff active scope",
-              "Authoritative current-session state only",
-            ],
-            [
-              "Earliest retry",
-              validTimestampMs(backoff?.earliest_retry_at_ms) != null
-                ? datetime(validTimestampMs(backoff?.earliest_retry_at_ms))
-                : "Not provided",
-            ],
-            [
-              "Last completed run",
-              lastRun
-                ? datetime(validTimestampMs(lastRun.at_ms))
-                : "Not recorded in current-session state",
-            ],
-            [
-              "Last run age",
-              lastRun ? ageLabel(lastRun.age_ms) : "Not reported",
-            ],
-            ["Last run count", lastRun ? metric(lastRun.runs) : "Not reported"],
-          ]}
-        />
-      </div>
-      <p className="caption">
-        A stale last completed run is not evidence that the supervisor is hung.
-        Only the published status is used.
-      </p>
     </Panel>
   );
 }
@@ -901,177 +629,6 @@ export function BookContinuity({
           book is preserved.
         </Notice>
       )}
-    </Panel>
-  );
-}
-function OwnerResearchPanel({
-  summary,
-  supervisor,
-  interpret,
-}: {
-  summary?: SummaryResponse | null;
-  supervisor?: SupervisorOperationalStatus | null;
-  interpret: boolean;
-}) {
-  const raw = summary?.owner_research;
-  const versionState = ownerResearchVersionState(raw);
-  const supervisorResearch = interpret ? (supervisor?.research ?? null) : null;
-  const research = ownerResearchFrom(summary, interpret ? supervisor : null);
-  const rawVersion =
-    raw && typeof raw === "object" && !Array.isArray(raw)
-      ? (raw as { version?: unknown }).version
-      : undefined;
-  if (versionState === "unsupported") {
-    return (
-      <Panel
-        title="Owner research"
-        note="Evidence-driven owner research from the same supervisor owner, profile and context budget. This is not a second agent."
-      >
-        <Notice error>
-          Owner research version{" "}
-          {typeof rawVersion === "number" || typeof rawVersion === "string"
-            ? String(rawVersion)
-            : "not reported"}{" "}
-          is not supported by this client; values are not interpreted.
-        </Notice>
-        <Empty title="Owner research projection not interpreted">
-          No status, evidence count, cutoff or model-call claim is inferred from
-          an unsupported version.
-        </Empty>
-      </Panel>
-    );
-  }
-  if (!research) {
-    return (
-      <Panel
-        title="Owner research"
-        note="Evidence-driven owner research from the same supervisor owner, profile and context budget. This is not a second agent."
-      >
-        <Empty title="Owner research not present in this snapshot">
-          This snapshot does not include the owner research projection. Evidence
-          count, cutoff, workspace refs and model calls are not inferred as zero
-          or Disabled.
-        </Empty>
-        <Facts
-          items={[
-            ["Research state", "Not reported"],
-            ["Evidence count", "Not reported"],
-            ["Model call", "Not reported"],
-          ]}
-        />
-      </Panel>
-    );
-  }
-  const config = supervisorResearch?.config;
-  const configUnavailable = config === "unavailable";
-  const configNotConfigured = config === "not_configured";
-  const status = researchStateLabel(research.status);
-  const asOf = validTimestampMs(research.as_of_ms);
-  const future = asOf !== null && asOf > Date.now();
-  const age = asOf === null ? null : Date.now() - asOf;
-  const evidenceCount = research.evidence_count;
-  const pendingSource =
-    supervisorResearch?.pending_source ?? supervisor?.pending_source;
-  const pending = supervisorResearch?.pending ?? supervisor?.pending;
-  const workspaceCount = workspaceRefCount(research);
-  const workspaceSnapshot = researchWorkspaceSnapshot(
-    research.workspace_snapshot_sha256,
-  );
-  const awaitingEvidence =
-    research.status === "awaiting_evidence" ||
-    (evidenceCount !== null &&
-      evidenceCount !== undefined &&
-      evidenceCount === 0);
-  return (
-    <Panel
-      title="Owner research"
-      note="Evidence-driven owner research from the same supervisor owner, profile and context budget. This is not a second agent and never authorizes a model call, order or activation."
-    >
-      {configUnavailable && (
-        <Notice error>
-          Research policy is configured but unavailable:{" "}
-          {researchConfigReason(supervisorResearch?.config_reason)}. This is not
-          Disabled and no fallback policy is assumed.
-        </Notice>
-      )}
-      {configNotConfigured && (
-        <Notice>
-          Research is not configured; this is an explicit disabled policy, not a
-          configured policy that failed to load.
-        </Notice>
-      )}
-      {future && (
-        <Notice error>
-          Clock anomaly: research source as-of is later than this browser clock;
-          age is not trusted and the source time is not renewed.
-        </Notice>
-      )}
-      {awaitingEvidence && (
-        <Notice>
-          No eligible evidence is present; no model call was made by this
-          projection. No progress or completion is claimed.
-        </Notice>
-      )}
-      <Facts
-        items={[
-          ["Research state", status],
-          ["Research reason", researchReason(research.reason, true)],
-          ["Research due", yesNo(research.research_due)],
-          ["State available", yesNo(research.state_available)],
-          ["Config source", researchConfig(config)],
-          [
-            "Config failure",
-            configUnavailable
-              ? researchConfigReason(supervisorResearch?.config_reason)
-              : "Not reported",
-          ],
-          ["Evidence count", metric(evidenceCount)],
-          ["Evidence id", researchEvidenceId(research.evidence_id)],
-          [
-            "Cutoff / task deadline",
-            research.cutoff_ms == null
-              ? "Not reported"
-              : datetime(validTimestampMs(research.cutoff_ms)),
-          ],
-          [
-            "Deferred / backoff until",
-            research.deferred_until_ms == null
-              ? "Not reported"
-              : datetime(validTimestampMs(research.deferred_until_ms)),
-          ],
-          ["Source as of", asOf === null ? "Not reported" : datetime(asOf)],
-          ["Source age", future ? "Not trusted (future clock)" : ageLabel(age)],
-          ["Pending source", researchPendingSource(pendingSource)],
-          ["Pending kind", researchPendingKind(pending?.kind, pendingSource)],
-          [
-            "Pending started",
-            pending
-              ? datetime(validTimestampMs(pending.started_at_ms))
-              : "Not reported",
-          ],
-          ["Pending age", pending ? ageLabel(pending.age_ms) : "Not reported"],
-          [
-            "Owner",
-            "Same supervisor owner, profile and context budget; no separate agent",
-          ],
-          ["Model call", researchModelCall(research.status, evidenceCount)],
-          [
-            "Workspace refs",
-            workspaceCount === null ? "Not reported" : count(workspaceCount),
-          ],
-          ["Workspace snapshot", workspaceSnapshot],
-          [
-            "Provider entitlement",
-            "Not reported; no provider guarantee, fallback or entitlement claim is inferred",
-          ],
-        ]}
-      />
-      <p className="caption">
-        A public scalar workspace-ref count and snapshot hash are shown only
-        when the captured projection supplies them. Raw workspace paths are
-        never read or rendered; account payloads, scripts and prompts are never
-        read either.
-      </p>
     </Panel>
   );
 }
@@ -1939,7 +1496,7 @@ export function OperationalPanel({
   return (
     <Panel
       title="Operational health"
-      note="Read-only projection. Paper finance, controller liveness, research/advisory state, supervisor state, calendar coverage and alert transport are separate observations. Browser refresh never renews the published server capture."
+      note="Read-only projection. Paper finance, controller liveness, research state, calendar coverage and alert transport are separate observations. Browser refresh never renews the published server capture."
     >
       {version === "missing" && (
         <Notice>
@@ -1952,9 +1509,9 @@ export function OperationalPanel({
         <Notice error>
           {rawObject
             ? versionMissing
-              ? "Operational health version is not reported; this client supports only version 1. values are not interpreted."
+              ? "Operational health version is not reported; this client supports only version 2; values are not interpreted."
               : versionMalformed
-                ? "Operational health version is malformed; this client supports only numeric version 1. values are not interpreted."
+                ? "Operational health version is malformed; this client supports only numeric version 2; values are not interpreted."
                 : `Operational health version ${versionText} is not supported by this client; values are not interpreted.`
             : "Operational health is malformed; values are not interpreted."}
         </Notice>
@@ -1969,18 +1526,7 @@ export function OperationalPanel({
           interpret={interpret}
         />
       </div>
-      <div className="cols-2">
-        <ResearchPanel summary={summary} />
-        <SupervisorPanel
-          supervisor={operational?.supervisor}
-          interpret={interpret}
-        />
-      </div>
-      <OwnerResearchPanel
-        summary={summary}
-        supervisor={operational?.supervisor}
-        interpret={interpret}
-      />
+      <ResearchPanel summary={summary} />
       <ObservationPanel summary={summary} />
       <CrossSessionPanel summary={summary} />
       <MeasurementPanel summary={summary} />

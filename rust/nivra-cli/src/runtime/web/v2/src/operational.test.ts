@@ -10,49 +10,13 @@ import {
   exchangeDate,
   failureCategory,
   freshness,
-  knownReason,
   lastCompletedAt,
   livenessLabel,
   metric,
   operationalHealthState,
-  pendingKind,
   secondsLabel,
-  supervisorState,
-  supervisorStatus,
   yesNo,
 } from "./operational";
-
-test("known operational reasons use readable labels and never echo unknown text", () => {
-  assert.equal(
-    knownReason("supervisor_budget_exhausted", true),
-    "Supervisor budget exhausted",
-  );
-  assert.equal(
-    knownReason("provider said /tmp/private-token", true),
-    "Unknown reason",
-  );
-  assert.equal(
-    knownReason("supervisor_budget_exhausted", false),
-    "Unknown reason",
-  );
-  assert.equal(knownReason(null, true), "Unknown reason");
-  assert.equal(knownReason(42, true), "Unknown reason");
-});
-
-test("supervisor status is unknown unless the current-session state is present", () => {
-  assert.equal(supervisorStatus("idle", "present"), "Unknown");
-  assert.equal(supervisorStatus("idle", "missing"), "Unknown");
-  assert.equal(supervisorStatus("idle", "other_session"), "Unknown");
-  assert.equal(supervisorStatus("idle", "malformed"), "Unknown");
-  assert.equal(supervisorStatus("idle", "unreadable"), "Unknown");
-  assert.equal(supervisorStatus("disabled", "not_configured"), "Disabled");
-  assert.equal(supervisorStatus("provider_healthy", "present"), "Unknown");
-  assert.equal(
-    supervisorState("other_session"),
-    "State belongs to another session",
-  );
-  assert.equal(supervisorState("raw source"), "Unknown source");
-});
 
 test("null operational counts stay unknown instead of becoming zero", () => {
   assert.equal(metric(null), "Not reported");
@@ -131,18 +95,17 @@ test("alert and liveness labels come from trusted static enums only", () => {
   assert.equal(failureCategory("provider raw text"), "Unknown category");
   assert.equal(livenessLabel("future"), "Future clock");
   assert.equal(livenessLabel("provider raw text"), "Not reported");
-  assert.equal(pendingKind("session_open"), "Session open");
-  assert.equal(pendingKind("provider raw text"), "Unknown kind");
 });
 
 test("operational health version and absence stay explicit", () => {
   assert.equal(operationalHealthState(null), "missing");
   assert.equal(operationalHealthState(undefined), "missing");
-  assert.equal(operationalHealthState({ version: 1 }), "present");
-  assert.equal(operationalHealthState({ version: 2 }), "unsupported");
+  assert.equal(operationalHealthState({ version: 2 }), "present");
+  // version 1 is the retired shape; it is not interpreted
+  assert.equal(operationalHealthState({ version: 1 }), "unsupported");
   assert.equal(operationalHealthState({}), "unsupported");
   assert.equal(
-    operationalHealthState({ version: "1" } as unknown as Parameters<
+    operationalHealthState({ version: "2" } as unknown as Parameters<
       typeof operationalHealthState
     >[0]),
     "unsupported",

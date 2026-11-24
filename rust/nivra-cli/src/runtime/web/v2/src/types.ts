@@ -470,23 +470,6 @@ export interface ResearchTasksStatus {
   observation_capture?: ObservationCapture | null;
   lifecycle?: Json;
 }
-export interface OwnerResearchView {
-  version?: number | null;
-  status?: string | null;
-  research_due?: boolean | null;
-  as_of_ms?: number | null;
-  cutoff_ms?: number | null;
-  evidence_count?: number | null;
-  state_available?: boolean | null;
-  reason?: string | null;
-  evidence_id?: string | null;
-  deferred_until_ms?: number | null;
-  activation_authorized?: false;
-  workspace_refs?: unknown;
-  workspace_ref_count?: number | null;
-  workspace_snapshot_sha256?: string | null;
-}
-/** Content hash per projection, excluding loop clocks. */
 export type RevisionName =
   | "portfolio"
   | "fills"
@@ -507,7 +490,6 @@ export interface SummaryResponse extends Envelope {
   } | null;
 
   operational_health?: OperationalHealth | null;
-  owner_research?: OwnerResearchView | null;
   research_tasks?: ResearchTasksStatus | null;
   instrument_display?: {
     status?: string;
@@ -712,108 +694,6 @@ export interface ControllerLiveness {
   expected_deadline_ms?: number | null;
   loop_generation?: number | null;
 }
-export type SupervisorStatus =
-  "idle" | "pending" | "parked" | "unknown" | "disabled";
-export type SupervisorStateSource =
-  | "present"
-  | "missing"
-  | "other_session"
-  | "malformed"
-  | "unreadable"
-  | "not_configured";
-export type SupervisorConfigSource =
-  "configured" | "unavailable" | "not_configured";
-export type SupervisorPendingSource =
-  | "missing"
-  | "no_pending"
-  | "pending"
-  | "corrupt"
-  | "incomplete"
-  | "unreadable"
-  | "oversize"
-  | "non_regular"
-  | "symlink"
-  | "not_checked";
-export interface SupervisorParked {
-  reason?: string | null;
-  reason_known?: boolean;
-  at_ms?: number | null;
-  budget_at_park?: number | null;
-}
-export interface SupervisorBudget {
-  configured_daily_calls?: number | null;
-  charged_calls?: number | null;
-  charged_calls_scope?: string | null;
-  parked_at_calls?: number | null;
-  exhausted?: boolean | null;
-  exhausted_scope?: string | null;
-}
-export interface SupervisorContext {
-  reason?: string | null;
-  reason_known?: boolean;
-  incomplete_reason?: string | null;
-  request_bytes?: number | null;
-  max_request_bytes?: number | null;
-  at_ms?: number | null;
-  retries?: number | null;
-}
-export interface SupervisorCompaction {
-  reason?: string | null;
-  reason_known?: boolean;
-  at_ms?: number | null;
-}
-export interface SupervisorBackoff {
-  configured_ms?: number | null;
-  retry_limit?: number | null;
-  enforced?: boolean | null;
-  enforced_scope?: string | null;
-  active?: boolean | null;
-  active_scope?: string | null;
-  earliest_retry_at_ms?: number | null;
-}
-export interface SupervisorLastRun {
-  at_ms?: number | null;
-  age_ms?: number | null;
-  runs?: number | null;
-}
-export interface SupervisorPending {
-  kind?: string | null;
-  started_at_ms?: number | null;
-  age_ms?: number | null;
-}
-export interface SupervisorOperationalStatus {
-  status?: SupervisorStatus | string;
-  config?: SupervisorConfigSource | string;
-  config_reason?: string | null;
-  config_scope?: string | null;
-  state?: SupervisorStateSource | string;
-  enabled?: boolean | null;
-  parked?: SupervisorParked | null;
-  budget?: SupervisorBudget | null;
-  context?: SupervisorContext | null;
-  compaction?: SupervisorCompaction | null;
-  backoff?: SupervisorBackoff | null;
-  last_completed_run?: SupervisorLastRun | null;
-  pending_source?: SupervisorPendingSource | string;
-  pending_scope?: string | null;
-  pending?: SupervisorPending | null;
-  research?: SupervisorResearch | null;
-}
-export interface SupervisorResearch {
-  config?: SupervisorConfigSource | string;
-  config_reason?: string | null;
-  enabled?: boolean | null;
-  due?: boolean | null;
-  state?: string | null;
-  reason?: string | null;
-  evidence_id?: string | null;
-  evidence_count?: number | null;
-  cutoff_ms?: number | null;
-  deferred_until_ms?: number | null;
-  pending_source?: SupervisorPendingSource | string;
-  pending?: SupervisorPending | null;
-  as_of_ms?: number | null;
-}
 export interface CalendarCoverage {
   source?: string | null;
   covered_from?: string | null;
@@ -888,7 +768,6 @@ export interface AlertTransportStatus {
 export interface OperationalHealth {
   version?: number | null;
   captured_at_ms?: number | null;
-  supervisor?: SupervisorOperationalStatus | null;
   calendar?: CalendarCoverage | null;
   alert_transport?: AlertTransportStatus | null;
 }

@@ -42,42 +42,13 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
         "experiment_attributions":[{"source_hash":"fixture-hash","net_after_cost_pnl":"13.00"}]
     });
     let operational = serde_json::json!({
-        "version":1,
+        "version":2,
         "captured_at_ms":900_000,
-        "supervisor":{
-            "status":"unknown",
-            "config":"unavailable",
-            "config_reason":"planner_usage_unavailable",
-            "state":"present",
-            "pending_source":"corrupt",
-            "pending":null,
-            "research":{
-                "config":"configured",
-                "enabled":true,
-                "due":true,
-                "state":"due",
-                "reason":null,
-                "evidence_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "evidence_count":1,
-                "cutoff_ms":901000,
-                "deferred_until_ms":null,
-                "pending_source":"no_pending",
-                "pending":null,
-                "as_of_ms":900000
-            }
-        },
         "calendar":{"source":"NSE/CMTR/71775","covered_to":"2026-12-31"},
         "alert_transport":{"status":"missing","counts":null}
     });
     // Captured read-only research projections. The API must copy these exact
     // objects and timestamps; it must not sample a new clock or recompute state.
-    let owner_research = serde_json::json!({
-        "version":1,
-        "status":"unavailable",
-        "reason":"planner_config_unavailable",
-        "activation_authorized":false,
-        "as_of_ms":900_000
-    });
     let research_tasks = serde_json::json!({
         "status":"unavailable",
         "reason":"candidate_task_state_unavailable",
@@ -89,7 +60,7 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
         }
     });
     let view = Arc::new(Mutex::new(
-        serde_json::json!({"paper_only":true,"live_enabled":false,"account":"fixture-alias","authorized_session":"2026-10-29","capital":"5000","portfolio":{"cash":"5000","positions":{},"fills":[]},"private":"must-not-be-served","activity_attribution":activity,"owner_research":owner_research.clone(),"research_tasks":research_tasks.clone()}),
+        serde_json::json!({"paper_only":true,"live_enabled":false,"account":"fixture-alias","authorized_session":"2026-10-29","capital":"5000","portfolio":{"cash":"5000","positions":{},"fills":[]},"private":"must-not-be-served","activity_attribution":activity,"research_tasks":research_tasks.clone()}),
     ));
     let request = |extra: &str| {
         format!(
@@ -270,26 +241,8 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
     // The captured research projections are copied verbatim, including their
     // producer timestamps and explicit unavailable source. No fake availability
     // or renewed sample is introduced by the GET.
-    assert_eq!(plain["owner_research"], owner_research);
     assert_eq!(plain["research_tasks"], research_tasks);
-    assert_eq!(plain["owner_research"]["as_of_ms"], 900_000);
     assert_eq!(plain["research_tasks"]["observation"]["as_of_ms"], 900_000);
-    assert_eq!(
-        plain["operational_health"]["supervisor"]["research"]["as_of_ms"],
-        900_000
-    );
-    assert_eq!(
-        plain["operational_health"]["supervisor"]["config"],
-        "unavailable"
-    );
-    assert_eq!(
-        plain["operational_health"]["supervisor"]["config_reason"],
-        "planner_usage_unavailable"
-    );
-    assert_eq!(
-        plain["operational_health"]["supervisor"]["pending_source"],
-        "corrupt"
-    );
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&decoded)
             .expect("summary gzip must contain JSON, not a nested gzip stream"),
@@ -335,9 +288,7 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
     let health_body: serde_json::Value = serde_json::from_slice(&health_reply.body).unwrap();
     assert_eq!(health_body["activity_attribution"], activity);
     assert_eq!(health_body["operational_health"], operational);
-    assert_eq!(health_body["owner_research"], owner_research);
     assert_eq!(health_body["research_tasks"], research_tasks);
-    assert_eq!(health_body["owner_research"]["as_of_ms"], 900_000);
     assert_eq!(health_body["controller_liveness"]["status"], "unknown");
     {
         let mut snapshot = view.lock().unwrap();
@@ -399,21 +350,10 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
     assert_eq!(projected["operational_health"], operational);
     assert_eq!(projected["operational_health"]["captured_at_ms"], 900_000);
     assert_eq!(
-        projected["operational_health"]["supervisor"]["research"]["as_of_ms"],
-        900_000
-    );
-    assert_eq!(
-        projected["operational_health"]["supervisor"]["research"]["state"],
-        "due"
+        projected["operational_health"]["calendar"]["covered_to"],
+        "2026-12-31"
     );
     assert_eq!(projected["as_of_ms"], now);
-    view.lock().unwrap()["owner_review"] = serde_json::json!({
-        "version":1,"status":"due","review_due":true,"as_of_ms":now
-    });
-    let reply = ops::health_at("", &view, now);
-    let projected: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
-    assert_eq!(projected["owner_review"]["status"], "due");
-    assert_eq!(projected["owner_review"]["review_due"], true);
     assert_eq!(
         health_body["activity_attribution"]["financials"]["net_after_cost_pnl"],
         "13.00"
@@ -427,18 +367,15 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
     {
         let mut snapshot = view.lock().unwrap();
         let object = snapshot.as_object_mut().unwrap();
-        object.remove("owner_research");
         object.remove("research_tasks");
     }
     reset_prepared_summary();
     let absent_summary: serde_json::Value =
         serde_json::from_slice(&send(&request("").replace("/api/v1/meta", "/api/v1/summary")).body)
             .unwrap();
-    assert!(absent_summary.get("owner_research").is_none());
     assert!(absent_summary.get("research_tasks").is_none());
     let absent_health: serde_json::Value =
         serde_json::from_slice(&ops::health_at("", &view, now).body).unwrap();
-    assert!(absent_health.get("owner_research").is_none());
     assert!(absent_health.get("research_tasks").is_none());
 }
 #[test]

@@ -1,12 +1,5 @@
 import { count, datetime, numeric, words } from "./data";
-import {
-  ageLabel,
-  configLabel,
-  configReason,
-  pendingKind,
-  pendingSourceLabel,
-  validTimestampMs,
-} from "./operational";
+import { ageLabel, validTimestampMs } from "./operational";
 import type {
   EpisodeMeasurement,
   EpisodeRecord,
@@ -14,50 +7,13 @@ import type {
   ObservationMilestone,
   ObservationStatus,
   ObservationTrialFold,
-  OwnerResearchView,
   ResearchCandidate,
   ResearchContinuation,
-  SupervisorResearch,
 } from "./types";
 
 // The backend projects bounded static reason codes. This client keeps its own
 // allowlist so an unexpected value can never become visible operator text.
 const RESEARCH_REASONS = new Set([
-  "owner_research_artifact_bound",
-  "owner_research_binding_invalid",
-  "owner_research_clock_invalid",
-  "owner_research_cutoff_invalid",
-  "owner_research_expired",
-  "owner_research_failed",
-  "owner_research_interrupted",
-  "owner_research_no_eligible_evidence",
-  "owner_research_output_bound",
-  "owner_research_output_citation_invalid",
-  "owner_research_output_financial_refused",
-  "owner_research_output_invalid",
-  "owner_research_path_invalid",
-  "owner_research_quote_capture_invalid",
-  "owner_research_receipt_conflict",
-  "owner_research_reconciliation_required",
-  "owner_research_requires_decision_owner",
-  "owner_research_requires_flat_or_postclose",
-  "owner_research_settings_invalid",
-  "owner_research_source_changed",
-  "owner_research_source_invalid",
-  "owner_research_source_missing",
-  "owner_research_source_unverified",
-  "owner_research_source_unsynced",
-  "owner_research_turn_missing",
-  "owner_research_workspace_changed",
-  "owner_research_workspace_disabled",
-  "owner_research_workspace_invalid",
-  "owner_research_workspace_missing",
-  "owner_research_workspace_not_file",
-  "owner_research_workspace_not_text",
-  "owner_research_workspace_permissions",
-  "owner_research_workspace_source_invalid",
-  "owner_research_workspace_source_missing",
-  "owner_research_workspace_symlink",
   "research_lane_book_not_runnable",
   "research_lane_call_budget_exhausted",
   "research_lane_market_hours",
@@ -68,15 +24,12 @@ const RESEARCH_REASONS = new Set([
   "research_lane_settings_missing",
   "research_lane_token_budget_exhausted",
   "research_lane_turn_budget_exhausted",
-  "owner_research_workspace_too_large",
   "research_lifecycle_unavailable",
   "research_queue_unavailable",
   "research_source_changed",
   "research_source_invalid",
   "research_source_missing",
   "research_source_unverified",
-  "supervisor_settings_invalid",
-  "supervisor_failure_backoff",
   "planner_config_unavailable",
   "planner_usage_unavailable",
   "planner_usage_unavailable_recovery_required",
@@ -157,16 +110,6 @@ const RESEARCH_REASON_LABELS: Record<string, string> = {
   research_lane_settings_missing: "Research lane settings missing",
   research_lane_token_budget_exhausted: "Research token budget used up",
   research_lane_turn_budget_exhausted: "Research turn budget used up",
-  owner_research_no_eligible_evidence: "No eligible evidence",
-  owner_research_requires_flat_or_postclose:
-    "Requires a flat book or post-close window",
-  owner_research_settings_invalid: "Research settings invalid",
-  owner_research_source_invalid: "Research source invalid",
-  owner_research_source_unverified: "Research source unverified",
-  owner_research_source_changed: "Research source changed",
-  owner_research_workspace_invalid: "Research workspace invalid",
-  owner_research_workspace_changed: "Research workspace changed",
-  supervisor_failure_backoff: "Owner failure backoff",
   planner_config_unavailable: "Planner config unavailable",
   controller_session_end_unavailable: "Controller session end unavailable",
   candidate_observation_disabled: "Candidate observation disabled",
@@ -365,26 +308,6 @@ const EXIT_STATUS: Record<string, string> = {
   unknown: "Unknown",
 };
 
-const RESEARCH_STATES: Record<string, string> = {
-  due: "Due",
-  eligible: "Eligible",
-  awaiting_evidence: "No eligible evidence",
-  no_evidence: "No eligible evidence",
-  deferred: "Deferred (backoff)",
-  backoff: "Backoff",
-  parked: "Parked",
-  pending: "Pending",
-  failed: "Failed",
-  invalid: "Unavailable",
-  unavailable: "Unavailable",
-  expired: "Expired (cutoff passed)",
-  busy: "Owner turn active",
-  portfolio_open: "Not eligible (portfolio open)",
-  disabled: "Disabled",
-  attempted: "Attempted",
-  unknown: "Unknown",
-};
-
 const TRIAL_STATUS: Record<string, string> = {
   available: "Available",
   partial: "Partial",
@@ -417,100 +340,6 @@ export function researchReason(value: unknown, known?: boolean): string {
   if (known === false || typeof value !== "string") return "Unknown reason";
   if (!RESEARCH_REASONS.has(value)) return "Unknown reason";
   return RESEARCH_REASON_LABELS[value] || sentence(value);
-}
-
-export function researchConfig(value: unknown): string {
-  return configLabel(value);
-}
-
-export function researchConfigReason(value: unknown): string {
-  return configReason(value);
-}
-
-export function researchStateLabel(value: unknown): string {
-  if (typeof value !== "string") return "Unknown";
-  return RESEARCH_STATES[value] || "Unknown";
-}
-
-export function researchModelCall(
-  state: unknown,
-  evidenceCount: unknown,
-): string {
-  const evidence = numeric(evidenceCount);
-  if (state === "awaiting_evidence" || evidence === 0)
-    return "No eligible evidence; no model call was made.";
-  switch (state) {
-    case "due":
-    case "eligible":
-      return "Evidence eligible; no model call is claimed by this projection.";
-    case "pending":
-      return "Owner turn pending; no completion is claimed.";
-    case "deferred":
-    case "backoff":
-      return "Deferred by owner failure backoff; no model call is claimed.";
-    case "parked":
-      return "Parked; no model call is claimed.";
-    case "busy":
-      return "Owner turn active; no completion is claimed.";
-    case "portfolio_open":
-      return "Portfolio open; research is not eligible.";
-    case "expired":
-      return "Cutoff passed; no model call is claimed.";
-    case "disabled":
-      return "Disabled by policy; no model call is claimed.";
-    case "failed":
-    case "invalid":
-    case "unavailable":
-      return "Unavailable; no model call is claimed.";
-    default:
-      return "Not reported.";
-  }
-}
-
-export function ownerResearchFrom(
-  summary?: { owner_research?: unknown } | null,
-  supervisor?: { research?: SupervisorResearch | null } | null,
-): OwnerResearchView | null {
-  const raw = summary?.owner_research;
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    const value = raw as OwnerResearchView;
-    if (value.version === 1) return value;
-    return null;
-  }
-  const research = supervisor?.research;
-  if (!research || typeof research !== "object") return null;
-  return {
-    version: 1,
-    status: research.state ?? null,
-    research_due: research.due ?? null,
-    as_of_ms: research.as_of_ms ?? null,
-    cutoff_ms: research.cutoff_ms ?? null,
-    evidence_count: research.evidence_count ?? null,
-    state_available: null,
-    reason: research.reason ?? null,
-    evidence_id: research.evidence_id ?? null,
-    deferred_until_ms: research.deferred_until_ms ?? null,
-  };
-}
-
-export function ownerResearchVersionState(
-  value: unknown,
-): "missing" | "unsupported" | "present" {
-  if (value === null || value === undefined) return "missing";
-  if (typeof value !== "object" || Array.isArray(value)) return "unsupported";
-  return (value as { version?: unknown }).version === 1
-    ? "present"
-    : "unsupported";
-}
-
-export function workspaceRefCount(value: unknown): number | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const parsed = numeric(
-    (value as { workspace_ref_count?: unknown }).workspace_ref_count,
-  );
-  return parsed !== null && Number.isInteger(parsed) && parsed >= 0
-    ? parsed
-    : null;
 }
 
 export function safeHash(value: unknown): string {
@@ -1250,28 +1079,6 @@ export function validObservationTimestamp(value: unknown): number | null {
   return validTimestampMs(value);
 }
 
-export function researchPendingKind(
-  value: unknown,
-  pendingSource?: unknown,
-): string {
-  if (value) return pendingKind(value);
-  return pendingSource === "missing" || pendingSource === "no_pending"
-    ? "No pending turn reported"
-    : "Unknown (source not authoritative)";
-}
-
-export function researchPendingSource(value: unknown): string {
-  return pendingSourceLabel(value);
-}
-
-export function researchEvidenceId(value: unknown): string {
-  return safeHash(value);
-}
-
-export function researchWorkspaceSnapshot(value: unknown): string {
-  return safeHash(value);
-}
-
 export type MeasurementEntryState = "present" | "unsupported" | "unavailable";
 
 export interface MeasurementEntry {
@@ -1539,18 +1346,6 @@ export function continuationLabel(
     default:
       return "Not reported";
   }
-}
-
-export function continuationRecordingSession(
-  continuation?: ResearchContinuation | null,
-): string {
-  return safeSession(continuation?.current_scope?.current_session);
-}
-
-export function continuationSourceSession(
-  continuation?: ResearchContinuation | null,
-): string {
-  return safeSession(continuation?.source_session);
 }
 
 export function researchLibraryCount(

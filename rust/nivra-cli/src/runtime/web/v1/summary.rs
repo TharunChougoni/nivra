@@ -225,13 +225,9 @@ pub(crate) fn build_summary_envelope(view: &serde_json::Value) -> serde_json::Va
     // Copy the controller's already-captured read-only projections verbatim.
     // This GET never samples a clock, reads the queue/state, recomputes the
     // research status or renews freshness; an absent field stays absent.
-    if let Some(value) = view.get("owner_research") {
-        body["owner_research"] = value.clone();
-    }
     if let Some(value) = view.get("research_tasks") {
         body["research_tasks"] = value.clone();
     }
-    body["owner_review"] = view["owner_review"].clone();
     if let Some(operational) = view.get("operational_health") {
         body["operational_health"] = operational.clone();
     }

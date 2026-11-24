@@ -6,7 +6,7 @@ Built locally with pinned package-lock.json. No runtime CDN or Node service.
 |---|---|---|---|---|
 | workspace | source | LICENSES.txt | local React source | 4d6b5933ec22b8f9b9243f369650ca858b121b7e168aefea9ea5879bd461542b |
 | workspace | source | app.css | local React source | eef70f654009eb032ca81fe61e5c069368a5a9d3f9182fd008c34c151c4f3eeb |
-| workspace | source | app.js | local React source | 52d838a100a8ccafe234be4a18668984b4195471a3a949b3a46e49fa428b4cb3 |
+| workspace | source | app.js | local React source | f6b641e34e4e8cdddb93b64f5cafb37abc2c371c2a191feea8ad58690cfdb23e |
 | workspace | source | index.html | local React source | c0ff95a179258c6668dc61272e56ccf61cc1c187823f8aae533a199c1cba7d5c |
 | workspace | source | uPlot.esm.js | local React source | 068506d72590b07d0e53e012ff1541813c52c09bded848b3f97fcd1d4b0fd3b2 |
 

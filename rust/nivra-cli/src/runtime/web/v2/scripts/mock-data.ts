@@ -2086,7 +2086,7 @@ function attributionAt(data: MockData, now: number): ActivityAttribution {
 
 function operationalAt(data: MockData, wall: number): OperationalHealth {
   return {
-    version: 1,
+    version: 2,
     captured_at_ms: wall - 4_000,
     calendar: {
       source: "NSE/CMTR/71775",
@@ -2232,8 +2232,14 @@ function summaryAt(data: MockData, now: number, wall: number): SummaryResponse {
       status: "ready",
       observation: {
         version: 1,
-        status: "ready",
-        source: "research_ledger",
+        status: "available",
+        source: "original_queue_and_lifecycle_read_only",
+        measurement: {
+          evaluation_scope: "independent_episodes",
+          strategy_portfolio_claimed: false,
+          portfolio_return: null,
+          aggregate_net_pnl: null,
+        },
         as_of_ms: wall - 4_000,
         queue: {
           pending: 1,

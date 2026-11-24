@@ -137,8 +137,10 @@ fields are display evidence and do not establish live readiness.
   fill order. A mode shows only when the report supplied explicit
   `paper_only`/`live_enabled` provenance; older rows stay `Not reported`.
 - **Health** separates transport, feed and history readiness, controller
-  liveness, the read-only activity attribution and unconnected independent
-  telemetry. A **Live readiness** panel shows the mode, the order broker
+  liveness, research state, calendar coverage, alert transport, the read-only
+  activity attribution and unconnected independent telemetry. It interprets
+  `operational_health` version 2 only; any other version is shown as not
+  interpreted rather than guessed. A **Live readiness** panel shows the mode, the order broker
   identity and `live_enabled` as reported; it has no controls. Missing reports
   remain unavailable; the dashboard does not calculate or fill gaps. Net
   after-cost P&L subtracts fees; slippage is a diagnostic because it is already
@@ -179,7 +181,7 @@ are not market or model evidence.
 
 ### Read-only research projections
 
-The operational panel may additionally render owner research, prospective
+The operational panel may additionally render prospective
 observation, cross-session continuity, observation capture and independent
 virtual episode measurements. These are optional, read-only projections: the
 panel renders them only when the authenticated v1 summary/health snapshot
@@ -187,7 +189,7 @@ carries the captured fields. Missing fields stay `Not reported`; they are never
 inferred as zero, idle, available or disabled.
 
 The v1 `summary` and `health` responses copy the controller's already-captured
-`owner_research` and `research_tasks` objects verbatim. The GET never samples a
+`research_tasks` object verbatim. The GET never samples a
 new clock, reads the queue/state, recomputes the research status or renews
 freshness; an absent captured field stays absent.
 
@@ -199,13 +201,6 @@ freshness; an absent captured field stays absent.
   `retired`) is a separate map from recorded lifecycle states; the removed
   `continued_evaluated` value is never invented. A source-truncated milestone
   list is disclosed as truncated and never shown as a complete total.
-- Workspace refs are shown only as a public scalar `workspace_ref_count` and
-  `workspace_snapshot_sha256` when the captured projection supplies them. The
-  count and the canonical hash of the pinned snapshot are captured with the
-  selected evidence at the producer completion sample; a captured empty
-  workspace is count `0` with a valid empty-array hash, while an uncaptured
-  source stays `Not reported`. Raw workspace refs, paths, file contents and
-  private filesystem reads are never exposed or recomputed on GET.
 - Observation capture distinguishes journal readability
   (`coverage_label: journal_readability_only`) from current eligibility
   (`current_eligibility: not_evaluated`, `eligible_for_attempt:false`). It never
