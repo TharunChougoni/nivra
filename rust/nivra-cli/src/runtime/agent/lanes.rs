@@ -396,6 +396,7 @@ impl<'a> LaneRunner<'a> {
             lane == Lane::Decision && self.settings.lanes.contains_key(&Lane::Research);
         let mut host = LaneHost {
             lane,
+            clock: self.clock,
             bridge: Bridge::new(
                 self.c,
                 self.cfg,

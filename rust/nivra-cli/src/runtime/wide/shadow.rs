@@ -181,9 +181,11 @@ impl ShadowSelection {
         if self.fallback.take().is_some() {
             let active = self.state.active.clone();
             let reason = self
-                .reason
-                .map(|reason| format!("{reason:?}"))
-                .unwrap_or_else(|| "BestEvidence".into());
+                .status
+                .as_ref()
+                .and_then(|status| status["reason"].as_str())
+                .unwrap_or("BestEvidence")
+                .to_owned();
             self.push_event("recovered", "default", &active, &reason, None, now);
             eprintln!(
                 "strategy_selection_recovered {}",
@@ -257,6 +259,39 @@ impl ShadowSelection {
         let regime = nivra_core::regime::classify(&inputs, &cfg.regime);
         let label = regime.label();
         self.regime = Some(label.clone());
+        if let Some(hash) = &cfg.paper_trial_sha256 {
+            self.previous_active = Some(previous.clone());
+            self.state.active = if stale {
+                nivra_sandbox::selector::DEFAULT_ID.into()
+            } else {
+                hash.clone()
+            };
+            self.live = None;
+            self.reason = None;
+            self.chosen_name = None;
+            self.status = Some(serde_json::json!({
+                "paper_only":true,"as_of_ms":now,"regime":label,
+                "instrument_count":inputs.instrument_count,"minute_count":inputs.minute_count,
+                "chosen_id":hash,"reason":"ReviewedPaperTrial","stale_data":stale,
+                "switched":previous!=self.state.active
+            }));
+            if previous != self.state.active {
+                let active = self.state.active.clone();
+                self.push_event(
+                    "switch",
+                    &previous,
+                    &active,
+                    "ReviewedPaperTrial",
+                    None,
+                    now,
+                );
+            }
+            if stale {
+                self.set_fallback("StaleData", "stale_data", now, hash);
+            }
+            self.refresh_status();
+            return;
+        }
         // Shadow retains its permissive initialize-on-read behavior. Live ranking
         // must never create or migrate a library while deciding paper candidates.
         let loaded = if cfg.mode.is_live() {
@@ -400,6 +435,7 @@ impl ShadowSelection {
                 return None;
             }
         };
+        self.chosen_name = Some(bounded_name(&version.name));
         match score_live(settings, &version, scan, instruments, projection, now) {
             Ok(ranking) => {
                 self.live = Some(ranking.clone());

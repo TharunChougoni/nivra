@@ -96,7 +96,9 @@ lane can inspect the book and market and submit a `plan`. Only a completed turn
 with a final validated proposal can reach the paper plan head. Rust checks the
 book, policy, model, instrument allowlist, turn deadline, and exact claim before
 committing the plan. Rust uses original quote receipts and the two-second gate
-for paper execution. The lane has no order or broker credential access.
+for paper execution. A buy's time exit uses absolute Unix epoch milliseconds.
+If supplied, the deadline must still be in the future when Rust validates and
+fills the buy. The lane has no order or broker credential access.
 
 An interrupted decision is recorded and is never replayed. A book already
 bound to another authority requires the reviewed config-apply transition.
@@ -113,6 +115,39 @@ request in one SQLite transaction. If publication fails, the turn reports
 scores-only sandbox has no network access. The response includes the executed
 source hash. Configured analysis and backtest tools use the existing research
 runner and evidence policy.
+
+### Review a research ranker for paper scanning
+
+Use the decision lane's research request or run a specific research task with
+the controller stopped. The manual turn uses the research budget and can write
+workspace artifacts.
+
+```sh
+nivra agent-turn --config PAPER_CONFIG --lane research \
+  --research-question 'Write and sandbox-test a Python prospect ranker in scripts/. Report its source hash and any replay evidence.'
+```
+
+Inspect the script and its sandbox and replay evidence. Use the hash from the
+successful workspace run to register the exact source in the configured
+`discovery.strategy_selection.library_path`:
+
+```sh
+nivra planner register-ranker --planner PLANNER_CONFIG --session YYYY-MM-DD \
+  --book DATED_SOURCE_BOOK --script scripts/ranker.py \
+  --expected-sha256 REVIEWED_SHA256 --author-model PROVIDER/MODEL
+```
+
+The CLI reads the workspace settings from the supplied dated planner config.
+Use a private path for the strategy library. Registration stores an immutable
+library version and leaves the scanner policy alone. To trial it, set
+`paper_trial_sha256` to the registered hash in the reviewed planner's enabled
+`discovery.strategy_selection` block with `mode: "live"`. Apply the normal
+reviewed configuration transition for the target paper session. Check the
+scanner's `live_ranking.sha256` and `strategy_selection` status for the applied
+hash or the reason it fell back to built-in ranking. See
+[Strategy sandbox](STRATEGY_SANDBOX.md#strategy-selection-shadow-diagnostics-and-live-paper-ranking).
+
+### Post-close review
 
 The review lane runs once after the session seal. Rust saves its redacted
 review and checks the previous session's closed report and account before

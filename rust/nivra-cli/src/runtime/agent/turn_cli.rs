@@ -30,6 +30,9 @@ pub(crate) struct Args {
     config: PathBuf,
     #[arg(long, value_enum)]
     lane: LaneArg,
+    /// Give a manual research turn a specific task instead of draining queued requests.
+    #[arg(long)]
+    research_question: Option<String>,
     /// Print the brief and the published tools; start no agent and call no model.
     #[arg(long)]
     dry: bool,
@@ -42,6 +45,12 @@ fn turn(args: &Args) -> Result<(bool, Value)> {
         LaneArg::Review => Lane::Review,
         LaneArg::Gate => Lane::Gate,
     };
+    let question = args.research_question.as_deref().map(str::trim);
+    if question.is_some_and(|question| {
+        lane != Lane::Research || question.is_empty() || question.len() > 2048
+    }) {
+        return Err("agent_research_question_invalid".into());
+    }
     let bytes = crate::read_bounded(&args.config, 16_384).map_err(|_| "config_unreadable")?;
     let c: Config = serde_json::from_slice(&bytes).map_err(|_| "config_invalid")?;
     c.validate()?;
@@ -112,7 +121,10 @@ fn turn(args: &Args) -> Result<(bool, Value)> {
     );
     let task = match lane {
         Lane::Decision => Value::Null,
-        Lane::Research => json!({"kind":"manual"}),
+        Lane::Research => match question {
+            Some(question) => json!({"kind":"manual","question":question}),
+            None => json!({"kind":"manual"}),
+        },
         Lane::Review => json!({"kind":"review","session":c.session.to_string()}),
         Lane::Gate => json!({"kind":"gate"}),
     };
@@ -167,7 +179,7 @@ fn turn(args: &Args) -> Result<(bool, Value)> {
     let trigger = json!({"kind":"schedule","reason":"agent_turn","triggers":triggers});
     let turns = match lane {
         Lane::Decision => vec![runner.decision(trigger, brief, &mut context)?],
-        Lane::Research if !runner.requests.queued(now, 1)?.is_empty() => {
+        Lane::Research if question.is_none() && !runner.requests.queued(now, 1)?.is_empty() => {
             runner.research_requests(&trigger, &brief, &mut context)?
         }
         Lane::Research | Lane::Gate => {

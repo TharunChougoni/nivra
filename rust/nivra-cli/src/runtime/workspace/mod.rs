@@ -596,6 +596,13 @@ fn run_ranker(
         return Err("workspace_run_input_invalid".into());
     }
 
+    let source = read_ranker(root, settings, rel)?;
+    let mut result = score_script(sandbox, rel, &source, &features, Value::Null)?;
+    result["source_sha256"] = json!(digest(&source));
+    Ok(result)
+}
+
+fn read_ranker(root: &Path, settings: &WorkspaceSettings, rel: &Path) -> Result<Vec<u8>> {
     let path = resolve(root, rel, true)?;
     ensure_private_dir(root, &root.join("scripts"))?;
     let file = fs::OpenOptions::new()
@@ -618,9 +625,41 @@ fn run_ranker(
     if source.len() as u64 > limit {
         return Err("workspace_file_too_large".into());
     }
-    let mut result = score_script(sandbox, rel, &source, &features, Value::Null)?;
-    result["source_sha256"] = json!(digest(&source));
-    Ok(result)
+    Ok(source)
+}
+
+pub(crate) fn register_ranker(
+    book: &Path,
+    settings: &WorkspaceSettings,
+    script: &str,
+    expected_sha256: &str,
+    author_model: &str,
+    library_path: &Path,
+) -> Result<nivra_sandbox::library::Version> {
+    settings.validate()?;
+    let rel = normalize_rel(script)?;
+    if !settings.enabled || !ranker_script(&rel) || !hash_ok(expected_sha256) {
+        return Err("workspace_ranker_registration_invalid".into());
+    }
+    let root = root_dir(book, settings)?;
+    let source = read_ranker(&root, settings, &rel)?;
+    if digest(&source) != expected_sha256 {
+        return Err("workspace_ranker_hash_mismatch".into());
+    }
+    let body = std::str::from_utf8(&source).map_err(|_| "workspace_ranker_source_invalid")?;
+    let name = rel
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or("workspace_ranker_registration_invalid")?;
+    let mut library = nivra_sandbox::library::Library::open(library_path)?;
+    Ok(library.add_version(nivra_sandbox::library::NewVersion {
+        name,
+        file_body: body,
+        author_model,
+        intent: "operator-reviewed research ranker",
+        inputs: &Value::Null,
+        created_at_ms: millis(),
+    })?)
 }
 
 fn score_script(

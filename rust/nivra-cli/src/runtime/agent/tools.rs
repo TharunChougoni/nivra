@@ -110,7 +110,7 @@ fn plan_definition() -> Value {
                         "rationale":{"type":"string","maxLength":2048},
                         "exit_intent":{
                             "type":"object",
-                            "properties":{"target":decimal,"stop":decimal,"time":{"type":["integer","null"]}},
+                            "properties":{"target":decimal,"stop":decimal,"time":{"type":["integer","null"],"description":"Absolute Unix epoch milliseconds. For a buy, the time must be in the future. Use null to omit a time exit."}},
                             "required":["target","stop","time"],
                             "additionalProperties":false
                         }
@@ -177,6 +177,7 @@ type UsageCheckpoint<'a> = Box<dyn FnMut(&Usage) + 'a>;
 /// validation and executor, or the existing plan validation for `plan`.
 pub(crate) struct LaneHost<'a> {
     pub lane: Lane,
+    pub clock: &'a dyn Fn() -> i64,
     pub bridge: Bridge<'a>,
     pub plan_inputs: Option<(&'a Portfolio, &'a [Instrument])>,
     pub plan: Option<PlanAttempt>,
@@ -214,7 +215,7 @@ impl LaneHost<'_> {
 
     fn plan(&mut self, args: &Value) -> std::result::Result<Value, String> {
         let (portfolio, instruments) = self.plan_inputs.ok_or("agent_plan_unavailable")?;
-        match planner::validate(&args.to_string(), portfolio, instruments) {
+        match planner::validate(&args.to_string(), portfolio, instruments, (self.clock)()) {
             Ok(verdicts) => {
                 let verdicts = json!(verdicts);
                 self.plan = Some(PlanAttempt::Validated {

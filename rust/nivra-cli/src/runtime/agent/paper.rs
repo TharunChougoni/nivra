@@ -167,7 +167,7 @@ pub(super) fn commit(
         return Err("agent_paper_output_secret_refused".into());
     }
     let raw = completed.proposal.to_string();
-    let verdicts = planner::validate(&raw, context.portfolio, &allowlist)?;
+    let verdicts = planner::validate(&raw, context.portfolio, &allowlist, now)?;
     let plan = json!({
         "decision_id":format!("owner-{}",completed.turn_id),
         "decision_turn_id":completed.turn_id,

@@ -681,6 +681,14 @@ feed the same scanner candidates, trigger and depth-shortlist paths as the defau
 ranking. They do **not** create orders, bypass validation or risk controls, or
 replace the owner's decision. `LIVE_ENABLED` remains false; this is paper ranking only.
 
+For an explicitly reviewed paper trial, set `paper_trial_sha256` in the enabled
+live selection block. The operator chooses that exact library version through
+the reviewed planner policy. This path tests a single ranker without waiting
+for the evidence-based selector to pick a candidate. It uses the same sandbox,
+fresh scanner inputs, score validation and fallback. Registry writes alone do
+not select a new version. The [research ranker workflow](AGENT.md#review-a-research-ranker-for-paper-scanning)
+describes how to register a script and bind its hash.
+
 Every live path falls back to the default ranking and logs
 `strategy_selection_fallback` with a stable reason/detail when the selector
 returns `UnknownRegime`, `StaleData`, `ScorerFailure`, `NoEligibleCandidates`,

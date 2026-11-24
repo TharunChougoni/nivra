@@ -776,7 +776,7 @@ impl Portfolio {
     ) -> Result<bool> {
         if self.stopped
             || self.closed
-            || (buy && self.halted)
+            || (buy && (self.halted || exit.time.is_some_and(|time| time <= now)))
             || units == 0
             || !q.fresh(now, MAX_FINANCIAL_AGE_MS)
             || q.ask < q.bid

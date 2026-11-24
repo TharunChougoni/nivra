@@ -546,6 +546,21 @@ pub enum Command {
         #[arg(long)]
         session: NaiveDate,
     },
+    /// Copy a reviewed, hash-pinned research script into the configured strategy library.
+    RegisterRanker {
+        #[arg(long)]
+        planner: PathBuf,
+        #[arg(long)]
+        session: NaiveDate,
+        #[arg(long)]
+        book: PathBuf,
+        #[arg(long)]
+        script: String,
+        #[arg(long)]
+        expected_sha256: String,
+        #[arg(long)]
+        author_model: String,
+    },
 }
 pub fn entry(cmd: Command) -> ExitCode {
     match cmd {
@@ -567,6 +582,52 @@ pub fn entry(cmd: Command) -> ExitCode {
                 }
                 Err(error) => {
                     eprintln!("planner_config_refused: {}", failure_code(error.as_ref()));
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::RegisterRanker {
+            planner,
+            session,
+            book,
+            script,
+            expected_sha256,
+            author_model,
+        } => {
+            let register = || -> Result<_> {
+                let cfg = PlannerConfig::load_for_session(&planner, session)?;
+                let workspace = cfg.workspace.as_ref().ok_or("workspace_disabled")?;
+                let selection = cfg
+                    .discovery
+                    .as_ref()
+                    .and_then(|discovery| discovery.strategy_selection.as_ref())
+                    .filter(|selection| selection.enabled)
+                    .ok_or("strategy_selection_library_required")?;
+                super::workspace::register_ranker(
+                    &book,
+                    workspace,
+                    &script,
+                    &expected_sha256,
+                    &author_model,
+                    Path::new(&selection.library_path),
+                )
+            };
+            match register() {
+                Ok(version) => {
+                    println!(
+                        "{}",
+                        json!({
+                            "status":"ranker_registered","name":version.name,"sha256":version.sha256,
+                            "version":version.version,"paper_only":true
+                        })
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!(
+                        "ranker_registration_refused: {}",
+                        failure_code(error.as_ref())
+                    );
                     ExitCode::FAILURE
                 }
             }

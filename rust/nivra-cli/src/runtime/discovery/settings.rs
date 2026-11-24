@@ -99,6 +99,8 @@ pub(crate) struct StrategySelectionSettings {
     #[serde(skip_serializing_if = "StrategySelectionMode::is_shadow")]
     pub mode: StrategySelectionMode,
     pub library_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paper_trial_sha256: Option<String>,
     pub evaluate_ms: i64,
     pub regime: nivra_core::regime::RegimeConfig,
     pub selector: nivra_sandbox::selector::SelectorConfig,
@@ -109,6 +111,7 @@ impl Default for StrategySelectionSettings {
             enabled: false,
             mode: StrategySelectionMode::Shadow,
             library_path: String::new(),
+            paper_trial_sha256: None,
             evaluate_ms: 60_000,
             regime: Default::default(),
             selector: Default::default(),
@@ -124,6 +127,15 @@ impl StrategySelectionSettings {
         // already owns ranking. Refuse the ambiguous combination.
         if self.mode.is_live() && !self.enabled {
             return Err("strategy_selection_live_requires_enabled".into());
+        }
+        if self.paper_trial_sha256.as_ref().is_some_and(|hash| {
+            !self.mode.is_live()
+                || hash.len() != 64
+                || !hash
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        }) {
+            return Err("strategy_selection_paper_trial_invalid".into());
         }
         self.regime.validate()?;
         self.selector.validate()?;
@@ -172,6 +184,14 @@ impl Settings {
         self.prefilter.validate()?;
         if let Some(limits) = &self.scorer_sandbox {
             limits.validate().map_err(|_| "invalid scorer_sandbox")?;
+            if limits.network
+                && self
+                    .strategy_selection
+                    .as_ref()
+                    .is_some_and(|selection| selection.paper_trial_sha256.is_some())
+            {
+                return Err("strategy_selection_paper_trial_requires_no_network".into());
+            }
         }
         if let Some(scorer) = &self.shadow_scorer {
             scorer.validate()?;

@@ -98,9 +98,12 @@ fn plan_validation_reserves_cash_and_holdings() {
         tick: Price::parse("0.05").unwrap(),
     };
     let mut p = crate::runtime::tests::test_portfolio();
+    let at = DateTime::parse_from_rfc3339("2026-10-16T09:15:00+05:30")
+        .unwrap()
+        .timestamp_millis();
     let action = |key: &str, side: &str, units: u64| json!({"instrument_key":key,"side":side,"units":units,"max_price":"100","rationale":"fixture","exit_intent":{}});
     let plan = json!({"actions":[action("absent","buy",1),action(&i.key,"buy",50),action(&i.key,"sell",1),action(&i.key,"buy",2)],"stance":"test","notes":""});
-    let v = validate(&plan.to_string(), &p, std::slice::from_ref(&i)).unwrap();
+    let v = validate(&plan.to_string(), &p, std::slice::from_ref(&i), at).unwrap();
     assert_eq!(
         v.iter().map(|v| v.reason.as_str()).collect::<Vec<_>>(),
         vec![
@@ -110,17 +113,17 @@ fn plan_validation_reserves_cash_and_holdings() {
             "accepted"
         ]
     );
-    assert!(validate("not JSON", &p, std::slice::from_ref(&i)).is_err());
+    assert!(validate("not JSON", &p, std::slice::from_ref(&i), at).is_err());
     let abstain = json!({"actions":[],"stance":"abstain","notes":"no trade"});
     assert!(
-        validate(&abstain.to_string(), &p, std::slice::from_ref(&i))
+        validate(&abstain.to_string(), &p, std::slice::from_ref(&i), at)
             .unwrap()
             .is_empty()
     );
     let with_reasons = json!({"actions":[],"stance":"abstain","notes":"wait",
             "candidate_reasons":[{"instrument_key":i.key,"reason":"spread too wide"}]});
     assert!(
-        validate(&with_reasons.to_string(), &p, std::slice::from_ref(&i))
+        validate(&with_reasons.to_string(), &p, std::slice::from_ref(&i), at)
             .unwrap()
             .is_empty()
     );
@@ -131,15 +134,23 @@ fn plan_validation_reserves_cash_and_holdings() {
     let mut oversized = with_reasons;
     oversized["candidate_reasons"][0]["reason"] = "x".repeat(2049).into();
     assert_eq!(
-        validate(&oversized.to_string(), &p, std::slice::from_ref(&i))
+        validate(&oversized.to_string(), &p, std::slice::from_ref(&i), at)
             .err()
             .unwrap()
             .to_string(),
         "planner_plan_bounds"
     );
-    let at = DateTime::parse_from_rfc3339("2026-10-16T09:15:00+05:30")
-        .unwrap()
-        .timestamp_millis();
+    for (time, reason) in [
+        (580_000, "action_time_exit_expired"),
+        (at, "action_time_exit_expired"),
+        (at + 1, "accepted"),
+    ] {
+        let mut buy = action(&i.key, "buy", 2);
+        buy["exit_intent"]["time"] = time.into();
+        let plan = json!({"actions":[buy],"stance":"test","notes":""});
+        let verdicts = validate(&plan.to_string(), &p, std::slice::from_ref(&i), at).unwrap();
+        assert_eq!(verdicts[0].reason, reason);
+    }
     let q = Quote {
         bid: Price::parse("99").unwrap(),
         ask: Price::parse("99.05").unwrap(),
@@ -162,7 +173,7 @@ fn plan_validation_reserves_cash_and_holdings() {
         .unwrap()
     );
     let plan = json!({"actions":[action(&i.key,"sell",4),action(&i.key,"sell",2),action(&i.key,"sell",2)],"stance":"hold","notes":""});
-    let v = validate(&plan.to_string(), &p, std::slice::from_ref(&i)).unwrap();
+    let v = validate(&plan.to_string(), &p, std::slice::from_ref(&i), at).unwrap();
     assert_eq!(
         v.iter().map(|v| v.reason.as_str()).collect::<Vec<_>>(),
         vec!["action_sell_units", "accepted", "action_sell_units"]

@@ -781,6 +781,103 @@ fn live_selection_scores_reorder_filter_and_change_candidates() {
 }
 
 #[test]
+fn reviewed_research_ranker_scores_from_the_registered_source() {
+    use crate::runtime::workspace::{self, WorkspaceOp, WorkspaceScope};
+
+    let dir = tempfile::tempdir().unwrap();
+    let book = dir.path();
+    let library = book.join("library.sqlite");
+    let planner_path = book.join("planner.json");
+    let now = start();
+    let session = local(now).date_naive();
+    let (scan, instruments) = live_scan(now);
+    let mut discovery = live_settings(&library);
+    let cfg = crate::runtime::planner::PlannerConfig {
+        discovery: Some(discovery.clone()),
+        workspace: Some(serde_json::from_value(serde_json::json!({"enabled":true})).unwrap()),
+        ..Default::default()
+    };
+    fs::write(&planner_path, serde_json::to_vec(&cfg).unwrap()).unwrap();
+    let workspace = cfg.workspace.as_ref().unwrap();
+    let script = "scripts/ranker.py";
+    let write = |source: &str| {
+        workspace::execute_scoped(
+            book,
+            workspace,
+            WorkspaceScope::ResearchSandbox,
+            WorkspaceOp::Write {
+                path: script.into(),
+                text: source.into(),
+            },
+        )
+        .unwrap();
+    };
+    let source = "print('{\"A\": 1, \"C\": 9}')\n";
+    write(source);
+    let sha = digest(source.as_bytes());
+    let register = |expected_sha256: String| {
+        planner::entry(planner::Command::RegisterRanker {
+            planner: planner_path.clone(),
+            session,
+            book: book.to_path_buf(),
+            script: script.into(),
+            expected_sha256,
+            author_model: "fixture-model".into(),
+        })
+    };
+    assert_eq!(register("0".repeat(64)), std::process::ExitCode::FAILURE);
+    assert!(!library.exists());
+    assert_eq!(register(sha.clone()), std::process::ExitCode::SUCCESS);
+
+    // Registering evidence alone leaves the built-in ranking in control.
+    let baseline = super::super::discovery::project(&scan, &instruments, &discovery, now);
+    let mut observer = ShadowSelection::default();
+    observer.evaluate(&discovery, &scan, now, false, &[0.001, 0.001]);
+    assert!(
+        observer
+            .live_ranking(&discovery, &scan, &instruments, &baseline, now)
+            .is_none()
+    );
+
+    // A subsequent workspace edit cannot change the reviewed source.
+    write("print('{}')\n");
+    discovery
+        .strategy_selection
+        .as_mut()
+        .unwrap()
+        .paper_trial_sha256 = Some(sha.clone());
+    discovery.validate().unwrap();
+    let mut observer = ShadowSelection::default();
+    observer.evaluate(&discovery, &scan, now, false, &[0.001, 0.001]);
+    assert_eq!(
+        observer.status.as_ref().unwrap()["reason"],
+        "ReviewedPaperTrial"
+    );
+    if !Path::new("/usr/bin/bwrap").is_file() {
+        return;
+    }
+    let live = observer
+        .live_ranking(&discovery, &scan, &instruments, &baseline, now)
+        .unwrap();
+    let ranked = super::super::discovery::project_with_live(
+        &scan,
+        &instruments,
+        &discovery,
+        now,
+        Some(&live),
+    );
+    let prospects = super::super::discovery::candidates(&ranked);
+    assert_eq!(
+        prospects
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .collect::<Vec<_>>(),
+        ["C", "A"]
+    );
+    assert_eq!(ranked["live_ranking"]["sha256"], sha);
+}
+
+#[test]
 fn shadow_selection_never_scores_or_requests_live_ranking() {
     let now = start();
     let (scan, instruments) = live_scan(now);
@@ -3902,7 +3999,7 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
     let at = start();
     let input = serde_json::json!({"allowlist":[i]});
     let raw=serde_json::json!({"actions":[{"instrument_key":i.key,"side":"buy","units":2,"max_price":"101","rationale":"fixture","exit_intent":{"target":"110","stop":"90"}}],"stance":"long","notes":""}).to_string();
-    let verdicts = planner::validate(&raw, &p, std::slice::from_ref(&i)).unwrap();
+    let verdicts = planner::validate(&raw, &p, std::slice::from_ref(&i), at).unwrap();
     fs::create_dir_all(c.directory.join("model/fixture-stale")).unwrap();
     let mut plan = serde_json::json!({"decision_id":"fixture-stale","session_binding":book_binding(&c).unwrap(),"input_hash":digest(&serde_json::to_vec(&input).unwrap()),"input":input,"fake":false,"dry_run":false,"verdicts":verdicts});
     activate_fixture_plan(&mut db, &c, &p, &plan);
@@ -3912,6 +4009,15 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
     })
     .unwrap();
     assert!(p.fills.is_empty());
+    let mut expired = plan.clone();
+    expired["decision_id"] = serde_json::json!("fixture-time-expired");
+    expired["verdicts"][0]["action"]["exit_intent"]["time"] = serde_json::json!(at + 1);
+    fs::create_dir_all(c.directory.join("model/fixture-time-expired")).unwrap();
+    activate_fixture_plan(&mut db, &c, &p, &expired);
+    commit_quotes(&mut db, &c, &mut p, &quotes, &[], at, "fixture", || at + 1).unwrap();
+    assert!(p.fills.is_empty());
+    assert!(p.positions.is_empty());
+
     plan["decision_id"] = serde_json::json!("fixture-screened");
     fs::create_dir_all(c.directory.join("model/fixture-screened")).unwrap();
     activate_fixture_plan(&mut db, &c, &p, &plan);
@@ -4028,7 +4134,7 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
         let second = instrument(2);
         let raw=serde_json::json!({"actions":[{"instrument_key":i.key,"side":"buy","units":1,"max_price":"101","rationale":"fixture","exit_intent":{"target":"110"}},{"instrument_key":second.key,"side":"buy","units":1,"max_price":"101","rationale":"fixture","exit_intent":{}}],"stance":"long","notes":""}).to_string();
         let input = serde_json::json!({"allowlist":[i,second]});
-        let plan = serde_json::json!({"decision_id":"fixture-predecessor","session_binding":book_binding(&c).unwrap(),"input_hash":digest(&serde_json::to_vec(&input).unwrap()),"input":input,"fake":false,"dry_run":false,"verdicts":planner::validate(&raw,&p,&[i.clone(),second.clone()]).unwrap()});
+        let plan = serde_json::json!({"decision_id":"fixture-predecessor","session_binding":book_binding(&c).unwrap(),"input_hash":digest(&serde_json::to_vec(&input).unwrap()),"input":input,"fake":false,"dry_run":false,"verdicts":planner::validate(&raw,&p,&[i.clone(),second.clone()],at).unwrap()});
         fs::create_dir_all(c.directory.join("model/fixture-predecessor")).unwrap();
         activate_fixture_plan(&mut db, &c, &p, &plan);
         commit_quotes(

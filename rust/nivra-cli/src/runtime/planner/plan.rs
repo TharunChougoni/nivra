@@ -103,6 +103,7 @@ pub(crate) fn validate(
     raw: &str,
     p: &Portfolio,
     instruments: &[Instrument],
+    now: i64,
 ) -> Result<Vec<Verdict>> {
     let decoded = plan_document(raw)?;
     let plan: TradePlan = serde_json::from_value(decoded).map_err(|_| "planner_schema_invalid")?;
@@ -162,6 +163,11 @@ pub(crate) fn validate(
                         return Err("action_revise_empty".into());
                     }
                     return Ok((a, 0));
+                }
+                if matches!(a.side, PlanSide::Buy)
+                    && a.exit_intent.time.is_some_and(|time| time <= now)
+                {
+                    return Err("action_time_exit_expired".into());
                 }
                 let max_price = a.max_price.ok_or("action_bounds")?;
                 // Segment identity is explicit: index keys are never tradeable,
@@ -260,6 +266,7 @@ pub(crate) fn validate(
                         code @ ("action_schema"
                         | "action_allowlist"
                         | "action_bounds"
+                        | "action_time_exit_expired"
                         | "action_size"
                         | "action_zero_units"
                         | "action_existing_position"
