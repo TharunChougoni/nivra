@@ -1192,15 +1192,9 @@ function ObservationPanel({ summary }: { summary?: SummaryResponse | null }) {
               "Native source refs",
               observationRefsStatusLabel(value.observation_refs_status),
             ],
-            [
-              "Native refs scanned",
-              metric(value.observation_refs_scanned),
-            ],
+            ["Native refs scanned", metric(value.observation_refs_scanned)],
             ["Native refs limit", metric(value.observation_refs_limit)],
-            [
-              "Native refs truncated",
-              yesNo(value.observation_refs_truncated),
-            ],
+            ["Native refs truncated", yesNo(value.observation_refs_truncated)],
             ["Native refs partial", yesNo(value.observation_refs_partial)],
             [
               "Native refs source error",
@@ -1511,10 +1505,7 @@ function MeasurementPanel({ summary }: { summary?: SummaryResponse | null }) {
                     : []),
                   ...(item.original_measurement_status
                     ? ([
-                        [
-                          "Original record",
-                          measurementOriginalStatus(item),
-                        ],
+                        ["Original record", measurementOriginalStatus(item)],
                       ] as [string, string][])
                     : []),
                   ["Reason", reason],
@@ -1543,7 +1534,10 @@ function MeasurementPanel({ summary }: { summary?: SummaryResponse | null }) {
             measurementStatusLabel(item.measurement_status),
           ]);
         if (item.original_measurement_status)
-          statusFacts.push(["Original record", measurementOriginalStatus(item)]);
+          statusFacts.push([
+            "Original record",
+            measurementOriginalStatus(item),
+          ]);
         return (
           <div
             key={`${safeHash(item.candidate_id)}-${index}`}
@@ -1648,9 +1642,7 @@ function MeasurementPanel({ summary }: { summary?: SummaryResponse | null }) {
                       ],
                       [
                         "Continuation recording session",
-                        safeSession(
-                          measurement.current_scope?.current_session,
-                        ),
+                        safeSession(measurement.current_scope?.current_session),
                       ],
                       [
                         "Entry quote archive hash",

@@ -447,12 +447,11 @@ pub(super) fn commit_quotes(
     c: &Config,
     p: &mut Portfolio,
     quotes: &BTreeMap<String, Quote>,
-    entries: &[Instrument],
     receipt: i64,
     raw: &str,
     clock: impl FnOnce() -> i64,
 ) -> Result<()> {
-    commit_quotes_screened(db, c, p, quotes, entries, receipt, raw, clock, None, false)
+    commit_quotes_screened(db, c, p, quotes, receipt, raw, clock, None, false)
 }
 #[allow(clippy::too_many_arguments)] // Runtime supplies the explicit revalidated buy screen; protection/sells bypass it.
 fn commit_quotes_screened(
@@ -460,16 +459,12 @@ fn commit_quotes_screened(
     c: &Config,
     p: &mut Portfolio,
     quotes: &BTreeMap<String, Quote>,
-    entries: &[Instrument],
     receipt: i64,
     raw: &str,
     clock: impl FnOnce() -> i64,
     allowed_buys: Option<&BTreeSet<String>>,
     held_positions: bool,
 ) -> Result<()> {
-    if !entries.is_empty() {
-        return Err(Fail::new(super::planner::NO_DECISION_WORK).into());
-    }
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let now = clock();
     let mut next = p.clone();
@@ -484,7 +479,7 @@ fn commit_quotes_screened(
     tx.execute_batch("SAVEPOINT planner_decision")?;
     let action_result = (|| -> Result<Option<serde_json::Value>> {
         ensure_actions(&tx)?;
-        let saved_plan = planner::saved_plan(&tx, c)?;
+        let saved_plan = redecision::active_plan(&tx, c)?;
         if let Some(plan) = &saved_plan
             && local(now).date_naive() == c.session
             && (c.execution.session_start_minute..c.execution.session_end_minute)
@@ -493,14 +488,6 @@ fn commit_quotes_screened(
             let decision = plan["decision_id"]
                 .as_str()
                 .ok_or("planner_saved_plan_invalid")?;
-            if plan["session_binding"] != book_binding(c)?
-                || plan["input_hash"] != digest(&serde_json::to_vec(&plan["input"])?)
-            {
-                return Err("planner_saved_binding_invalid".into());
-            }
-            if plan["fake"] != false || plan["dry_run"] != false {
-                return Err("planner_fake_plan_not_executable".into());
-            }
             // A1 intent binding: revalidate the book and policy revision the
             // intent was produced against. Missing values keep archived legacy
             // plans executable; present values must match exactly.
@@ -1074,11 +1061,9 @@ fn read_apply(
     db: &mut Connection,
     p: &mut Portfolio,
     instruments: &[Instrument],
-    entries: &[Instrument],
     mut scanner: Option<&mut Scanner>,
     last_fresh_receipt: &mut Option<i64>,
     event_config: Option<&planner::PlannerConfig>,
-    event_cancel: Option<&std::sync::atomic::AtomicBool>,
     metadata_only: bool,
     depth_sink: Option<&mut Scanner>,
     feature_store: &Arc<Mutex<FeatureStore>>,
@@ -1091,9 +1076,6 @@ fn read_apply(
     let (requested, receipt, raw) = match client.quotes(c, &keys) {
         Ok(v) => v,
         Err(error) => {
-            if let Some(cancel) = event_cancel {
-                cancel.store(true, std::sync::atomic::Ordering::Release);
-            }
             let reason = failure_code(error.as_ref());
             if event_config.is_some() {
                 block_read_failure(db, c, p, &reason);
@@ -1106,9 +1088,6 @@ fn read_apply(
     let body: serde_json::Value = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(_) => {
-            if let Some(cancel) = event_cancel {
-                cancel.store(true, std::sync::atomic::Ordering::Release);
-            }
             if event_config.is_some() {
                 block_data_failure(db, c, p);
             }
@@ -1125,9 +1104,6 @@ fn read_apply(
         }
     };
     if body["status"] != "success" {
-        if let Some(cancel) = event_cancel {
-            cancel.store(true, std::sync::atomic::Ordering::Release);
-        }
         if event_config.is_some() {
             block_data_failure(db, c, p);
         }
@@ -1143,9 +1119,6 @@ fn read_apply(
         return Ok(Some("invalid_quote_status".into()));
     }
     let Some(rows) = body["data"].as_object() else {
-        if let Some(cancel) = event_cancel {
-            cancel.store(true, std::sync::atomic::Ordering::Release);
-        }
         if event_config.is_some() {
             block_data_failure(db, c, p);
         }
@@ -1197,9 +1170,6 @@ fn read_apply(
             continue;
         };
         if !duplicate.insert(i.key.clone()) {
-            if let Some(cancel) = event_cancel {
-                cancel.store(true, std::sync::atomic::Ordering::Release);
-            }
             if event_config.is_some() {
                 block_data_failure(db, c, p);
             }
@@ -1268,25 +1238,6 @@ fn read_apply(
             }
         }
     }
-    // Entry revalidation repeats dynamic liquidity/band tests on the new receipt.
-    let mut checked = Vec::new();
-    for i in entries {
-        if let (Some(q), Some(row)) = (
-            quotes.get(&i.key),
-            rows.values().find(|r| r["instrument_token"] == i.key),
-        ) && Scanner::market_allows_with_policy(
-            millis(),
-            i,
-            q,
-            row,
-            &event_config
-                .and_then(|cfg| cfg.discovery.as_ref())
-                .and_then(|d| d.screens.clone())
-                .unwrap_or_else(nivra_core::execution::ScreenPolicy::recommended),
-        ) {
-            checked.push(i.clone());
-        }
-    }
     let archive=serde_json::json!({"source":"upstox-readonly-v1","purpose":if scanner.is_some(){"scanner"}else{"execution_or_protection"},"requested_ms":requested,"received_ms":receipt,"body":raw}).to_string();
     let policy = event_config
         .and_then(|cfg| cfg.discovery.as_ref())
@@ -1322,7 +1273,6 @@ fn read_apply(
         c,
         p,
         &quotes,
-        &checked,
         receipt,
         &archive,
         millis,
@@ -1342,20 +1292,8 @@ fn read_apply(
             );
         }
     }
-    if !p.halted && event_config.is_some() {
-        match redecision::sticky_blocked(db, c) {
-            Ok(blocked) => {
-                if blocked && let Some(cancel) = event_cancel {
-                    cancel.store(true, std::sync::atomic::Ordering::Release);
-                }
-            }
-            Err(_) => {
-                if let Some(cancel) = event_cancel {
-                    cancel.store(true, std::sync::atomic::Ordering::Release);
-                }
-                planner_incident(db, c, p, millis())?;
-            }
-        }
+    if !p.halted && event_config.is_some() && redecision::check_existing_authority(db, c).is_err() {
+        planner_incident(db, c, p, millis())?;
     }
     if let Some(receipt) = quotes
         .values()

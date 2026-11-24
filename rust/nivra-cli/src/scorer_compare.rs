@@ -1,7 +1,6 @@
 //! Offline comparison and the runtime scorer replay; no providers or paper writer.
 use crate::strategy_lab::{
-    self, CostAdjustedMetrics, ForwardReturn, MarkCosts, MissingMarkReason, ReplayConfig,
-    ReplayFees, ReplayReport,
+    self, CostAdjustedMetrics, ForwardReturn, MissingMarkReason, ReplayConfig, ReplayReport,
 };
 use clap::Args as ClapArgs;
 use nivra_core::{
@@ -39,7 +38,7 @@ pub struct ScorerReplaySettings {
     pub lookback_samples: usize,
     /// Maximum UTF-8 bytes of the prior replay summary fed back to the model.
     pub max_feedback_chars: usize,
-    /// Independent hypothetical notional used only for cost-adjusted marks.
+    /// Retained in the serialized replay policy for existing configurations.
     pub notional: Money,
 }
 impl Default for ScorerReplaySettings {
@@ -213,149 +212,15 @@ fn candidate_scan(
     }
     Ok(candidate)
 }
-fn costs_for_marks(
-    settings: &ScorerReplaySettings,
-    costs: Option<&FeeArithmetic>,
-) -> Result<Option<MarkCosts>, String> {
-    let Some(costs) = costs else {
-        return Ok(None);
-    };
-    costs
-        .validate()
-        .map_err(|_| "scorer_replay_paper_costs_invalid".to_string())?;
-    let slippage: f64 = costs
-        .slippage_bps
-        .amount()
-        .to_string()
-        .parse()
-        .map_err(|_| "scorer_replay_paper_costs_invalid".to_string())?;
-    Ok(Some(MarkCosts {
-        notional: settings.notional,
-        // Policy slippage applies to both legs; marks declare one round-trip charge.
-        round_trip_spread_bps: slippage * 2.0,
-        fees: ReplayFees {
-            per_order: costs.per_order,
-            buy_bps: costs.buy_bps,
-            sell_bps: costs.sell_bps,
-            rounding_increment: costs.rounding_increment,
-        },
-    }))
-}
-/// Execute already-written scorer artifacts over supplied feature snapshots.
-/// A failed sandbox process is a failed snapshot, not a replay error; the caller
-/// receives the failure code in the report and decides whether to publish.
-pub fn replay_scorer(
+/// The enclosing owned unit enforces the task deadline. The last local sandbox
+/// receipt is advisory and does not release the candidate lease.
+pub fn replay_candidate(
     settings: &ScorerReplaySettings,
     sandbox: &ScorerSandboxConfig,
     scorer_source: &[u8],
     params_bytes: &[u8],
     snapshots: &[FeatureSnapshot],
-    costs: Option<&FeeArithmetic>,
-) -> Result<ScorerReplayReport, String> {
-    replay_scorer_inner(
-        settings,
-        sandbox,
-        scorer_source,
-        params_bytes,
-        snapshots,
-        costs,
-        || false,
-        |_| Ok(sandbox.clone()),
-        |_| {},
-    )
-}
-
-/// Cancellation is checked between bounded snapshots and before each horizon.
-/// The caller controls the current snapshot budget; there is no immediate kill
-/// claim while a snapshot is already running.
-pub fn replay_scorer_with_cancel(
-    settings: &ScorerReplaySettings,
-    sandbox: &ScorerSandboxConfig,
-    scorer_source: &[u8],
-    params_bytes: &[u8],
-    snapshots: &[FeatureSnapshot],
-    costs: Option<&FeeArithmetic>,
-    cancelled: impl FnMut() -> bool,
-) -> Result<ScorerReplayReport, String> {
-    replay_scorer_inner(
-        settings,
-        sandbox,
-        scorer_source,
-        params_bytes,
-        snapshots,
-        costs,
-        cancelled,
-        |_| Ok(sandbox.clone()),
-        |_| {},
-    )
-}
-
-/// Candidate execution bounds each sandbox invocation to the remaining global
-/// task wall. A zero/negative remainder refuses before starting the snapshot.
-#[allow(clippy::too_many_arguments)]
-pub fn replay_scorer_bounded(
-    settings: &ScorerReplaySettings,
-    sandbox: &ScorerSandboxConfig,
-    scorer_source: &[u8],
-    params_bytes: &[u8],
-    snapshots: &[FeatureSnapshot],
-    costs: Option<&FeeArithmetic>,
-    cancelled: impl FnMut() -> bool,
-    sandbox_for: impl FnMut(usize) -> Result<ScorerSandboxConfig, String>,
-) -> Result<ScorerReplayReport, String> {
-    replay_scorer_inner(
-        settings,
-        sandbox,
-        scorer_source,
-        params_bytes,
-        snapshots,
-        costs,
-        cancelled,
-        sandbox_for,
-        |_| {},
-    )
-}
-
-/// Candidate path: observe each sandbox invocation's typed start/cleanup
-/// receipt. The observer runs synchronously after the child is reaped and
-/// before the next snapshot, so a caller can retain an ambiguous lease.
-#[allow(clippy::too_many_arguments)]
-pub fn replay_scorer_bounded_observed(
-    settings: &ScorerReplaySettings,
-    sandbox: &ScorerSandboxConfig,
-    scorer_source: &[u8],
-    params_bytes: &[u8],
-    snapshots: &[FeatureSnapshot],
-    costs: Option<&FeeArithmetic>,
-    cancelled: impl FnMut() -> bool,
-    sandbox_for: impl FnMut(usize) -> Result<ScorerSandboxConfig, String>,
-    observed: impl FnMut(&BwrapLeaderReceipt),
-) -> Result<ScorerReplayReport, String> {
-    replay_scorer_inner(
-        settings,
-        sandbox,
-        scorer_source,
-        params_bytes,
-        snapshots,
-        costs,
-        cancelled,
-        sandbox_for,
-        observed,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn replay_scorer_inner(
-    settings: &ScorerReplaySettings,
-    sandbox: &ScorerSandboxConfig,
-    scorer_source: &[u8],
-    params_bytes: &[u8],
-    snapshots: &[FeatureSnapshot],
-    costs: Option<&FeeArithmetic>,
-    mut cancelled: impl FnMut() -> bool,
-    mut sandbox_for: impl FnMut(usize) -> Result<ScorerSandboxConfig, String>,
-    mut observed: impl FnMut(&BwrapLeaderReceipt),
-) -> Result<ScorerReplayReport, String> {
+) -> Result<(ScorerReplayReport, BwrapLeaderReceipt), String> {
     settings.validate()?;
     sandbox
         .validate()
@@ -370,45 +235,31 @@ fn replay_scorer_inner(
     {
         return Err("scorer_replay_input_invalid".into());
     }
-    let mut params: Value =
+    let params: Value =
         serde_json::from_slice(params_bytes).map_err(|_| "scorer_replay_params_invalid")?;
     if !params.is_object() {
         return Err("scorer_replay_params_invalid".into());
     }
     let written_params_sha256 = nivra_core::replay::digest(params_bytes);
-    if let Some(costs) = costs {
-        merge_paper_costs(&mut params, costs)?;
-    }
     let params_effective_sha256 = nivra_core::replay::digest(
         &serde_json::to_vec(&params).map_err(|_| "scorer_replay_params_invalid")?,
     );
     let spec = StrategySpec::default();
     let mut ticks = Vec::with_capacity(snapshots.len());
     let mut scans = Vec::with_capacity(snapshots.len());
-    for (index, snapshot) in snapshots.iter().enumerate() {
-        if cancelled() {
-            return Err("scorer_replay_cancelled".into());
-        }
-        let snapshot_sandbox = sandbox_for(index)?;
-        snapshot_sandbox
-            .validate()
-            .map_err(|_| "scorer_replay_sandbox_invalid".to_string())?;
+    let mut advisory = BwrapLeaderReceipt::not_started();
+    for snapshot in snapshots {
         let default = evaluate(&spec, snapshot)?;
-        let execution = scorer_input(snapshot, &params).map(|features| {
-            nivra_sandbox::score_source_with_receipt(&snapshot_sandbox, scorer_source, &features)
+        let scores = scorer_input(snapshot, &params).and_then(|features| {
+            let execution =
+                nivra_sandbox::score_source_with_receipt(sandbox, scorer_source, &features);
+            advisory = execution.receipt;
+            execution.result
         });
-        if let Ok(execution) = &execution {
-            observed(&execution.receipt);
-        }
-        let (candidate, failure) = match execution.and_then(|execution| execution.result) {
-            Ok(scores) => match candidate_scan(default.clone(), &scores, settings.top_n) {
-                Ok(candidate) => (candidate, None),
-                Err(failure) => {
-                    let mut failed = default.clone();
-                    failed.rows.iter_mut().for_each(|row| row.selected = false);
-                    (failed, Some(failure))
-                }
-            },
+        let (candidate, failure) = match scores
+            .and_then(|scores| candidate_scan(default.clone(), &scores, settings.top_n))
+        {
+            Ok(candidate) => (candidate, None),
             Err(failure) => {
                 let mut failed = default.clone();
                 failed.rows.iter_mut().for_each(|row| row.selected = false);
@@ -441,15 +292,10 @@ fn replay_scorer_inner(
     } else {
         None
     };
-    let costs = costs_for_marks(settings, costs)?;
     let mut horizons = Vec::with_capacity(settings.horizons_minutes.len());
     for minutes in &settings.horizons_minutes {
-        if cancelled() {
-            return Err("scorer_replay_cancelled".into());
-        }
         let config = ReplayConfig {
             horizon_ms: minutes.saturating_mul(60_000),
-            costs: costs.clone(),
             ..ReplayConfig::default()
         };
         let mut cached = scans.iter().cloned();
@@ -469,7 +315,7 @@ fn replay_scorer_inner(
             cost_adjusted: report.cost_adjusted,
         });
     }
-    ScorerReplayReport {
+    let report = ScorerReplayReport {
         schema: 1,
         status: String::from(if reason.is_none() { "ok" } else { "failed" }),
         reason: reason.map(str::to_owned),
@@ -491,7 +337,8 @@ fn replay_scorer_inner(
         horizons,
         report_hash: String::new(),
     }
-    .hash()
+    .hash()?;
+    Ok((report, advisory))
 }
 
 const PAPER_COSTS_MISSING: &str = "scorer_compare_paper_costs_missing";
@@ -662,7 +509,6 @@ fn compare(
     if !(1..=200).contains(&config.k) {
         return Err("scorer_compare_k_invalid".into());
     }
-    // Validate input/config and reuse the laboratory's default selection/mark policy.
     let spec = StrategySpec::default();
     let default_replay = strategy_lab::replay_configured(&spec, snapshots, &config.replay)?;
     let mut ticks = Vec::new();

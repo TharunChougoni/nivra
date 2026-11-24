@@ -139,6 +139,25 @@ test("one session per lane per date, reused across turns and replaced on a new d
   agent.dispose();
 });
 
+test("a new session date starts its own session even when the lane directory is shared", async () => {
+  const script: FakeScript = {
+    turns: [
+      { lane: "research", steps: [{ text: "earlier-session-marker" }] },
+      { lane: "research", steps: [{ text: "next day" }] },
+    ],
+  };
+  const { dir, agent, run } = await harness(script, () => ({ ok: true, output: {} }));
+  const laneDir = join(dir, "shared", "research");
+  const request = (id: string, date: string) => ({ ...turn(id, "research", dir, date, [tool("portfolio")]), session: { date, dir: laneDir } });
+  const first = await run(request("r1", "2026-11-18"));
+  const second = await run(request("r2", "2026-11-19"));
+  assert.ok(first.session_file && second.session_file);
+  assert.notEqual(second.session_file, first.session_file, "a new date starts a new session file");
+  assert.ok(readFileSync(first.session_file, "utf8").includes("earlier-session-marker"));
+  assert.ok(!readFileSync(second.session_file, "utf8").includes("earlier-session-marker"), "a new date does not continue the previous date's context");
+  agent.dispose();
+});
+
 test("an unknown model is refused without a model call", async () => {
   const { dir, agent, run } = await harness({ turns: [] }, () => ({ ok: true }));
   const request = turn("t1", "decision", dir);

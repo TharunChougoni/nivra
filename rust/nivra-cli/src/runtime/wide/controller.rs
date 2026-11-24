@@ -270,6 +270,58 @@ fn attach_agent(
     }
 }
 
+/// Attach the pi lanes for one dated book. A failed attach records its incident
+/// and an explicit reason; it never aborts the paper loop.
+fn attach_policy(
+    db: &mut Connection,
+    c: &Config,
+    p: &mut Portfolio,
+    policy: Result<planner::PlannerConfig>,
+) -> Result<(
+    Option<planner::PlannerConfig>,
+    Option<super::super::agent::service::LaneService>,
+    Option<&'static str>,
+)> {
+    Ok(match attach_agent(db, c, p, policy)? {
+        Some((cfg, agent)) => (Some(cfg), Some(agent), None),
+        None => (None, None, Some("pi_paper_authority_unavailable")),
+    })
+}
+
+/// Per-dated-book scanner and feature evidence. Cold start and in-process
+/// rollover both build it from the successor policy, so a dated book never
+/// inherits another session's scanner preload, feature stores or option state.
+pub(super) struct SessionEvidence {
+    pub(super) scan: Scanner,
+    pub(super) feature_store: FeatureStore,
+    /// Separate store: index minute returns must never enter the cash market median.
+    pub(super) index_features: FeatureStore,
+    pub(super) option_status: serde_json::Value,
+}
+
+impl SessionEvidence {
+    pub(super) fn load(
+        db: &Connection,
+        c: &Config,
+        policy: Option<&planner::PlannerConfig>,
+    ) -> Result<Self> {
+        let preload_max_age = policy
+            .and_then(|cfg| cfg.discovery.as_ref())
+            .and_then(|d| d.market_feed.as_ref())
+            .map_or(0, |feed| feed.metadata_preload_max_age_ms);
+        Ok(Self {
+            scan: load_scanner(db, preload_max_age, millis(), &c.execution)?,
+            feature_store: session_features(c, policy)?,
+            index_features: session_features(c, None)?,
+            option_status: if c.nifty_options.enabled {
+                serde_json::json!({"status":"waiting_for_spot","reason":"option_spot_unavailable"})
+            } else {
+                serde_json::json!({"status":"disabled"})
+            },
+        })
+    }
+}
+
 impl<'a> Controller<'a> {
     fn start(c: &Config, client: &'a data::Client) -> Result<Self> {
         let _daily_lock = rollover::controller_lock(c)?;
@@ -299,19 +351,20 @@ impl<'a> Controller<'a> {
         if action_fault {
             planner_incident(&mut db, c, &mut p, millis())?;
         }
-        let (event_config, agent) = match attach_agent(&mut db, c, &mut p, policy)? {
-            Some((cfg, agent)) => (Some(cfg), Some(agent)),
-            None => (None, None),
-        };
-        let event_config_reason = agent.is_none().then_some("pi_paper_authority_unavailable");
+        let (event_config, agent, event_config_reason) = attach_policy(&mut db, c, &mut p, policy)?;
         if c.prior_config.is_none() || c.legacy_directory.is_some() {
             persist(&mut db, c, &p, millis(), None, None, "wide_reconciled")?;
         }
         let token = dashboard_token(c)?;
         let view = Arc::new(Mutex::new(serde_json::json!({"status":"starting"})));
-        let feature_store = Arc::new(Mutex::new(session_features(c, event_config.as_ref())?));
-        // Separate store: index minute returns must never enter the cash market median.
-        let index_features = Arc::new(Mutex::new(session_features(c, None)?));
+        let SessionEvidence {
+            scan,
+            feature_store,
+            index_features,
+            option_status,
+        } = SessionEvidence::load(&db, c, event_config.as_ref())?;
+        let feature_store = Arc::new(Mutex::new(feature_store));
+        let index_features = Arc::new(Mutex::new(index_features));
         let equity_series = Arc::new(Mutex::new(web::EquitySeries::new(
             c.dashboard.equity_sample_interval_ms,
             c.dashboard.equity_max_points,
@@ -342,13 +395,10 @@ impl<'a> Controller<'a> {
             .as_ref()
             .map(|u| u.instruments.clone())
             .unwrap_or_default();
-        let mut option_status = serde_json::json!({"status":"disabled"});
         if c.nifty_options.enabled {
             // The runtime-only per-segment schedule is never serialized into the
             // cash book; `paper_costs` stays the cash policy.
             p.fee_schedule = Some(c.fee_schedule()?);
-            option_status =
-                serde_json::json!({"status":"waiting_for_spot","reason":"option_spot_unavailable"});
         }
         if let Ok(mut catalog) = instrument_catalog.lock() {
             *catalog = universe
@@ -357,16 +407,6 @@ impl<'a> Controller<'a> {
         }
         super::super::instrument_display::start(c, &instrument_catalog, &display_catalog_started);
         let alerts = Alerts::start(c.alert_webhook_file.as_deref(), true);
-        let scan = load_scanner(
-            &db,
-            event_config
-                .as_ref()
-                .and_then(|cfg| cfg.discovery.as_ref())
-                .and_then(|d| d.market_feed.as_ref())
-                .map_or(0, |feed| feed.metadata_preload_max_age_ms),
-            millis(),
-            &c.execution,
-        )?;
         let reported = p.closed && c.directory.join("report.json").is_file();
         let history_attempt = HistoryAttempts::load(&config)?;
         Ok(Self {
@@ -897,7 +937,6 @@ impl<'a> Controller<'a> {
             )?;
         }
         self.option_depth_read(now)?;
-        // Rank the entire dated universe before truncating prospects.
         let rank_interval = feed_settings
             .as_ref()
             .map(|s| s.tick_ms)
@@ -1045,11 +1084,9 @@ impl<'a> Controller<'a> {
                 &mut self.db,
                 &mut self.p,
                 held,
-                &[],
                 None,
                 &mut self.last_fresh_receipt,
                 self.event_config.as_ref(),
-                None,
                 false,
                 None,
                 &self.feature_store,
@@ -1067,14 +1104,12 @@ impl<'a> Controller<'a> {
         if history_admitted
             && self.read_failure.is_none()
             && !self.p.halted
-            && planner::saved_plan(&self.db, c)?.is_some()
+            && let Some(plan) = redecision::active_plan(&self.db, c)?
             && now - self.last_plan_read >= 2000
         {
-            let plan = planner::saved_plan(&self.db, c)?.ok_or("planner_saved_plan_invalid")?;
-            let mut actions: Vec<planner::Verdict> =
-                serde_json::from_value(plan["verdicts"].clone())?;
+            let actions: Vec<planner::Verdict> = serde_json::from_value(plan["verdicts"].clone())?;
             let mut pending = Vec::new();
-            for a in actions.drain(..) {
+            for a in actions {
                 let done: bool = self.db.query_row(
                     "SELECT EXISTS(SELECT 1 FROM planner_action WHERE decision=? AND idx=?)",
                     rusqlite::params![
@@ -1108,11 +1143,9 @@ impl<'a> Controller<'a> {
                     &mut self.db,
                     &mut self.p,
                     &planned,
-                    &[],
                     None,
                     &mut self.last_fresh_receipt,
                     self.event_config.as_ref(),
-                    None,
                     false,
                     None,
                     &self.feature_store,
@@ -1150,11 +1183,9 @@ impl<'a> Controller<'a> {
             &mut self.db,
             &mut self.p,
             batch,
-            &[],
             Some(&mut self.scan),
             &mut self.last_fresh_receipt,
             self.event_config.as_ref(),
-            None,
             feed_live,
             None,
             &self.feature_store,
@@ -1194,11 +1225,9 @@ impl<'a> Controller<'a> {
                 &mut self.db,
                 &mut self.p,
                 &self.option_instruments,
-                &[],
                 None,
                 &mut self.last_fresh_receipt,
                 self.event_config.as_ref(),
-                None,
                 false,
                 Some(&mut self.scan),
                 &self.feature_store,
@@ -1357,11 +1386,9 @@ impl<'a> Controller<'a> {
                 &mut self.db,
                 &mut self.p,
                 &shortlist,
-                &[],
                 None,
                 &mut self.last_fresh_receipt,
                 self.event_config.as_ref(),
-                None,
                 false,
                 Some(&mut self.scan),
                 &self.feature_store,
@@ -1553,6 +1580,7 @@ impl<'a> Controller<'a> {
         self.history_status =
             serde_json::json!({"status":"UNKNOWN","reason":"preparation_not_started"});
         self.universe = None;
+        self.tradable.clear();
         if let Ok(mut catalog) = self.instrument_catalog.lock() {
             *catalog = None;
         }
@@ -1560,22 +1588,7 @@ impl<'a> Controller<'a> {
             .store(false, std::sync::atomic::Ordering::Release);
         self.display_catalog_status = serde_json::json!({"status":"not_prepared"});
         self.volume_history_loaded = false;
-        self.scan = load_scanner(
-            &self.db,
-            self.event_config
-                .as_ref()
-                .and_then(|cfg| cfg.discovery.as_ref())
-                .and_then(|d| d.market_feed.as_ref())
-                .map_or(0, |feed| feed.metadata_preload_max_age_ms),
-            millis(),
-            &self.config.execution,
-        )?;
         self.feed_worker = None;
-        *self
-            .feature_store
-            .lock()
-            .map_err(|_| Fail::new("feature_store_lock"))? =
-            session_features(&self.config, self.event_config.as_ref())?;
         if let Ok(mut series) = self.equity_series.lock() {
             series.reset();
         }
@@ -1604,17 +1617,32 @@ impl<'a> Controller<'a> {
         }
         self.live_ranking.clear();
         let policy = load_pi_policy(&self.config);
-        match attach_agent(&mut self.db, &self.config, &mut self.p, policy)? {
-            Some((cfg, agent)) => {
-                self.event_config = Some(cfg);
-                self.event_config_reason = None;
-                self.agent = Some(agent);
-            }
-            None => {
-                self.event_config = None;
-                self.event_config_reason = Some("pi_paper_authority_unavailable");
-            }
-        }
+        let (event_config, agent, event_config_reason) =
+            attach_policy(&mut self.db, &self.config, &mut self.p, policy)?;
+        self.event_config = event_config;
+        self.agent = agent;
+        self.event_config_reason = event_config_reason;
+        let SessionEvidence {
+            scan,
+            feature_store,
+            index_features,
+            option_status,
+        } = SessionEvidence::load(&self.db, &self.config, self.event_config.as_ref())?;
+        self.scan = scan;
+        *self
+            .feature_store
+            .lock()
+            .map_err(|_| Fail::new("feature_store_lock"))? = feature_store;
+        *self
+            .index_features
+            .lock()
+            .map_err(|_| Fail::new("feature_store_lock"))? = index_features;
+        self.option_status = option_status;
+        self.option_instruments.clear();
+        self.option_universe = None;
+        self.option_retry = 0;
+        self.last_option_depth = 0;
+        self.index_context = super::IndexContext::default();
         Ok(())
     }
 
@@ -1714,7 +1742,11 @@ impl<'a> Controller<'a> {
             "operator_stopped"
         } else if self.planner_status["pending_attempt"].is_string() {
             "planning_no_new_entries"
-        } else if planner::saved_plan(&self.db, c).ok().flatten().is_some() {
+        } else if redecision::active_plan(&self.db, c)
+            .ok()
+            .flatten()
+            .is_some()
+        {
             "model_plan_ready"
         } else if self.planner_status["status"].as_str() == Some(planner::NO_DECISION_WORK) {
             planner::NO_DECISION_WORK

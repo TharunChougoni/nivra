@@ -9,7 +9,7 @@ pub(super) use turn::call_time_input;
 mod plan;
 pub(crate) use plan::{PlanSide, Verdict, validate};
 mod guard;
-pub(crate) use guard::{CallGuard, preview_guard};
+pub(crate) use guard::CallGuard;
 /// How much evidence the model sees in its user message. `ToolsOnly` is the
 /// default: the host keeps the full bundle for tools, validation and audits,
 /// while the model receives only a trigger envelope and fetches facts itself.
@@ -527,13 +527,6 @@ pub(super) fn has_eligible_input(
             .any(|p| instruments.contains(&p.instrument)))
 }
 
-pub(crate) fn saved_plan(db: &Connection, c: &Config) -> Result<Option<Value>> {
-    let plan = redecision::active_plan(db, c)?.flatten();
-    if let Some(plan) = &plan {
-        validate_saved(c, plan)?;
-    }
-    Ok(plan)
-}
 pub(crate) fn status(plan: &Value) -> Value {
     json!({"status":"validated_plan","decision_id":plan["decision_id"],"model_id":plan["model_id"],"provider":plan["provider"],"actions":plan["verdicts"],"budget_used":plan["budget_used"],"budgets":plan["budgets"]})
 }

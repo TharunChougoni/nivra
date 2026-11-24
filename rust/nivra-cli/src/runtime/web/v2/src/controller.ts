@@ -1,6 +1,7 @@
 import type {
   WorkspaceState,
   ChartSeries,
+  ApprovalsResponse,
   ProjectionName,
   ProjectionData,
   SummaryResponse,
@@ -12,7 +13,7 @@ import type {
   LoadState,
   Fetch,
 } from "./types";
-import { errorMessage } from "./types";
+import { errorMessage, PROJECTION_NAMES } from "./types";
 import type { BrowserWindow, EvidenceCache } from "./cache";
 export interface ControllerOptions {
   fetch?: Fetch;
@@ -51,15 +52,14 @@ const emptySeries = (): ChartSeries => ({
   priceWatermark: null,
   equityWatermark: null,
 });
-const projectionNames: ProjectionName[] = [
-  "summary",
-  "portfolio",
-  "fills",
-  "plans",
-  "scanner",
-  "sessions",
-  "approvals",
-];
+type SnapshotProjection = Exclude<ProjectionName, "approvals">;
+// Approvals is an optional legacy projection, read outside the mandatory snapshot.
+const projectionNames = PROJECTION_NAMES.filter(
+  (name): name is SnapshotProjection => name !== "approvals",
+);
+type SeriesRead =
+  | { kind: "receipt-minute-bar"; instrument: string }
+  | { kind: "account-equity" };
 
 export function createController(
   win: BrowserWindow,
@@ -106,6 +106,7 @@ export function createController(
   let epoch = 0;
   let stream: ReturnType<typeof createEventStream> | null = null;
   let pending: Promise<ProjectionResults> | null = null;
+  let optionalApproval: Promise<ReadResult<ApprovalsResponse>> | null = null;
   let dirty = false,
     stopped = false,
     gap = false,
@@ -150,109 +151,70 @@ export function createController(
       },
     };
   };
-  async function fetchPriceSeries(instrument = state.watch) {
-    if (!state.token || !state.meta || !state.summary || !instrument || stopped)
-      return;
-    const generation = epoch,
-      binding = summaryIdentity(state.summary),
-      key = `${binding}|receipt-minute-bar|${instrument}|latest`;
-    const cached = await evidence.get(key);
-    if (generation !== epoch || stopped || instrument !== state.watch) return;
-    if (cached?.body) set(seriesPatch("receipt-minute-bar", cached.body, true));
-    try {
-      const body = await api.series({
-        instrument,
-        kind: "receipt-minute-bar",
-      });
-      if (generation !== epoch || stopped || instrument !== state.watch) return;
-      if (body?.unavailable) {
-        if (!cached?.body)
-          set({
-            series: {
-              ...state.series,
-              price: [],
-              priceState: "unavailable",
-              priceCached: false,
-              priceCoverage: null,
-              priceSource: null,
-              priceNote: body.reason || null,
-              priceWatermark: null,
-            },
-          });
-        return;
-      }
-      set(seriesPatch("receipt-minute-bar", body, false));
-      void evidence.put(
-        key,
-        { body },
-        {
-          binding,
-          kind: "receipt-minute-bar",
-          instrument,
-        },
-      );
-    } catch {
-      if (generation !== epoch || instrument !== state.watch) return;
-      if (!cached?.body)
-        set({
-          series: {
-            ...state.series,
-            priceState: "error",
-            priceCached: false,
-          },
-        });
-    }
-  }
-  async function fetchEquitySeries() {
+  const clearSeries = (
+    prefix: "price" | "equity",
+    loadState: "idle" | "unavailable",
+    reason: string | null = null,
+  ): ChartSeries => ({
+    ...state.series,
+    [prefix]: [],
+    [`${prefix}State`]: loadState,
+    [`${prefix}Cached`]: false,
+    [`${prefix}Coverage`]: null,
+    [`${prefix}Source`]: null,
+    [`${prefix}Note`]: reason,
+    [`${prefix}Watermark`]: null,
+  });
+  async function fetchSeries(query: SeriesRead) {
     if (!state.token || !state.meta || !state.summary || stopped) return;
-    const generation = epoch,
-      binding = summaryIdentity(state.summary),
-      key = `${binding}|account-equity||latest`;
+    const { kind } = query;
+    const instrument = kind === "receipt-minute-bar" ? query.instrument : null;
+    if (instrument === "") return;
+    const prefix = instrument === null ? "equity" : "price";
+    const generation = epoch;
+    const binding = summaryIdentity(state.summary);
+    const current = () =>
+      generation === epoch &&
+      !stopped &&
+      binding === summaryIdentity(state.summary) &&
+      (instrument === null || instrument === state.watch);
+    const key = `${binding}|${kind}|${instrument ?? ""}|latest`;
     const cached = await evidence.get(key);
-    if (generation !== epoch || stopped) return;
-    if (cached?.body) set(seriesPatch("account-equity", cached.body, true));
+    if (!current()) return;
+    if (cached?.body) set(seriesPatch(kind, cached.body, true));
     try {
-      const body = await api.series({ kind: "account-equity" });
-      if (generation !== epoch || stopped) return;
+      const body = await api.series(query);
+      if (!current()) return;
       if (body?.unavailable) {
         if (!cached?.body)
           set({
-            series: {
-              ...state.series,
-              equity: [],
-              equityState: "unavailable",
-              equityCached: false,
-              equityCoverage: null,
-              equitySource: null,
-              equityNote: body.reason || null,
-              equityWatermark: null,
-            },
+            series: clearSeries(prefix, "unavailable", body.reason || null),
           });
         return;
       }
-      set(seriesPatch("account-equity", body, false));
-      void evidence.put(key, { body }, { binding, kind: "account-equity" });
+      set(seriesPatch(kind, body, false));
+      void evidence.put(key, { body }, { binding, ...query });
     } catch {
-      if (generation !== epoch) return;
-      if (!cached?.body)
+      if (current() && !cached?.body)
         set({
           series: {
             ...state.series,
-            equityState: "error",
-            equityCached: false,
+            [`${prefix}State`]: "error",
+            [`${prefix}Cached`]: false,
           },
         });
     }
   }
   const loadSeries = () => {
-    void fetchPriceSeries();
-    void fetchEquitySeries();
+    void fetchSeries({ kind: "receipt-minute-bar", instrument: state.watch });
+    void fetchSeries({ kind: "account-equity" });
   };
   const lock = () => {
     epoch++;
     stream?.stop();
     stream = null;
     pending = null;
+    optionalApproval = null;
     dirty = false;
     gap = false;
     chartDeferred = false;
@@ -344,7 +306,7 @@ export function createController(
     const generation = epoch;
     set({ snapshotState: "loading", error: "" });
     const task = (async () => {
-      const [summary, portfolio, fills, plans, scanner, sessions, approvals] =
+      const [summary, portfolio, fills, plans, scanner, sessions] =
         await Promise.all([
           settle(api.summary()),
           settle(api.portfolio()),
@@ -352,41 +314,35 @@ export function createController(
           settle(api.plans()),
           settle(api.scanner({ segment: "prospects", limit: 500 })),
           settle(api.sessions({ limit: 200 })),
-          settle(api.approvals()),
         ]);
-      return { summary, portfolio, fills, plans, scanner, sessions, approvals };
+      return { summary, portfolio, fills, plans, scanner, sessions };
     })();
     pending = task;
+    // Pi snapshots omit the legacy approvals route. Older hosts may still supply it.
+    const approvalRead = settle(api.approvals());
+    optionalApproval = approvalRead;
     try {
       const result = await task;
       if (generation !== epoch || stopped) return;
       const summaryResult = result.summary;
-      if (
-        !summaryResult?.ok ||
-        !summaryResult.value ||
-        summaryResult.value.unavailable === true
-      ) {
+      const summary = summaryResult.ok ? summaryResult.value : null;
+      if (!summary || summary.unavailable === true) {
         const reason =
-          summaryResult?.value?.reason ||
-          summaryResult?.error ||
+          summary?.reason ||
+          (!summaryResult.ok && summaryResult.error) ||
           "summary_unavailable";
+        const availability =
+          summary?.unavailable === true ? "unavailable" : "error";
         set(
           clearProjections({
-            summaryState:
-              summaryResult?.value?.unavailable === true
-                ? "unavailable"
-                : "error",
-            snapshotState:
-              summaryResult?.value?.unavailable === true
-                ? "unavailable"
-                : "error",
+            summaryState: availability,
+            snapshotState: availability,
             issues: [{ source: "summary", state: "error", reason }],
             error: "Session summary unavailable. Refresh to retry.",
           }),
         );
         return;
       }
-      const summary = summaryResult.value;
       const identity = summaryIdentity(summary);
       if (state.summary && identity !== summaryIdentity(state.summary)) {
         set({
@@ -396,6 +352,8 @@ export function createController(
           priceBatchSeq: 0,
           watch: "",
           session: "",
+          approvals: null,
+          approvalsState: "idle",
         });
         void evidence.clear();
       }
@@ -403,14 +361,14 @@ export function createController(
       const patch: Partial<WorkspaceState> = {};
       for (const name of projectionNames) {
         const entry = result[name];
-        const value = entry?.ok ? entry.value : null;
+        const value = entry.ok ? entry.value : null;
         assignProjection(patch, result, name);
-        if (!entry?.ok) {
+        if (!entry.ok) {
           patch[`${name}State`] = "error";
           issues.push({
             source: name,
             state: "error",
-            reason: entry?.error || "request_failed",
+            reason: entry.error || "request_failed",
           });
         } else if (value?.unavailable === true) {
           patch[`${name}State`] = "unavailable";
@@ -452,17 +410,38 @@ export function createController(
           patch.portfolioState === "ready" ? observed.equityPoints : [],
       };
       set(loaded);
+      void approvalRead.then((entry) => {
+        if (
+          generation !== epoch ||
+          stopped ||
+          optionalApproval !== approvalRead
+        )
+          return;
+        const approvals = entry.ok ? entry.value : null;
+        set({
+          approvals,
+          approvalsState: !entry.ok
+            ? "error"
+            : approvals?.unavailable === true
+              ? "unavailable"
+              : "ready",
+        });
+      });
       const first = Array.isArray(scanner?.items)
         ? scanner.items[0]?.instrument_key
         : null;
       if (!state.watch && first) {
         set({ watch: first });
         set(observe(summary, portfolio, scanner));
-        void fetchPriceSeries(first);
+        void fetchSeries({ kind: "receipt-minute-bar", instrument: first });
       } else if (state.watch && state.series.priceState === "idle") {
-        void fetchPriceSeries();
+        void fetchSeries({
+          kind: "receipt-minute-bar",
+          instrument: state.watch,
+        });
       }
-      if (state.series.equityState === "idle") void fetchEquitySeries();
+      if (state.series.equityState === "idle")
+        void fetchSeries({ kind: "account-equity" });
     } catch {
       if (generation === epoch && !stopped)
         set(
@@ -596,19 +575,11 @@ export function createController(
           watch,
           points: [],
           priceBatchSeq: 0,
-          series: {
-            ...state.series,
-            price: [],
-            priceState: "idle",
-            priceCached: false,
-            priceCoverage: null,
-            priceSource: null,
-            priceNote: null,
-            priceWatermark: null,
-          },
+          series: clearSeries("price", "idle"),
         });
         set(observe(state.summary, state.portfolio, state.scanner));
-        if (watch) void fetchPriceSeries(watch);
+        if (watch)
+          void fetchSeries({ kind: "receipt-minute-bar", instrument: watch });
       }
     },
     selectSession: (session: string) => set({ session }),
@@ -632,9 +603,9 @@ export function createController(
   };
 }
 
-type ReadResult<T> = { ok: boolean; value?: T; error?: string };
+type ReadResult<T> = { ok: true; value: T } | { ok: false; error: string };
 type ProjectionResults = {
-  [K in ProjectionName]: ReadResult<NonNullable<ProjectionData[K]>>;
+  [K in SnapshotProjection]: ReadResult<NonNullable<ProjectionData[K]>>;
 };
 async function settle<T>(read: Promise<T>): Promise<ReadResult<T>> {
   try {
@@ -643,13 +614,12 @@ async function settle<T>(read: Promise<T>): Promise<ReadResult<T>> {
     return { ok: false, error: errorMessage(error) };
   }
 }
-function assignProjection<K extends ProjectionName>(
+function assignProjection<K extends SnapshotProjection>(
   patch: Partial<ProjectionData>,
   results: ProjectionResults,
   name: K,
 ) {
-  patch[name] = (
-    results[name].ok ? results[name].value : null
-  ) as ProjectionData[K];
+  const entry = results[name];
+  patch[name] = entry.ok ? entry.value : null;
 }
 export type Controller = ReturnType<typeof createController>;

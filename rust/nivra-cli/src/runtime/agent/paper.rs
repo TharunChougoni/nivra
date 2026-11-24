@@ -292,7 +292,7 @@ mod tests {
             assert!(p.fills.is_empty());
             decision_id = committed["decision_id"].as_str().unwrap().to_owned();
             assert_eq!(
-                planner::saved_plan(&db, &c).unwrap().unwrap()["decision_id"],
+                redecision::active_plan(&db, &c).unwrap().unwrap()["decision_id"],
                 decision_id
             );
             let quote = Quote {
@@ -305,10 +305,8 @@ mod tests {
             };
             let quotes = BTreeMap::from([(instrument.key.clone(), quote)]);
             for _ in 0..2 {
-                wide::commit_quotes(&mut db, &c, &mut p, &quotes, &[], now, "original", || {
-                    now + age
-                })
-                .unwrap();
+                wide::commit_quotes(&mut db, &c, &mut p, &quotes, now, "original", || now + age)
+                    .unwrap();
             }
             let verdict: String = db
                 .query_row(

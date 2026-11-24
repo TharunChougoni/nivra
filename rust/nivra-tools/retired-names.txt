@@ -146,7 +146,7 @@
 25	scorer	rust/nivra-cli/src/runtime/wide/shadow.rs
 34	scorer	rust/nivra-cli/src/runtime/wide/tests.rs
 7	scorer	rust/nivra-cli/src/runtime/workspace/mod.rs
-98	scorer	rust/nivra-cli/src/scorer_compare.rs
+59	scorer	rust/nivra-cli/src/scorer_compare.rs
 2	scorer	rust/nivra-cli/src/strategy_lab.rs
 35	scorer	rust/nivra-cli/src/strategy_scorer.rs
 6	scorer	rust/nivra-cli/tests/scorer_compare_cli.rs

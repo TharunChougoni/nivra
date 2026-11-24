@@ -1,7 +1,7 @@
 use super::*;
 
-pub(crate) fn command(program: &str, args: &[&str]) -> Result<(i32, Vec<u8>)> {
-    let (code, out, _) = command_in(program, args, None)?;
+fn command(program: &str, args: &[&str]) -> Result<(i32, Vec<u8>)> {
+    let (code, out, _) = capture(Command::new(program).args(args))?;
     Ok((code, out))
 }
 pub(crate) fn git_command(args: &[&str], directory: &Path) -> Command {
@@ -22,18 +22,7 @@ pub(crate) fn git_command(args: &[&str], directory: &Path) -> Command {
         .env("GIT_CONFIG_GLOBAL", "/dev/null");
     command
 }
-pub(crate) fn command_in(
-    program: &str,
-    args: &[&str],
-    directory: Option<&Path>,
-) -> Result<(i32, Vec<u8>, Vec<u8>)> {
-    let mut builder = if program == "git" {
-        git_command(args, directory.ok_or("git_stable_directory_required")?)
-    } else {
-        let mut c = Command::new(program);
-        c.args(args);
-        c
-    };
+fn capture(builder: &mut Command) -> Result<(i32, Vec<u8>, Vec<u8>)> {
     let mut child = builder
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -129,7 +118,7 @@ pub(crate) fn git_run(cache: &Path, args: &[&str]) -> Result<Vec<u8>> {
     .copied()
     .unwrap_or("unknown");
     for attempt in 1..=3 {
-        let result = command_in("git", args, Some(directory));
+        let result = capture(&mut git_command(args, directory));
         match result {
             Ok((0, data, _)) => return Ok(data),
             other => {
@@ -275,6 +264,20 @@ pub(crate) struct RealHost {
     pub(crate) now: Option<chrono::DateTime<chrono::FixedOffset>>,
     pub(crate) operator_stopped: bool,
 }
+
+impl RealHost {
+    fn preflight_output(&self, binary: &Path) -> Result<(i32, Vec<u8>)> {
+        let (code, _, errors) = capture(
+            Command::new(binary.to_str().ok_or("invalid_binary_path")?).args([
+                "preflight",
+                "--config",
+                self.paper.to_str().ok_or("invalid_config_path")?,
+            ]),
+        )?;
+        Ok((code, errors))
+    }
+}
+
 impl Host for RealHost {
     fn fetch(&mut self, name: &str, limit: usize) -> Result<Vec<u8>> {
         let data = if name == "tags" {
@@ -504,15 +507,7 @@ impl Host for RealHost {
         {
             return Err("update_self_check_failed");
         }
-        let (code, _, errors) = command_in(
-            binary.to_str().ok_or("invalid_binary_path")?,
-            &[
-                "preflight",
-                "--config",
-                self.paper.to_str().ok_or("invalid_config_path")?,
-            ],
-            None,
-        )?;
+        let (code, errors) = self.preflight_output(binary)?;
         let state = self.cache.parent().ok_or("update_directory_unavailable")?;
         if code != 0 {
             // The bounded reason code, never raw stderr, is recorded for status.
@@ -523,17 +518,7 @@ impl Host for RealHost {
         Ok(())
     }
     fn rollback_preflight(&mut self, binary: &Path) -> Result<()> {
-        // Run the old binary's own preflight, not the candidate's. Output is
-        // captured by the bounded helper; only a reason code is retained.
-        let (code, _, errors) = command_in(
-            binary.to_str().ok_or("invalid_binary_path")?,
-            &[
-                "preflight",
-                "--config",
-                self.paper.to_str().ok_or("invalid_config_path")?,
-            ],
-            None,
-        )?;
+        let (code, errors) = self.preflight_output(binary)?;
         let state = self.cache.parent().ok_or("update_directory_unavailable")?;
         if code != 0 {
             record_preflight_failure(state, "rollback", None, &errors);

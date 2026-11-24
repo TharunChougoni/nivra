@@ -134,7 +134,7 @@ impl<'a> Bridge<'a> {
     /// fabricates one. Every other tool goes back to `execute_tool`.
     fn lane_tool(&mut self, id: &str, tool: Tool) -> Result<std::result::Result<Value, Tool>> {
         let (c, cfg, turn) = (self.c, self.cfg, self.run_id);
-        let now = DomainClock::new(self.guard).wall_ms();
+        let now = self.guard.wall_ms();
         let model = self.grant.model_id;
         let requests = self.grant.requests;
         let candidate = |operation: Result<Value>| {

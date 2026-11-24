@@ -1,7 +1,7 @@
 //! Off-host artifact assembly. Reads local Git metadata; never creates/pushes tags.
 use crate::{digest, safe_file};
+use nivra_core::release::{MUSL_BINARY_ASSET as ASSET, MUSL_TARGET, ReleaseManifest};
 use std::{fs, path::Path, process::Command};
-const ASSET: &str = "nivra-x86_64-unknown-linux-musl";
 fn git(root: &Path, args: &[&str]) -> Result<String, &'static str> {
     let out = Command::new("git")
         .args(args)
@@ -48,7 +48,14 @@ pub fn assemble(root: &Path, tag: &str, binary: &Path, output: &Path) -> Result<
         format!("{sha}  {ASSET}\n"),
     )
     .map_err(|_| "release_write_failed")?;
-    fs::write(output.join("release.json"),serde_json::to_vec_pretty(&serde_json::json!({"tag":tag,"source_commit":revision,"target":"x86_64-unknown-linux-musl","sha256":sha})).map_err(|_|"release_manifest_failed")?).map_err(|_|"release_write_failed")?;
+    let manifest = ReleaseManifest {
+        sha256: sha,
+        source_commit: revision,
+        tag: tag.to_owned(),
+        target: MUSL_TARGET.to_owned(),
+    };
+    let manifest = serde_json::to_vec_pretty(&manifest).map_err(|_| "release_manifest_failed")?;
+    fs::write(output.join("release.json"), manifest).map_err(|_| "release_write_failed")?;
     Ok(())
 }
 fn static_elf(bytes: &[u8]) -> bool {

@@ -109,6 +109,7 @@ test("lock discards pending financial responses and clears chart/session evidenc
 test("v1 projection reads coalesce and selected chart observations preserve original sample time", async () => {
   const dom = new JSDOM("", { url: "http://localhost" });
   let summaryReads = 0;
+  let finishApprovals: ((response: Response) => void) | undefined;
   const requests: string[] = [];
   const app = createController(dom.window, {
     connect: false,
@@ -116,6 +117,10 @@ test("v1 projection reads coalesce and selected chart observations preserve orig
       requests.push(url);
       if (url === "/api/v1/meta")
         return json({ mode: "paper", broker: { data: "fixture" } });
+      if (url === "/api/v1/approvals")
+        return new Promise((resolve) => {
+          finishApprovals = resolve;
+        });
       if (url.startsWith("/api/v1/series"))
         return json({ points: [], coverage: null });
       if (url === "/api/v1/summary") {
@@ -146,6 +151,7 @@ test("v1 projection reads coalesce and selected chart observations preserve orig
   });
   await app.authenticate("fixture");
   await wait(() => app.getSnapshot().scannerState === "ready");
+  assert.equal(app.getSnapshot().snapshotState, "ready");
   app.watch("TEST|1");
   await app.refresh();
   assert.deepEqual(
@@ -157,6 +163,11 @@ test("v1 projection reads coalesce and selected chart observations preserve orig
     requests.some((url) => String(url).startsWith("/api/status")),
     false,
   );
+  assert.ok(finishApprovals);
+  finishApprovals(new Response(null, { status: 404 }));
+  await wait(() => app.getSnapshot().approvalsState === "error");
+  assert.equal(app.getSnapshot().snapshotState, "ready");
+  assert.deepEqual(app.getSnapshot().issues, []);
   app.stop();
   dom.window.close();
 });
@@ -311,6 +322,42 @@ test("cached series evidence is marked stale and survives a failed series read",
   assert.equal(series.priceState, "cached");
   assert.ok(cacheReads >= 1);
   app.lock();
+  app.stop();
+  dom.window.close();
+});
+
+test("a pending equity read cannot publish into the next paper session", async () => {
+  const dom = new JSDOM("", { url: "http://localhost" });
+  let session = "2026-10-29";
+  let finishOldEquity: ((response: Response) => void) | undefined;
+  const app = createController(dom.window, {
+    connect: false,
+    fetch: async (url) => {
+      if (url === "/api/v1/meta") return json({ mode: "paper" });
+      if (url.includes("kind=account-equity")) {
+        if (session === "2026-10-29")
+          return new Promise((resolve) => {
+            finishOldEquity = resolve;
+          });
+        return json({ points: [{ at: 2000, equity: "5000" }] });
+      }
+      return json(
+        projections({ session, as_of_ms: 2000 })[url.split("?")[0]] || {},
+      );
+    },
+  });
+  await app.authenticate("fixture");
+  await wait(() => finishOldEquity);
+  session = "2026-10-30";
+  await app.refresh();
+  await wait(() => app.getSnapshot().series.equityState === "ready");
+  assert.ok(finishOldEquity);
+  finishOldEquity(json({ points: [{ at: 1000, equity: "1" }] }));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    app.getSnapshot().series.equity.map(({ at, value }) => [at, value]),
+    [[2000, 5000]],
+  );
   app.stop();
   dom.window.close();
 });

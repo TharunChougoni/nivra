@@ -7,7 +7,7 @@ use super::tools::{LaneHost, PlanAttempt, Verdict, lane_definitions};
 use super::{AgentSettings, Lane, ModelSpec};
 use crate::runtime::harness::{Bridge, LaneGrant};
 use crate::runtime::lane_queue::{LaneMessage, MessageBody, TransitionReason};
-use crate::runtime::planner::{Backend, CallGuard, PlannerConfig, preview_guard};
+use crate::runtime::planner::{Backend, CallGuard, PlannerConfig};
 use crate::runtime::web_tools::Transport;
 use crate::runtime::workspace::WorkspaceScope;
 use crate::runtime::{Config, Result, digest, rollover};
@@ -385,9 +385,9 @@ impl<'a> LaneRunner<'a> {
         let spent = ledger.spent(lane)?;
         let model = self.model(lane)?;
         let guard = CallGuard {
-            configuration: Some((self.c, self.cfg)),
+            book: self.c,
+            policy: self.cfg,
             clock: self.clock,
-            ..preview_guard()
         };
         let archive = self.root().join("turns").join(&id);
         let checkpoints = Ledger::new(self.c);

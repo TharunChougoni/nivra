@@ -20,7 +20,7 @@ pub(crate) fn status(db: &Connection, c: &Config) -> Result<Option<Value>> {
     if let Some(reason) = state.digest_failed.as_deref() {
         view["last_digest_failure"] = json!(reason);
     }
-    if let Some(plan) = active_plan(db, c)?.flatten() {
+    if let Some(plan) = active_plan_in(db, c, &state)? {
         let plan = planner::status(&plan);
         for key in ["decision_id", "model_id", "provider", "actions", "budgets"] {
             view[key] = plan[key].clone();
@@ -106,15 +106,11 @@ pub(crate) fn blocked(db: &Connection, c: &Config) -> Result<bool> {
     check(&state, c)?;
     Ok(state.blocked.is_some())
 }
-/// Operator and setup blocks cancel an in-flight run. A recoverable timing or
-/// model failure does not.
-pub(crate) fn sticky_blocked(db: &Connection, c: &Config) -> Result<bool> {
-    let Some(state) = load(db)? else {
-        return Ok(false);
-    };
-    check(&state, c)?;
-    Ok(state
-        .blocked
-        .as_deref()
-        .is_some_and(|reason| !recoverable_block(reason)))
+/// Verify that an existing authority journal still binds this book and session.
+/// Absent authority is not an error; a binding or decode failure is.
+pub(crate) fn check_existing_authority(db: &Connection, c: &Config) -> Result<()> {
+    if let Some(state) = load(db)? {
+        check(&state, c)?;
+    }
+    Ok(())
 }

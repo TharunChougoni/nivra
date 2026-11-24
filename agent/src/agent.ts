@@ -248,17 +248,22 @@ export class LaneAgent {
   private async laneSession(turn: TurnRequest, model: Model<string>, fallback: Model<string> | undefined): Promise<AgentSession> {
     const key = toolsKey(turn.tools);
     const current = this.sessions.get(turn.lane);
-    if (current && current.date === turn.session.date && current.dir === turn.session.dir && current.toolsKey === key) {
-      return current.session;
-    }
-    // A new date starts a new session; a changed tool set reopens the same file.
-    const file = current && current.date === turn.session.date && current.dir === turn.session.dir ? current.session.sessionFile : undefined;
+    // A lane's slot is its session date and directory. Rust passes a date-scoped
+    // directory, so a restarted agent resumes this slot's session below.
+    const slot = current !== undefined && current.date === turn.session.date && current.dir === turn.session.dir;
+    if (slot && current.toolsKey === key) return current.session;
+    // A changed tool set reopens the slot's file; a new slot starts a new session.
+    const file = slot ? current.session.sessionFile : undefined;
     current?.session.dispose();
     this.sessions.delete(turn.lane);
     mkdirSync(turn.session.dir, { recursive: true, mode: 0o700 });
     const sessionManager = file
       ? SessionManager.open(file, turn.session.dir, turn.session.dir)
-      : SessionManager.continueRecent(turn.session.dir, turn.session.dir);
+      : current
+        ? SessionManager.create(turn.session.dir, turn.session.dir)
+        : SessionManager.continueRecent(turn.session.dir, turn.session.dir);
+    // The enable list and the definitions come from the turn's one tool list.
+    const customTools = turn.tools.map((tool) => this.bridgeTool(tool));
     const { session } = await createAgentSession({
       cwd: turn.session.dir,
       agentDir: turn.session.dir,
@@ -266,8 +271,8 @@ export class LaneAgent {
       thinkingLevel: turn.model.thinking ?? "medium",
       modelRuntime: this.options.runtime,
       resourceLoader: resourceLoader(this.prompt(turn.lane).text),
-      tools: turn.tools.map((tool) => tool.name),
-      customTools: turn.tools.map((tool) => this.bridgeTool(tool)),
+      tools: customTools.map((tool) => tool.name),
+      customTools,
       sessionManager,
       settingsManager: SettingsManager.inMemory({
         compaction: compactionSettings(turn.compact_at_tokens, fallback ? [model, fallback] : [model]),

@@ -977,17 +977,21 @@ pub(crate) fn decision_startup_check(
     }
     Ok(())
 }
-/// None means the journal suspended/superseded the old plan; never fall back to a file.
-pub(crate) fn active_plan(db: &Connection, c: &Config) -> Result<Option<Option<Value>>> {
+/// The authority journal is the only source of executable plans.
+pub(crate) fn active_plan(db: &Connection, c: &Config) -> Result<Option<Value>> {
     let Some(state) = load(db)? else {
         return Ok(None);
     };
     check(&state, c)?;
+    active_plan_in(db, c, &state)
+}
+
+fn active_plan_in(db: &Connection, c: &Config, state: &Control) -> Result<Option<Value>> {
     if state.blocked.is_some() {
-        return Ok(Some(None));
+        return Ok(None);
     }
     let Some(id) = state.active.as_deref() else {
-        return Ok(Some(None));
+        return Ok(None);
     };
     let body: String = db.query_row("SELECT body FROM planner_plan WHERE id=?", [id], |r| {
         r.get(0)
@@ -1002,8 +1006,7 @@ pub(crate) fn active_plan(db: &Connection, c: &Config) -> Result<Option<Option<V
     planner::validate_saved(c, &plan)?;
     // A pending factual digest must not suspend a committed owner plan: only
     // activate_plan's own decision id marks an executable owner plan.
-    let pi =
-        authority_owner(db, &state)?.is_some_and(|receipt| receipt.owner == AuthorityOwner::Pi);
+    let pi = authority_owner(db, state)?.is_some_and(|receipt| receipt.owner == AuthorityOwner::Pi);
     if pi != (plan["decision_owner"] == AuthorityOwner::Pi.plan_name()) {
         return Err("planner_saved_binding_invalid".into());
     }
@@ -1026,9 +1029,9 @@ pub(crate) fn active_plan(db: &Connection, c: &Config) -> Result<Option<Option<V
             .as_str()
             .is_some_and(|id| id.starts_with("owner-"));
     if state.pending.is_some() && !owned {
-        return Ok(Some(None));
+        return Ok(None);
     }
-    Ok(Some(Some(plan)))
+    Ok(Some(plan))
 }
 
 /// Activate a supervisor-owned plan inside the caller's transaction. This

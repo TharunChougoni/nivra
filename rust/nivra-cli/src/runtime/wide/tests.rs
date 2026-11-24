@@ -536,6 +536,58 @@ fn restart_metadata_uses_original_receipt_and_configured_age() {
 }
 
 #[test]
+fn dated_session_evidence_is_built_from_the_successor_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Connection::open_in_memory().unwrap();
+    let instrument = instrument(1);
+    let receipt = super::super::millis() - 600_000;
+    let mut restored = Scanner::default();
+    let fields = nivra_core::execution::MarketFields {
+        session_vwap: None,
+        best_bid: None,
+        best_bid_qty: None,
+        best_ask: None,
+        best_ask_qty: None,
+        total_buy_quantity: None,
+        total_sell_quantity: None,
+        lower_circuit_limit: a("50"),
+        upper_circuit_limit: a("150"),
+        volume: 100000,
+    };
+    restored
+        .observe_fields(receipt, &instrument, &quote(receipt, 100), &fields)
+        .unwrap();
+    checkpoint_scanner(&db, &restored).unwrap();
+    let policy = |metadata_preload_max_age_ms: i64| crate::runtime::planner::PlannerConfig {
+        discovery: Some(
+            serde_json::from_value(serde_json::json!({
+                "max_scan_age_ms":2000,"max_prospects":10,
+                "market_feed":{"metadata_preload_max_age_ms":metadata_preload_max_age_ms}
+            }))
+            .unwrap(),
+        ),
+        ..Default::default()
+    };
+    let mut next = super::super::tests::config(dir.path());
+    next.session = next.session.succ_opt().unwrap();
+    let evidence =
+        super::controller::SessionEvidence::load(&db, &next, Some(&policy(900_000))).unwrap();
+    // Each dated book owns its stores, and its scanner preload follows that
+    // book's policy instead of the session it replaced.
+    assert_eq!(evidence.feature_store.session(), Some(next.session));
+    assert_eq!(evidence.index_features.session(), Some(next.session));
+    assert!(evidence.scan.samples[&instrument.key].metadata_preloaded);
+    assert_eq!(evidence.option_status["status"], "disabled");
+    let tight = super::controller::SessionEvidence::load(&db, &next, Some(&policy(0))).unwrap();
+    assert!(!tight.scan.samples[&instrument.key].metadata_preloaded);
+    let mut with_options = next.clone();
+    with_options.nifty_options.enabled = true;
+    let option_evidence =
+        super::controller::SessionEvidence::load(&db, &with_options, None).unwrap();
+    assert_eq!(option_evidence.option_status["status"], "waiting_for_spot");
+}
+
+#[test]
 fn fresh_drop_requires_strict_threshold_and_nonzero_previous() {
     assert!(!scanner_fresh_drop(100, 50, 0.5));
     assert!(scanner_fresh_drop(100, 49, 0.5));
@@ -1684,7 +1736,6 @@ fn durable_terminal_corruption_and_rollback() {
             &c,
             &mut current,
             &BTreeMap::new(),
-            &[],
             start(),
             "rollback",
             start
@@ -1702,10 +1753,7 @@ fn after_lock_clock_and_eod_no_invented_exit() {
     let at = start();
     let i = instrument(1);
     let quotes = BTreeMap::from([(i.key.clone(), quote(at, 100))]);
-    commit_quotes(&mut db, &c, &mut p, &quotes, &[], at, "fixture", || {
-        at + 2001
-    })
-    .unwrap();
+    commit_quotes(&mut db, &c, &mut p, &quotes, at, "fixture", || at + 2001).unwrap();
     assert!(p.fills.is_empty());
     assert!(p.enter(at, &i, &quote(at, 100)).unwrap());
     let close = at + 360 * 60000;
@@ -3949,7 +3997,7 @@ fn resume_resolves_active_session_book_and_keeps_safety_checks() {
 /// Event authority with the given plan as its active head, as the owner path
 /// leaves it after an accepted decision.
 fn activate_fixture_plan(db: &mut Connection, c: &Config, p: &Portfolio, plan: &serde_json::Value) {
-    if redecision::active_plan(db, c).unwrap().is_none() {
+    if !redecision::has_authority(db).unwrap() {
         let cfg: planner::PlannerConfig = serde_json::from_value(serde_json::json!({"enabled":true,"agent":{"mode":"paper","node":"/usr/bin/node","entry":"/opt/nivra/agent/dist/src/main.js","agent_dir":"/var/lib/nivra/pi","lanes":{"decision":{"model":{"provider":"openai-codex","id":"gpt-6.1-sol"},"daily_calls":10,"daily_cost_usd":10.0,"turn_timeout_ms":10000,"max_tool_calls":40}}}})).unwrap();
         ensure_actions(db).unwrap();
         redecision::initialize(db, c, p, Some(&cfg), start()).unwrap();
@@ -4004,17 +4052,14 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
     let mut plan = serde_json::json!({"decision_id":"fixture-stale","session_binding":book_binding(&c).unwrap(),"input_hash":digest(&serde_json::to_vec(&input).unwrap()),"input":input,"fake":false,"dry_run":false,"verdicts":verdicts});
     activate_fixture_plan(&mut db, &c, &p, &plan);
     let quotes = BTreeMap::from([(i.key.clone(), quote(at, 100))]);
-    commit_quotes(&mut db, &c, &mut p, &quotes, &[], at, "fixture", || {
-        at + 2001
-    })
-    .unwrap();
+    commit_quotes(&mut db, &c, &mut p, &quotes, at, "fixture", || at + 2001).unwrap();
     assert!(p.fills.is_empty());
     let mut expired = plan.clone();
     expired["decision_id"] = serde_json::json!("fixture-time-expired");
     expired["verdicts"][0]["action"]["exit_intent"]["time"] = serde_json::json!(at + 1);
     fs::create_dir_all(c.directory.join("model/fixture-time-expired")).unwrap();
     activate_fixture_plan(&mut db, &c, &p, &expired);
-    commit_quotes(&mut db, &c, &mut p, &quotes, &[], at, "fixture", || at + 1).unwrap();
+    commit_quotes(&mut db, &c, &mut p, &quotes, at, "fixture", || at + 1).unwrap();
     assert!(p.fills.is_empty());
     assert!(p.positions.is_empty());
 
@@ -4026,7 +4071,6 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
         &c,
         &mut p,
         &quotes,
-        &[],
         at,
         "fixture",
         || at,
@@ -4049,7 +4093,7 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
     plan["portfolio_revision"] = serde_json::json!("0".repeat(64));
     fs::create_dir_all(c.directory.join("model/fixture-stale-portfolio")).unwrap();
     activate_fixture_plan(&mut db, &c, &p, &plan);
-    commit_quotes(&mut db, &c, &mut p, &quotes, &[], at, "fixture", || at).unwrap();
+    commit_quotes(&mut db, &c, &mut p, &quotes, at, "fixture", || at).unwrap();
     assert!(p.fills.is_empty());
     let stale: String = db
         .query_row(
@@ -4065,7 +4109,7 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
     plan["policy_sha256"] = serde_json::json!("a".repeat(64));
     fs::create_dir_all(c.directory.join("model/fixture-policy-changed")).unwrap();
     activate_fixture_plan(&mut db, &c, &p, &plan);
-    commit_quotes(&mut db, &c, &mut p, &quotes, &[], at, "fixture", || at).unwrap();
+    commit_quotes(&mut db, &c, &mut p, &quotes, at, "fixture", || at).unwrap();
     assert!(p.fills.is_empty());
     let changed: String = db
         .query_row(
@@ -4080,14 +4124,14 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
     plan["decision_id"] = serde_json::json!("fixture-fresh");
     fs::create_dir_all(c.directory.join("model/fixture-fresh")).unwrap();
     activate_fixture_plan(&mut db, &c, &p, &plan);
-    commit_quotes(&mut db, &c, &mut p, &quotes, &[], at, "fixture", || at).unwrap();
+    commit_quotes(&mut db, &c, &mut p, &quotes, at, "fixture", || at).unwrap();
     assert_eq!(p.fills.len(), 1);
     assert_eq!(p.fills[0].decision_id.as_deref(), Some("fixture-fresh"));
-    commit_quotes(&mut db, &c, &mut p, &quotes, &[], at, "fixture", || at).unwrap();
+    commit_quotes(&mut db, &c, &mut p, &quotes, at, "fixture", || at).unwrap();
     assert_eq!(p.fills.len(), 1);
     let close = at + 360 * 60000;
     let q = BTreeMap::from([(i.key.clone(), quote(close, 103))]);
-    commit_quotes(&mut db, &c, &mut p, &q, &[], close, "fixture", || close).unwrap();
+    commit_quotes(&mut db, &c, &mut p, &q, close, "fixture", || close).unwrap();
     assert_eq!(p.positions.len(), 1); // No legacy +2% or 15:15 flatten.
     let later = close + 60000;
     let q = BTreeMap::from([(i.key.clone(), quote(later, 111))]);
@@ -4097,7 +4141,6 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
         &c,
         &mut p,
         &q,
-        &[],
         later,
         "fixture",
         || later,
@@ -4142,7 +4185,6 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
             &c,
             &mut p,
             &BTreeMap::from([(i.key.clone(), quote(at, 100))]),
-            &[],
             at,
             "fixture",
             || at,
@@ -4243,10 +4285,7 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
             (i.key.clone(), quote(later, 111)),
             (second.key.clone(), quote(later, 100)),
         ]);
-        commit_quotes(&mut db, &c, &mut p, &quotes, &[], later, "fixture", || {
-            later
-        })
-        .unwrap();
+        commit_quotes(&mut db, &c, &mut p, &quotes, later, "fixture", || later).unwrap();
         assert!(p.positions.is_empty(), "{fault}");
         assert_eq!(p.fills.len(), 2);
         assert!(!p.fills[1].buy);

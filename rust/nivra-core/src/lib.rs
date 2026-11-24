@@ -7,6 +7,7 @@ pub mod market;
 pub mod native;
 pub mod prefilter;
 pub mod regime;
+pub mod release;
 pub mod resources;
 pub mod time;
 

@@ -1,4 +1,6 @@
 use super::*;
+use nivra_core::strategy::FeatureSnapshot;
+use nivra_sandbox::{BwrapLeaderReceipt, ScorerSandboxConfig};
 
 /// Content check for the running helper. The path is opened once with
 /// `O_NOFOLLOW` and bounded; a changed byte stream is refused before any
@@ -16,15 +18,10 @@ pub(crate) fn verify_helper_file(
     Ok(())
 }
 
-/// Fixed helper body. It reads only the staged launch/input files, re-verifies
-/// every bound hash, executes the staged content-addressed interpreter and
-/// bwrap copies, and writes one bounded result atomically. It never opens the
-/// queue, config, broker, account, data root or live paper book.
-pub(crate) fn run_helper_at(
+fn verify_helper_launch(
     launch: &worker::CandidateLaunch,
-    clock: impl Fn() -> i64,
     verify_self: bool,
-) -> std::result::Result<CandidateHelperOutput, &'static str> {
+) -> std::result::Result<(), &'static str> {
     if launch.version != 2
         || launch.unit != worker::candidate_unit_name(&launch.lease).unwrap_or_default()
     {
@@ -35,16 +32,53 @@ pub(crate) fn run_helper_at(
             std::env::current_exe().map_err(|_| "candidate_helper_self_unavailable")?;
         verify_helper_file(&executable, &launch.unit_policy.helper_sha256)?;
     }
-    let stage = Path::new(&launch.stage_dir);
-    let source = read_stage_file(&stage.join("source"), 262_144)?;
-    let params = read_stage_file(&stage.join("params"), 65_536)?;
-    let dataset = read_stage_file(&stage.join("dataset"), 4 * 1024 * 1024)?;
-    if digest(&source) != launch.source_sha256
-        || digest(&params) != launch.params_sha256
-        || digest(&dataset) != launch.dataset_hash
-    {
-        return Err("candidate_helper_input_changed");
+    Ok(())
+}
+
+struct StagedReplayInputs {
+    source: Vec<u8>,
+    params: Vec<u8>,
+    dataset: Vec<u8>,
+}
+
+impl StagedReplayInputs {
+    fn read(stage: &Path) -> std::result::Result<Self, &'static str> {
+        Ok(Self {
+            source: read_stage_file(&stage.join("source"), 262_144)?,
+            params: read_stage_file(&stage.join("params"), 65_536)?,
+            dataset: read_stage_file(&stage.join("dataset"), 4 * 1024 * 1024)?,
+        })
     }
+
+    fn matches(&self, launch: &worker::CandidateLaunch) -> bool {
+        digest(&self.source) == launch.source_sha256
+            && digest(&self.params) == launch.params_sha256
+            && digest(&self.dataset) == launch.dataset_hash
+    }
+
+    fn snapshots(&self) -> std::result::Result<Vec<FeatureSnapshot>, &'static str> {
+        let snapshots: Vec<FeatureSnapshot> = serde_json::from_slice(&self.dataset)
+            .map_err(|_| "candidate_helper_dataset_invalid")?;
+        if snapshots.is_empty() {
+            return Err("candidate_helper_dataset_invalid");
+        }
+        Ok(snapshots)
+    }
+
+    fn replay(
+        &self,
+        settings: &ScorerReplaySettings,
+        sandbox: &ScorerSandboxConfig,
+        snapshots: &[FeatureSnapshot],
+    ) -> std::result::Result<(ScorerReplayReport, BwrapLeaderReceipt), &'static str> {
+        scorer_compare::replay_candidate(settings, sandbox, &self.source, &self.params, snapshots)
+            .map_err(|_| "candidate_helper_replay_failed")
+    }
+}
+
+fn verified_replay(
+    launch: &worker::CandidateLaunch,
+) -> std::result::Result<(ScorerReplaySettings, ScorerSandboxConfig), &'static str> {
     let python = read_stage_file(Path::new(&launch.python_path), 64 * 1024 * 1024)?;
     let bwrap = read_stage_file(Path::new(&launch.bwrap_path), 64 * 1024 * 1024)?;
     if digest(&python) != launch.sandbox.python_sha256
@@ -57,11 +91,61 @@ pub(crate) fn run_helper_at(
     replay
         .validate()
         .map_err(|_| "candidate_helper_replay_invalid")?;
-    let snapshots: Vec<nivra_core::strategy::FeatureSnapshot> =
-        serde_json::from_slice(&dataset).map_err(|_| "candidate_helper_dataset_invalid")?;
-    if snapshots.is_empty() {
-        return Err("candidate_helper_dataset_invalid");
+    let sandbox = ScorerSandboxConfig {
+        python_path: launch.python_path.clone().into(),
+        bwrap_path: launch.bwrap_path.clone().into(),
+        cpu_seconds: launch.sandbox.cpu_seconds,
+        memory_mb: launch.sandbox.memory_mb,
+        wall_ms: launch.sandbox.wall_ms,
+        max_output_bytes: launch.sandbox.max_output_bytes as usize,
+        max_keys: launch.sandbox.max_keys as usize,
+        max_processes: launch.sandbox.max_processes,
+        max_open_files: launch.sandbox.max_open_files,
+        network: false,
+    };
+    Ok((replay, sandbox))
+}
+
+fn helper_output(
+    launch: &worker::CandidateLaunch,
+    result_produced_at_ms: i64,
+    report: ScorerReplayReport,
+    advisory: BwrapLeaderReceipt,
+) -> CandidateHelperOutput {
+    CandidateHelperOutput {
+        version: 1,
+        abi: "candidate_helper_output_v1".into(),
+        job_id: launch.job_id.clone(),
+        lease: launch.lease.clone(),
+        task_id: launch.task_id.clone(),
+        revision: launch.revision,
+        candidate_id: launch.candidate_id.clone(),
+        source_sha256: launch.source_sha256.clone(),
+        params_sha256: launch.params_sha256.clone(),
+        dataset_hash: launch.dataset_hash.clone(),
+        runtime_hash: launch.runtime_binding.runtime_hash.clone(),
+        result_produced_at_ms,
+        report,
+        advisory,
+        execution: None,
+        observation: None,
     }
+}
+
+/// The helper has no access to the queue, config, credentials, or paper book.
+pub(crate) fn run_helper_at(
+    launch: &worker::CandidateLaunch,
+    clock: impl Fn() -> i64,
+    verify_self: bool,
+) -> std::result::Result<CandidateHelperOutput, &'static str> {
+    verify_helper_launch(launch, verify_self)?;
+    let stage = Path::new(&launch.stage_dir);
+    let inputs = StagedReplayInputs::read(stage)?;
+    if !inputs.matches(launch) {
+        return Err("candidate_helper_input_changed");
+    }
+    let (replay, sandbox) = verified_replay(launch)?;
+    let snapshots = inputs.snapshots()?;
     // Only the declared execution policy is read before untrusted scoring. The
     // full frozen quote tape is future data for the adapter, not input to the
     // scorer, so it is not read into the helper heap until after the untrusted
@@ -97,31 +181,7 @@ pub(crate) fn run_helper_at(
         }
         None => None,
     };
-    let sandbox = nivra_sandbox::ScorerSandboxConfig {
-        python_path: launch.python_path.clone().into(),
-        bwrap_path: launch.bwrap_path.clone().into(),
-        cpu_seconds: launch.sandbox.cpu_seconds,
-        memory_mb: launch.sandbox.memory_mb,
-        wall_ms: launch.sandbox.wall_ms,
-        max_output_bytes: launch.sandbox.max_output_bytes as usize,
-        max_keys: launch.sandbox.max_keys as usize,
-        max_processes: launch.sandbox.max_processes,
-        max_open_files: launch.sandbox.max_open_files,
-        network: false,
-    };
-    let mut advisory = nivra_sandbox::BwrapLeaderReceipt::not_started();
-    let report = scorer_compare::replay_scorer_bounded_observed(
-        &replay,
-        &sandbox,
-        &source,
-        &params,
-        &snapshots,
-        None,
-        || false,
-        |_| Ok(sandbox.clone()),
-        |receipt| advisory = receipt.clone(),
-    )
-    .map_err(|_| "candidate_helper_replay_failed")?;
+    let (report, advisory) = inputs.replay(&replay, &sandbox, &snapshots)?;
     let execution = match execution_policy {
         Some(spec) => {
             let binding = launch
@@ -149,46 +209,18 @@ pub(crate) fn run_helper_at(
         None => None,
     };
     Ok(CandidateHelperOutput {
-        version: 1,
-        abi: "candidate_helper_output_v1".into(),
-        job_id: launch.job_id.clone(),
-        lease: launch.lease.clone(),
-        task_id: launch.task_id.clone(),
-        revision: launch.revision,
-        candidate_id: launch.candidate_id.clone(),
-        source_sha256: launch.source_sha256.clone(),
-        params_sha256: launch.params_sha256.clone(),
-        dataset_hash: launch.dataset_hash.clone(),
-        runtime_hash: launch.runtime_binding.runtime_hash.clone(),
-        result_produced_at_ms: clock(),
-        report,
-        advisory,
         execution,
-        observation: None,
+        ..helper_output(launch, clock(), report, advisory)
     })
 }
 
-/// Fixed observation helper body. It reads only the original source/params,
-/// the frozen feature snapshot, the frozen research quote tape and the study
-/// spec. It never reads an exit quote, the execution tape, the live paper book,
-/// host paths or the network. The score completion clock is sampled after the
-/// untrusted scorer returns; the key is chosen from the actual post-score
-/// ranking, never preselected.
+/// The observation path has only an entry tape. It cannot read exit quotes.
 pub(crate) fn run_observation_at(
     launch: &worker::CandidateLaunch,
     clock: impl Fn() -> i64,
     verify_self: bool,
 ) -> std::result::Result<CandidateHelperOutput, &'static str> {
-    if launch.version != 2
-        || launch.unit != worker::candidate_unit_name(&launch.lease).unwrap_or_default()
-    {
-        return Err("candidate_helper_launch_invalid");
-    }
-    if verify_self {
-        let executable =
-            std::env::current_exe().map_err(|_| "candidate_helper_self_unavailable")?;
-        verify_helper_file(&executable, &launch.unit_policy.helper_sha256)?;
-    }
+    verify_helper_launch(launch, verify_self)?;
     let target = launch
         .observation
         .as_ref()
@@ -202,14 +234,10 @@ pub(crate) fn run_observation_at(
         return Err("candidate_helper_observation_binding_invalid");
     }
     let stage = Path::new(&launch.stage_dir);
-    let source = read_stage_file(&stage.join("source"), 262_144)?;
-    let params = read_stage_file(&stage.join("params"), 65_536)?;
-    let dataset = read_stage_file(&stage.join("dataset"), 4 * 1024 * 1024)?;
+    let inputs = StagedReplayInputs::read(stage)?;
     let spec_bytes = read_stage_file(&stage.join("observation_spec"), 65_536)?;
     let bundle_bytes = read_stage_file(&stage.join("observation_quotes"), 2_000_000)?;
-    if digest(&source) != launch.source_sha256
-        || digest(&params) != launch.params_sha256
-        || digest(&dataset) != launch.dataset_hash
+    if !inputs.matches(launch)
         || digest(&spec_bytes) != target.spec_sha256
         || digest(&bundle_bytes) != target.quotes_sha256
     {
@@ -220,56 +248,19 @@ pub(crate) fn run_observation_at(
             .map_err(|_| "candidate_helper_observation_spec_invalid")?;
     nivra_cli::candidate_execution::validate_observation_spec(&spec)
         .map_err(|_| "candidate_helper_observation_spec_invalid")?;
-    let snapshots: Vec<nivra_core::strategy::FeatureSnapshot> =
-        serde_json::from_slice(&dataset).map_err(|_| "candidate_helper_dataset_invalid")?;
-    if snapshots.is_empty()
-        || snapshots
-            .iter()
-            .any(|snapshot| snapshot.observed_ms > target.signal_ms)
+    let snapshots = inputs.snapshots()?;
+    if snapshots
+        .iter()
+        .any(|snapshot| snapshot.observed_ms > target.signal_ms)
         || snapshots
             .last()
             .is_some_and(|snapshot| snapshot.observed_ms < target.window_from_ms)
     {
         return Err("candidate_helper_dataset_invalid");
     }
-    let python = read_stage_file(Path::new(&launch.python_path), 64 * 1024 * 1024)?;
-    let bwrap = read_stage_file(Path::new(&launch.bwrap_path), 64 * 1024 * 1024)?;
-    if digest(&python) != launch.sandbox.python_sha256
-        || digest(&bwrap) != launch.sandbox.bwrap_sha256
-    {
-        return Err("candidate_helper_runtime_changed");
-    }
-    let replay: ScorerReplaySettings =
-        serde_json::from_str(&launch.replay_json).map_err(|_| "candidate_helper_replay_invalid")?;
-    replay
-        .validate()
-        .map_err(|_| "candidate_helper_replay_invalid")?;
-    let sandbox = nivra_sandbox::ScorerSandboxConfig {
-        python_path: launch.python_path.clone().into(),
-        bwrap_path: launch.bwrap_path.clone().into(),
-        cpu_seconds: launch.sandbox.cpu_seconds,
-        memory_mb: launch.sandbox.memory_mb,
-        wall_ms: launch.sandbox.wall_ms,
-        max_output_bytes: launch.sandbox.max_output_bytes as usize,
-        max_keys: launch.sandbox.max_keys as usize,
-        max_processes: launch.sandbox.max_processes,
-        max_open_files: launch.sandbox.max_open_files,
-        network: false,
-    };
-    let mut advisory = nivra_sandbox::BwrapLeaderReceipt::not_started();
-    let report = scorer_compare::replay_scorer_bounded_observed(
-        &replay,
-        &sandbox,
-        &source,
-        &params,
-        &snapshots,
-        None,
-        || false,
-        |_| Ok(sandbox.clone()),
-        |receipt| advisory = receipt.clone(),
-    )
-    .map_err(|_| "candidate_helper_replay_failed")?;
-    // Real completion clock, sampled after the scorer returned. Never the last
+    let (replay, sandbox) = verified_replay(launch)?;
+    let (report, advisory) = inputs.replay(&replay, &sandbox, &snapshots)?;
+    // Real completion clock, sampled after the replay returned. Never the last
     // feature tick and never a retrospective replay result time.
     let score_produced_at_ms = clock();
     if score_produced_at_ms < launch.started_ms {
@@ -403,22 +394,8 @@ pub(crate) fn run_observation_at(
     score.observation_sha256 = nivra_cli::candidate_execution::observation_artifact_sha256(&score)
         .map_err(|_| "candidate_helper_observation_hash_invalid")?;
     Ok(CandidateHelperOutput {
-        version: 1,
-        abi: "candidate_helper_output_v1".into(),
-        job_id: launch.job_id.clone(),
-        lease: launch.lease.clone(),
-        task_id: launch.task_id.clone(),
-        revision: launch.revision,
-        candidate_id: launch.candidate_id.clone(),
-        source_sha256: launch.source_sha256.clone(),
-        params_sha256: launch.params_sha256.clone(),
-        dataset_hash: launch.dataset_hash.clone(),
-        runtime_hash: launch.runtime_binding.runtime_hash.clone(),
-        result_produced_at_ms: score_produced_at_ms,
-        report,
-        advisory,
-        execution: None,
         observation: Some(score),
+        ..helper_output(launch, score_produced_at_ms, report, advisory)
     })
 }
 

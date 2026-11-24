@@ -2,6 +2,9 @@
 use chrono::{Datelike, Timelike, Utc};
 use fs2::FileExt;
 use nivra_cli::lock::AdvisoryLock;
+use nivra_core::release::{
+    MUSL_BINARY_ASSET as ASSET, MUSL_TARGET as TARGET, ReleaseManifest as Manifest,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -13,17 +16,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-const TARGET: &str = "x86_64-unknown-linux-musl";
-const ASSET: &str = "nivra-x86_64-unknown-linux-musl";
 type Result<T> = std::result::Result<T, &'static str>;
-#[derive(Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Manifest {
-    tag: String,
-    source_commit: String,
-    target: String,
-    sha256: String,
-}
 /// The only SSH host alias accepted as release transport. The host migration
 /// (`nivra host-migrate`) is the one path that rebinds a retired remote.
 const REMOTE_ALIAS: &str = "github-nivra:";

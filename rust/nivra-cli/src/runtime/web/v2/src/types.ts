@@ -1200,6 +1200,24 @@ export interface ProjectionData {
   approvals: ApprovalsResponse | null;
 }
 export type ProjectionName = keyof ProjectionData;
+/** Every v1 projection the workspace reads, in display order. */
+export const PROJECTION_NAMES = [
+  "summary",
+  "portfolio",
+  "fills",
+  "plans",
+  "scanner",
+  "sessions",
+  "approvals",
+] as const satisfies readonly ProjectionName[];
+type ListedProjection = (typeof PROJECTION_NAMES)[number];
+/** Fails the build when `ProjectionData` gains a name this list does not cover. */
+const projectionsCovered: Exclude<
+  ProjectionName,
+  ListedProjection
+> extends never
+  ? true
+  : never = true;
 export type ProjectionStates = {
   [K in ProjectionName as `${K}State`]: LoadState;
 };

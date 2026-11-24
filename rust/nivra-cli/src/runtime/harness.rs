@@ -65,24 +65,6 @@ pub(crate) struct GrantedTools {
     #[serde(default, skip_serializing_if = "skip_false")]
     pub research_request: bool,
 }
-impl GrantedTools {}
-
-/// Two independent readings for one admitted model turn: the actual observation
-/// wall (model-visible timestamps) and the monotonic duration budget. They are
-/// never mixed into a fabricated UTC value.
-#[derive(Clone, Copy)]
-pub(crate) struct DomainClock<'a, 'b> {
-    guard: &'a CallGuard<'b>,
-}
-
-impl<'a, 'b> DomainClock<'a, 'b> {
-    pub(crate) fn new(guard: &'a CallGuard<'b>) -> Self {
-        Self { guard }
-    }
-    pub(crate) fn wall_ms(&self) -> i64 {
-        self.guard.wall_ms()
-    }
-}
 
 #[cfg(test)]
 mod call_time_tool_tests;
@@ -102,7 +84,7 @@ pub(crate) struct ToolScope<'a> {
 /// Execute one validated read-only data tool. The lane bridge runs every tool
 /// whose authority a lane grants before it reaches this executor.
 fn execute_tool(scope: &mut ToolScope<'_>, key: &str, tool: Tool) -> Result<Value> {
-    let now = DomainClock::new(scope.guard).wall_ms();
+    let now = scope.guard.wall_ms();
     let (c, bundle) = (scope.c, scope.bundle);
     match tool {
         Tool::Evidence(id) => Ok(json!({"evidence_id":id,"data":evidence(bundle,&id)})),

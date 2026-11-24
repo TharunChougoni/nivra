@@ -35,15 +35,7 @@ import {
   useWorkspace,
 } from "./ui";
 import { PAGES } from "./Pages";
-const projectionNames: import("./types").ProjectionName[] = [
-  "summary",
-  "portfolio",
-  "fills",
-  "plans",
-  "scanner",
-  "sessions",
-  "approvals",
-];
+import { PROJECTION_NAMES } from "./types";
 function Brand() {
   return (
     <a href="#/overview" className="brand" aria-label="Nivra overview">
@@ -481,9 +473,9 @@ export default function App() {
             ["Transport", state.connection],
             [
               "v1 projections",
-              projectionNames
-                .map((name) => `${name}:${state[`${name}State`]}`)
-                .join(" · "),
+              PROJECTION_NAMES.map(
+                (name) => `${name}:${state[`${name}State`]}`,
+              ).join(" · "),
             ],
             [
               "Chart series",
