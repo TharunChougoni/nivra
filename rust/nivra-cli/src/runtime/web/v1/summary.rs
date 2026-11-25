@@ -129,28 +129,103 @@ pub(crate) struct PreparedSummary {
 
 static PREPARED_SUMMARY: std::sync::RwLock<Option<Arc<PreparedSummary>>> =
     std::sync::RwLock::new(None);
+static PUBLISH_GATE: Mutex<PublishGate> = Mutex::new(PublishGate::new());
+
+/// Least time between two `summary_changed` frames.
+const ANNOUNCE_MIN_MS: i64 = 1_000;
+/// A summary with no announced change is still announced this often, so its
+/// own figures (feed age, cash, clock) keep refreshing.
+const REFRESH_MS: i64 = 5_000;
+/// Least time between two announced changes of one revision; others have none.
+const ROLL_MIN_MS: &[(&str, i64)] = &[("scanner", 15_000)];
+
+/// Chooses which revisions clients are told about, and when.
+pub(super) struct PublishGate {
+    /// Each announced revision with the time it last rolled forward.
+    announced: std::collections::BTreeMap<String, (serde_json::Value, i64)>,
+    /// When `summary_changed` last fired.
+    announced_at_ms: Option<i64>,
+}
+
+impl PublishGate {
+    pub(super) const fn new() -> Self {
+        Self {
+            announced: std::collections::BTreeMap::new(),
+            announced_at_ms: None,
+        }
+    }
+
+    /// Folds in the current revisions at `now_ms` and says whether to fire
+    /// `summary_changed`. A revision rolls forward only when its minimum
+    /// interval has passed and the frame fires.
+    pub(super) fn step(&mut self, current: &serde_json::Value, now_ms: i64) -> bool {
+        let since = |at: i64| now_ms.saturating_sub(at);
+        let rolled = current
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(key, revision)| match self.announced.get(key.as_str()) {
+                None => true,
+                Some((held, at)) => {
+                    let min = ROLL_MIN_MS
+                        .iter()
+                        .find(|(name, _)| name == key)
+                        .map_or(0, |(_, min)| *min);
+                    held != *revision && since(*at) >= min
+                }
+            })
+            .collect::<Vec<_>>();
+        let quiet = self.announced_at_ms.map_or(i64::MAX, since);
+        let fire = (!rolled.is_empty() && quiet >= ANNOUNCE_MIN_MS) || quiet >= REFRESH_MS;
+        if fire {
+            for (key, revision) in rolled {
+                self.announced
+                    .insert(key.clone(), (revision.clone(), now_ms));
+            }
+            self.announced_at_ms = Some(now_ms);
+        }
+        fire
+    }
+
+    /// The revisions the summary body embeds: the announced ones, never
+    /// newer, because clients compare them to choose what to fetch.
+    pub(super) fn announced(&self) -> serde_json::Value {
+        self.announced
+            .iter()
+            .map(|(key, (revision, _))| (key.clone(), revision.clone()))
+            .collect::<serde_json::Map<_, _>>()
+            .into()
+    }
+}
 
 pub(crate) fn update_prepared_summary(
     view: &serde_json::Value,
     root: Option<&Path>,
 ) -> Arc<PreparedSummary> {
-    replace_prepared_summary(view, root).0
+    replace_prepared_summary(view, revisions(view, root))
 }
 
-/// Prepares the summary and announces it on the event feed, unless it is
-/// byte-identical to the one already announced.
+/// Prepares the summary every loop and announces it when [`PublishGate`]
+/// fires.
 pub(crate) fn publish_summary(view: &serde_json::Value, root: Option<&Path>) {
-    let (prepared, previous) = replace_prepared_summary(view, root);
-    if previous.is_none_or(|previous| previous.etag != prepared.etag) {
+    let current = revisions(view, root);
+    let (fire, announced) = {
+        let mut gate = match PUBLISH_GATE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        (gate.step(&current, millis()), gate.announced())
+    };
+    let prepared = replace_prepared_summary(view, announced);
+    if fire {
         nivra_cli::event_feed::summary_changed(&prepared.etag, &prepared.revisions);
     }
 }
 
 fn replace_prepared_summary(
     view: &serde_json::Value,
-    root: Option<&Path>,
-) -> (Arc<PreparedSummary>, Option<Arc<PreparedSummary>>) {
-    let revisions = revisions(view, root);
+    revisions: serde_json::Value,
+) -> Arc<PreparedSummary> {
     let mut body = build_summary_envelope(view);
     body["revisions"] = revisions.clone();
     let body = super::super::super::transcript::redact(&body);
@@ -167,8 +242,8 @@ fn replace_prepared_summary(
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
-    let previous = lock.replace(Arc::clone(&prepared));
-    (prepared, previous)
+    *lock = Some(Arc::clone(&prepared));
+    prepared
 }
 
 pub(crate) fn get_prepared_summary() -> Option<Arc<PreparedSummary>> {
@@ -186,6 +261,7 @@ pub(crate) fn reset_prepared_summary() {
         Err(poisoned) => poisoned.into_inner(),
     };
     *lock = None;
+    *PUBLISH_GATE.lock().unwrap() = PublishGate::new();
 }
 
 pub(crate) fn build_summary_envelope(view: &serde_json::Value) -> serde_json::Value {

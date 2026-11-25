@@ -4,6 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { JSDOM } from "jsdom";
 import { OperationalPanel } from "./Operational";
+import { ageLabel } from "./operational";
 import type {
   AlertCounts,
   AlertTransportStatus,
@@ -263,6 +264,26 @@ test("last completed zero, malformed and future values never become 1970 or rece
   assert.ok(future.text.includes("ahead of this browser"));
   assert.equal(future.text.includes("Recent capture"), false);
   assert.equal(future.fact("Loop age"), "Not trusted (future clock)");
+});
+
+test("a newer summary loop time replaces a held health read and ages locally", () => {
+  const liveness: ControllerLiveness = {
+    status: "healthy",
+    last_completed_at_ms: envelope.as_of_ms - 60_000,
+    age_ms: 250,
+    max_age_ms: 62_000,
+    expected_deadline_ms: null,
+    loop_generation: 7,
+  };
+  const view = panel({ operational: operational(), liveness });
+  assert.notEqual(view.fact("Loop age"), ageLabel(250));
+  assert.equal(
+    view.fact("Last loop finished"),
+    panel({
+      operational: operational(),
+      liveness: { ...liveness, last_completed_at_ms: envelope.as_of_ms },
+    }).fact("Last loop finished"),
+  );
 });
 
 test("book state uses portfolio-first projectedStatus and never shows a false open", () => {

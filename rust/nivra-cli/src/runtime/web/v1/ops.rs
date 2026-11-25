@@ -89,7 +89,11 @@ pub(crate) fn health_at(head: &str, view: &Arc<Mutex<serde_json::Value>>, now_ms
     };
     let body = health_body(&view, now_ms);
     drop(view);
-    json_reply(head, body)
+    // The body carries the live liveness age; the ETag does not, so a repeat
+    // read with unchanged content answers 304.
+    let mut content = body.clone();
+    strip_clocks(&mut content);
+    content_reply(head, body, &content)
 }
 
 pub(super) fn health_body(view: &serde_json::Value, now_ms: i64) -> serde_json::Value {

@@ -303,24 +303,47 @@ state instead of treating old values as current. Unknown marks, fees or capital
 remain unknown; a flat-book net total is withheld while holdings remain.
 
 One SSE fetch (or a held long-poll fallback) carries `summary_changed` and
-`price_batch` frames. SSE transport errors fall back to held polling. A normal
-hold-boundary reconnect keeps the connection live; only transport errors mark it
-stale.
+`price_batch` frames. When the request accepts gzip, the stream is sent with
+`Content-Encoding: gzip` as one compressed stream per connection, flushed after
+every frame and heartbeat. Browsers decode it transparently. Clients without
+gzip and the long-poll fallback get plain frames. SSE transport errors fall
+back to held polling. A normal hold-boundary reconnect keeps the connection
+live; only transport errors mark it stale.
 
 The summary carries `revisions`, a map of projection name to a 16-hex content
 hash for `portfolio`, `fills`, `plans`, `scanner`, `sessions`, `health`,
-`alerts` and `agent`. Each hash covers the view fields that projection reads,
-excluding per-loop clocks (`as_of_ms`, the controller heartbeat and liveness,
-`captured_at_ms` and alert `observed_at_ms`). `agent` is derived from the
-length, inode and mtime of the lane journals and `usage.json`. The controller
-computes them once per loop and publishes `summary_changed` with
-`{etag, revisions}` whenever the summary ETag changes. The summary still changes
-every loop because it carries `as_of_ms`, so the saving is on the client: it
-refetches only the projections whose revision differs from the one it last
-read. Without `revisions` (an older backend) it refetches every projection.
+`alerts`, `agent` and `agent_turns`. Each hash covers only the content that
+projection serves. Clocks are removed at any depth before hashing: `as_of_ms`,
+`captured_at_ms`, `checked_at_ms`, `observed_at_ms`, `retained_window`,
+`last_completed_at_ms`, `expected_deadline_ms`, `next_deadline_ms`,
+`deadline_remaining_ms`, `loop_generation`, the heartbeat `completed_at_ms`,
+the feed tick counters (`ticks_total`, `tick_rate_per_s`,
+`oldest_last_trade_ms`) and every `age_ms` or `*_age_ms` field. Controller
+liveness keeps its `status`, so a malformed or missing heartbeat still moves
+`health`. `scanner` covers the prospects, missing rows, screen reasons, counts,
+selection, limitations, universe size and ranking. `agent` is derived from the
+length, inode and mtime of `turns.ndjson`, `triggers.ndjson` and `usage.json`;
+`agent_turns` from `turns.ndjson` alone.
+
+The controller prepares the summary once per loop and announces it with
+`summary_changed` carrying `{etag, revisions}`:
+
+- A changed revision is announced at most once per second.
+- `scanner` rolls forward at most once every 15 s, however often the scan moves.
+- With no change, the summary is still announced every 5 s, so its own figures
+  (feed age, cash, clock) keep refreshing.
+- Nothing is sent otherwise.
+
+The summary body embeds the announced revisions, never newer ones, so a held
+change cannot trigger a read early. The client refetches only the projections
+whose revision differs from the one it last read. Without `revisions` (an older
+backend) it refetches every projection.
 Explicit Refresh, a stream gap and document visibility refetch everything.
 Page-local reads (health, alerts, tools, lanes) reload when their revision
-changes; no status interval is scheduled.
+changes; no status interval is scheduled. Because health no longer reloads every
+loop, the health page takes the market feed block from the summary, and the
+controller panel ages the last loop from the summary's `as_of_ms` when that is
+newer than the health read.
 
 A failed projection clears only its own field, is reported as unavailable with
 the source reason, and never reuses a prior financial value. The clock timer is
@@ -351,15 +374,15 @@ header is present on JSON, long-poll and SSE authentication responses.
 | `GET /api/v1/instruments?cursor=&limit=` | Read-only validated NSE cash EQ catalog with `total`/`next`, validated session, source-file hashes and an explicit unavailable envelope before preparation; no derivative, option-chain or margin data. |
 | `GET /api/v1/sessions?cursor=&limit=` | Bounded current/archive session checkpoints and provenance. |
 | `GET /api/v1/tools?date=&cursor=&limit=` | Bounded pi lane web-tool call record: original query or URL, provider, latency, bytes, result count and outcome. Missing records are an empty list; a corrupt complete row is unavailable. Read-only, no provider call. |
-| `GET /api/v1/health` | Readiness, feed/history, book safeguards, retention, planner budgets, read-only `activity_attribution` when present, derived alerts and the bounded `updater` status (last preflight failure reason/version/since, or null). |
+| `GET /api/v1/health` | Readiness, feed/history, book safeguards, retention, planner budgets, read-only `activity_attribution` when present, derived alerts and the bounded `updater` status (last preflight failure reason/version/since, or null). The body carries the live `controller_liveness.age_ms`; the ETag covers the body without clocks, so a repeat read with unchanged content returns 304. |
 | `GET /api/v1/alerts?cursor=&limit=` | Stable derived alert rows with original evidence and `next`. |
 | `GET /api/v1/series?kind=receipt-minute-bar&instrument=&from=&to=&limit=` | Bounded receipt-derived minute bars with classified coverage gaps (`no_trade`/`unobserved`), store/session-start clocks and `watermark_ms`. |
 | `GET /api/v1/series?kind=account-equity&from=&to=&limit=` | Bounded recorded portfolio checkpoints with cash, equity and mark basis. |
 | `GET /api/v1/agent?cursor=&limit=` | Newest-first pi lane turns (`limit` 1–200, default 50; anything else is `400 agent_limit_invalid`) with tool calls, plan stance, gate verdict, usage and fallback; trigger counts; per-lane usage totals. Served from a process-local journal cache that parses only appended bytes. When a journal exceeds the read window it returns the newest rows with `truncated:true` and `rows_not_loaded:{turns,triggers}`. ETag revalidation. |
 | `GET /api/v1/agent/transcript?lane=&cursor=&limit=` | One pi lane's session transcripts as chat exchanges, newest first (`limit` 1–50, default 20). Each exchange is a trigger brief, the model's thinking, text and tool calls (arguments and results paired by call id) and the matching turn row from `/api/v1/agent`. Reads the newest eight `model/agent/pi/<lane>/*.jsonl` session files through the same append-only cache. Text is capped by `transcript_text_max_bytes`, tool arguments by `transcript_args_max_bytes`, and capped fields say `truncated:true`. System prompts are not served. A missing lane directory is an empty list. Bad `lane`, `limit` or `cursor` values return `400 transcript_*_invalid`. ETag revalidation. |
-| `GET /api/v1/events` | SSE `summary_changed` / `price_batch` frames with heartbeats; `?poll=1&after=N` is the held long-poll fallback. |
+| `GET /api/v1/events` | SSE `summary_changed` / `price_batch` frames with heartbeats, gzipped when accepted; `?poll=1&after=N` is the held long-poll fallback. |
 
-Meta and the lane journal revalidate with ETags. Private responses vary by
+Meta, health and the lane journal revalidate with ETags. Private responses vary by
 `Authorization`. Snapshot and financial projections stay `no-store`/`private,
 no-cache`. `price_batch` frames carry their own `batch_seq` and no `id:` line;
 `Last-Event-ID` continues to address only the event ring. The older
@@ -415,7 +438,9 @@ conflict handling and dry-run/apply commands.
 
 `#/lanes` shows each pi lane as a chat session. It reads
 `GET /api/v1/agent/transcript` for the selected lane and `GET /api/v1/agent`
-for the stats and charts, and reloads both when `revisions.agent` changes.
+for the stats and charts. The chat thread reloads when `revisions.agent_turns`
+changes, that is when a turn row lands. The stats reload when `revisions.agent`
+changes, which also covers triggers and usage.
 
 - **Lane tabs** for decision, gate, research and review, then any other lane.
   Each tab shows a status dot and the turn and error counts. A side-by-side

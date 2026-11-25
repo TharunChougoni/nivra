@@ -80,6 +80,16 @@ fn json_reply(head: &str, body: serde_json::Value) -> Response {
     let body = super::super::transcript::redact(&body);
     let text = body.to_string();
     let etag = format!("\"{}\"", &digest(text.as_bytes())[..16]);
+    tagged_reply(head, text, etag)
+}
+/// Like [`json_reply`], but the ETag covers `content`: the body without the
+/// fields a repeat read may move while it means the same thing.
+fn content_reply(head: &str, body: serde_json::Value, content: &serde_json::Value) -> Response {
+    let text = super::super::transcript::redact(&body).to_string();
+    let etag = format!("\"{}\"", &digest(content.to_string().as_bytes())[..16]);
+    tagged_reply(head, text, etag)
+}
+fn tagged_reply(head: &str, text: String, etag: String) -> Response {
     let matched = values(head, "if-none-match") == [etag.as_str()];
     let mut reply = response(
         if matched {

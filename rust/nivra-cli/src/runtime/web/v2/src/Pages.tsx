@@ -1626,7 +1626,9 @@ export function Health() {
       health.value?.history_preparation ||
       s?.readiness?.history ||
       s?.history_preparation,
-    feed = health.value?.market_feed || s?.market_feed,
+    // The summary's feed block refreshes at least every 5 s; health's only
+    // when its content changes, so its ages would hold still.
+    feed = s?.market_feed || health.value?.market_feed,
     readiness = health.value?.readiness || s?.readiness,
     attribution = health.value?.activity_attribution;
   return (

@@ -268,8 +268,8 @@ function LaneColumn({
   picker?: React.ReactNode;
 }) {
   const [state, app] = useWorkspace(),
-    revision = useRevision("agent"),
-    // Reloads the newest page whenever the agent revision changes.
+    revision = useRevision("agent_turns"),
+    // Reloads the newest page only when a turn row lands.
     first = useRead(
       (api) => api.agentTranscript({ lane, limit: PAGE }),
       lane + "|" + revision,

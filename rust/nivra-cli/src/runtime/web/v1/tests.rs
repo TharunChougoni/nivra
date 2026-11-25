@@ -251,24 +251,10 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
     );
     assert_eq!(plain["revisions"], revisions(&view.lock().unwrap(), None));
 
-    // Loop clocks move no revision; a new fill moves only the projections
-    // that read fills; an identical summary is announced once.
-    let snapshot = view.lock().unwrap().clone();
-    let mut later = snapshot.clone();
-    later["as_of_ms"] = serde_json::json!(snapshot["as_of_ms"].as_i64().unwrap_or(0) + 2000);
-    later["controller_heartbeat"] = serde_json::json!({"version":1,"completed_at_ms":2});
-    later["operational_health"]["captured_at_ms"] = serde_json::json!(902_000);
-    assert_eq!(revisions(&later, None), revisions(&snapshot, None));
+    // A published summary is announced once with the revisions its body embeds.
+    let mut later = view.lock().unwrap().clone();
     later["portfolio"]["fills"] = serde_json::json!([{"fee":"1.00"}]);
-    let (before, after) = (revisions(&snapshot, None), revisions(&later, None));
-    let moved = before
-        .as_object()
-        .unwrap()
-        .iter()
-        .filter(|(name, revision)| after[name.as_str()] != **revision)
-        .map(|(name, _)| name.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(moved, ["portfolio", "fills", "sessions"]);
+    let after = revisions(&later, None);
     let cursor = nivra_cli::event_feed::snapshot(0)["next"].as_u64().unwrap();
     publish_summary(&later, None);
     publish_summary(&later, None);
@@ -341,6 +327,17 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
         );
         assert_eq!(projected["controller_heartbeat"]["completed_at_ms"], now);
     }
+    // The ETag leaves out the live age: unchanged content answers 304 at a
+    // later age, and a liveness status change answers 200.
+    let etag = ops::health_at("", &view, now + 1_000).etag.unwrap();
+    let conditional = format!("GET /api/v1/health HTTP/1.1\r\nIf-None-Match: {etag}\r\n");
+    let repeat = ops::health_at(&conditional, &view, now + 2_000);
+    assert_eq!(repeat.code, "304 Not Modified");
+    assert!(repeat.body.is_empty());
+    assert_eq!(
+        ops::health_at(&conditional, &view, now + 62_001).code,
+        "200 OK"
+    );
     view.lock().unwrap()["controller_heartbeat"]["completed_at_ms"] = serde_json::json!(now + 1);
     let reply = ops::health_at("", &view, now);
     let malformed: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
@@ -735,6 +732,157 @@ fn price_batches_are_shared_bounded_and_send_only_moved_receipts() {
     let (seq, full) = frame(0, Duration::from_secs(6)).unwrap();
     assert_eq!(seq, 2);
     assert_eq!(keys(&full), ["A", "C"]);
+
+    // Over gzip, one stream carries every frame and each frame decodes whole
+    // as soon as it is written.
+    let (_, batch) = batches
+        .next_frame(&features, &settings, 0, start + Duration::from_secs(6), 0)
+        .unwrap();
+    let event = sse_frame(
+        &serde_json::json!({"seq":7,"kind":"summary_changed","etag":"\"e\"","revisions":{}}),
+        &serde_json::json!("fixture"),
+    )
+    .unwrap();
+    let mut sink = FrameWriter::new(Vec::new(), true);
+    let mut decoder = flate2::write::GzDecoder::new(Vec::new());
+    let mut sent = 0;
+    for frame in [&b": heartbeat\n\n"[..], &batch, &event] {
+        sink.frame(frame).unwrap();
+        let FrameWriter::Gzip(encoder) = &sink else {
+            unreachable!("gzip writer");
+        };
+        decoder.write_all(&encoder.get_ref()[sent..]).unwrap();
+        decoder.flush().unwrap();
+        sent = encoder.get_ref().len();
+        assert!(decoder.get_ref().ends_with(frame));
+    }
+    assert_eq!(
+        decoder.get_ref().as_slice(),
+        [&b": heartbeat\n\n"[..], &batch, &event].concat()
+    );
+}
+
+/// The view one controller loop publishes at `at`, with the clocks its
+/// producers stamp: heartbeat, operational capture, feed telemetry, research
+/// queue and scanner ages.
+fn loop_view(at: i64, generation: u64) -> serde_json::Value {
+    serde_json::json!({
+        "paper_only":true,"live_enabled":false,"account":"fixture","authorized_session":"2026-11-25",
+        "status":"model_plan_ready","as_of_ms":at,
+        "controller_heartbeat":crate::runtime::operational_health::heartbeat(at, 500, generation),
+        "operational_health":{"version":2,"captured_at_ms":at,"calendar":{"covered":true,"days_remaining":30},
+            "alert_transport":{"status":"available","last_accepted_at_ms":null,
+                "retained_window":{"start_ms":at - 3_600_000,"end_ms":at,"rows_in_window":0}}},
+        "market_feed":{"mode":"ltpc","state":"streaming","connected":true,"fallback":false,
+            "last_tick_age_ms":at % 700,"last_heartbeat_age_ms":at % 300,"ticks_total":at / 10,
+            "tick_rate_per_s":(at % 97) as f64,"cached_keys":2,"oldest_last_trade_ms":at - 90_000,"reconnects":0},
+        "oldest_scan_age_ms":at % 900,
+        "readiness":{"status":"ready","checked_at_ms":at},
+        "research_tasks":{"status":"idle","observation":{"as_of_ms":at,"queue":{"pending":1,
+            "oldest_created_ms":1_000,"oldest_age_ms":at - 1_000,
+            "next_deadline_ms":9_000_000_000_000_i64,"deadline_remaining_ms":9_000_000_000_000_i64 - at}}},
+        "discovery":{"as_of_ms":at,"fresh_count":1,"stale_count":1,"unseen_count":0,"eligible_count":1,
+            "presented_count":1,"unavailable_count":1,"unavailable_truncated":false,
+            "oldest_fresh_age_ms":at % 900,"max_scan_age_ms":180_000,
+            "prospects":[{"instrument_key":"NSE_EQ|A","observed_ms":1_000,"bid":"100",
+                "screening_age_ms":at - 1_000,"quote_age_ms":at - 1_200}],
+            "unavailable":[{"instrument_key":"NSE_EQ|B","reason":"stale","last_observed_ms":500,"age_ms":at - 500}],
+            "screen_reasons":{"eligible_no_signal":1,"stale":1},"selection":"fixture","limitations":"fixture"},
+        "universe_size":2,"ranking":[["1.0","NSE_EQ|A",1_000]],
+        "portfolio":{"stopped":false,"halted":false,"closed":false,"cash":"1000","positions":{},"fills":[]},
+        "planner":{"status":"ready"}
+    })
+}
+
+#[test]
+fn revisions_follow_content_and_liveness_not_loop_clocks() {
+    let (first, next) = (
+        loop_view(1_764_050_000_000, 41),
+        loop_view(1_764_050_000_500, 42),
+    );
+    assert_ne!(first, next);
+    assert_eq!(revisions(&first, None), revisions(&next, None));
+    let moved = |change: &dyn Fn(&mut serde_json::Value)| {
+        let mut later = next.clone();
+        change(&mut later);
+        let (before, after) = (revisions(&next, None), revisions(&later, None));
+        before
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(name, revision)| after[name.as_str()] != **revision)
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>()
+    };
+    // A heartbeat that disagrees with as_of_ms turns liveness malformed.
+    assert_eq!(
+        moved(&|v| v["controller_heartbeat"]["completed_at_ms"] = serde_json::json!(1)),
+        ["health"]
+    );
+    assert_eq!(
+        moved(&|v| v["market_feed"]["state"] = serde_json::json!("rest_fallback")),
+        ["health"]
+    );
+    assert_eq!(
+        moved(&|v| v["discovery"]["prospects"][0]["bid"] = serde_json::json!("101")),
+        ["scanner"]
+    );
+    assert_eq!(
+        moved(&|v| v["portfolio"]["fills"] = serde_json::json!([{"fee":"1.00"}])),
+        ["portfolio", "fills", "sessions"]
+    );
+}
+
+#[test]
+fn publish_gate_coalesces_changes_limits_scanner_churn_and_refreshes() {
+    let revisions = |portfolio: &str, scanner: &str| serde_json::json!({"portfolio":portfolio,"scanner":scanner});
+    let mut gate = PublishGate::new();
+    let mut step =
+        |current: &serde_json::Value, at: i64| (gate.step(current, at), gate.announced());
+    // The first loop and a change fire; a second change inside 1 s is held,
+    // with the announced revisions unchanged, then fires on the next loop.
+    assert_eq!(
+        step(&revisions("p1", "s1"), 0),
+        (true, revisions("p1", "s1"))
+    );
+    assert_eq!(
+        step(&revisions("p1", "s1"), 500),
+        (false, revisions("p1", "s1"))
+    );
+    assert_eq!(
+        step(&revisions("p2", "s1"), 1_000),
+        (true, revisions("p2", "s1"))
+    );
+    assert_eq!(
+        step(&revisions("p3", "s1"), 1_500),
+        (false, revisions("p2", "s1"))
+    );
+    assert_eq!(
+        step(&revisions("p3", "s1"), 2_000),
+        (true, revisions("p3", "s1"))
+    );
+    // The scanner rolled at 0 and rolls again at most once per 15 s, however
+    // often it moves; only the 5 s refreshes fire while it is held.
+    for at in (2_500..30_000).step_by(500) {
+        let (fired, announced) = step(&revisions("p3", &format!("s{at}")), at);
+        let refresh = [7_000, 12_000, 20_000, 25_000].contains(&at);
+        assert_eq!(fired, at == 15_000 || refresh, "at {at}");
+        let held = if at < 15_000 { "s1" } else { "s15000" };
+        assert_eq!(announced["scanner"], held, "at {at}");
+    }
+    assert_eq!(
+        step(&revisions("p3", "s30000"), 30_000),
+        (true, revisions("p3", "s30000"))
+    );
+    // With no change, the summary is still announced every 5 s.
+    assert_eq!(
+        step(&revisions("p3", "s30000"), 34_999),
+        (false, revisions("p3", "s30000"))
+    );
+    assert_eq!(
+        step(&revisions("p3", "s30000"), 35_000),
+        (true, revisions("p3", "s30000"))
+    );
 }
 
 #[test]
@@ -788,9 +936,20 @@ fn agent_route_pages_pi_turns_newest_first_with_gate_counts() {
     assert_eq!(first["truncated"], false);
 
     // An unchanged journal answers 304; an append moves the agent revision
-    // and is read incrementally, with a torn final line held back.
-    let revision = || revisions(&serde_json::json!({}), Some(dir.path()))["agent"].clone();
-    assert_ne!(revision(), revisions(&serde_json::json!({}), None)["agent"]);
+    // and is read incrementally, with a torn final line held back. Only a
+    // turns append moves `agent_turns`; a usage rewrite does not.
+    let revision = || {
+        let all = revisions(&serde_json::json!({}), Some(dir.path()));
+        (all["agent"].clone(), all["agent_turns"].clone())
+    };
+    assert_ne!(
+        revision().0,
+        revisions(&serde_json::json!({}), None)["agent"]
+    );
+    let before = revision();
+    std::fs::write(agent.join("usage.json"), "{}").unwrap();
+    assert_ne!(revision().0, before.0);
+    assert_eq!(revision().1, before.1);
     let before = revision();
     let Ok(router::Route::Agent(query)) = router::parse("GET /api/v1/agent HTTP/1.1") else {
         panic!("agent route");
@@ -814,7 +973,8 @@ fn agent_route_pages_pi_turns_newest_first_with_gate_counts() {
         turn("decision-2", "decision", serde_json::json!({}))
     )
     .unwrap();
-    assert_ne!(revision(), before);
+    assert_ne!(revision().0, before.0);
+    assert_ne!(revision().1, before.1);
     let grown = get("/api/v1/agent");
     assert_eq!(grown["total"], 3);
     assert_eq!(grown["turns"][0]["turn_id"], "decision-2");

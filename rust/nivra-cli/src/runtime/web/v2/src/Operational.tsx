@@ -138,11 +138,13 @@ function PaperFinancialPanel({
 function ControllerLivenessPanel({
   liveness,
   operational,
+  loopAt,
   now,
   interpret,
 }: {
   liveness: ControllerLiveness | null;
   operational: OperationalHealth | null;
+  loopAt: unknown;
   now: number;
   interpret: boolean;
 }) {
@@ -150,7 +152,12 @@ function ControllerLivenessPanel({
     ? validTimestampMs(operational?.captured_at_ms)
     : null;
   const fresh = freshness(captured, now);
-  const completed = lastCompletedAt(liveness, operational, interpret);
+  // Health is read again only when its content changes, so its loop time can
+  // lag. The summary's loop time refreshes at least every 5 s; age it here.
+  const reported = lastCompletedAt(liveness, operational, interpret),
+    summaryAt = validTimestampMs(loopAt),
+    newer = reported !== null && summaryAt !== null && summaryAt > reported,
+    completed = newer ? summaryAt : reported;
   const completedFuture = completed !== null && completed > now;
   return (
     <Panel title="Controller">
@@ -162,7 +169,11 @@ function ControllerLivenessPanel({
             "Loop age",
             completedFuture
               ? "Not trusted (future clock)"
-              : ageLabel(liveness?.age_ms),
+              : ageLabel(
+                  newer && summaryAt !== null
+                    ? now - summaryAt
+                    : liveness?.age_ms,
+                ),
           ],
           [
             "Next loop due",
@@ -1129,6 +1140,7 @@ export function OperationalPanel({
         <ControllerLivenessPanel
           liveness={liveness}
           operational={operational}
+          loopAt={summary?.as_of_ms}
           now={now}
           interpret={interpret}
         />

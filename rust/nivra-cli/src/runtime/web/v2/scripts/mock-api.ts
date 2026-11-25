@@ -83,7 +83,8 @@ export function mockApi(options: { seed?: number } = {}): Plugin {
     sessions: revisionOf(sessionsAt(data, now)),
     health: revisionOf(healthAt(data, now, wall)),
     alerts: revisionOf(alertsAt(data, now)),
-    agent: revisionOf(agentAt(data, now, 1).total),
+    agent: revisionOf(agentAt(data, now, 1)),
+    agent_turns: revisionOf(agentAt(data, now, 1).total),
   });
 
   function publish(name: string, body: Record<string, unknown>) {

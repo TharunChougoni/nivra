@@ -1,7 +1,6 @@
 //! Per-projection content revisions. Each hash covers the view fields that
-//! projection's handler reads, minus per-loop clocks (`as_of_ms`, the
-//! controller heartbeat, `captured_at_ms`), so an idle loop leaves every
-//! revision unchanged and clients skip the refetch.
+//! projection's handler reads, minus the fields in [`CLOCKS`], so an idle loop
+//! leaves every revision unchanged and clients skip the refetch.
 use super::*;
 use serde_json::{Value, json};
 
@@ -25,10 +24,55 @@ fn short_hash(inputs: &[&Value]) -> String {
         .collect()
 }
 
-/// Revision of the lane journals `/api/v1/agent` reads, from file metadata
-/// only. A missing file contributes a fixed `absent` marker.
-fn agent_revision(root: Option<&Path>) -> String {
-    let stats = AGENT_FILES
+/// Fields that move with the loop clock or the feed tick, not with content,
+/// as `(parent, key)`. A `None` parent matches the key at any depth. Any key
+/// named `age_ms` or ending in `_age_ms` is a clock as well.
+const CLOCKS: &[(Option<&str>, &str)] = &[
+    (None, "as_of_ms"),
+    (None, "captured_at_ms"),
+    (None, "checked_at_ms"),
+    (None, "observed_at_ms"),
+    (None, "retained_window"),
+    (None, "last_completed_at_ms"),
+    (None, "expected_deadline_ms"),
+    (None, "next_deadline_ms"),
+    (None, "deadline_remaining_ms"),
+    (None, "loop_generation"),
+    (Some("controller_heartbeat"), "completed_at_ms"),
+    (Some("market_feed"), "ticks_total"),
+    (Some("market_feed"), "tick_rate_per_s"),
+    (Some("market_feed"), "oldest_last_trade_ms"),
+];
+
+fn is_clock(parent: Option<&str>, key: &str) -> bool {
+    key == "age_ms"
+        || key.ends_with("_age_ms")
+        || CLOCKS
+            .iter()
+            .any(|(at, clock)| *clock == key && at.is_none_or(|at| Some(at) == parent))
+}
+
+/// Removes every [`CLOCKS`] field, at any depth.
+pub(super) fn strip_clocks(value: &mut Value) {
+    fn strip(parent: Option<&str>, value: &mut Value) {
+        match value {
+            Value::Object(fields) => {
+                fields.retain(|key, _| !is_clock(parent, key));
+                for (key, child) in fields.iter_mut() {
+                    strip(Some(key), child);
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|item| strip(parent, item)),
+            _ => {}
+        }
+    }
+    strip(None, value);
+}
+
+/// Revision of the given lane journals, from file metadata only. A missing
+/// file contributes a fixed `absent` marker.
+fn agent_revision(root: Option<&Path>, files: &[&str]) -> String {
+    let stats = files
         .iter()
         .map(|file| {
             let Some(root) = root else {
@@ -47,15 +91,6 @@ fn agent_revision(root: Option<&Path>) -> String {
     short_hash(&stats.iter().collect::<Vec<_>>())
 }
 
-/// Alerts carry the loop clock as `observed_at_ms`.
-fn strip_alert_clocks(alerts: &mut Value) {
-    for alert in alerts.as_array_mut().into_iter().flatten() {
-        if let Some(fields) = alert.as_object_mut() {
-            fields.shift_remove("observed_at_ms");
-        }
-    }
-}
-
 pub(crate) fn revisions(view: &Value, root: Option<&Path>) -> Value {
     let p = &view["portfolio"];
     let identity = [
@@ -72,17 +107,29 @@ pub(crate) fn revisions(view: &Value, root: Option<&Path>) -> Value {
     let positions = json!(p["positions"].as_object().map(|v| v.len()));
     let fills = json!(p["fills"].as_array().map(Vec::len));
     let mut alerts = json!(derived_alerts(view));
-    strip_alert_clocks(&mut alerts);
-    let mut health = health_body(view, 0);
-    if let Some(fields) = health.as_object_mut() {
-        for clock in ["as_of_ms", "controller_liveness", "controller_heartbeat"] {
-            fields.shift_remove(clock);
-        }
-    }
-    if let Some(Value::Object(fields)) = health.get_mut("operational_health") {
-        fields.shift_remove("captured_at_ms");
-    }
-    strip_alert_clocks(&mut health["alerts"]);
+    strip_clocks(&mut alerts);
+    // Liveness is judged at the loop's own completion, so only a malformed or
+    // missing heartbeat changes its status here.
+    let mut health = health_body(view, view["as_of_ms"].as_i64().unwrap_or(0));
+    strip_clocks(&mut health);
+    let discovery = &view["discovery"];
+    let mut scanner = json!({
+        "prospects":discovery["prospects"],
+        "unavailable":discovery["unavailable"],
+        "screen_reasons":discovery["screen_reasons"],
+        "fresh_count":discovery["fresh_count"],
+        "stale_count":discovery["stale_count"],
+        "unseen_count":discovery["unseen_count"],
+        "eligible_count":discovery["eligible_count"],
+        "presented_count":discovery["presented_count"],
+        "unavailable_count":discovery["unavailable_count"],
+        "unavailable_truncated":discovery["unavailable_truncated"],
+        "selection":discovery["selection"],
+        "limitations":discovery["limitations"],
+        "universe_size":view["universe_size"],
+        "ranking":view["ranking"],
+    });
+    strip_clocks(&mut scanner);
     json!({
         "portfolio": with_identity(&[
             &view["capital"],
@@ -92,7 +139,7 @@ pub(crate) fn revisions(view: &Value, root: Option<&Path>) -> Value {
         ]),
         "fills": with_identity(&[&p["fills"]]),
         "plans": with_identity(&[&view["planner"]]),
-        "scanner": with_identity(&[&view["discovery"], &view["universe_size"], &view["ranking"]]),
+        "scanner": with_identity(&[&scanner]),
         "sessions": with_identity(&[
             &view["status"],
             &view["capital"],
@@ -105,6 +152,7 @@ pub(crate) fn revisions(view: &Value, root: Option<&Path>) -> Value {
         ]),
         "health": short_hash(&[&health]),
         "alerts": with_identity(&[&alerts]),
-        "agent": agent_revision(root),
+        "agent": agent_revision(root, &AGENT_FILES),
+        "agent_turns": agent_revision(root, &AGENT_FILES[..1]),
     })
 }

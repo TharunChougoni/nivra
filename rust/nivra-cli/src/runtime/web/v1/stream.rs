@@ -180,6 +180,33 @@ pub(crate) fn sse_frame(event: &serde_json::Value, epoch: &serde_json::Value) ->
     };
     Some(format!("id: {seq}\nevent: {kind}\ndata: {body}\n\n").into_bytes())
 }
+/// One SSE connection's byte sink: plain, or a single gzip stream with a sync
+/// flush after every frame, so each frame reaches the client whole.
+pub(crate) enum FrameWriter<W: Write> {
+    Plain(W),
+    Gzip(flate2::write::GzEncoder<W>),
+}
+impl<W: Write> FrameWriter<W> {
+    pub(crate) fn new(sink: W, gzip: bool) -> Self {
+        if gzip {
+            Self::Gzip(flate2::write::GzEncoder::new(
+                sink,
+                flate2::Compression::default(),
+            ))
+        } else {
+            Self::Plain(sink)
+        }
+    }
+    pub(crate) fn frame(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        match self {
+            Self::Plain(sink) => sink.write_all(bytes),
+            Self::Gzip(encoder) => {
+                encoder.write_all(bytes)?;
+                encoder.flush()
+            }
+        }
+    }
+}
 /// The latest display price batch, built at most once per interval and
 /// shared by every stream. A stream that sent the previous batch gets only
 /// the instruments whose receipt time moved; any other stream gets the full
@@ -340,6 +367,7 @@ pub(crate) fn start_sse(
         return Err(("503 Service Unavailable", "stream_busy", None));
     }
     let permit = StreamPermit(ctx.streams.clone());
+    let gzip = super::super::accepts_gzip(head);
     thread::Builder::new()
         .name("paper-dashboard-sse".into())
         .stack_size(2 * 1024 * 1024)
@@ -348,13 +376,17 @@ pub(crate) fn start_sse(
             let _ = stream.set_write_timeout(Some(Duration::from_millis(
                 ctx.settings.sse_write_timeout_ms,
             )));
-            let headers = String::from_utf8(encode(response("200 OK", "text/event-stream", b"")))
+            let mut headers = response("200 OK", "text/event-stream", b"");
+            headers.vary = true;
+            headers.encoding = gzip.then_some("gzip");
+            let headers = String::from_utf8(encode(headers))
                 .expect("fixed UTF-8 headers")
                 .replace("Content-Length: 0\r\n", "")
                 .replace("\r\n\r\n", "\r\nX-Accel-Buffering: no\r\n\r\n");
             if stream.write_all(headers.as_bytes()).is_err() {
                 return;
             }
+            let mut stream = FrameWriter::new(stream, gzip);
             let heartbeat = Duration::from_millis(ctx.settings.sse_heartbeat_ms);
             let batch_interval = Duration::from_millis(ctx.settings.price_batch_interval_ms.max(1));
             let mut next_heartbeat = Instant::now() + heartbeat;
@@ -363,7 +395,7 @@ pub(crate) fn start_sse(
             loop {
                 let now = Instant::now();
                 if now >= next_heartbeat {
-                    if stream.write_all(b": heartbeat\n\n").is_err() {
+                    if stream.frame(b": heartbeat\n\n").is_err() {
                         return;
                     }
                     next_heartbeat = now + heartbeat;
@@ -379,7 +411,7 @@ pub(crate) fn start_sse(
                         )
                     {
                         batch_seq = seq;
-                        if stream.write_all(&frame).is_err() {
+                        if stream.frame(&frame).is_err() {
                             return;
                         }
                     }
@@ -406,9 +438,7 @@ pub(crate) fn start_sse(
                     let body =
                         serde_json::json!({"gap":true,"next":data["next"],"epoch":data["epoch"]});
                     if stream
-                        .write_all(
-                            format!("id: {seq}\nevent: run_event\ndata: {body}\n\n").as_bytes(),
-                        )
+                        .frame(format!("id: {seq}\nevent: run_event\ndata: {body}\n\n").as_bytes())
                         .is_err()
                     {
                         return;
@@ -418,7 +448,7 @@ pub(crate) fn start_sse(
                     let Some(frame) = sse_frame(event, &data["epoch"]) else {
                         continue;
                     };
-                    if stream.write_all(&frame).is_err() {
+                    if stream.frame(&frame).is_err() {
                         return;
                     }
                 }

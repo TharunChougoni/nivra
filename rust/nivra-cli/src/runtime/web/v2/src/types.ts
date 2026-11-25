@@ -478,7 +478,8 @@ export type RevisionName =
   | "sessions"
   | "health"
   | "alerts"
-  | "agent";
+  | "agent"
+  | "agent_turns";
 export type Revisions = Partial<Record<RevisionName, string>>;
 export interface SummaryResponse extends Envelope {
   revisions?: Revisions;
