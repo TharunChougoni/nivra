@@ -158,6 +158,7 @@ export interface Execution {
   decision_id?: string;
   index?: number;
   verdict?: string;
+  reason?: string | null;
 }
 export interface PlanAction {
   index?: number;

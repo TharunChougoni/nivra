@@ -141,7 +141,14 @@ test("orderTracks marks filled only from a fill record and simulates submit/ack 
           action: { instrument_key: "C|3", side: "buy" },
         },
       ],
-      [{ decision_id: "d1", index: 1, verdict: "not_filled_stale_quote" }],
+      [
+        {
+          decision_id: "d1",
+          index: 1,
+          verdict: "execution_gate_rejected",
+          reason: "stale_quote",
+        },
+      ],
     ),
     [fill()],
     paper,
@@ -162,7 +169,7 @@ test("orderTracks marks filled only from a fill record and simulates submit/ack 
     acknowledged: "absent",
     filled: "pending",
   });
-  assert.equal(by("B|2").outcome, "not filled stale quote");
+  assert.equal(by("B|2").outcome, "refused: the quote was too old");
   // a rejected validation ends the track
   assert.deepEqual(by("C|3").stages, {
     intent: "done",

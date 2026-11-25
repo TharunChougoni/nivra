@@ -588,7 +588,7 @@ fn commit_quotes_screened(
                     )?;
                     continue;
                 }
-                let filled = next.execute_plan(
+                let outcome = next.execute_plan(
                     now,
                     &instrument,
                     q,
@@ -598,18 +598,21 @@ fn commit_quotes_screened(
                     action.exit_intent,
                     decision,
                 )?;
+                let verdict_code = if outcome.is_ok() {
+                    "filled"
+                } else {
+                    "execution_gate_rejected"
+                };
                 tx.execute(
                     "INSERT INTO planner_action VALUES(?,?,?)",
-                    rusqlite::params![
-                        decision,
-                        verdict.index as i64,
-                        if filled {
-                            "filled"
-                        } else {
-                            "execution_gate_rejected"
-                        }
-                    ],
+                    rusqlite::params![decision, verdict.index as i64, verdict_code],
                 )?;
+                if let Err(refusal) = outcome {
+                    tx.execute(
+                        "INSERT INTO planner_refusal VALUES(?,?,?)",
+                        rusqlite::params![decision, verdict.index as i64, refusal.code()],
+                    )?;
+                }
             }
         }
         Ok(saved_plan)
@@ -647,9 +650,9 @@ fn commit_quotes_screened(
                 .as_str()
                 .ok_or("planner_saved_plan_invalid")?;
             let rows = db
-            .prepare("SELECT idx,verdict FROM planner_action WHERE decision=? ORDER BY idx")?
+            .prepare("SELECT a.idx,a.verdict,r.reason FROM planner_action a LEFT JOIN planner_refusal r ON r.decision=a.decision AND r.idx=a.idx WHERE a.decision=? ORDER BY a.idx")?
             .query_map([id], |r| {
-                Ok(serde_json::json!({"index":r.get::<_,i64>(0)?,"verdict":r.get::<_,String>(1)?}))
+                Ok(serde_json::json!({"index":r.get::<_,i64>(0)?,"verdict":r.get::<_,String>(1)?,"reason":r.get::<_,Option<String>>(2)?}))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
             let audit = c.directory.join("model").join(id);
@@ -751,7 +754,7 @@ pub(super) fn ensure_actions(db: &Connection) -> Result<()> {
     if !present && redecision::has_authority(db)? {
         return Err("planner_action_journal_missing".into());
     }
-    db.execute_batch("CREATE TABLE IF NOT EXISTS planner_action(decision TEXT,idx INTEGER,verdict TEXT NOT NULL,PRIMARY KEY(decision,idx));")?;
+    db.execute_batch("CREATE TABLE IF NOT EXISTS planner_action(decision TEXT,idx INTEGER,verdict TEXT NOT NULL,PRIMARY KEY(decision,idx));\n         CREATE TABLE IF NOT EXISTS planner_refusal(decision TEXT,idx INTEGER,reason TEXT NOT NULL,PRIMARY KEY(decision,idx));")?;
     Ok(())
 }
 fn block_data_failure(db: &mut Connection, c: &Config, p: &mut Portfolio) {

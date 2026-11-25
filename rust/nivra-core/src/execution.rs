@@ -762,6 +762,7 @@ impl Portfolio {
         Ok(true)
     }
     /// Deterministic execution gate; caller commits under its ledger lock.
+    /// `Ok(Err(reason))` is a refusal that left the book untouched.
     #[allow(clippy::too_many_arguments)]
     pub fn execute_plan(
         &mut self,
@@ -773,68 +774,93 @@ impl Portfolio {
         max_price: Price,
         exit: ExitIntent,
         decision: &str,
-    ) -> Result<bool> {
-        if self.stopped
-            || self.closed
-            || (buy && (self.halted || exit.time.is_some_and(|time| time <= now)))
-            || units == 0
-            || !q.fresh(now, MAX_FINANCIAL_AGE_MS)
-            || q.ask < q.bid
-            || !(self.settings.session_start_minute..self.settings.session_end_minute)
-                .contains(&minute(now)?)
+    ) -> Result<std::result::Result<(), Refusal>> {
+        use Refusal::*;
+        let refuse = |reason| Ok(Err(reason));
+        if self.stopped || self.closed {
+            return refuse(BookStoppedOrClosed);
+        }
+        if buy && self.halted {
+            return refuse(Halted);
+        }
+        if buy && exit.time.is_some_and(|time| time <= now) {
+            return refuse(ExitTimePassed);
+        }
+        if units == 0 {
+            return refuse(ZeroUnits);
+        }
+        if !q.fresh(now, MAX_FINANCIAL_AGE_MS) {
+            return refuse(StaleQuote);
+        }
+        if q.ask < q.bid {
+            return refuse(CrossedQuote);
+        }
+        if !(self.settings.session_start_minute..self.settings.session_end_minute)
+            .contains(&minute(now)?)
         {
-            return Ok(false);
+            return refuse(OutsideSession);
         }
         // Option execution gate: a bounded catalog contract must exist, units
         // must be a lot multiple, and no order may hold past expiry. Unknown
         // NSE_FO keys are never treated as cash.
         if Segment::from_key(&i.key) == Some(Segment::NseFo) {
             let Some(catalog) = self.options.as_ref() else {
-                return Ok(false);
+                return refuse(OptionContractInvalid);
             };
             let Some(contract) = catalog.contract(&i.key) else {
-                return Ok(false);
+                return refuse(OptionContractInvalid);
             };
             if !units.is_multiple_of(contract.lot_size)
                 || (buy && contract.expiry <= catalog.session)
                 || (!buy && contract.expiry < catalog.session)
             {
-                return Ok(false);
+                return refuse(OptionContractInvalid);
             }
         }
         let policy = self.fee_policy(&i.key)?;
         let price =
             Self::execution_with_costs(if buy { q.ask } else { q.bid }, i.tick, buy, &policy)?;
         if buy {
-            if price > max_price
-                || self
-                    .positions
-                    .get(&i.key)
-                    .is_some_and(|p| p.instrument != *i)
-                || units > q.ask_units
-                || units > self.size_with_costs(i, q, self.cash)?
-                || self
-                    .positions
-                    .values()
-                    .any(|p| now < p.marked_at || now - p.marked_at > MAX_FINANCIAL_AGE_MS)
-            {
-                return Ok(false);
+            if price > max_price {
+                return refuse(PriceAboveMax);
             }
-        } else if units > q.bid_units
-            || !self
+            if self
+                .positions
+                .get(&i.key)
+                .is_some_and(|p| p.instrument != *i)
+            {
+                return refuse(InstrumentMismatch);
+            }
+            if units > q.ask_units {
+                return refuse(InsufficientDepth);
+            }
+            if units > self.size_with_costs(i, q, self.cash)? {
+                return refuse(InsufficientCash);
+            }
+            if self
+                .positions
+                .values()
+                .any(|p| now < p.marked_at || now - p.marked_at > MAX_FINANCIAL_AGE_MS)
+            {
+                return refuse(StalePositionMark);
+            }
+        } else {
+            if units > q.bid_units {
+                return refuse(InsufficientDepth);
+            }
+            if !self
                 .positions
                 .get(&i.key)
                 .is_some_and(|p| p.instrument == *i && units <= p.units)
-        {
-            return Ok(false);
-        }
-        if !buy {
+            {
+                return refuse(NoHeldUnits);
+            }
             let notional = price.amount().checked_mul(Amount::from_unsigned(units))?;
             let charge = policy
                 .charge(Side::Sell, Money::try_from(notional)?)?
                 .amount();
             if self.cash.checked_add(notional)?.checked_sub(charge)? < Amount::ZERO {
-                return Ok(false);
+                return refuse(SellCashNegative);
             }
         }
         let mut next = self.clone();
@@ -849,7 +875,7 @@ impl Portfolio {
         }
         next.reconcile()?;
         *self = next;
-        Ok(true)
+        Ok(Ok(()))
     }
     fn size_with_costs(&self, i: &Instrument, q: &Quote, budget: Amount) -> Result<u64> {
         let policy = self.fee_policy(&i.key)?;
@@ -878,6 +904,47 @@ impl Portfolio {
         }
         self.fill(now, i, q, true, units)?;
         Ok(true)
+    }
+}
+/// Why `Book::execute_plan` declined an order. The code is stable and is
+/// stored beside the plan verdict; it never carries quotes or model text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    BookStoppedOrClosed,
+    Halted,
+    ExitTimePassed,
+    ZeroUnits,
+    StaleQuote,
+    CrossedQuote,
+    OutsideSession,
+    OptionContractInvalid,
+    PriceAboveMax,
+    InstrumentMismatch,
+    InsufficientDepth,
+    InsufficientCash,
+    StalePositionMark,
+    NoHeldUnits,
+    SellCashNegative,
+}
+impl Refusal {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::BookStoppedOrClosed => "book_stopped_or_closed",
+            Self::Halted => "halted",
+            Self::ExitTimePassed => "exit_time_passed",
+            Self::ZeroUnits => "zero_units",
+            Self::StaleQuote => "stale_quote",
+            Self::CrossedQuote => "crossed_quote",
+            Self::OutsideSession => "outside_session",
+            Self::OptionContractInvalid => "option_contract_invalid",
+            Self::PriceAboveMax => "price_above_max",
+            Self::InstrumentMismatch => "instrument_mismatch",
+            Self::InsufficientDepth => "insufficient_depth",
+            Self::InsufficientCash => "insufficient_cash",
+            Self::StalePositionMark => "stale_position_mark",
+            Self::NoHeldUnits => "no_held_units",
+            Self::SellCashNegative => "sell_cash_negative",
+        }
     }
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
