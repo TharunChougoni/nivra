@@ -1,5 +1,20 @@
 # Source snapshot
 
+## 0.12.7 — 2026-11-25
+
+Nivra now follows an algorithms-first direction: models research and write
+paper strategies, and code executes them. See docs/DIRECTION.md and #44. The
+guides are rewritten, shorter and checked against the source.
+
+- Nifty options can load. The option spot now comes from the index feed point
+  for the underlying, with the original receipt as the two-second freshness
+  clock (#38).
+- The decision brief states the book's paper cost rates per segment, and the
+  prompt warns that stops and targets inside the round-trip cost lose (#37).
+- Every execution-gate refusal records an exact reason, such as a stale quote,
+  a price above the cap or too little depth, in a new `planner_refusal` table.
+  The dashboard shows it in plain words (#28).
+
 ## 0.12.6 — 2026-11-25
 
 An idle dashboard tab uses far less bandwidth during market hours (#33).
