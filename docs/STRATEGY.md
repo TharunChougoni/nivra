@@ -54,10 +54,11 @@ apply to option premiums.
 
 Enabling options needs an `NSE_FO` fee entry and an `NSE_FO|` quote-key prefix.
 
-The option universe never loads today. The spot is read from cash scanner
-samples, but the index feed writes elsewhere, so preparation stops at
-`option_spot_unavailable`. See issue
-[#38](https://github.com/TharunChougoni/nivra/issues/38).
+The option universe prepares from the Nifty spot on the index feed
+(`index_feeds` must include the underlying key). The spot must be no more than
+two seconds old by its original receipt. Until a fresh point arrives, the status
+stays `waiting_for_spot`. One lot is the premium times the contract lot size, so
+a small book can afford only low premiums.
 
 ## Fees
 

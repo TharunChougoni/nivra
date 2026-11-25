@@ -40,13 +40,13 @@ protection. Paper only: nothing here enables live orders.
 
 Tracked in [#44](https://github.com/TharunChougoni/nivra/issues/44):
 
-1. Record exact refusal reasons and give models the cost rates (#28, #37).
-2. Fix the option spot source so the Nifty options mandate can load (#38).
-3. Run research after the close, every day, and record the quote tape it needs (#39).
-4. Extend the strategy contract from scores-only rankers to entry and exit rules (#40).
-5. Add the deterministic acceptance check and automatic registration (#41).
-6. Add the strategy executor to the paper controller (#42).
-7. Move the decision lane to supervision, and remove the gate from cash entries (#43).
+1. Done: exact refusal reasons (#28, execution part), cost rates in the brief
+   (#37), and the option spot source (#38).
+2. Run research after the close, every day, and record the quote tape it needs (#39).
+3. Extend the strategy contract from scores-only rankers to entry and exit rules (#40).
+4. Add the deterministic acceptance check and automatic registration (#41).
+5. Add the strategy executor to the paper controller (#42).
+6. Move the decision lane to supervision, and remove the gate from cash entries (#43).
 
 Capital stays at ₹5,000 for paper trading. Costs are proportional (brokerage
 percentages are below a ₹20 cap at this order size), so the bar is to beat
