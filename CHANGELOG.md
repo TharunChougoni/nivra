@@ -1,5 +1,20 @@
 # Source snapshot
 
+## 0.12.4 — 2026-11-25
+
+The Lanes tab shows each pi lane as a chat. Browser-style tabs switch between
+the decision, gate, research and review lanes, and a side-by-side layout shows
+two at once. Each trigger appears as a message with its time, reason and
+instruments, and the full brief folds beneath it. The model's thinking and
+each tool call are single lines that expand to the full arguments and result.
+Answers carry the gate verdict, the validated plan or the turn error. Lane
+stats sit below the thread, and the session charts fold into one section.
+
+`GET /api/v1/agent/transcript` serves a lane's pi session transcripts
+read-only, capped by the dashboard transcript limits. The Lanes tab no longer
+reports a healthy journal as unreadable: it requested more turns than
+`/api/v1/agent` allows.
+
 ## 0.12.3 — 2026-11-24
 
 The dashboard explains its state. A banner at the top of each page says when

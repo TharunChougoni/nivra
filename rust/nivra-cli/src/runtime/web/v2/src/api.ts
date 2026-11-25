@@ -16,7 +16,6 @@ import type {
   ReplayExample,
   ReplayInput,
   ReplayResponse,
-  ToolsResponse,
   AgentResponse,
   AgentTranscript,
 } from "./types";
@@ -108,8 +107,6 @@ export function createApi({ fetchImpl, getToken, onUnauthorized }: ApiOptions) {
     health: () => get<HealthResponse>("/api/v1/health"),
     alerts: (parameters?: Query) =>
       get<AlertsResponse>("/api/v1/alerts" + query(parameters)),
-    tools: (parameters?: Query) =>
-      get<ToolsResponse>("/api/v1/tools" + query(parameters)),
     agent: (parameters?: Query) =>
       get<AgentResponse>("/api/v1/agent" + query(parameters)),
     agentTranscript: (parameters: Query) =>

@@ -13,6 +13,11 @@
   gap: 2px;
   min-width: 0;
   overflow-x: auto;
+  /* The active tab's -1px overlap would otherwise draw a vertical scrollbar. */
+  scrollbar-width: none;
+}
+.lane-tabs::-webkit-scrollbar {
+  display: none;
 }
 .lane-tab {
   display: inline-flex;

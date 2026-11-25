@@ -347,6 +347,7 @@ header is present on JSON, long-poll and SSE authentication responses.
 | `GET /api/v1/series?kind=receipt-minute-bar&instrument=&from=&to=&limit=` | Bounded receipt-derived minute bars with classified coverage gaps (`no_trade`/`unobserved`), store/session-start clocks and `watermark_ms`. |
 | `GET /api/v1/series?kind=account-equity&from=&to=&limit=` | Bounded recorded portfolio checkpoints with cash, equity and mark basis. |
 | `GET /api/v1/agent?cursor=&limit=` | Newest-first pi lane turns (`limit` 1–200, default 50; anything else is `400 agent_limit_invalid`) with tool calls, plan stance, gate verdict, usage and fallback; trigger counts; per-lane usage totals. Served from a process-local journal cache that parses only appended bytes. When a journal exceeds the read window it returns the newest rows with `truncated:true` and `rows_not_loaded:{turns,triggers}`. ETag revalidation. |
+| `GET /api/v1/agent/transcript?lane=&cursor=&limit=` | One pi lane's session transcripts as chat exchanges, newest first (`limit` 1–50, default 20). Each exchange is a trigger brief, the model's thinking, text and tool calls (arguments and results paired by call id) and the matching turn row from `/api/v1/agent`. Reads the newest eight `model/agent/pi/<lane>/*.jsonl` session files through the same append-only cache. Text is capped by `transcript_text_max_bytes`, tool arguments by `transcript_args_max_bytes`, and capped fields say `truncated:true`. System prompts are not served. A missing lane directory is an empty list. Bad `lane`, `limit` or `cursor` values return `400 transcript_*_invalid`. ETag revalidation. |
 | `GET /api/v1/events` | SSE `summary_changed` / `price_batch` frames with heartbeats; `?poll=1&after=N` is the held long-poll fallback. |
 
 Meta and the lane journal revalidate with ETags. Private responses vary by
@@ -403,28 +404,34 @@ conflict handling and dry-run/apply commands.
 
 ## pi lanes view
 
-`#/lanes` reads `GET /api/v1/agent` and reloads it when `revisions.agent`
-changes. It shows:
+`#/lanes` shows each pi lane as a chat session. It reads
+`GET /api/v1/agent/transcript` for the selected lane and `GET /api/v1/agent`
+for the stats and charts, and reloads both when `revisions.agent` changes.
 
-- **Lane cards** for decision, gate, research and review, then any other lane:
-  turns, failed turns, fallbacks, p50/p95 latency, tokens in/out, cache reads,
-  cost, provider calls, the configured model, calls and spend against the daily
-  budget (from `readiness.models.roles` in `/api/v1/health`), readiness status
-  and the last turn. Usage totals come from the API's `usage.lanes`; latency and
-  failure figures come from the loaded turns and say so.
-- **Timeline**: one row per lane over the session. Each turn is a bar whose
-  height is log latency; a failed turn is a hollow outline and a gate
-  escalation adds a diamond. Hover shows the turn; click opens it.
-- **Gate funnel**: gate turns, escalations, decision turns, validated plans,
-  actions and fills, with only recorded counts.
-- **Latency distribution** per lane and **cumulative cost by lane**.
-- **Turn table** with model and fallback, trigger and instruments, the tool
-  chain (failed tools marked with their error), outcome, latency, tokens, cost
-  and status. A row opens a drawer with the full recorded turn.
-- **Web tool activity**: recorded `web_search`, `web_fetch` and `news_lookup`
-  calls with their original query or URL, latency, bytes and outcome.
+- **Lane tabs** for decision, gate, research and review, then any other lane.
+  Each tab shows a status dot and the turn and error counts. A side-by-side
+  toggle shows two lanes next to each other. The selected lane and layout are
+  remembered in this browser only.
+- **Chat thread**, oldest at the top and newest at the bottom, with
+  **Load earlier** for older exchanges. A dashed divider marks each pi session
+  (a controller restart starts a new one) with its model and thinking level.
+  Each trigger is a user message with its IST time, kind, reason and
+  instruments; the full brief sent to the model folds under
+  **Show full brief**. Thinking and each tool call are single lines that expand
+  to the full text, arguments and result. Long tool chains fold their middle
+  calls. The answer carries a chip: escalated or declined for the gate, the
+  validated plan and its action count for decision, or the turn error. A brief
+  without a reply shows as interrupted.
+- **Lane stats** below the thread: turns, failures, fallbacks, p50/p95
+  latency, tokens, cost, provider calls, calls and spend against the daily
+  budget (from `readiness.models.roles` in `/api/v1/health`) and the last
+  turn. Usage totals come from the API's `usage.lanes`; latency and failure
+  figures come from the loaded turns and say so.
+- **Session charts**, collapsed by default: the lane timeline, gate funnel,
+  latency distribution and cumulative cost by lane.
 
-Turns, queries and URLs are untrusted model text rendered as text. The view is
+Briefs, model text, tool arguments and results are untrusted model or tool
+text rendered as text. Capped fields are marked as truncated. The view is
 display evidence only and carries no order authority. A truncated journal is
 labelled as showing the newest rows, never as a complete total.
 
