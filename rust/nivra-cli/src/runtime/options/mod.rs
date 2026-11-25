@@ -16,17 +16,20 @@ pub(crate) fn is_option_key(key: &str) -> bool {
     Segment::from_key(key) == Some(Segment::NseFo)
 }
 
-/// Fresh spot from the existing quote map (the scanner sample for the
-/// configured underlying key). Missing or stale spot fails closed upstream
-/// with an explicit reason; it is never inferred from a contract's symbol.
-pub(crate) fn spot_quote(scan: &Scanner, c: &Config, now: i64) -> Option<SpotQuote> {
+/// Fresh spot from the non-tradeable index feed point for the configured
+/// underlying key. The index never enters the cash scanner samples, so the
+/// spot is read from the index context, not the cash quote map. Missing or
+/// stale spot fails closed upstream with an explicit reason; it is never
+/// inferred from a contract's symbol.
+pub(crate) fn spot_quote(
+    index: &super::wide::IndexContext,
+    c: &Config,
+    now: i64,
+) -> Option<SpotQuote> {
     if !c.nifty_options.enabled {
         return None;
     }
-    let sample = scan.samples.get(&c.nifty_options.underlying_key)?;
-    let price = sample.current?;
-    let source_at = sample.source?;
-    let received_at = sample.seen;
+    let (price, source_at, received_at) = index.point(&c.nifty_options.underlying_key)?;
     // The original receipt is the financial freshness clock; the exchange
     // source stamp must not be later than that receipt.
     if received_at <= 0
@@ -200,24 +203,50 @@ mod tests {
         let c = config(dir.path());
         let now = 1_792_122_300_000_i64;
         let mut scan = Scanner::default();
-        // No spot sample: fail closed with no invented price.
-        assert!(spot_quote(&scan, &c, now).is_none());
+        let store = nivra_core::feature_store::FeatureStore::new(Default::default()).unwrap();
+        let index = |source: i64, receipt: i64| {
+            let point = super::super::market_feed::Point {
+                price: Price::parse("26000").unwrap(),
+                source,
+                receipt,
+                last_trade: source,
+                prior_close: None,
+            };
+            let points = [(c.nifty_options.underlying_key.clone(), point)].into();
+            super::super::wide::IndexContext::capture(
+                &c,
+                &points,
+                &store,
+                &Default::default(),
+                receipt,
+                Some(receipt),
+            )
+        };
+        // No index point: fail closed with no invented price, even when the
+        // cash scanner holds a sample under the same key.
+        let missing = super::super::wide::IndexContext::default();
         scan.observe_price(
             now,
             "NSE_INDEX|Nifty 50",
-            Price::parse("26000").unwrap(),
+            Price::parse("25000").unwrap(),
             now,
             now,
             2000,
             None,
         )
         .unwrap();
-        let spot = spot_quote(&scan, &c, now).unwrap();
+        assert!(spot_quote(&missing, &c, now).is_none());
+        // A fresh index feed point supplies the spot with its original times.
+        let spot = spot_quote(&index(now - 5, now), &c, now).unwrap();
         assert_eq!(spot.price, Price::parse("26000").unwrap());
         assert_eq!(spot.key, "NSE_INDEX|Nifty 50");
-        // A stale or future receipt never becomes spot.
-        assert!(spot_quote(&scan, &c, now + 2_001).is_none());
-        assert!(spot_quote(&scan, &c, now - 1).is_none());
+        assert_eq!((spot.source_at, spot.received_at), (now - 5, now));
+        assert!(spot_quote(&index(now, now), &c, now + 2_000).is_some());
+        // A stale or future receipt, or a source later than receipt, never
+        // becomes spot.
+        assert!(spot_quote(&index(now, now), &c, now + 2_001).is_none());
+        assert!(spot_quote(&index(now, now), &c, now - 1).is_none());
+        assert!(spot_quote(&index(now + 1, now), &c, now).is_none());
         // Bounded rows: only catalog contracts, no cash screens, spot included.
         let catalog = catalog();
         scan.observe_price(

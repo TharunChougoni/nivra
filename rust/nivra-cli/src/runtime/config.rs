@@ -554,7 +554,7 @@ impl IndexFeedSettings {
 #[serde(default, deny_unknown_fields)]
 pub struct NiftyOptionSettings {
     pub enabled: bool,
-    /// Spot instrument key; the existing quote map must carry a fresh quote.
+    /// Spot instrument key; the index feed (`index_feeds`) must carry a fresh point.
     pub underlying_key: String,
     pub underlying_symbol: String,
     /// Sanity check against the contract/BOD payload; never used to invent a lot.
