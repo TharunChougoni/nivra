@@ -369,8 +369,13 @@ function revisionFixture() {
     const path = url.split("?")[0];
     requests.push(path);
     if (path === "/api/v1/meta") return json({ mode: "paper" });
-    if (path === "/api/v1/agent")
+    if (path === "/api/v1/agent") {
+      // The server accepts limit 1..=200 and answers 400 otherwise (ops.rs).
+      const limit = new URL(url, "http://x").searchParams.get("limit");
+      if (limit !== null && !(Number(limit) >= 1 && Number(limit) <= 200))
+        return new Response(null, { status: 400 });
       return json({ turns: [], total: 0, usage: { lanes: {} } });
+    }
     if (path === "/api/v1/series") return json({ points: [], coverage: null });
     const all = projections({});
     const body = all[path] as Record<string, unknown>;

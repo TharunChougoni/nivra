@@ -346,7 +346,7 @@ header is present on JSON, long-poll and SSE authentication responses.
 | `GET /api/v1/alerts?cursor=&limit=` | Stable derived alert rows with original evidence and `next`. |
 | `GET /api/v1/series?kind=receipt-minute-bar&instrument=&from=&to=&limit=` | Bounded receipt-derived minute bars with classified coverage gaps (`no_trade`/`unobserved`), store/session-start clocks and `watermark_ms`. |
 | `GET /api/v1/series?kind=account-equity&from=&to=&limit=` | Bounded recorded portfolio checkpoints with cash, equity and mark basis. |
-| `GET /api/v1/agent?cursor=&limit=` | Newest-first pi lane turns with tool calls, plan stance, gate verdict, usage and fallback; trigger counts; per-lane usage totals. Served from a process-local journal cache that parses only appended bytes. When a journal exceeds the read window it returns the newest rows with `truncated:true` and `rows_not_loaded:{turns,triggers}`. ETag revalidation. |
+| `GET /api/v1/agent?cursor=&limit=` | Newest-first pi lane turns (`limit` 1–200, default 50; anything else is `400 agent_limit_invalid`) with tool calls, plan stance, gate verdict, usage and fallback; trigger counts; per-lane usage totals. Served from a process-local journal cache that parses only appended bytes. When a journal exceeds the read window it returns the newest rows with `truncated:true` and `rows_not_loaded:{turns,triggers}`. ETag revalidation. |
 | `GET /api/v1/events` | SSE `summary_changed` / `price_batch` frames with heartbeats; `?poll=1&after=N` is the held long-poll fallback. |
 
 Meta and the lane journal revalidate with ETags. Private responses vary by

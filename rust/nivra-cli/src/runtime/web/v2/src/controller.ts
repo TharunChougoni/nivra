@@ -510,7 +510,7 @@ export function createController(
     if (!state.agent) set({ agentState: "loading" });
     const task: Promise<void> = (async () => {
       try {
-        const body = await api.agent({ limit: 300 });
+        const body = await api.agent({ limit: 200 });
         if (generation !== epoch || stopped) return;
         set({
           agent: body?.unavailable ? null : body,
