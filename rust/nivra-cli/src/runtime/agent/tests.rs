@@ -636,9 +636,20 @@ fn request_research_reaches_a_research_turn_and_the_next_decision_brief() {
         (queued, refused, unlisted, plan, updates)
     });
     let mut context = context("5000");
+    let costs = crate::runtime::tests::test_costs();
+    context.portfolio.fee_schedule = Some(
+        nivra_core::finance::FeeSchedule::new(costs.clone())
+            .with_segment(nivra_core::market::Segment::NseFo, costs.clone()),
+    );
     let mut agent = fixture_agent(client);
     let mut runner = LaneRunner::new(&mut agent, &settings, &c, &cfg, &clock);
     let brief = fixture_brief(&context, clock());
+    let book = serde_json::to_value(&brief).unwrap()["book"].clone();
+    assert_eq!(book["paper_costs"], serde_json::to_value(&costs).unwrap());
+    assert_eq!(
+        book["paper_costs_by_segment"]["NSE_FO"],
+        serde_json::to_value(&costs).unwrap()
+    );
     let first = runner
         .decision(json!({"kind":"schedule"}), brief.clone(), &mut context)
         .unwrap();

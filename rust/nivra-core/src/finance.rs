@@ -439,6 +439,13 @@ impl FeeSchedule {
         &self.cash
     }
 
+    /// Configured non-cash schedules, in segment order.
+    pub fn segments(&self) -> impl Iterator<Item = (Segment, &FeeArithmetic)> {
+        self.by_segment
+            .iter()
+            .map(|(segment, fees)| (*segment, fees))
+    }
+
     /// Cash equity uses `paper_costs`; other segments need a configured entry.
     pub fn for_segment(&self, segment: Segment) -> Option<&FeeArithmetic> {
         match segment {

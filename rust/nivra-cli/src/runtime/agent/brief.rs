@@ -7,9 +7,10 @@ use super::protocol::Usage;
 use super::triggers::{Held, Phase, Ranked, Trigger};
 use crate::runtime::Result;
 use nivra_core::execution::Portfolio;
-use nivra_core::finance::Price;
+use nivra_core::finance::{FeeArithmetic, Price};
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 const MAX_FILLS: usize = 10;
 const MAX_POSITIONS: usize = 20;
@@ -53,6 +54,12 @@ pub(crate) struct BookFacts {
     pub stopped: bool,
     pub closed: bool,
     pub execution: &'static str,
+    /// The book's paper cost policy for cash equities: per-order fee, buy and
+    /// sell bps, slippage bps per side and the fee rounding increment.
+    pub paper_costs: Option<FeeArithmetic>,
+    /// Non-cash segments whose costs differ, keyed by segment.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub paper_costs_by_segment: BTreeMap<&'static str, FeeArithmetic>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -227,6 +234,17 @@ impl Brief {
                 stopped: p.stopped,
                 closed: p.closed,
                 execution: facts.execution,
+                paper_costs: p
+                    .fee_schedule
+                    .as_ref()
+                    .map(|schedule| schedule.cash().clone())
+                    .or_else(|| p.costs.clone()),
+                paper_costs_by_segment: p
+                    .fee_schedule
+                    .iter()
+                    .flat_map(|schedule| schedule.segments())
+                    .map(|(segment, fees)| (segment.as_str(), fees.clone()))
+                    .collect(),
             },
             budget,
             positions,
