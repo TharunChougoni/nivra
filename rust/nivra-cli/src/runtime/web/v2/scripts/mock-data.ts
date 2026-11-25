@@ -9,7 +9,11 @@ import type {
   LaneBudget,
   ActivityAttribution,
   AgentResponse,
+  AgentTranscript,
   AgentTurn,
+  TranscriptExchange,
+  TranscriptItem,
+  TranscriptSession,
   Alert,
   CatalogInstrument,
   ContractChainResponse,
@@ -1595,6 +1599,7 @@ export function metaFor(data: MockData): MetaResponse {
       "alerts",
       "series",
       "agent",
+      "agent_transcript",
       "events",
       "tools",
       "backtest",
@@ -1968,6 +1973,138 @@ export function agentAt(
         : null,
     triggers,
     usage: { date: data.day, lanes },
+    execution_authorized: false,
+  };
+}
+
+/** pi session ids per lane: the first covers the morning, a restart starts the second. */
+const sessionIds = (lane: string) =>
+  [1, 2].map(
+    (n) =>
+      `0192a3b${n}-${lane.slice(0, 4).padEnd(4, "0")}-7079-a3a5-5c0de0000000`,
+  );
+const TOOL_ARGS: Record<string, (instruments: string[]) => unknown> = {
+  snapshot: (i) => ({ instruments: i.slice(0, 3) }),
+  quotes: (i) => ({ instruments: i }),
+  intraday: (i) => ({ instrument: i[0], bars: 30 }),
+  bars: (i) => ({ instrument: i[0], interval: "1m", limit: 60 }),
+  positions: () => ({}),
+  fills: () => ({ limit: 20 }),
+  propose_plan: () => ({ stance: "see answer", actions: "see plan" }),
+  verdict: () => ({ escalate: "see answer" }),
+  web_search: () => ({ query: "market breadth NSE today" }),
+  web_fetch: () => ({ url: "https://example.com/markets/breadth" }),
+  news_lookup: () => ({ topic: "sector news", limit: 5 }),
+  read_evidence: () => ({ evidence_id: "bundle" }),
+};
+/** Synthetic pi transcript for one lane, derived from the mock turns so both agree. */
+export function transcriptAt(
+  data: MockData,
+  now: number,
+  {
+    lane,
+    cursor = 0,
+    limit = 20,
+  }: { lane: string; cursor?: number; limit?: number },
+): AgentTranscript {
+  const rows = data.turns.filter(
+    (t) => t.lane === lane && (t.at_ms ?? 0) <= now,
+  );
+  const ids = sessionIds(lane);
+  const split = Math.floor(rows.length / 2);
+  const sessions: TranscriptSession[] = ids.map((id, n) => ({
+    id,
+    file: `fixture-${n + 1}.jsonl`,
+    started_ms: rows[n ? split : 0]?.at_ms ?? data.openMs,
+    provider: rows[0]?.provider ?? null,
+    model: rows[0]?.model ?? null,
+    thinking: lane === "gate" ? "low" : "medium",
+  }));
+  const exchanges = rows.map((turn, i): TranscriptExchange => {
+    const keys = turn.trigger?.instruments ?? [];
+    const at_ms = (turn.at_ms ?? 0) + 20;
+    const failed = turn.status === "error";
+    const calls = [...(turn.tool_calls ?? [])];
+    // Multi-name decisions look at each name, which makes a long tool run.
+    if (lane === "decision" && keys.length > 2)
+      calls.splice(
+        2,
+        0,
+        ...keys.map(() => ({ name: "intraday", ok: true, error: null })),
+      );
+    const items: TranscriptItem[] = [
+      {
+        kind: "thinking",
+        text: `${turn.trigger?.reason ?? "Scheduled turn"}.\nCheck the book first, then look at fresh evidence before answering.`,
+        truncated: false,
+      },
+    ];
+    calls.forEach((c, n) => {
+      const args = JSON.stringify(TOOL_ARGS[c.name]?.(keys) ?? {});
+      const last = failed && n === calls.length - 1;
+      items.push({
+        kind: "tool",
+        id: `call_${i}_${n}`,
+        name: c.name,
+        args: { text: args, truncated: false },
+        result: last
+          ? null
+          : {
+              text: c.ok
+                ? JSON.stringify({
+                    status: "available",
+                    execution_authorized: false,
+                    rows: n + 2,
+                  })
+                : JSON.stringify({ error: c.error }),
+              truncated: n === 1 && i % 5 === 0,
+            },
+        is_error: last ? null : !c.ok,
+        duration_ms: last ? null : 6 + ((i * 7 + n * 13) % 80),
+      });
+    });
+    if (failed) {
+      if (turn.error === "provider_overloaded")
+        items.push({
+          kind: "error",
+          text: "529 provider overloaded; retries exhausted",
+        });
+    } else
+      items.push({
+        kind: "text",
+        text: turn.verdict
+          ? `${turn.verdict.escalate ? "Escalating" : "Declining"}: ${turn.verdict.reason}.`
+          : turn.plan
+            ? `Stance ${turn.plan.stance ?? "hold"}; ${turn.plan.actions ?? 0} action(s) proposed for validation.`
+            : "Findings recorded for the evidence library.",
+        truncated: false,
+      });
+    const body = `Brief:\n${JSON.stringify({ session: data.day, lane, trigger: turn.trigger, book: { cash: "5000", positions: 0 } }, null, 2)}`;
+    const long = i % 7 === 3;
+    return {
+      session: ids[i < split ? 0 : 1],
+      at_ms,
+      ended_ms: failed ? null : at_ms + (turn.elapsed_ms ?? 0),
+      complete: !failed,
+      brief: {
+        text: long ? body.slice(0, Math.floor(body.length * 0.6)) : body,
+        bytes: long ? body.length * 3 : body.length,
+        truncated: long,
+      },
+      items,
+      turn,
+    };
+  });
+  const page = exchanges.reverse().slice(cursor, cursor + limit);
+  return {
+    v: 1,
+    lane,
+    sessions,
+    exchanges: page,
+    total: rows.length,
+    next:
+      cursor + page.length < rows.length ? String(cursor + page.length) : null,
+    truncated: false,
     execution_authorized: false,
   };
 }

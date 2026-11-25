@@ -10,6 +10,7 @@ import "./layout.css";
 import "./components.css";
 import "./charts.css";
 import "./pages.css";
+import "./lanes.css";
 import "./motion.css";
 export function mountApp(
   doc: Document,

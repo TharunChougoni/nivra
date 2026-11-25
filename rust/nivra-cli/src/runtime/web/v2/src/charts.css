@@ -135,9 +135,6 @@
 .lane-timeline .now-line {
   stroke: var(--fg-2);
 }
-.lane-timeline rect.turn {
-  cursor: pointer;
-}
 .lane-timeline rect.turn:hover {
   opacity: 1;
 }

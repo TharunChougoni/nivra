@@ -597,21 +597,6 @@ td.wrap {
 .validation-summary > a {
   margin-left: auto;
 }
-/* Lane tool chips */
-.tool-ok,
-.tool-failed {
-  font: 10px var(--mono);
-  padding: 0 4px;
-  border-radius: 2px;
-  border: 1px solid var(--line-2);
-  color: var(--fg-1);
-  margin-right: 3px;
-  display: inline-block;
-}
-.tool-failed {
-  border-color: var(--neg);
-  color: var(--neg);
-}
 .fact-list.facts-strip {
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 0;

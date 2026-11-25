@@ -18,6 +18,7 @@ import type {
   ReplayResponse,
   ToolsResponse,
   AgentResponse,
+  AgentTranscript,
 } from "./types";
 // Authenticated JSON/text reads with ETag revalidation. No mutations exist here.
 export class ApiError extends Error {
@@ -111,6 +112,8 @@ export function createApi({ fetchImpl, getToken, onUnauthorized }: ApiOptions) {
       get<ToolsResponse>("/api/v1/tools" + query(parameters)),
     agent: (parameters?: Query) =>
       get<AgentResponse>("/api/v1/agent" + query(parameters)),
+    agentTranscript: (parameters: Query) =>
+      get<AgentTranscript>("/api/v1/agent/transcript" + query(parameters)),
     series: (parameters?: Query) =>
       get<SeriesResponse>("/api/v1/series" + query(parameters)),
     example: () => get<ReplayExample>("/api/v1/backtest/example"),

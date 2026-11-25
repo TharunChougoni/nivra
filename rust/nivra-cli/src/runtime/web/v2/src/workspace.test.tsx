@@ -478,12 +478,12 @@ test("client renders every section, archived books and private lock state", asyn
             ?.getAttribute("aria-current") === "page",
       );
       if (section === "lanes") {
+        await until(() => document.querySelector('[role="tab"]'));
         await until(() =>
-          document.body.textContent?.includes("Web tool activity"),
+          requests.some((url) =>
+            url.startsWith("/api/v1/agent/transcript?lane="),
+          ),
         );
-        await until(() => document.body.textContent?.includes("nifty bank"));
-        assert.ok(document.body.textContent?.includes("42 ms"));
-        assert.ok(requests.some((url) => url.startsWith("/api/v1/tools?")));
         assert.equal(
           requests.some((url) =>
             /\/api\/v1\/(runs|approvals|session)(\?|\/|$)/.test(url),
@@ -935,12 +935,105 @@ const GLOBALS = [
   "localStorage",
   "NodeFilter",
 ] as const;
-test("#/lanes shows lane cards, the turn table and the turn drawer from the journal", async () => {
+type Json = Record<string, unknown>;
+const turn = (lane: string, n: number, extra: Json = {}) => ({
+  turn_id: `${lane}-${n}`,
+  lane,
+  at_ms: envelope.as_of_ms - 1000 * n,
+  status: "ok",
+  model: `${lane}-model`,
+  elapsed_ms: 900,
+  usage: { input: 100, output: 20, cache_read: 5, cost_usd: 0.02, calls: 1 },
+  trigger: { kind: "price_move", reason: "move over 30 bps", instruments: [] },
+  ...extra,
+});
+const exchange = (turn: Json, extra: Json = {}) => ({
+  session: "01a210cf-7c56-7079-a3a5-59ca71548016",
+  at_ms: turn.at_ms as number,
+  ended_ms: (turn.at_ms as number) + 900,
+  complete: true,
+  brief: { text: 'Brief:\n{"book":{}}', bytes: 4200, truncated: true },
+  items: [],
+  turn,
+  ...extra,
+});
+const gateNew = turn("gate", 1, {
+  trigger: {
+    kind: "price_move",
+    reason: "move over 30 bps",
+    instruments: ["NSE_EQ|RELIANCE"],
+  },
+  verdict: { escalate: true, reason: "spread tight" },
+});
+const gateOld = turn("gate", 2, {
+  verdict: { escalate: false, reason: "no volume confirmation" },
+});
+const decisionNew = turn("decision", 1, {
+  plan: { status: "validated", stance: "hold", actions: 2 },
+});
+const decisionCut = turn("decision", 2, { status: "ok" });
+const transcripts: Record<string, Json[][]> = {
+  // Pages are newest first; the second page answers `cursor=1`.
+  gate: [
+    [
+      exchange(gateNew, {
+        items: [
+          {
+            kind: "thinking",
+            text: "Checking the spread.\nThen depth.",
+            truncated: false,
+          },
+          {
+            kind: "tool",
+            id: "c1",
+            name: "intraday",
+            args: {
+              text: '{"instrument":"NSE_EQ|RELIANCE"}',
+              truncated: true,
+            },
+            result: { text: '{"bid":"100.0"}', truncated: false },
+            is_error: false,
+            duration_ms: 9,
+          },
+          { kind: "text", text: "Escalating RELIANCE.", truncated: false },
+        ],
+      }),
+    ],
+    [
+      exchange(gateOld, {
+        items: [{ kind: "text", text: "Declining.", truncated: false }],
+      }),
+    ],
+  ],
+  decision: [
+    [
+      exchange(decisionNew, {
+        items: [{ kind: "text", text: "Holding the book.", truncated: false }],
+      }),
+      exchange(decisionCut, { complete: false, ended_ms: null }),
+    ],
+  ],
+  research: [[]],
+};
+async function openLanes(failing = "review") {
   const dom = new JSDOM('<div id="root"></div>', {
     url: "http://localhost/#/lanes",
     pretendToBeVisual: true,
   });
-  for (const key of GLOBALS)
+  for (const key of [
+    "window",
+    "document",
+    "Node",
+    "HTMLElement",
+    "Element",
+    "Event",
+    "CustomEvent",
+    "MutationObserver",
+    "getComputedStyle",
+    "location",
+    "localStorage",
+    "NodeFilter",
+  ] as const)
     Object.defineProperty(globalThis, key, {
       value:
         key === "getComputedStyle"
@@ -955,49 +1048,7 @@ test("#/lanes shows lane cards, the turn table and the turn drawer from the jour
   );
   const { App, Context } = await loadApp();
   const { createRoot } = await import("react-dom/client");
-  const turns = [
-    {
-      turn_id: "gate-1",
-      lane: "gate",
-      at_ms: envelope.as_of_ms - 2000,
-      status: "ok",
-      model: "gate-model",
-      elapsed_ms: 900,
-      usage: {
-        input: 100,
-        output: 20,
-        cache_read: 5,
-        cost_usd: 0.02,
-        calls: 1,
-      },
-      trigger: { kind: "price_move", instruments: ["NSE_EQ|RELIANCE"] },
-      verdict: { escalate: true, reason: "spread tight" },
-    },
-    {
-      turn_id: "decision-1",
-      lane: "decision",
-      at_ms: envelope.as_of_ms - 1000,
-      status: "failed",
-      error: "provider timeout",
-      model: "primary-model",
-      fallback: { to: { id: "backup-model" }, reason: "timeout" },
-      elapsed_ms: 4100,
-      usage: {
-        input: 900,
-        output: 300,
-        cache_read: 50,
-        cost_usd: 0.31,
-        calls: 2,
-      },
-      tool_calls: [
-        { name: "positions", ok: true },
-        { name: "quote", ok: false, error: "stale receipt" },
-      ],
-      plan: { status: "validated", stance: "hold", actions: 0 },
-    },
-  ];
   const fetch = fetchFixture({
-    // Only the decision lane reports a budget; gate's stays unknown.
     "/api/v1/health": () =>
       json({
         ...envelope,
@@ -1007,7 +1058,6 @@ test("#/lanes shows lane cards, the turn table and the turn drawer from the jour
               {
                 role: "decision",
                 model: "primary-model",
-                provider: "router",
                 status: "unknown",
                 daily_call_budget: 60,
                 daily_cost_usd: 4,
@@ -1021,29 +1071,45 @@ test("#/lanes shows lane cards, the turn table and the turn drawer from the jour
     "/api/v1/agent": () =>
       json({
         v: 1,
-        turns,
+        turns: [gateNew, decisionNew],
         total: 2,
-        triggers: { gate_escalated: 1 },
         usage: {
           lanes: {
-            gate: {
-              input: 100,
-              output: 20,
-              cache_read: 5,
-              cost_usd: 0.02,
-              calls: 1,
-            },
-            decision: {
-              input: 900,
-              output: 300,
-              cache_read: 50,
-              cost_usd: 0.31,
-              calls: 2,
-            },
+            decision: { input: 900, output: 300, cost_usd: 0.31, calls: 2 },
           },
         },
         execution_authorized: false,
       }),
+    "/api/v1/agent/transcript": (url) => {
+      const q = new URLSearchParams(url.split("?")[1]),
+        lane = q.get("lane") ?? "",
+        pages = transcripts[lane] ?? [[]],
+        page = q.get("cursor") ? 1 : 0;
+      if (lane === failing)
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ error: "agent_transcript_unavailable" }),
+            {
+              status: 503,
+            },
+          ),
+        );
+      return json({
+        v: 1,
+        lane,
+        sessions: [
+          {
+            id: "01a210cf-7c56-7079-a3a5-59ca71548016",
+            started_ms: envelope.as_of_ms - 60_000,
+            model: `${lane}-model`,
+            thinking: "low",
+          },
+        ],
+        exchanges: pages[page] ?? [],
+        total: 2,
+        next: page === 0 && pages.length > 1 ? "1" : null,
+      });
+    },
   });
   const app = createController(dom.window, { connect: false, fetch });
   const root = createRoot(document.getElementById("root")!);
@@ -1052,47 +1118,98 @@ test("#/lanes shows lane cards, the turn table and the turn drawer from the jour
       <App />
     </Context.Provider>,
   );
+  await app.authenticate("fixture-only");
+  const text = () => document.body.textContent || "",
+    tab = (name: string) =>
+      [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find((t) =>
+        t.textContent?.startsWith(name),
+      )!,
+    button = (label: string) =>
+      [...document.querySelectorAll<HTMLElement>("button")].find((b) =>
+        b.textContent?.includes(label),
+      );
+  return {
+    text,
+    tab,
+    button,
+    close: () => {
+      app.stop();
+      root.unmount();
+      dom.window.close();
+    },
+  };
+}
+test("#/lanes reads each lane as a chat with expandable tools and outcome chips", async () => {
+  const page = await openLanes();
   try {
-    await app.authenticate("fixture-only");
-    await until(() => document.querySelectorAll(".lane-card").length === 4);
-    const cards = [...document.querySelectorAll(".lane-card")].map(
-      (c) => c.textContent || "",
-    );
-    // fixed lane order, totals from the API usage block
-    assert.ok(cards[0].startsWith("decision"));
-    assert.ok(cards[0].includes("$0.31"));
-    assert.ok(cards[0].includes("1 · 1"), "failed and fallback counts");
-    await until(() =>
-      (document.querySelector(".lane-card")?.textContent || "").includes(
-        "2 of 60",
-      ),
-    );
-    const budgeted =
-        document.querySelectorAll(".lane-card")[0].textContent || "",
-      unbudgeted = document.querySelectorAll(".lane-card")[1].textContent || "";
-    assert.ok(
-      budgeted.includes("$0.31 of $4.00"),
-      "spend against daily budget",
-    );
-    assert.ok(unbudgeted.includes("not reported"), "absent budget is not zero");
-    assert.ok(cards[1].startsWith("gate"));
-    // a lane with no turns keeps unknown latency instead of 0 ms
-    assert.ok(cards[2].includes("— / —"));
-    const rows = [...document.querySelectorAll("tbody tr")].filter((r) =>
-      r.textContent?.includes("primary-model"),
-    );
-    assert.equal(rows.length, 1);
-    assert.ok(rows[0].textContent?.includes("fallback"));
-    assert.ok(rows[0].querySelector(".tool-failed"));
-    rows[0].querySelector<HTMLButtonElement>(".row-link")!.click();
-    await until(() => document.querySelector(".drawer"));
-    const drawer = document.querySelector(".drawer")!.textContent || "";
-    assert.ok(drawer.includes("provider timeout"));
-    assert.ok(drawer.includes("backup-model"));
-    assert.ok(drawer.includes("stale receipt"));
+    // decision is the first tab: the trigger bubble and the plan chip
+    await until(() => page.text().includes("Holding the book."));
+    assert.ok(page.text().includes("price move · move over 30 bps"));
+    assert.ok(page.text().includes("plan validated · 2 actions"));
+    assert.ok(page.text().includes("session 01a210cf · decision-model"));
+    // the stats strip sits under the thread, with spend against budget
+    assert.ok(page.text().includes("$0.31 of $4.00"));
+    page.tab("gate").click();
+    await until(() => page.text().includes("Escalating RELIANCE."));
+    assert.ok(page.text().includes("Instruments: RELIANCE"));
+    assert.ok(page.text().includes("escalated"));
+    assert.ok(page.text().includes("spread tight"));
+    // a tool call is one collapsed line until opened
+    const tool = page.button("intraday")!;
+    assert.equal(tool.getAttribute("aria-expanded"), "false");
+    assert.equal(page.text().includes('"bid": "100.0"'), false);
+    assert.equal(page.text().includes("truncated"), false);
+    tool.click();
+    await until(() => page.text().includes('"bid": "100.0"'));
+    assert.ok(page.text().includes("truncated"));
+    assert.equal(page.text().includes("Declining."), false);
+    // older exchanges arrive through the cursor
+    page.button("Load earlier")!.click();
+    await until(() => page.text().includes("Declining."));
+    assert.ok(page.text().includes("declined"));
+    assert.ok(page.text().includes("no volume confirmation"));
+    assert.equal(page.button("Load earlier"), undefined);
   } finally {
-    app.stop();
-    root.unmount();
-    dom.window.close();
+    page.close();
+  }
+});
+test("#/lanes marks an interrupted exchange and keeps a failed transcript read to its lane", async () => {
+  const page = await openLanes("review");
+  try {
+    await until(() => page.text().includes("Holding the book."));
+    assert.ok(page.text().includes("interrupted"));
+    page.tab("review").click();
+    await until(() =>
+      page.text().includes("The lane transcript could not be read"),
+    );
+    assert.equal(page.text().includes("No turns yet"), false);
+    page.tab("research").click();
+    await until(() => page.text().includes("No turns yet"));
+    assert.ok(page.text().includes("Runs on research requests"));
+  } finally {
+    page.close();
+  }
+});
+test("#/lanes side by side shows two lanes and the right one can change", async () => {
+  const page = await openLanes();
+  try {
+    await until(() => page.text().includes("Holding the book."));
+    assert.equal(document.querySelectorAll("section.lane-col").length, 1);
+    page.button("Side by side")!.click();
+    await until(() => page.text().includes("Escalating RELIANCE."));
+    const lanes = () =>
+      [...document.querySelectorAll("section.lane-col")].map((c) =>
+        c.getAttribute("aria-label"),
+      );
+    assert.deepEqual(lanes(), ["decision lane", "gate lane"]);
+    const select = document.querySelector<HTMLSelectElement>(
+      'select[aria-label="Right lane"]',
+    )!;
+    select.value = "research";
+    select.dispatchEvent(new window.Event("change", { bubbles: true }));
+    await until(() => lanes()[1] === "research lane");
+    await until(() => page.text().includes("No turns yet"));
+  } finally {
+    page.close();
   }
 });

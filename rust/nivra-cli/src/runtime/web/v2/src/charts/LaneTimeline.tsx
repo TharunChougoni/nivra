@@ -45,7 +45,6 @@ export default function LaneTimeline({
   range,
   now,
   rowHeight = 36,
-  onSelect,
 }: {
   turns: AgentTurn[];
   lanes: string[];
@@ -53,7 +52,6 @@ export default function LaneTimeline({
   /** Source checkpoint time; never the browser clock. */
   now?: number | null;
   rowHeight?: number;
-  onSelect?: (turn: AgentTurn) => void;
 }) {
   const [ref, width] = useWidth<HTMLDivElement>(800);
   const [hover, setHover] = useState<{
@@ -147,7 +145,6 @@ export default function LaneTimeline({
                           setHover({ turn: t, x: e.clientX, y: e.clientY })
                         }
                         onMouseLeave={() => setHover(null)}
-                        onClick={() => onSelect?.(t)}
                       />
                     </g>
                   );

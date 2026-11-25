@@ -1160,6 +1160,56 @@ export interface AgentResponse extends Availability {
   usage?: { date?: string; lanes?: Record<string, AgentUsage> } | null;
   execution_authorized?: false;
 }
+/** Text the API may have cut at its byte cap; `truncated` says it did. */
+export interface TranscriptText {
+  text: string;
+  truncated: boolean;
+}
+export interface TranscriptSession {
+  id: string;
+  file?: string;
+  started_ms?: number;
+  provider?: string | null;
+  model?: string | null;
+  thinking?: string | null;
+}
+export type TranscriptItem =
+  | { kind: "thinking"; text: string; truncated?: boolean }
+  | { kind: "text"; text: string; truncated?: boolean }
+  | {
+      kind: "tool";
+      id: string;
+      name: string;
+      args: TranscriptText;
+      /** Null until the tool result arrives. */
+      result: TranscriptText | null;
+      is_error: boolean | null;
+      duration_ms: number | null;
+    }
+  | { kind: "error"; text: string }
+  | { kind: "note"; text: string };
+export interface TranscriptExchange {
+  session: string;
+  at_ms: number;
+  ended_ms: number | null;
+  /** False while the model is still working, or when the exchange was cut off. */
+  complete: boolean;
+  brief: { text: string; bytes: number; truncated: boolean };
+  items: TranscriptItem[];
+  turn: AgentTurn | null;
+}
+/** `GET /api/v1/agent/transcript`: one lane's pi exchanges, newest first. */
+export interface AgentTranscript extends Availability {
+  v?: number;
+  lane?: string;
+  /** Oldest first, one per pi session file read. */
+  sessions?: TranscriptSession[];
+  exchanges?: TranscriptExchange[];
+  total?: number;
+  next?: string | null;
+  truncated?: boolean;
+  execution_authorized?: false;
+}
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "request_failed";
 }

@@ -22,6 +22,7 @@ import {
   seriesAt,
   sessionsAt,
   toolsAt,
+  transcriptAt,
   type MockData,
 } from "./mock-data";
 
@@ -257,6 +258,18 @@ export function mockApi(options: { seed?: number } = {}): Plugin {
           200,
           agentAt(data, now, num("limit") ?? 50, num("cursor") ?? 0),
         );
+      case "agent/transcript": {
+        const lane = q.get("lane") ?? "";
+        if (!/^[a-z][a-z0-9_]{0,31}$/.test(lane))
+          return fail(res, 400, "transcript_lane_invalid");
+        const limit = num("limit") ?? 20,
+          cursor = num("cursor") ?? 0;
+        if (!Number.isInteger(limit) || limit < 1 || limit > 50)
+          return fail(res, 400, "transcript_limit_invalid");
+        if (!Number.isInteger(cursor) || cursor < 0 || cursor > 100_000)
+          return fail(res, 400, "transcript_cursor_invalid");
+        return send(res, 200, transcriptAt(data, now, { lane, cursor, limit }));
+      }
       case "series":
         return send(
           res,

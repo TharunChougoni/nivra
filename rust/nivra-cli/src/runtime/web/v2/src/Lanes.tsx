@@ -1,7 +1,13 @@
-import type { AgentTurn, LaneBudget } from "./types";
-import type { Column } from "./ui";
+import type {
+  AgentTurn,
+  LaneBudget,
+  TranscriptExchange,
+  TranscriptSession,
+} from "./types";
+import type { LaneStats } from "./model";
 import React, { useEffect, useMemo, useState } from "react";
-import { clock, count, datetime, duration, numeric, usd, words } from "./data";
+import { Columns2 } from "lucide-react";
+import { clock, count, duration, numeric, usd, words } from "./data";
 import {
   LANE_ORDER,
   journalCoverage,
@@ -9,111 +15,19 @@ import {
   turnFailed,
   turnOutcome,
 } from "./model";
-import {
-  Drawer,
-  Empty,
-  Facts,
-  LaneSwatch,
-  Notice,
-  Panel,
-  Segments,
-  Status,
-  Table,
-  Tag,
-  useWorkspace,
-} from "./ui";
+import { Empty, LaneSwatch, Notice, Panel, Segments, useWorkspace } from "./ui";
 import Bars from "./charts/Bars";
 import LaneTimeline, { laneColor, sessionRange } from "./charts/LaneTimeline";
 import { TimeChart } from "./charts/TimeChart";
 import { useRead, useRevision } from "./reads";
+import { LaneThread } from "./LaneChat";
 
-const PAGE = 100;
-const tokens = (t: AgentTurn) =>
-  t.usage ? `${count(t.usage.input)} / ${count(t.usage.output)}` : "—";
-const triggerText = (t: AgentTurn) =>
-  [
-    t.trigger?.reason || t.trigger?.kind,
-    ...(t.trigger?.instruments || []).map((k) => k.split("|")[1] || k),
-  ]
-    .filter(Boolean)
-    .join(" · ") || "—";
-
-function WebToolActivity() {
-  const [state] = useWorkspace();
-  const date =
-    state.summary?.session || state.sessions?.items?.[0]?.id?.date || "";
-  const calls = useRead(
-      (api) => api.tools({ date, limit: 50 }),
-      date + "|" + useRevision("agent"),
-    ),
-    rows = calls.value?.calls || [];
-  return (
-    <Panel
-      title="Web tool activity"
-      note="Every recorded web_search, web_fetch and news_lookup call with its original query or URL, latency, bytes and outcome. Display evidence only; no order authority."
-    >
-      {(calls.state === "idle" ||
-        (calls.state === "loading" && !calls.value)) && (
-        <p className="panel-note">Loading recorded web tool calls…</p>
-      )}
-      {(calls.state === "error" || calls.state === "unavailable") && (
-        <Notice error>
-          The web tool record is unavailable for this session.
-        </Notice>
-      )}
-      {calls.state === "ready" && rows.length === 0 && (
-        <Empty>No web tool calls were recorded for this session.</Empty>
-      )}
-      {rows.length > 0 && (
-        <Table
-          getKey={(r) => `${r.run}:${r.turn}:${r.call}`}
-          rows={rows}
-          columns={[
-            {
-              key: "tool",
-              label: "Tool",
-              render: (r) => r.tool || "Not reported",
-            },
-            {
-              key: "query",
-              label: "Query / URL",
-              render: (r) => r.query || r.url || "—",
-            },
-            {
-              key: "latency_ms",
-              label: "Latency",
-              render: (r) => duration(r.latency_ms),
-            },
-            {
-              key: "bytes",
-              label: "Bytes",
-              render: (r) => count(r.bytes),
-            },
-            {
-              key: "status",
-              label: "Outcome",
-              render: (r) => <Status value={r.status} />,
-            },
-            {
-              key: "at_ms",
-              label: "Recorded · IST",
-              render: (r) => datetime(r.at_ms),
-            },
-          ]}
-        />
-      )}
-      {calls.state === "ready" && (
-        <div className="table-footer">
-          <span>{count(calls.value?.total ?? rows.length)} recorded calls</span>
-          <span>
-            Queries and URLs are untrusted model text; credentials are never
-            recorded.
-          </span>
-        </div>
-      )}
-    </Panel>
-  );
-}
+const PAGE = 20;
+const VIEW_KEY = "nivra.lanes.view";
+const EMPTY_HINT: Record<string, string> = {
+  review: "Runs after the close seal.",
+  research: "Runs on research requests.",
+};
 
 /** Daily budget rows; absent budget fields stay unknown, never zero. */
 function laneBudgetRows(b: LaneBudget | undefined): [string, string][] {
@@ -125,86 +39,6 @@ function laneBudgetRows(b: LaneBudget | undefined): [string, string][] {
     ["spend today", of(usd(b.current_cost_usd), usd(b.daily_cost_usd))],
     ["status", words(b.status)],
   ];
-}
-function LaneCards({ turns }: { turns: AgentTurn[] }) {
-  const [state] = useWorkspace();
-  const coverage = journalCoverage(state.agent);
-  const stats = useMemo(
-    () => laneStats(turns, state.agent?.usage),
-    [turns, state.agent],
-  );
-  // Budgets move only with lane usage, which the agent revision covers.
-  const health = useRead((api) => api.health(), useRevision("agent")),
-    budgets = new Map<string, LaneBudget>(
-      (health.value?.readiness?.models?.roles ?? []).map((b) => [b.role, b]),
-    );
-  const missing =
-    state.agentState === "error" || state.agentState === "unavailable";
-  if (missing && !turns.length)
-    return (
-      <Panel title="Lanes" note="No lane journal loaded">
-        <Empty
-          tone={state.agentState === "error" ? "failed" : "unavailable"}
-          title={
-            state.agentState === "error"
-              ? "The pi lane journal could not be read"
-              : "The pi lane journal is not reported"
-          }
-        >
-          Turn counts, latency, tokens and cost stay unknown until the journal
-          is available. No lane is shown as idle or healthy without evidence.
-        </Empty>
-      </Panel>
-    );
-  return (
-    <Panel
-      title="Lanes"
-      note={
-        coverage.label
-          ? `latency and failures from the ${coverage.label.replace("showing ", "")}`
-          : `${count(turns.length)} turns loaded · tokens and cost from API usage totals`
-      }
-    >
-      <div className="lane-cards">
-        {stats.map((l) => (
-          <div className="lane-card" key={l.lane}>
-            <div className="top">
-              <LaneSwatch lane={l.lane} />
-              <span className="num muted">{count(l.turns)} turns</span>
-            </div>
-            {(
-              [
-                [
-                  "failed · fallbacks",
-                  `${count(l.failed)} · ${count(l.fallbacks)}`,
-                ],
-                [
-                  "latency p50 / p95",
-                  `${duration(l.p50_ms)} / ${duration(l.p95_ms)}`,
-                ],
-                ["tokens in / out", `${count(l.input)} / ${count(l.output)}`],
-                ["cache read", count(l.cache_read)],
-                ["cost", usd(l.cost_usd)],
-                ["calls", count(l.calls)],
-                ...laneBudgetRows(budgets.get(l.lane)),
-                [
-                  "last",
-                  l.last
-                    ? `${clock(l.last.at_ms)} · ${turnOutcome(l.last)}`
-                    : "—",
-                ],
-              ] as [string, string][]
-            ).map(([k, v]) => (
-              <div className="kv-row" key={k}>
-                <span>{k}</span>
-                <span title={v}>{v}</span>
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-    </Panel>
-  );
 }
 /** Gate turns → escalated → decision turns → validated plans → actions → fills; recorded counts only. */
 function GateFunnel({ turns }: { turns: AgentTurn[] }) {
@@ -349,208 +183,207 @@ function LatencyHistograms({
     </div>
   );
 }
-function TurnDrawer({
-  turn,
-  onClose,
+
+interface View {
+  lane: string;
+  split: boolean;
+  right: string;
+}
+/** The remembered tab and split mode; storage may be blocked or hold junk. */
+function readView(): Partial<View> {
+  try {
+    const v = JSON.parse(localStorage.getItem(VIEW_KEY) || "null");
+    return {
+      lane: typeof v?.lane === "string" ? v.lane : undefined,
+      split: v?.split === true,
+      right: typeof v?.right === "string" ? v.right : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+function saveView(view: View) {
+  try {
+    localStorage.setItem(VIEW_KEY, JSON.stringify(view));
+  } catch {
+    /* the page works without storage */
+  }
+}
+
+/** One lane's numbers: loaded turns, API usage totals and the daily budget. */
+function LaneStatsStrip({
+  stat,
+  budget,
 }: {
-  turn: AgentTurn | null;
-  onClose: () => void;
+  stat: LaneStats;
+  budget?: LaneBudget;
 }) {
+  const cells: [string, string][] = [
+    ["turns · errors", `${count(stat.turns)} · ${count(stat.failed)}`],
+    ["fallbacks", count(stat.fallbacks)],
+    [
+      "latency p50 / p95",
+      `${duration(stat.p50_ms)} / ${duration(stat.p95_ms)}`,
+    ],
+    ["tokens in / out", `${count(stat.input)} / ${count(stat.output)}`],
+    ["cache read", count(stat.cache_read)],
+    ["cost", usd(stat.cost_usd)],
+    ["calls", count(stat.calls)],
+    ...laneBudgetRows(budget),
+    [
+      "last turn",
+      stat.last ? `${clock(stat.last.at_ms)} · ${turnOutcome(stat.last)}` : "—",
+    ],
+  ];
   return (
-    <Drawer
-      open={!!turn}
-      onClose={onClose}
-      title={turn ? `${turn.lane} turn` : "Turn"}
-      description={turn?.turn_id}
-    >
-      {turn && (
-        <>
-          <Facts
-            items={[
-              ["Time", datetime(turn.at_ms)],
-              ["Lane", turn.lane],
-              ["Status", words(turn.status)],
-              ["Model", turn.model],
-              ["Provider", turn.provider],
-              [
-                "Fallback",
-                turn.fallback
-                  ? `${turn.fallback.to?.id ?? "unknown"} · ${words(turn.fallback.reason)}`
-                  : "None",
-              ],
-              ["Latency", duration(turn.elapsed_ms)],
-              ["Tokens in / out", tokens(turn)],
-              ["Cache read", count(turn.usage?.cache_read)],
-              ["Cost", usd(turn.usage?.cost_usd)],
-              ["Trigger", triggerText(turn)],
-              [
-                "Plan",
-                turn.plan
-                  ? [
-                      turn.plan.status,
-                      turn.plan.stance,
-                      turn.plan.actions != null
-                        ? `${turn.plan.actions} actions`
-                        : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")
-                  : "—",
-              ],
-              ["Plan error", turn.plan?.error],
-              [
-                "Verdict",
-                turn.verdict
-                  ? `${turn.verdict.escalate ? "escalate" : "pass"} · ${turn.verdict.reason}`
-                  : "—",
-              ],
-              ["Error", turn.error],
-            ]}
-          />
-          <Panel title="Tool calls">
-            <Table
-              rows={turn.tool_calls || []}
-              getKey={(c, i) => `${c.name}:${i}`}
-              empty="No tool calls recorded"
-              columns={[
-                { key: "name", label: "Tool" },
-                {
-                  key: "ok",
-                  label: "Result",
-                  render: (c) =>
-                    c.ok ? <Status value="ok" /> : <Status value="failed" />,
-                },
-                { key: "error", label: "Error", render: (c) => c.error || "—" },
-              ]}
-            />
-          </Panel>
-          <details className="raw-evidence">
-            <summary>Inspect raw turn record</summary>
-            <pre>{JSON.stringify(turn, null, 2)}</pre>
-          </details>
-        </>
-      )}
-    </Drawer>
+    <dl className="lane-stats" aria-label={`${stat.lane} stats`}>
+      {cells.map(([k, v]) => (
+        <div key={k}>
+          <dt>{k}</dt>
+          <dd title={v}>{v}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
-function TurnTable({
+
+/** One lane as a chat thread over its stats strip. Remount per lane to reset paging. */
+function LaneColumn({
+  lane,
+  stat,
+  budget,
+  journalMissing,
+  picker,
+}: {
+  lane: string;
+  stat: LaneStats;
+  budget?: LaneBudget;
+  journalMissing: boolean;
+  picker?: React.ReactNode;
+}) {
+  const [, app] = useWorkspace(),
+    revision = useRevision("agent"),
+    // Reloads the newest page whenever the agent revision changes.
+    first = useRead(
+      (api) => api.agentTranscript({ lane, limit: PAGE }),
+      lane + "|" + revision,
+    ),
+    [older, setOlder] = useState<{
+      exchanges: TranscriptExchange[];
+      sessions: TranscriptSession[];
+      next: string | null | undefined;
+      busy: boolean;
+      failed: boolean;
+    }>({
+      exchanges: [],
+      sessions: [],
+      next: undefined,
+      busy: false,
+      failed: false,
+    });
+  const exchanges = useMemo(() => {
+    const seen = new Set<string>();
+    return [...(first.value?.exchanges ?? []), ...older.exchanges].filter(
+      (e) => {
+        const key = `${e.session}:${e.at_ms}`;
+        return !seen.has(key) && !!seen.add(key);
+      },
+    );
+  }, [first.value, older.exchanges]);
+  const sessions = useMemo(
+    () =>
+      new Map(
+        [...(first.value?.sessions ?? []), ...older.sessions].map((s) => [
+          s.id,
+          s,
+        ]),
+      ),
+    [first.value, older.sessions],
+  );
+  const cursor = older.next !== undefined ? older.next : first.value?.next;
+  const loadMore = async () => {
+    if (!cursor) return;
+    setOlder((o) => ({ ...o, busy: true, failed: false }));
+    try {
+      const page = await app.api.agentTranscript({
+        lane,
+        cursor,
+        limit: PAGE,
+      });
+      setOlder((o) => ({
+        exchanges: [...o.exchanges, ...(page.exchanges ?? [])],
+        sessions: [...o.sessions, ...(page.sessions ?? [])],
+        next: page.next ?? null,
+        busy: false,
+        failed: false,
+      }));
+    } catch {
+      setOlder((o) => ({ ...o, busy: false, failed: true }));
+    }
+  };
+  let body: React.ReactNode;
+  if (first.state === "error")
+    body = (
+      <Empty tone="failed" title="The lane transcript could not be read">
+        This lane shows no history until the transcript loads again. Other lanes
+        and the stats below are unaffected.
+      </Empty>
+    );
+  else if (first.state === "unavailable")
+    body = (
+      <Empty tone="unavailable" title="The lane transcript is not reported">
+        The controller has no pi session transcripts to show for this lane.
+      </Empty>
+    );
+  else if (!first.value)
+    body = <p className="panel-note">Loading lane transcript…</p>;
+  else if (!exchanges.length)
+    body = (
+      <Empty title="No turns yet">
+        {EMPTY_HINT[lane] ?? "Turns appear after an eligible pi lane runs."}
+      </Empty>
+    );
+  else
+    body = (
+      <LaneThread
+        exchanges={exchanges}
+        sessions={sessions}
+        hasMore={!!cursor}
+        loadingMore={older.busy}
+        moreFailed={older.failed}
+        onLoadMore={() => void loadMore()}
+      />
+    );
+  return (
+    <section className="lane-col" aria-label={`${lane} lane`}>
+      {picker && (
+        <header className="lane-col-head">
+          <LaneSwatch lane={lane} />
+          {picker}
+        </header>
+      )}
+      {body}
+      {journalMissing ? (
+        <p className="panel-note">
+          Lane stats are unknown until the pi lane journal loads.
+        </p>
+      ) : (
+        <LaneStatsStrip stat={stat} budget={budget} />
+      )}
+    </section>
+  );
+}
+
+function SessionCharts({
   turns,
   lanes,
-  onSelect,
-  selected,
 }: {
   turns: AgentTurn[];
   lanes: string[];
-  onSelect: (t: AgentTurn) => void;
-  selected: AgentTurn | null;
 }) {
-  const [lane, setLane] = useState("all"),
-    [shown, setShown] = useState(PAGE);
-  const rows = turns.filter((t) => lane === "all" || t.lane === lane);
-  const columns: Column<AgentTurn>[] = [
-    { key: "at_ms", label: "Time", num: true, render: (t) => clock(t.at_ms) },
-    { key: "lane", label: "Lane", render: (t) => <LaneSwatch lane={t.lane} /> },
-    {
-      key: "model",
-      label: "Model",
-      render: (t) => (
-        <span className="row">
-          {t.model || "—"}
-          {t.fallback && (
-            <Tag tone="warn" title={t.fallback.reason}>
-              fallback
-            </Tag>
-          )}
-        </span>
-      ),
-    },
-    { key: "trigger", label: "Trigger", render: triggerText },
-    {
-      key: "tools",
-      label: "Tools",
-      render: (t) =>
-        (t.tool_calls || []).map((c, i) => (
-          <span
-            key={i}
-            className={c.ok ? "tool-ok" : "tool-failed"}
-            title={c.error || ""}
-          >
-            {c.name + (c.ok ? "" : " ✗")}
-          </span>
-        )),
-    },
-    { key: "outcome", label: "Outcome", render: turnOutcome },
-    {
-      key: "elapsed_ms",
-      label: "Latency",
-      num: true,
-      render: (t) => duration(t.elapsed_ms),
-    },
-    { key: "tokens", label: "In / out", num: true, render: tokens },
-    {
-      key: "cost",
-      label: "Cost",
-      num: true,
-      render: (t) => usd(t.usage?.cost_usd),
-    },
-    {
-      key: "status",
-      label: "Status",
-      render: (t) => <Status value={turnFailed(t) ? "failed" : t.status} />,
-    },
-  ];
-  return (
-    <Panel
-      title="Turns"
-      note={`${count(rows.length)} loaded · newest first · select a row for the full record`}
-      actions={
-        <Segments
-          value={lane}
-          onChange={(v) => {
-            setLane(v);
-            setShown(PAGE);
-          }}
-          label="Lane filter"
-          items={[["all", "all"], ...lanes.map((l) => [l, l])]}
-        />
-      }
-    >
-      <Table
-        rows={rows.slice(0, shown)}
-        columns={columns}
-        getKey={(t) => t.turn_id}
-        selected={selected?.turn_id}
-        onSelect={onSelect}
-        empty="No lane turns yet"
-      />
-      {rows.length > shown && (
-        <div className="panel-foot">
-          <span>
-            {count(shown)} of {count(rows.length)} shown
-          </span>
-          <button className="button" onClick={() => setShown(shown + PAGE)}>
-            Show more
-          </button>
-        </div>
-      )}
-    </Panel>
-  );
-}
-export default function Lanes() {
-  const [state, app] = useWorkspace(),
-    [laneFilter, setLaneFilter] = useState("all"),
-    [turn, setTurn] = useState<AgentTurn | null>(null);
-  const turns = state.agent?.turns ?? [],
-    coverage = journalCoverage(state.agent);
-  // The controller reloads the journal when `revisions.agent` changes, on
-  // run_ended and on visibility; this page only asks once if it never loaded.
-  useEffect(() => {
-    if (!state.agent && state.agentState === "idle") void app.loadAgent();
-  }, [app]);
-  const lanes = useMemo(() => {
-    const seen = new Set([...LANE_ORDER, ...turns.map((t) => t.lane)]);
-    return [...seen];
-  }, [turns]);
+  const [state] = useWorkspace(),
+    [open, setOpen] = useState(false),
+    [laneFilter, setLaneFilter] = useState("all");
   const range = useMemo(
     () => sessionRange(state.summary?.session, turns),
     [state.summary?.session, turns],
@@ -558,82 +391,188 @@ export default function Lanes() {
   const shownLanes = lanes.filter(
     (l) => laneFilter === "all" || l === laneFilter,
   );
+  const active = lanes.filter((l) => turns.some((t) => t.lane === l));
+  return (
+    <details
+      className="session-charts"
+      onToggle={(e) => setOpen(e.currentTarget.open)}
+    >
+      <summary>Session charts</summary>
+      {open && (
+        <div className="session-charts-body">
+          <Panel
+            title="Timeline"
+            note="x = session time IST · height = log latency · hollow = failed · ◆ gate escalated"
+            actions={
+              <Segments
+                value={laneFilter}
+                onChange={setLaneFilter}
+                label="Lane filter"
+                items={[["all", "all"], ...lanes.map((l) => [l, l])]}
+              />
+            }
+          >
+            {turns.length ? (
+              <div className="panel-body">
+                <LaneTimeline
+                  turns={turns}
+                  lanes={shownLanes}
+                  range={range}
+                  now={numeric(state.summary?.as_of_ms)}
+                  rowHeight={laneFilter === "all" ? 40 : 90}
+                />
+              </div>
+            ) : (
+              <Empty title="No lane turns recorded">
+                Turns appear after an eligible pi lane runs.
+              </Empty>
+            )}
+          </Panel>
+          <div className="cols-2">
+            <GateFunnel turns={turns} />
+            <Panel
+              title="Latency distribution"
+              note="turns per log-spaced latency bucket (ms)"
+            >
+              <div className="panel-body">
+                <LatencyHistograms turns={turns} lanes={active} />
+              </div>
+            </Panel>
+          </div>
+          <Panel
+            title="Cumulative cost by lane"
+            note="stepped · USD · from recorded per-turn cost"
+          >
+            <CostChart turns={turns} lanes={active} />
+          </Panel>
+        </div>
+      )}
+    </details>
+  );
+}
+
+export default function Lanes() {
+  const [state, app] = useWorkspace(),
+    [view, setView] = useState<Partial<View>>(readView);
+  const turns = state.agent?.turns ?? [],
+    coverage = journalCoverage(state.agent);
+  // The controller reloads the journal when `revisions.agent` changes, on
+  // run_ended and on visibility; this page only asks once if it never loaded.
+  useEffect(() => {
+    if (!state.agent && state.agentState === "idle") void app.loadAgent();
+  }, [app]);
+  const lanes = useMemo(
+      () => [...new Set([...LANE_ORDER, ...turns.map((t) => t.lane)])],
+      [turns],
+    ),
+    stats = useMemo(
+      () => laneStats(turns, state.agent?.usage),
+      [turns, state.agent],
+    );
+  // Budgets move only with lane usage, which the agent revision covers.
+  const health = useRead((api) => api.health(), useRevision("agent")),
+    budgets = new Map<string, LaneBudget>(
+      (health.value?.readiness?.models?.roles ?? []).map((b) => [b.role, b]),
+    );
+  const lane = view.lane && lanes.includes(view.lane) ? view.lane : lanes[0],
+    split = view.split === true,
+    other = lane === "gate" ? "decision" : "gate",
+    right =
+      view.right && view.right !== lane && lanes.includes(view.right)
+        ? view.right
+        : other;
+  useEffect(() => saveView({ lane, split, right }), [lane, split, right]);
+  const journalMissing =
+    (state.agentState === "error" || state.agentState === "unavailable") &&
+    !turns.length;
+  const statFor = (l: string) =>
+    stats.find((s) => s.lane === l) ?? laneStats([], null)[0];
+  const column = (l: string, picker?: React.ReactNode) => (
+    <LaneColumn
+      key={l}
+      lane={l}
+      stat={statFor(l)}
+      budget={budgets.get(l)}
+      journalMissing={journalMissing}
+      picker={picker}
+    />
+  );
   return (
     <>
-      {(state.agentState === "error" || state.agentState === "unavailable") &&
-        turns.length > 0 && (
-          <Notice error>
-            The pi lane journal is{" "}
-            {state.agentState === "error" ? "unavailable" : "not reported"}.
-          </Notice>
-        )}
+      {(state.agentState === "error" || state.agentState === "unavailable") && (
+        <Notice error>
+          The pi lane journal is{" "}
+          {state.agentState === "error" ? "unavailable" : "not reported"}.
+          {journalMissing &&
+            " Turn counts, latency, tokens and cost stay unknown, and no lane is shown as idle."}
+        </Notice>
+      )}
       {coverage.label && (
         <Notice>
           Lane journal: {coverage.label}. Counts below cover the loaded turns
           only; API usage totals are shown as reported.
         </Notice>
       )}
-      <LaneCards turns={turns} />
-      <Panel
-        title="Timeline"
-        note="x = session time IST · height = log latency · hollow = failed · ◆ gate escalated"
-        actions={
-          <Segments
-            value={laneFilter}
-            onChange={setLaneFilter}
-            label="Lane filter"
-            items={[["all", "all"], ...lanes.map((l) => [l, l])]}
-          />
-        }
-      >
-        {turns.length ? (
-          <div className="panel-body">
-            <LaneTimeline
-              turns={turns}
-              lanes={shownLanes}
-              range={range}
-              now={numeric(state.summary?.as_of_ms)}
-              rowHeight={laneFilter === "all" ? 40 : 90}
-              onSelect={setTurn}
-            />
-          </div>
-        ) : (
-          <Empty title="No lane turns recorded">
-            Turns appear after an eligible pi lane runs.
-          </Empty>
-        )}
-      </Panel>
-      <div className="cols-2">
-        <GateFunnel turns={turns} />
-        <Panel
-          title="Latency distribution"
-          note="turns per log-spaced latency bucket (ms)"
+      <div className="lane-tabbar">
+        <div className="lane-tabs" role="tablist" aria-label="Lane">
+          {lanes.map((l) => {
+            const s = statFor(l),
+              tone = journalMissing
+                ? "muted"
+                : s.last && turnFailed(s.last)
+                  ? "neg"
+                  : s.turns
+                    ? "pos"
+                    : "muted";
+            return (
+              <button
+                key={l}
+                role="tab"
+                aria-selected={l === lane}
+                className="lane-tab"
+                onClick={() => setView({ ...view, lane: l })}
+              >
+                <i className={`lane-dot ${tone}`} aria-hidden="true" />
+                {l}
+                <span className="num muted">
+                  {journalMissing
+                    ? "—"
+                    : count(s.turns) + (s.failed ? ` · ${s.failed} err` : "")}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <button
+          className="lane-split"
+          aria-pressed={split}
+          onClick={() => setView({ ...view, split: !split })}
         >
-          <div className="panel-body">
-            <LatencyHistograms
-              turns={turns}
-              lanes={lanes.filter((l) => turns.some((t) => t.lane === l))}
-            />
-          </div>
-        </Panel>
+          <Columns2 size={14} aria-hidden="true" />
+          Side by side
+        </button>
       </div>
-      <Panel
-        title="Cumulative cost by lane"
-        note="stepped · USD · from recorded per-turn cost"
-      >
-        <CostChart
-          turns={turns}
-          lanes={lanes.filter((l) => turns.some((t) => t.lane === l))}
-        />
-      </Panel>
-      <TurnTable
-        turns={turns}
-        lanes={lanes}
-        onSelect={setTurn}
-        selected={turn}
-      />
-      <WebToolActivity />
-      <TurnDrawer turn={turn} onClose={() => setTurn(null)} />
+      <div className={split ? "lane-view lane-view-split" : "lane-view"}>
+        {column(lane)}
+        {split &&
+          column(
+            right,
+            <select
+              aria-label="Right lane"
+              value={right}
+              onChange={(e) => setView({ ...view, right: e.target.value })}
+            >
+              {lanes
+                .filter((l) => l !== lane)
+                .map((l) => (
+                  <option key={l} value={l}>
+                    {l}
+                  </option>
+                ))}
+            </select>,
+          )}
+      </div>
+      <SessionCharts turns={turns} lanes={lanes} />
     </>
   );
 }
