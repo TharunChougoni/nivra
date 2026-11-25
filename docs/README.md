@@ -1,43 +1,23 @@
 # Documentation
 
-These guides describe the current Nivra source snapshot. Historical
-investigation notes, dated incident write-ups and completed plans are not kept
-here. The initial snapshot is described in [CHANGELOG](../CHANGELOG.md);
-future work belongs in [GitHub Issues](https://github.com/TharunChougoni/nivra/issues).
+These guides describe the code on `main`. The planned design is in
+[direction](DIRECTION.md). Future work is tracked in
+[GitHub Issues](https://github.com/TharunChougoni/nivra/issues).
 
-Start with the root [README](../README.md) for the project overview and quick
-start.
-
-## Core guides
-
-| Guide | Description |
+| Guide | Read it to |
 | --- | --- |
-| [Architecture](ARCHITECTURE.md) | Crate boundaries, runtime flow, durable state and lane separation |
-| [Operations](OPERATIONS.md) | Configuration, startup, recovery, releases and operator safety procedures |
-| [Strategy](STRATEGY.md) | Paper mandate, execution gates, fees and Nifty option scope |
-| [Lane tools](LANE_TOOLS.md) | Lane triggers, tool boundary, plan binding, evidence and budgets |
-| [pi agent lanes](AGENT.md) | Current pi service: protocol, lanes, tools, budgets, verification and operations |
-| [Dashboard](DASHBOARD.md) | Read-only API, React workspace and captured-data projections |
-| [Testing](TESTING.md) | Behavioral test strategy and the current gate |
-| [Development](DEVELOPMENT.md) | Build, release workflow and immutable-tag policy |
-| [Build Performance](BUILD_PERFORMANCE.md) | Portable build guidance and CI shape |
+| [Direction](DIRECTION.md) | Understand where Nivra is going and why |
+| [Architecture](ARCHITECTURE.md) | Learn the crates, the runtime loop and the durable state |
+| [Strategy](STRATEGY.md) | See the paper mandate, the execution gate, fees and the option scope |
+| [Agent lanes](AGENT.md) | Configure the decision, gate, research and review lanes, with their triggers, tools and budgets |
+| [Research](RESEARCH.md) | Write, sandbox, replay and register strategies |
+| [Operations](OPERATIONS.md) | Set up, run, stop, resume, roll over, update and recover a paper book |
+| [Configuration](../packaging/rust/CONFIGURATION.md) | Fill in the paper config templates |
+| [Market data](MARKET_DATA.md) | Understand the Upstox feed, index context and history download |
+| [Dashboard](DASHBOARD.md) | Use the read-only dashboard and its API |
+| [Development](DEVELOPMENT.md) | Build, run the gate, keep builds fast and release |
+| [Testing](TESTING.md) | Follow the test rules and the test budget |
 
-## Setup and operation
-
-| Guide | Description |
-| --- | --- |
-| [Paper configuration](../packaging/rust/CONFIGURATION.md) | Current setup templates, fresh-install workflow and compatibility inventory |
-| [Upstox market feed](UPSTOX_MARKET_FEED.md) | V3 screening feed, index context and fallback behavior |
-| [Research worker](RESEARCH_WORKER.md) | Registered research jobs, leases and sandbox containment |
-| [Strategy sandbox](STRATEGY_SANDBOX.md) | Scores-only strategies, recorded replay and read-only evidence |
-| [Historical candles](HISTORY_DOWNLOAD.md) | Read-only history download, receipts and coverage limits |
-
-## Reference
-
-| Reference | Description |
-| --- | --- |
-| [Fee research](reference/KOTAK_FEE_REVIEW.md) | Dated public fee components and simulation caveats |
-| [Market-source research](reference/MARKET_SOURCE_REVIEW.md) | Dated tick, calendar and source findings |
-| [Shared replay](reference/SHARED_REPLAY.md) | Lower-level shared-engine quote replay format |
-
-Repository working rules are in [AGENTS.md](../AGENTS.md).
+Reference notes: [fees](reference/KOTAK_FEE_REVIEW.md),
+[market sources](reference/MARKET_SOURCE_REVIEW.md),
+[shared replay](reference/SHARED_REPLAY.md).

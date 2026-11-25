@@ -1,29 +1,24 @@
 # Development and releases
 
-## Client workspace build
+The repository has three build units:
 
-The workspace uses React/Vite/TypeScript with plain token-based CSS, Radix
-Dialog, Lucide and uPlot. Node 24 is the build/CI environment; Rust serves the committed static
-output. Node is not a runtime dependency of the paper controller. After client
-source/dependency changes:
+| Unit | Path | Toolchain |
+| --- | --- | --- |
+| Rust workspace, six crates | `rust/` | Rust `1.95.0` from `rust-toolchain.toml`, edition 2024 |
+| Dashboard client | `rust/nivra-cli/src/runtime/web/v2` | Node 24, React, Vite and TypeScript |
+| pi agent | `agent/` | Node 22.19 or later, TypeScript |
 
-```sh
-npm ci --prefix rust/nivra-cli/src/runtime/web/v2
-npm run build --prefix rust/nivra-cli/src/runtime/web/v2
-```
-
-Commit the v2 source, lockfile and generated `bundle/` together. The bundle
-manifest verifies source and artifact hashes in the JS gate, so a stale build
-fails. Build locally before compiling Rust's `include_bytes!` assets. The source
-HTML is a Vite input; `bundle/index.html` is the served shell. A dev server is
-optional for isolated fixtures, never a paper/live session.
+Build and test on a development host, never on the paper host.
 
 ## Local gate
+
+Run the full gate before you commit to `main`. Run it from the repository root,
+in this order:
 
 ```sh
 cargo fmt --all --check
 cargo build --workspace --all-targets --locked
-cargo clippy --workspace --all-targets --locked -- -D warnings -D clippy::all
+cargo clippy --workspace --all-targets --locked -- -D warnings
 NIVRA_REQUIRE_SCORER_SANDBOX=1 cargo test --workspace --locked
 target/debug/nivra-tools test-budget
 target/debug/nivra-tools check-release
@@ -31,108 +26,127 @@ target/debug/nivra-tools golden-check
 npm test --prefix rust/nivra-cli/src/runtime/web/v2
 ```
 
-Build every target once with `--all-targets`, then run the tools binary directly;
-`cargo run -p nivra-tools` rebuilds shared dependencies and is not part of the
-gate. Do not hardcode `CARGO_BUILD_JOBS=2` on a normal development host. See
-[build performance](BUILD_PERFORMANCE.md) for portable settings and for
-memory-constrained or different setups. Run one heavy build at a time.
+The test environment variable makes sandbox tests fail instead of skip when
+`python3` or bubblewrap is missing. [Testing](TESTING.md) has the test rules.
 
-The workspace tests use Node 24, jsdom, the Node test runner and `tsc --noEmit`.
-They need no browser or sockets. Build and test on a development host, not the
-paper host.
+If you changed files under `agent/`, also run the pi agent gate:
+
+```sh
+npm ci --prefix agent
+npm run build --prefix agent
+npm test --prefix agent
+```
+
+Commit `agent/src`, `agent/test` and the lockfile, but not `agent/dist`.
+
+## Dashboard client
+
+Rust embeds the committed `bundle/` with `include_bytes!`, so Node is not a
+runtime dependency. After you change client source or dependencies, rebuild
+before you compile Rust:
+
+```sh
+npm ci --prefix rust/nivra-cli/src/runtime/web/v2
+npm run build --prefix rust/nivra-cli/src/runtime/web/v2
+```
+
+Commit the source, the lockfile and the generated `bundle/` together. `npm test`
+checks that the bundle manifest matches the source, so a stale build fails.
+
+## Keep builds fast
+
+- Reuse one clone and its `target/` directory. A fresh clone or worktree
+  starts cold, at about 3 minutes. Do not run `cargo clean`.
+- Use all cores. Do not set `CARGO_BUILD_JOBS=2`. Lower the job count only on
+  a small, shared or memory-starved host. Allow about 0.3 to 0.5 GiB per rustc
+  job, plus more while linking.
+- Run one heavy build at a time.
+- Build every target once with `--all-targets`. A separate
+  `cargo build --workspace` is redundant, and a plain build after the tests
+  rebuilds `tokio` because the dev `test-util` feature differs.
+- Run `target/debug/nivra-tools` directly. `cargo run -p nivra-tools` resolves
+  features for one package and recompiles shared dependencies.
+- Keep `target/` on a local SSD, using `CARGO_TARGET_DIR` if needed. Set
+  `CARGO_INCREMENTAL=0` for a clean gate run, and leave it unset while you edit.
+
+While you edit, check only the crate you changed:
+
+```sh
+cargo check -p nivra-cli
+cargo test -p nivra-cli --lib
+```
+
+Build musl only for a release, once, on the tagged commit. Never run tests on
+musl, and never build a GNU `--release`, because it is never shipped. The
+release profile uses thin LTO and `codegen-units = 16`.
 
 ## Branches
 
-Commit and push directly to `main` once the local gate passes. A separate branch
-is optional when isolation helps; delete it once its work is included in `main`.
-Update documentation alongside behavior changes and resolve conflicting guidance.
-Release tags still require an explicit request.
+Push directly to `main` after the gate passes. Delete a branch once its work is
+in `main`. Update the guides in the same commit as the behavior they describe.
 
 ## Cutting a release
 
-Nivra is the only deployment source; never install from the retired `ind-sadr`
-repository. Releases are published from this repository when explicitly requested
-(`v0.9.26` is the first). The
-workflow below runs when a release is explicitly requested and its annotated
-version tag is created.
+Publish releases from this repository only, and only when a release is
+requested. The version in `Cargo.toml`, the `## X.Y.Z` changelog heading and
+the annotated tag `vX.Y.Z` must match on the same commit.
 
-CI builds and publishes a release in the **same run** as its tests when an
-annotated stable version tag points at that exact main-push commit. Its release
-job waits for all three checks, reuses their `release-tools` artifact, builds only
-the two musl binaries, runs `self-check` and publishes. It does not repeat
-Clippy, Rust tests, frontend tests or a GNU build. Never build or test on the
-paper host.
+1. Put the workspace version, `Cargo.lock` and the changelog heading in the
+   implementation commit, then run the local gate.
+2. Create the annotated tag and push `main` and the tag together:
 
-1. Include the workspace version, lockfile and `## X.Y.Z — date` changelog heading
-   in the implementation commit before running the local gate. Avoid a separate
-   version-only commit and its extra CI run.
-2. When a release is explicitly requested and the local gate passes, commit the
-   final source, create its annotated tag, and push main and tag atomically:
-   `git tag -a vX.Y.Z -m vX.Y.Z && git push --atomic origin main vX.Y.Z`.
-   The main-push CI selector matches the tag to its own SHA and workspace version;
-   an absent tag or an older release tag skips publication. A matching lightweight
-   tag refuses. Tags alone do not trigger another CI run.
-3. CI runs the three required jobs once. If they pass, the release job verifies
-   those completed jobs in its own still-running CI run and downloads that run's
-   tested assembler. A failed, missing or skipped prerequisite prevents release.
-   Version/tag/changelog/source checks and immutable publication guards still apply.
-4. For a tag added **after** its main CI run finished, or to finish a failed
-   publication, use **Fast musl release** on `main`:
-   `gh workflow run rust-release.yml --ref main -f tag=vX.Y.Z`.
-   A manual retry may reuse the latest completed exact-SHA push-main CI run when
-   the three required named jobs passed, including when the aggregate run failed
-   or was cancelled after those jobs. It rejects an in-progress, older, wrong-SHA
-   or PR run, and any missing, failed or skipped required job. It never reruns
-   tests. If the immutable asset ref does not exist, the `release-tools` artifact
-   (retained 30 days) is required; missing or expired artifacts fail closed and
-   require rerunning exact-commit CI. If the asset ref exists, recovery verifies
-   it instead. Never move a tag to repair a failed run.
-5. Verify the five published files (the musl `nivra` and `nivra-analysis`,
-   `release.json` and both SHA-256 files) and the immutable
-   `refs/release-assets/vX.Y.Z` source SHA/target. The updater installs at its
-   next eligible window. Research registrations separately pin their runtime
-   hash and never silently follow a new engine.
+   ```sh
+   git tag -a vX.Y.Z -m vX.Y.Z && git push --atomic origin main vX.Y.Z
+   ```
 
-Once `refs/release-assets/vX.Y.Z` exists, its assets are immutable and the
-publication is resumable. The asset ref becomes available to the installed updater
-before the GitHub release attachment step completes, so a failed release step
-can leave an installable partial publication. Rerunning the failed release job
-or dispatching **Fast musl release** verifies the annotated tag, exact source
-commit, exact seven legacy or five current files, `release.json`, checksums and
-the binary self-check, then creates the missing GitHub release or uploads only missing
-byte-identical attachments. It never moves a tag or the asset ref, overwrites an
-existing attachment, rebuilds over an existing asset ref, or accepts mismatched
-bytes. An existing GitHub release without its immutable asset ref refuses repair
-by rebuild. No workflow step connects to the paper host or activates a session.
-For an off-GitHub fallback, use the manual
-[build/publish steps](OPERATIONS.md#release-build-and-publish-manual-fallback),
-never race two publishers for one tag.
+3. CI runs once on the push. The release job starts only after the four
+   required jobs pass: **Dashboard JS tests**, **pi agent tests**,
+   **Rust fmt + clippy** and **Rust tests**. It reuses the tested
+   `release-tools` artifact, builds the musl `nivra` and `nivra-analysis`,
+   runs `self-check` and publishes. It does not rerun tests. A missing or older
+   tag skips publication. A matching lightweight tag fails the run.
+4. If the tag was added after CI finished, or publication failed, run
+   **Fast musl release** on `main`:
 
-Published tags never move. A fix is the next patch version. A tag does not
-authorize a paper or live session.
+   ```sh
+   gh workflow run rust-release.yml --ref main -f tag=vX.Y.Z
+   ```
+
+   It reuses the latest push-main CI run for that exact commit if the four
+   required jobs passed. The `release-tools` artifact expires after 30 days.
+   After that, rerun CI on the commit.
+5. Check the five published files: the musl `nivra` and `nivra-analysis`,
+   `release.json` and both SHA-256 files. Check that `refs/release-assets/vX.Y.Z`
+   points at the tagged source.
+
+### Immutable tags and assets
+
+- Never move a published tag. Ship a fix as the next patch version.
+- After `refs/release-assets/vX.Y.Z` exists, its assets never change. A rerun
+  verifies them and only creates a missing GitHub release or uploads missing,
+  byte-identical attachments. It never rebuilds over an existing asset ref or
+  overwrites an attachment.
+- The installed updater can see the asset ref before the GitHub release exists.
+  Finish a partial publication with a rerun, not a new build.
+- Never run two publishers for one tag. For the manual fallback, see
+  [operations](OPERATIONS.md). A tag never starts a paper or live session.
 
 ## Tools
 
 | Command | Purpose |
 | --- | --- |
-| `nivra-tools check-release` | Changelog/version, Markdown links and the retired-name ratchet |
-| `nivra-tools retired-names` | Prints current retired-name counts in the `rust/nivra-tools/retired-names.txt` format |
-| `nivra-tools release-artifact` | Assemble the release assets on a development host |
+| `nivra-tools check-release` | Changelog and version, Markdown links and retired words |
+| `nivra-tools test-budget` | Count Rust tests against the 400 limit |
 | `nivra-tools golden-check` | Verify frozen fixture bytes |
-| `nivra-tools replay` / `replay-fingerprint` | Offline shared replay ([shared replay](reference/SHARED_REPLAY.md)) |
-| `nivra-tools watch-progress` | Summarize roadmap link and recent commits |
-| `nivra self-check --expected-version vX.Y.Z` | Quick offline binary check |
-| `nivra setup --help` | Explicit fresh current-policy paper preparation; never activates |
-| `nivra backtest` | Offline bounded quote backtest |
-| `nivra history-download` | Resumable read-only candle evidence ([usage](HISTORY_DOWNLOAD.md)) |
+| `nivra-tools release-artifact` | Assemble release assets |
+| `nivra-tools replay`, `replay-fingerprint` | Offline shared replay ([reference](reference/SHARED_REPLAY.md)) |
+| `nivra self-check --expected-version vX.Y.Z` | Offline check of a built binary |
+| `nivra backtest` | Offline quote backtest |
 
-## Retired vocabulary
+## Retired words
 
-The pi lanes replaced the earlier model harness. Code, docs and packaging use the
-lane vocabulary: controller, brief, the decision, research and review lanes,
-ranker, promotion, trigger, sandbox, and turn or session. `check-release` refuses
-Luna, supervisor, orchestrator, owner as a lane, decide, digest as the fact
-summary, scorer, wake and harness run under `rust/`, `docs/` and `packaging/`
-beyond the per-file allowance in `rust/nivra-tools/retired-names.txt`. An
-allowance only shrinks: when a file loses occurrences, lower its line (or
-regenerate the file with `nivra-tools retired-names`) in the same commit.
+`check-release` fails when a file under `rust/`, `docs/` or `packaging/` holds
+more retired words than its line in `rust/nivra-tools/retired-names.txt` allows.
+The word list is in `rust/nivra-tools/src/retired.rs`. An allowance only
+shrinks. When a file loses occurrences, lower its line in the same commit, or
+regenerate the file with `nivra-tools retired-names`.

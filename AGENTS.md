@@ -10,12 +10,17 @@ Issues and leave handoff detail in Git history.
 - **Paper only.** No live orders or live activation without a separate, explicit
   live mandate from the repository owner. A tag, install or passing build never
   authorizes a session.
-- Models select paper actions/sizes/holding periods. Rust builds factual briefs.
-  Pi owns decision, research, and review turns. Older usage journals and
-  transcripts remain readable as archive evidence. Deterministic code owns validation, credentials, cash/fees,
-  fills and protection. The reviewed model-led paper policy has no
+- **Algorithms first** ([direction](docs/DIRECTION.md)). Models research and
+  write paper strategies. Registered, hash-pinned strategies that pass the
+  deterministic after-cost acceptance may generate paper actions, sizes and
+  exits, and code executes them. The decision lane picks the active strategy
+  and handles what rules cannot (options, exceptions). No multi-day shadow
+  period is required for paper.
+- Rust builds factual briefs; pi owns decision, research and review turns.
+  Deterministic code owns validation, credentials, cash/fees, fills and
+  protection, for strategy and model actions alike. The paper policy has no
   added trading risk caps. No eligible evidence means no model call; no silent
-  fallback.
+  fallback. Older journals and transcripts stay readable as archive evidence.
 - Keep broker, account, instrument and session identities explicit. Never retry
   an ambiguous order or fail it over to another broker. An ACK is not a fill.
 - Preserve stopped or halted books, original journals and failed artifacts. No
@@ -56,7 +61,7 @@ Issues and leave handoff detail in Git history.
 ## Fast build and test
 
 Use all cores; do not hardcode `CARGO_BUILD_JOBS=2`. Reduce jobs only on a
-memory-constrained or shared host. See [build performance](docs/BUILD_PERFORMANCE.md)
+memory-constrained or shared host. See [development](docs/DEVELOPMENT.md)
 for portable settings.
 
 Run the gate in this order, reusing an existing `target/` directory so the build
@@ -123,10 +128,8 @@ working provider session.
 ## Releases
 
 A push to `main` does not deploy. Releases are published from this repository
-only; `v0.9.26` is the first. The retired `ind-sadr` repository is not a deployment
-source, and an installed host moves once through the reviewed
-[host migration](docs/OPERATIONS.md#one-time-host-migration).
-When a release is explicitly requested, the version in `Cargo.toml`, the
+only, and the paper host installs them through the guarded updater. When a
+release is explicitly requested, the version in `Cargo.toml`, the
 changelog heading and the annotated tag `vX.Y.Z` must match on the exact commit.
 Never move a published tag; ship fixes as the next patch. See
 [development](docs/DEVELOPMENT.md).

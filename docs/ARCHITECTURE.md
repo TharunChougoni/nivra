@@ -1,101 +1,85 @@
 # Architecture
 
-The application is a Cargo workspace; `nivra` owns the paper controller and
-embedded dashboard. The pi agent is a separate TypeScript package under `agent/`.
-No live order transport is enabled.
+Nivra is a Cargo workspace plus a TypeScript pi agent package under `agent/`.
+The `nivra` binary runs the paper controller and serves the dashboard. Nivra has
+no live order path.
 
-| Crate | Ownership |
+## Crates
+
+| Crate | Owns |
 | --- | --- |
-| `nivra-core` | Decimal finance, fees, instruments/calendar, quotes, paper execution and replay |
-| `nivra-store` | SQLite ledger, durable control/read journals, writer bindings |
-| `nivra-cli` | Controller, scanner, pi agent lanes, history, dashboard, recovery and updater |
-| `nivra-research` | Registered jobs, leases, sandbox worker and result contracts |
-| `nivra-sandbox` | CLI-free scorer/replay containment API |
-| `nivra-tools` | Release assembly/checks, streaming replay and progress tooling |
+| `nivra-core` | Decimal finance, fees, instruments and calendar, quotes, paper execution and replay |
+| `nivra-store` | SQLite ledger, durable journals and writer bindings |
+| `nivra-cli` | The `nivra` and `nivra-analysis` binaries: controller, scanner, pi lanes, history, dashboard, recovery and updater |
+| `nivra-research` | Research jobs, leases, the bubblewrap sandbox worker and result contracts |
+| `nivra-sandbox` | Strategy and replay containment API, with no CLI |
+| `nivra-tools` | Release assembly, repository checks and offline replay tools |
 
-The shared financial engine is `nivra-core`; the paper controller and offline
-replay both call it. The research lane is separate from the trading lane and
-cannot place, size or promote a trade.
-
-See [strategy sandbox](STRATEGY_SANDBOX.md) for its containment behavior.
+The paper controller and offline replay share one financial engine,
+`nivra-core`. Research cannot place, size or promote a trade.
 
 ## Runtime flow
 
-1. Resolve the committed session pointer and original book/journal identities;
-   fence competing writers and retain stopped/halted state. Root controller guards and the resume/config-apply/planner-recovery
-   book guards explicitly unlock on scope exit, so a concurrent fork awaiting
-   exec cannot extend a completed operation’s lock lifetime.
-2. Prepare dated NSE/Upstox universe and previous-session history. Coverage gaps
-   remain explicit. Protect held positions before lower-priority scanning.
-3. Rotate configured quote batches. Project timestamped scanner prospects and full
-   historical features; observations are not executable fill authority.
-4. Rust's deterministic trigger engine starts a pi decision lane turn from eligible
-   evidence: a fill, position risk, a persistent top-ranked candidate or a
-   scheduled/pre-close turn. Rust builds the bounded brief and publishes the
-   lane's tools; pi owns the provider call, conversation state, tool loop,
-   compaction and usage report. Only a completed turn with a final validated
-   proposal can reach the paper plan head.
-5. Deterministic execution rechecks identity, held units, available cash, fees and
-   the original ≤2-second quote receipt under the financial lock. Accepting a plan
-   does not create a fill. Outcome/holdings feed the next decision turn and the
-   research/review lanes.
-6. Close/seal the dated book without forced liquidation of model-led holdings.
-   The review lane runs once after the seal and its redacted text becomes the
-   review memory the next session carries. Normal rollover verifies carry and
-   requires the successor's pi paper planner.
+1. The controller resolves the committed session pointer and the original book
+   and journal. It fences competing writers and keeps stopped or halted state.
+2. It prepares the dated NSE universe from Upstox and the previous session's
+   history. Coverage gaps stay explicit. Held positions are protected before
+   lower-priority scanning.
+3. It rotates quote batches and projects scanner prospects and historical
+   features. A scanner observation is not a fill.
+4. A deterministic trigger engine starts a pi decision lane turn from eligible
+   evidence. Triggers include a fill, position risk, an entry candidate, a
+   schedule and the pre-close turn. An optional gate lane screens entry
+   candidates first. Rust builds the brief and publishes the lane's tools. Pi
+   owns the provider call, conversation, tool loop and usage report.
+5. Only a completed turn with a validated proposal reaches the paper plan head.
+   Deterministic execution then rechecks identity, held units, cash, fees and
+   the original quote receipt, which must be at most 2 seconds old. An accepted
+   plan is not a fill.
+6. The controller seals the dated book. The review lane runs once after the
+   seal, and its redacted text becomes the review memory for the next session.
 
-Model/network work runs outside financial transactions. Protection continues while
-models run. Ordinary provider/schema/timeout failures end the event with no new
-trade; corruption or lost authority is a distinct integrity incident.
+Model and network work runs outside financial transactions, and protection
+keeps running while a model works. A provider, schema or timeout failure ends
+that event with no new trade. Corruption or lost writer authority is an
+integrity incident.
+
+## Where strategies will run
+
+Today a model proposes each paper trade. The planned design has models write
+strategies that a deterministic executor runs on every scan. See
+[direction](DIRECTION.md).
 
 ## Durable state
 
-SQLite uses WAL/FULL sync. The original book owns fills, scanner checkpoints,
-planner events/attempts/plans, halt history and the review memory. Hashed artifacts retain
-inputs, outputs and receipts; namespace/device/inode pins prevent journal resets.
-`sessions_root/current.json` selects the committed dated successor. Credentials
-stay in private application files outside Git/model evidence.
+| State | Where |
+| --- | --- |
+| Fills, scanner checkpoints, planner events and plans, halt history, review memory | The original book's SQLite database, in WAL mode with `synchronous=FULL` |
+| Lane trigger batches, turn receipts, plan outcomes, usage and sessions | The book's `model/agent/` directory |
+| Inputs, outputs and receipts | Hashed artifacts. Namespace, device and inode pins prevent journal resets. |
+| The active dated session | `sessions_root/current.json` |
+| Credentials | Private application files, outside Git and model evidence |
 
-Research workers receive registered hash-pinned inputs, never financial writer
-ownership or credentials.
+Research workers receive registered, hash-pinned inputs. They never get
+financial writer ownership or credentials.
 
-See [operations](OPERATIONS.md) and [lane tools](LANE_TOOLS.md). Future work is
-tracked in [GitHub Issues](https://github.com/TharunChougoni/nivra/issues).
+## Module map
 
-The financial freshness gate derives both clock units from
-`nivra_core::market::MAX_FINANCIAL_AGE: Duration` (two seconds). `_MS` is used
-for execution clocks and `_MICROS` for market receipts; receipt timestamps are
-still archived unchanged.
+| Path under `rust/nivra-cli/src/runtime/` | Owns |
+| --- | --- |
+| `wide/controller.rs` | The dated paper loop |
+| `agent/` | The pi agent client, lane runner, trigger engine and tool bridge |
+| `harness/` | Lane tool schemas, argument checks, the data-tool executor and the research ranker runner |
+| `planner.rs`, `planner/` | Paper policy shape and hash, the trade plan validator and the brief's call-time evidence |
+| `redecision.rs` | The durable plan head: claims, settlement and recovery |
+| `web_tools/` | Opt-in web search, fetch and news tools for the decision and research lanes |
+| `web/` | Dashboard API and the embedded React bundle |
 
-`runtime/instrument_display.rs` owns background public BOD capture, bounded
-metadata projection and immutable source receipts. It joins only already-verified
-cash metadata for qualified tick display and never extends `Universe::instruments`.
-Authenticated catalog/chain reads stay in `web/v1.rs`; summary readiness uses a
-nonblocking status read so catalog work cannot hold up the financial loop.
+The freshness limit is `nivra_core::market::MAX_FINANCIAL_AGE` (2 seconds).
+Quote receipt timestamps are archived unchanged.
 
-`runtime/planner.rs` owns the pi paper policy shape (`PlannerConfig`), its
-validation and policy hash, the TradePlan validator (`planner/plan.rs`), the
-brief's call-time evidence (`planner/turn.rs`) and the lane call guard
-(`planner/guard.rs`). `runtime/redecision.rs` owns the durable plan-head
-authority: pi claims, settlement, recovery and config rebinding.
+The web tools have no broker credential or order path. The research sandbox
+keeps the network off unless `workspace.network` enables it. The ranker
+sandbox always refuses network.
 
-`runtime/agent/` owns the pi agent service the paper controller requires: the
-JSONL client, the lane runner and budgets, the deterministic trigger engine and
-the tool bridge. `runtime/harness/` owns the lane tool schemas, argument
-validation, the data-tool executor and the research task and ranker runner. The book's
-`model/agent/` directory holds trigger batches, turn receipts, plan outcomes,
-usage and lane sessions. See [pi agent lanes](AGENT.md).
-
-`runtime/web_tools/` owns the opt-in web search/fetch/news tools exposed to the
-pi decision and research lanes: configuration, public-HTTPS URL policy, bounded
-provider reads, per-run budget and the session `model/web-tools.ndjson` call
-record. It has no broker credential, order path or sandbox environment access.
-The research workspace sandbox keeps network disabled unless the reviewed
-`workspace.network` setting explicitly enables it; the ranker sandbox refuses
-network.
-
-`runtime/wide/projection.rs` owns the bounded execution dashboard read and
-their existing incident handling; the controller retains the original call order.
-
-`runtime/wide/controller.rs` owns the dated paper loop and worker orchestration.
-`wide.rs` reexports the original `run` path and retains book/history/recovery helpers.
+See [operations](OPERATIONS.md) and [pi agent lanes](AGENT.md).

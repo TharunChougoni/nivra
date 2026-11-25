@@ -21,9 +21,6 @@ includes fills/fees/turnover, cash, flat realised P&L, drawdown and open exposur
 no missing closing quote is replaced by an invented fill. Engine fingerprints
 are exact; old manifests are preserved, not silently rebound to a newer build.
 
-This lower-level replay is distinct from [full-day model-led paper replay](../PAPER_REPLAY.md),
-which also replays an explicit recorded-reply transcript through the retained
-planner backend.
 Neither synthetic replay nor a declared provenance hash certifies a historical
 strategy. Virtual receipts cannot measure real financial latency. All remaining
 data/methodology qualification is tracked in

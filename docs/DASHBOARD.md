@@ -1,551 +1,217 @@
 # Dashboard
 
-The React workspace is served at `/` as committed static assets. There is no
-Node, CDN or provider call on page load. The older `/legacy/`, `/v2/`,
-`/assets/dashboard.*`, `/api/model-*` and `/api/status` paths are not served;
-unknown non-v1 paths return 404. The updater probes `/api/v1/health`.
-Unfinished work and telemetry qualification are tracked in
-[GitHub Issues](https://github.com/TharunChougoni/nivra/issues).
+The dashboard is a read-only React workspace for watching a paper session. The
+`nivra` binary serves it from committed static assets at `/` on
+`127.0.0.1:8771`. Page load makes no Node, CDN or provider call. The dashboard
+has no trading controls.
 
-## Sources and authentication
+## Open the dashboard
 
-The paper worker serves its own bound current snapshot on `127.0.0.1:8771`.
-For a separate research-only workspace (Backtest lab and verification, no
-controller state), use an existing private token file:
+The paper worker serves the dashboard for its running session. Open
+`http://127.0.0.1:8771/` and enter the dashboard token.
 
-```sh
-nivra dashboard --token-file /private/dashboard-token [--model-config PAPER_CONFIG]
-```
-
-Do not compete with the worker's listener. Open the loopback URL and enter the
-token in the UI. Rotate the token file with `nivra dashboard-token rotate [--config PAPER_CONFIG] [--token TOKEN]`,
-which generates 32 bytes of secure random hex entropy (or writes the provided token) with mode 0600;
-a service restart is required. Static login/assets contain no account data; all data/status/model
-streams/examples require bearer auth. Exact loopback/configured Funnel Hosts,
-origin checks, no-store/CSP/frame/referrer headers and bounded requests apply.
-The standalone dashboard also reads `dashboard_public_host` from its optional
-`--model-config`; only that exact HTTPS Funnel authority is admitted in addition
-to loopback. Any other Host or origin remains refused, and without a configured
-host the server stays local-only. Public trading controls are absent; unknown non-v1 paths return 404.
-
-Financial views distinguish continuing cash, dated P&L, marks, fees and unresolved
-holdings; never add daily allocations as wealth. Scanner shows fresh/stale/unseen
-coverage and timestamped prospects, not a fabricated expected-profit ranking.
-When discovery publishes `strategy_selection`, the scanner also shows the selector
-mode, chosen identity, live-ranking/fallback state and a bounded recent
-switch/fallback log. Absent evidence is shown as not configured, never inferred.
-
-## React workspace at `/`
-
-The React workspace is client-rendered with Vite, strict TypeScript, React,
-Radix Dialog, Lucide icons and uPlot, styled with plain CSS custom properties
-(no CSS framework). It is a presentation layer; the Rust runtime owns trading.
-The operator builds pinned npm dependencies locally; the generated static
-`bundle/` is committed and embedded in the Rust binary. There is no Node
-service, SSR, CDN, remote font or runtime package installation. The bundle is
-served from `/`. `/SOURCES.md` and `/LICENSES.txt` carry the vendored-source
-and licence manifest.
-
-### Design system
-
-The workspace is dark only. Colours are tokens in `src/tokens.css`:
-near-black surfaces (`--bg-0`…`--bg-3`), three text weights, one desaturated
-steel accent, and low-chroma semantic colours for gain (`--pos`), loss
-(`--neg`) and warning (`--warn`). Each pi lane has its own muted colour
-(`--lane-decision`, `--lane-gate`, `--lane-research`, `--lane-review`).
-`--live` (amber) is reserved for live-mode chrome and is used nowhere else, so
-a live session can never look like paper. Numbers, times and identifiers use
-the system monospace stack with tabular figures and are right-aligned in
-tables. Stylesheets are split by concern: `tokens`, `base`, `layout`,
-`components`, `charts` and `pages`. Components read colours from tokens, never
-from literals.
-
-Screen text is plain language. `src/labels.ts` maps code values (statuses,
-trigger kinds, tool names, turn errors, source files and segments) to short
-labels, with a sentence-case fallback for anything unmapped. Hashes show
-their first eight characters with the full value on hover, and instrument
-keys show the symbol, or the ISIN without the segment prefix. Raw JSON stays
-behind **Raw data** folds and in expanded tool calls.
-
-### Shell
-
-A status bar shows the brand, the mode pill, the data and order brokers, the
-account alias, the session date and phase, then feed age, stream state, alert
-count, the IST display clock, Refresh and Lock. Under 600 px the labels
-collapse to status dots. A ticker of recently observed instruments, from
-`price_batch` receipts, sits below it. The navigation groups the sections as
-Trade, Agents, Market, Research and System, shows counts only when they are
-known, and collapses to icons (remembered per browser). Under 900 px it
-becomes a focus-managed Radix dialog. `Ctrl/Cmd+K` opens section navigation.
-
-Mode chrome comes from one derived value, `modeOf(meta, summary)` in
-`src/model.ts`: `paper`, `live` (with order broker and account) or `unknown`.
-Paper is neutral. Live adds a 2 px `--live` rule above the shell and a **Live**
-pill. A missing or contradictory report shows **Mode unknown**. Only the mode
-pill says Live; the stream indicator reads **Streaming**, **Polling**,
-**Stale** or **Locked**. The broker
-fields are display evidence and do not establish live readiness.
-
-### Sections
-
-| Group | Section | Route |
-|---|---|---|
-| Trade | Overview | `#/overview` |
-| Trade | Portfolio & fills | `#/portfolio` |
-| Trade | Instruments & F&O | `#/instruments` |
-| Agents | pi lanes | `#/lanes` (`#/models` and `#/runs/*` land here) |
-| Market | Scanner | `#/scanner` |
-| Research | Strategies, Backtest lab | `#/strategies`, `#/backtest` |
-| System | Sessions, Health | `#/sessions`, `#/health` |
-
-- **Overview** shows a ten-cell figure strip: equity, day P&L net of fees,
-  realized, unrealized, fees, cash, gross exposure, maximum drawdown, fills and
-  pi spend. Day P&L and drawdown are computed only from recorded equity
-  checkpoints, and the cell names that basis; otherwise it shows `—` with the
-  reason. Below are the account-equity chart (fill markers, a session-start
-  baseline and a synced drawdown pane, or a selected instrument's price), a
-  "pi lanes now" rail, the lane timeline, positions, the latest order tracks,
-  recent alerts and the latest lane turns.
-- **Portfolio & fills** has positions, order lifecycle, fills and
-  plans/validation tabs. Instrument-class filters derive only from recorded
-  `instrument.kind` values (`index`, `cash`, `etf`, `future`, `call`, `put`).
-  Derivative labels such as `NIFTY 25NOV 24500 CE` are built only from recorded
-  underlying, expiry, strike and kind; missing parts are left out, never
-  guessed. Expiry and margin show only when recorded; margin must match the
-  exact instrument key and be marked display-only. A Greeks column appears only
-  when a position carries recorded Greeks. Selecting a position or fill opens
-  its recorded evidence and links only to plan actions and execution verdicts
-  that match by `decision_id` and instrument.
-- **Order lifecycle** shows each recorded plan action as five stages: intent,
-  validated, submitted, acknowledged and filled. Validation is `done` only for
-  the validator's `accepted` verdict and `failed` for any rejection code.
-  `filled` comes only from a fill record. In paper, submitted and acknowledged
-  are drawn as simulated (dashed) when a simulated fill exists and are absent
-  otherwise. An ACK is never shown as a fill. Live order records can fill these
-  stages later without a layout change.
-- **Instruments & F&O** holds the verified cash catalog, the captured
-  instrument-metadata catalog and the contract chain described in
-  [Instrument metadata](#instrument-metadata-and-fo-contract-chains).
-- **pi lanes** is described in [pi lanes view](#pi-lanes-view).
-- **Scanner** offers original-priority, symbol and absolute-change sorting of
-  prospects, missing observations and screen totals from the v1 scanner
-  segments. Selecting an instrument opens its chart, original clocks, recorded
-  strategy reference fields and raw evidence without losing the table. Its
-  coverage is labelled as the current NSE_EQ cash scope, not all-market
-  coverage.
-- **Strategies** has two tabs. **Strategy references** shows references
-  projected by scanner prospects (spec ID, version, hash, scan ID and recorded
-  score); no library record is reconstructed from them. **Library & switches**
-  shows the registered-research library described below.
-- **Backtest lab** takes an original manifest/events pair, uses the local
-  bounded replay endpoint and shows replay equity points, fees, fills and hash
-  provenance. Synthetic examples are labelled; results stay in component memory
-  and can be exported as JSON.
-- **Sessions** merges the bounded v1 session archive with the current
-  summary and portfolio identity, preserving archived checkpoints and original
-  fill order. A mode shows only when the report supplied explicit
-  `paper_only`/`live_enabled` provenance; older rows stay `Not reported`.
-- **Health** separates transport, feed and history readiness, controller
-  liveness, research state, calendar coverage, alert transport, the read-only
-  activity attribution and unconnected independent telemetry. It interprets
-  `operational_health` version 2 only; any other version is shown as not
-  interpreted rather than guessed. A **Live readiness** panel shows the mode, the order broker
-  identity and `live_enabled` as reported; it has no controls. Missing reports
-  remain unavailable; the dashboard does not calculate or fill gaps. Net
-  after-cost P&L subtracts fees; slippage is a diagnostic because it is already
-  in fill prices. Drawdown coverage is incomplete because historical position
-  marks are not retained.
-
-### Frontend build gate
-
-Node is a frontend build/CI tool, not a runtime dependency of the paper host. The
-controller serves the committed static bundle; it does not run npm, Vite or a
-Node service. After any frontend change, run from the repository root:
+To use the Backtest lab without a session, start the research-only dashboard.
+It shows no controller state. Stop the paper worker first, because both bind
+the same port.
 
 ```sh
-npm ci --prefix rust/nivra-cli/src/runtime/web/v2
-npm run build --prefix rust/nivra-cli/src/runtime/web/v2
-npm test --prefix rust/nivra-cli/src/runtime/web/v2
+nivra dashboard --token-file TOKEN_FILE [--config PAPER_CONFIG]
 ```
 
-`npm test` runs the strict TypeScript check, the Node test files and
-`check:bundle`. Commit `src/`, `scripts/`, `package.json`, `package-lock.json`
-and the generated `bundle/` together; the bundle is embedded in the Rust binary.
-A deterministic rebuild must reproduce identical source and bundle hashes. Do
-not install Node globally on the paper host and do not add a runtime CDN, SSR or
-package-install path.
+The token file must hold at least 32 characters. With `--config`, the
+dashboard uses that config's `dashboard` settings and `dashboard_public_host`.
 
-To work on the UI with a full synthetic trading day, run:
+To replace the token, run the command below and restart the service. It writes
+32 random bytes as hex, or the token you pass, to the token file with mode
+`0600`.
+
+```sh
+nivra dashboard-token rotate --config PAPER_CONFIG [--token TOKEN]
+```
+
+## Authentication and request rules
+
+- Every `/api/v1` route needs `Authorization: Bearer <token>`. The browser
+  keeps the token in session storage for the tab. **Lock** clears the token,
+  the loaded data and the chart cache.
+- The server accepts the `Host` `127.0.0.1:8771`. If the config sets
+  `dashboard_public_host`, it also accepts that host over HTTPS. It refuses
+  any other `Host` or `Origin`.
+- Failed authentication draws from a token bucket of
+  `dashboard.failed_auth_per_minute` attempts (default 30). An empty bucket
+  returns `429` with `Retry-After`.
+- Query strings are limited to 2 KiB, strict UTF-8 percent decoding, known
+  keys and no duplicate keys. Errors are `{"v":1,"error":"<code>"}`.
+- Only `POST /api/v1/backtest` accepts a method other than `GET`. Unknown
+  paths return `404`.
+- A pool of `dashboard.workers` threads (default 4) serves a queue of
+  `dashboard.queue` requests (default 16). A full queue returns `503 busy`
+  with `Retry-After: 1`.
+
+The static login page and assets carry no account data. `/SOURCES.md` and
+`/LICENSES.txt` list the vendored sources and licences.
+
+## What you see
+
+A status bar shows the mode, the data and order brokers, the account alias,
+the session phase, feed age, stream state, alert count and the IST clock.
+**Ctrl+K** or **Cmd+K** opens section navigation.
+
+The mode pill shows **Paper**, **Live** or **Mode unknown**. The dashboard
+shows **Live** only when the meta and summary responses agree on live mode.
+A missing or contradictory report shows **Mode unknown**.
+
+| Group | Section | Route | Shows |
+|---|---|---|---|
+| Trade | Overview | `#/overview` | Equity, day P&L net of fees, fees, cash, exposure, drawdown, fills and model spend. Equity chart, lane activity, positions and alerts. |
+| Trade | Portfolio & fills | `#/portfolio` | Positions, order lifecycle, fills and plans with their validation verdicts. |
+| Trade | Instruments & F&O | `#/instruments` | The verified cash catalog, captured instrument metadata and option chains. |
+| Agents | pi lanes | `#/lanes` | Each model lane as a chat: the brief, the thinking, the tool calls and the answer. Also lane stats and charts. |
+| Market | Scanner | `#/scanner` | The current prospects, missing or stale instruments and screen totals for NSE cash equities. |
+| Research | Strategies | `#/strategies` | Strategy references from the scanner and the registered research library. |
+| Research | Backtest lab | `#/backtest` | Offline replay of a manifest and its quote events. |
+| System | Sessions | `#/sessions` | Current and archived paper sessions. |
+| System | Health | `#/health` | Feed, history, controller, research, calendar and alert status. |
+
+The old routes `#/models` and `#/runs/*` open `#/lanes`. The pi lanes today
+are decision, gate, research and review. The planned change of lane roles is in
+[the direction](DIRECTION.md).
+
+How the dashboard treats evidence:
+
+- It shows a value only when a report recorded it. A missing value reads
+  **Not reported**. The dashboard never fills a gap with zero or a guess.
+- An order shows five stages: intent, validated, submitted, acknowledged and
+  filled. Only a fill record marks it filled. An acknowledgement is never
+  shown as a fill.
+- Charts use the recorded receipt times. The browser's clock never replaces a
+  quote time.
+- Minute bars come from quote receipts, not exchange OHLCV. A `no_trade`
+  minute draws as a flat step. An `unobserved` minute, such as during a feed
+  outage, breaks the line and is shaded.
+- A failed read clears that section's financial values instead of showing
+  stale ones.
+
+## Refresh
+
+The browser opens one server-sent event stream at `/api/v1/events`. If the
+stream fails, it falls back to a held long poll. The stream is gzipped when
+the browser accepts gzip.
+
+The stream carries two frame types:
+
+- `summary_changed` carries the summary ETag and `revisions`, a content hash
+  for each projection: `portfolio`, `fills`, `plans`, `scanner`, `sessions`,
+  `health`, `alerts`, `agent` and `agent_turns`. The browser refetches only
+  the projections whose hash changed. The server sends a changed revision at
+  most once a second, and `scanner` at most once every 15 seconds. With no
+  change, it still sends the summary every 5 seconds.
+- `price_batch` carries the latest receipt price of recently observed
+  instruments, every `dashboard.price_batch_interval_ms` (default 2000). A
+  new stream gets a full frame. Later frames carry only instruments whose
+  receipt moved.
+
+**Refresh**, a stream gap and returning to the tab refetch every projection.
+
+## API routes
+
+All routes live in `rust/nivra-cli/src/runtime/web/` and return JSON with
+`"v":1`. List routes take `cursor` and `limit` and return `next`.
+
+| Route | Returns |
+|---|---|
+| `GET /api/v1/meta` | Version, paper or live mode, account alias, broker roles, dashboard limits and capability names. |
+| `GET /api/v1/summary` | Session phase, identities, readiness, equity, cash, counts, feed and alerts, plus `revisions`. Built once per trading loop. |
+| `GET /api/v1/portfolio` | Cash, capital, marks, positions, fees and book state. |
+| `GET /api/v1/positions` | Position records from the current portfolio. |
+| `GET /api/v1/orders?date=` | Validation verdicts for the loaded session, each with its validated action or `null`, and the execution records. |
+| `GET /api/v1/fills` | Simulated fills, newest first. |
+| `GET /api/v1/plans?date=` | Recorded plan actions, execution verdicts and planner status for the loaded session. |
+| `GET /api/v1/scanner?segment=prospects\|missing\|screens` | Scanner rows, coverage and reasons for missing instruments. |
+| `GET /api/v1/instruments` | The verified NSE cash catalog. Add `scope=all` for captured metadata, filtered by `market_segment`, `kind` and `q`. |
+| `GET /api/v1/instruments/chain?underlying_key=&expiry_ms=` | The call, strike and put chain and matching futures for one underlying and expiry. Optional `market_segment`. |
+| `GET /api/v1/sessions` | Current and archived session checkpoints. |
+| `GET /api/v1/tools?date=` | Web tool calls made by the pi lanes: query or URL, provider, latency, size and outcome. |
+| `GET /api/v1/health` | Readiness, feed and history state, controller liveness, retention, model budgets, alerts and updater status. |
+| `GET /api/v1/alerts` | Alerts with their original evidence. |
+| `GET /api/v1/series?kind=receipt-minute-bar&instrument=&from=&to=` | Minute bars from quote receipts, with classified gaps and `watermark_ms`. |
+| `GET /api/v1/series?kind=account-equity&from=&to=` | Recorded portfolio checkpoints: cash, equity and mark basis. |
+| `GET /api/v1/agent` | pi lane turns, newest first, with tool calls, usage, trigger counts and per-lane totals. `limit` is 1 to 200, default 50. |
+| `GET /api/v1/agent/transcript?lane=` | One lane's newest eight session files as chat exchanges. `limit` is 1 to 50, default 20. System prompts are not served. |
+| `GET /api/v1/events` | The event stream. `?poll=1&after=N` is the long-poll fallback. |
+| `GET /api/v1/backtest/example` | A labelled synthetic backtest input. |
+| `POST /api/v1/backtest` | Runs an offline replay. Returns `409 backtest_paused_for_trading` unless the research-only dashboard serves it. |
+
+`meta`, `health` and the lane routes support ETag revalidation. Financial
+projections are `no-store` or `private, no-cache`.
+
+## Backtest lab
+
+Paste a manifest and its quote events in NDJSON. The shared replay engine
+checks the engine and data hashes, the order of events, identities, fees,
+slippage and open exposure. It does not turn candles into quotes and does not
+invent a closing fill. The manifest is limited to 512 KiB and the events to
+4 MiB. The compute deadline is `dashboard.backtest_timeout_ms` (default 3000).
+
+The browser keeps at most ten reports and can export each one as JSON. For the
+same replay on the command line, run:
+
+```sh
+nivra backtest-fingerprint
+nivra backtest --manifest MANIFEST --events EVENTS
+```
+
+[Shared replay](reference/SHARED_REPLAY.md) describes the formats.
+
+## Settings
+
+The `dashboard` block of the paper config holds these keys. A key at its
+default is left out of the serialized config. The config loader validates the
+range of each key.
+
+| Key | Default | Effect |
+|---|---:|---|
+| `workers` | 4 | HTTP worker threads. |
+| `queue` | 16 | Requests waiting for a worker. |
+| `gzip_min_bytes` | 1024 | Smallest response that is gzipped. |
+| `backtest_timeout_ms` | 3000 | Backtest compute deadline. |
+| `sse_max_streams` | 3 | Concurrent event streams. Extra clients use long poll. |
+| `sse_heartbeat_ms` | 15000 | Event stream heartbeat. |
+| `sse_write_timeout_ms` | 30000 | Timeout for one stream write. |
+| `longpoll_hold_ms` | 25000 | Long-poll hold time. |
+| `transcript_text_max_bytes` | 16384 | Cap on transcript text per field. |
+| `transcript_args_max_bytes` | 4096 | Cap on tool arguments per call. |
+| `series_max_points` | 2000 | Points in one series response. |
+| `series_max_range_ms` | 86400000 | Longest `from` to `to` span. |
+| `equity_max_points` | 4096 | Account-equity checkpoints kept in memory. |
+| `equity_sample_interval_ms` | 15000 | Least time between equity checkpoints. |
+| `price_batch_instruments` | 24 | Instruments in a full `price_batch` frame. |
+| `price_batch_interval_ms` | 2000 | Time between `price_batch` frames. |
+| `failed_auth_per_minute` | 30 | Failed authentication attempts allowed per minute. |
+| `retention.pack_after_days` | off | Pack raw model archives after this many days. |
+| `retention.delete_after_days` | off | Delete raw model archives after this many days. |
+| `model_prices.*` | none | INR per million input, output and cached tokens, for cost figures. |
+| `instrument_catalog` | none | Leave unset for the NSE BOD archive. Set `source` to `"complete"` for the complete-market BOD capture. |
+
+The config still accepts `static_max_age_s`, `history_read_max_bytes`,
+`history_list_cache`, `history_max_files`, `model_feed_unavailable_grace_ms`,
+`transcript_max_bytes` and `blob_slice_max_bytes` so that existing config
+hashes stay the same. The workspace does not use them.
+
+[Operations](OPERATIONS.md) describes archive retention.
+
+## Change the frontend
+
+The source is in `rust/nivra-cli/src/runtime/web/v2`: Vite, React and strict
+TypeScript. The built `bundle/` is committed and embedded in the binary.
+After a frontend change, run the
+[dashboard frontend gate](../AGENTS.md) and commit the source, the lockfile
+and the bundle together.
+
+To work against a synthetic trading day, run the command below. It serves the
+workspace on `127.0.0.1:5173` with a fixture API. Unlock it with any 64-hex
+token. The fixture API never enters the built bundle.
 
 ```sh
 npm run dev:mock --prefix rust/nivra-cli/src/runtime/web/v2
 ```
-
-It serves the workspace on `127.0.0.1:5173` against a seeded fixture API
-(`scripts/mock-api.ts`, `scripts/mock-data.ts`) that emits the real v1 wire
-shapes, including revisions, delta `price_batch` frames and pi lane turns.
-Unlock it with any 64-hex token. The mock registers only for `vite serve` with
-`NIVRA_MOCK=1`; it never enters the built bundle. Its values are synthetic and
-are not market or model evidence.
-
-### Read-only research projections
-
-The operational panel may additionally render prospective
-observation, cross-session continuity, observation capture and independent
-virtual episode measurements. These are optional, read-only projections: the
-panel renders them only when the authenticated v1 summary/health snapshot
-carries the captured fields. Missing fields stay `Not reported`; they are never
-inferred as zero, idle, available or disabled.
-
-The v1 `summary` and `health` responses copy the controller's already-captured
-`research_tasks` object verbatim. The GET never samples a
-new clock, reads the queue/state, recomputes the research status or renews
-freshness; an absent captured field stays absent.
-
-- Cross-session continuity reads `research_tasks.observation.lifecycle.milestones`.
-  `research_library.items[].continued` / `continuation` is not used as
-  continuation evidence. Original recorded state, effective state, effective
-  scientific state, source session and recording session remain separate. The
-  scientific vocabulary (`insufficient_evidence`, `eligible`, `rejected`,
-  `retired`) is a separate map from recorded lifecycle states; the removed
-  `continued_evaluated` value is never invented. A source-truncated milestone
-  list is disclosed as truncated and never shown as a complete total.
-- Observation capture distinguishes journal readability
-  (`coverage_label: journal_readability_only`) from current eligibility
-  (`current_eligibility: not_evaluated`, `eligible_for_attempt:false`). It never
-  claims a provider guarantee; its caps are resource limits, not trading risk
-  caps.
-- Native source-observation enumeration is rendered from the structured
-  `observation_refs_status` / `truncated` / `partial` / `scanned` / `limit` /
-  source-error fields; a raw score plus job hash is never promoted to a
-  verified ref.
-- Continuation receipts use typed `entry_quote` / `exit_quote` objects and their
-  `archive_sha256`; `measurement_sha256` is a continuation receipt hash, not the
-  immutable episode `projection_sha256`. The continuation id, source session and
-  recording session are separate from the current read. Original exit, processed
-  and recorded clocks are separate.
-- Independent virtual episodes are not portfolio returns. The panel does not sum
-  episode PnL, draw an equity curve, compute Sharpe or profit percentage, or
-  claim promotion/activation. The canonical checked `measurement_status`
-  (`verified`, `not_matured`, `unavailable`) is authoritative: an unavailable
-  record is an explicit entry even when the effective body is null, the original
-  stored status is preserved separately, and a missing or unsupported
-  measurement version is never zero or green. A legacy protection replay source that is
-  explicitly unavailable is shown as unavailable, never as copied unchanged.
-- Trial debt from a partial read is a lower bound. The panel shows bounded gap
-  reasons and keeps main counts `Not reported`; it does not extrapolate a total.
-- Display limits are explicit: at most 5 measurement entries, 20 milestones and
-  10 continued cross-session rows, with `Showing N of M` or a source-truncation
-  note when the total is unknown. A source-truncated list is never presented as
-  a complete total.
-
-These panels add no route, request, trading control, provider fallback,
-restart/unhalt, promotion or activation authority. This documentation does not
-claim the panels are deployed, that a browser/HMR session was exercised, or that
-the Source API is activated.
-
-### Charts and available data
-
-Time-series charts use one uPlot wrapper (`src/charts/TimeChart.tsx`) with
-synced panes, markers, a token-coloured theme and an IST tooltip. Sparklines,
-the lane timeline and bar charts are small SVG components in `src/charts/`.
-uPlot is loaded only when at least two actual observations exist. Charts have
-an IST crosshair/readout, 5m/15m/1h/day windows, drag-to-zoom and Pause/Follow.
-Replay curves use the report's original times and values. Scanner prices use
-`latest_screening_price` and original `sampled_price_ms` (legacy sampled-bid
-fields remain supported); browser response time never replaces quote time.
-
-The workspace loads a selected instrument's durable receipt-minute bars from
-`GET /api/v1/series?kind=receipt-minute-bar` and the recorded account-equity
-checkpoints from `kind=account-equity`. Points keep original receipt or
-portfolio-checkpoint times. Receipt-minute bars are display evidence, not
-certified exchange OHLCV; `tick_count` is never labelled or treated as volume.
-Missing minutes are classified by the backend: `no_trade` means the instrument
-was observed by a healthy feed, the store was live and no tick arrived;
-`unobserved` means feed fallback/outage, restart or reset, or a minute before the
-store started. The workspace carries `no_trade` minutes forward as a muted
-dashed step at the previous receipt close, and breaks only on `unobserved`
-intervals, which are shaded with a reason hint. Isolated receipt observations
-remain visible as points. When the in-memory store started after session open,
-the chart shows a history-start note instead of implying earlier coverage.
-The event stream also carries bounded `price_batch` frames for recently observed
-instruments. A frame is `{v, batch_seq, as_of_ms, session, full, items,
-price_kind, source, note, execution_authority:false}` with rows
-`{instrument_key, last_price, receipt_ms}`. The server builds one frame per
-`dashboard.price_batch_interval_ms` and shares it across streams. A new stream,
-or one that missed a batch, receives `full:true`; otherwise a frame carries only
-instruments whose receipt moved, and no frame is sent when nothing moved. The
-client merges rows per instrument. `batch_seq` advances only when a receipt
-moved, so a quiet interval is not a gap. Frames omit the `id:` line so the
-event cursor is independent. A reconnect or sequence reset is not a market gap;
-a real batch jump is drawn as a discontinuity, and a local gap marker is
-discarded once an authoritative refetch covers it.
-
-Authenticated series responses are cached in a bounded, tab-local IndexedDB
-store (24 records per tab, each bounded to 2,048 display points). Cached
-financial points are shown immediately only with an explicit stale marker while
-the authoritative read runs; a successful read replaces them. The cache is
-cleared on lock and whenever broker/account/session identity changes. If the
-authoritative read fails, cached points remain visibly stale; they are never
-presented as fresh. Hidden tabs defer batch/chart work and reconcile against the
-series watermark when visible. Tab-local snapshot observations remain a fallback
-when no durable series is available; they are still labelled as this-tab
-evidence. The client never reconstructs candles, volume or prices from sampled
-returns.
-
-### Authentication and refresh
-
-Every API read requires the installation's bearer token. It stays in this tab's
-session storage. Lock aborts the stream and clears account/session data, chart
-points and API caches; request generations prevent late responses repopulating
-them even if the same token is later reused. Failed reads remove financial
-state instead of treating old values as current. Unknown marks, fees or capital
-remain unknown; a flat-book net total is withheld while holdings remain.
-
-One SSE fetch (or a held long-poll fallback) carries `summary_changed` and
-`price_batch` frames. When the request accepts gzip, the stream is sent with
-`Content-Encoding: gzip` as one compressed stream per connection, flushed after
-every frame and heartbeat. Browsers decode it transparently. Clients without
-gzip and the long-poll fallback get plain frames. SSE transport errors fall
-back to held polling. A normal hold-boundary reconnect keeps the connection
-live; only transport errors mark it stale.
-
-The summary carries `revisions`, a map of projection name to a 16-hex content
-hash for `portfolio`, `fills`, `plans`, `scanner`, `sessions`, `health`,
-`alerts`, `agent` and `agent_turns`. Each hash covers only the content that
-projection serves. Clocks are removed at any depth before hashing: `as_of_ms`,
-`captured_at_ms`, `checked_at_ms`, `observed_at_ms`, `retained_window`,
-`last_completed_at_ms`, `expected_deadline_ms`, `next_deadline_ms`,
-`deadline_remaining_ms`, `loop_generation`, the heartbeat `completed_at_ms`,
-the feed tick counters (`ticks_total`, `tick_rate_per_s`,
-`oldest_last_trade_ms`) and every `age_ms` or `*_age_ms` field. Controller
-liveness keeps its `status`, so a malformed or missing heartbeat still moves
-`health`. `scanner` covers the prospects, missing rows, screen reasons, counts,
-selection, limitations, universe size and ranking. `agent` is derived from the
-length, inode and mtime of `turns.ndjson`, `triggers.ndjson` and `usage.json`;
-`agent_turns` from `turns.ndjson` alone.
-
-The controller prepares the summary once per loop and announces it with
-`summary_changed` carrying `{etag, revisions}`:
-
-- A changed revision is announced at most once per second.
-- `scanner` rolls forward at most once every 15 s, however often the scan moves.
-- With no change, the summary is still announced every 5 s, so its own figures
-  (feed age, cash, clock) keep refreshing.
-- Nothing is sent otherwise.
-
-The summary body embeds the announced revisions, never newer ones, so a held
-change cannot trigger a read early. The client refetches only the projections
-whose revision differs from the one it last read. Without `revisions` (an older
-backend) it refetches every projection.
-Explicit Refresh, a stream gap and document visibility refetch everything.
-Page-local reads (health, alerts, tools, lanes) reload when their revision
-changes; no status interval is scheduled. Because health no longer reloads every
-loop, the health page takes the market feed block from the summary, and the
-controller panel ages the last loop from the summary's `as_of_ms` when that is
-newer than the health read.
-
-A failed projection clears only its own field, is reported as unavailable with
-the source reason, and never reuses a prior financial value. The clock timer is
-display only. Source checkpoint, browser receipt and stream connection remain
-separate facts. A snapshot does not establish worker liveness, quote freshness,
-an ACK or a fill.
-
-### v1 JSON API
-
-All routes require `Authorization: Bearer <dashboard token>`. Query strings are
-limited to 2 KiB, strict UTF-8 percent decoding, no duplicate keys and no
-unknown keys; errors are `{"v":1,"error":"<code>"}`.
-Failed authentication attempts are rate-limited via a token bucket (`dashboard.failed_auth_per_minute`,
-default 30, range 1–600). When exhausted, requests return HTTP 429 Too Many Requests with
-`Retry-After` set to the rounded-up time until the next failed-auth attempt is accepted. This
-header is present on JSON, long-poll and SSE authentication responses.
-
-| Route | Purpose |
-|---|---|
-| `GET /api/v1/meta` | Version, explicit paper/live mode, account alias, broker roles and dashboard limits. ETag revalidation. |
-| `GET /api/v1/summary` | Compact session phase, mode/identities, readiness, equity/cash, counts, feed and alert summary, plus per-projection `revisions`. Precomputed once per trading loop. |
-| `GET /api/v1/portfolio` | Cash, capital/policy, valuation marks, exact position records, fees and book state. |
-| `GET /api/v1/positions?cursor=&limit=` | Dedicated position records projected from the current portfolio with total count and next cursor. |
-| `GET /api/v1/orders?date=&cursor=&limit=` | Planner validation verdict rows under `items` with total count and next cursor; each row contains a nested validated `action` or `null` when rejected. Separate execution records are included, and verdicts are never fills. Restricted to the currently loaded session. |
-| `GET /api/v1/fills?cursor=&limit=` | Newest-first immutable simulated fills with `total` and `next`; ACKs are never exposed as fills. |
-| `GET /api/v1/plans?date=` | Recorded planner `actions` and host `execution` verdicts for the loaded session only, plus the `planner` status without those two arrays. |
-| `GET /api/v1/scanner?segment=prospects\|missing\|screens&cursor=&limit=` | Bounded scanner rows, coverage and explicit missing/unseen reasons. |
-| `GET /api/v1/instruments?cursor=&limit=` | Read-only validated NSE cash EQ catalog with `total`/`next`, validated session, source-file hashes and an explicit unavailable envelope before preparation; no derivative, option-chain or margin data. |
-| `GET /api/v1/sessions?cursor=&limit=` | Bounded current/archive session checkpoints and provenance. |
-| `GET /api/v1/tools?date=&cursor=&limit=` | Bounded pi lane web-tool call record: original query or URL, provider, latency, bytes, result count and outcome. Missing records are an empty list; a corrupt complete row is unavailable. Read-only, no provider call. |
-| `GET /api/v1/health` | Readiness, feed/history, book safeguards, retention, planner budgets, read-only `activity_attribution` when present, derived alerts and the bounded `updater` status (last preflight failure reason/version/since, or null). The body carries the live `controller_liveness.age_ms`; the ETag covers the body without clocks, so a repeat read with unchanged content returns 304. |
-| `GET /api/v1/alerts?cursor=&limit=` | Stable derived alert rows with original evidence and `next`. |
-| `GET /api/v1/series?kind=receipt-minute-bar&instrument=&from=&to=&limit=` | Bounded receipt-derived minute bars with classified coverage gaps (`no_trade`/`unobserved`), store/session-start clocks and `watermark_ms`. |
-| `GET /api/v1/series?kind=account-equity&from=&to=&limit=` | Bounded recorded portfolio checkpoints with cash, equity and mark basis. |
-| `GET /api/v1/agent?cursor=&limit=` | Newest-first pi lane turns (`limit` 1–200, default 50; anything else is `400 agent_limit_invalid`) with tool calls, plan stance, gate verdict, usage and fallback; trigger counts; per-lane usage totals. Served from a process-local journal cache that parses only appended bytes. When a journal exceeds the read window it returns the newest rows with `truncated:true` and `rows_not_loaded:{turns,triggers}`. ETag revalidation. |
-| `GET /api/v1/agent/transcript?lane=&cursor=&limit=` | One pi lane's session transcripts as chat exchanges, newest first (`limit` 1–50, default 20). Each exchange is a trigger brief, the model's thinking, text and tool calls (arguments and results paired by call id) and the matching turn row from `/api/v1/agent`. Reads the newest eight `model/agent/pi/<lane>/*.jsonl` session files through the same append-only cache. Text is capped by `transcript_text_max_bytes`, tool arguments by `transcript_args_max_bytes`, and capped fields say `truncated:true`. System prompts are not served. A missing lane directory is an empty list. Bad `lane`, `limit` or `cursor` values return `400 transcript_*_invalid`. ETag revalidation. |
-| `GET /api/v1/events` | SSE `summary_changed` / `price_batch` frames with heartbeats, gzipped when accepted; `?poll=1&after=N` is the held long-poll fallback. |
-
-Meta, health and the lane journal revalidate with ETags. Private responses vary by
-`Authorization`. Snapshot and financial projections stay `no-store`/`private,
-no-cache`. `price_batch` frames carry their own `batch_seq` and no `id:` line;
-`Last-Event-ID` continues to address only the event ring. The older
-`/api/model-*`, `/api/backtest`, `/legacy/` and `/assets/dashboard.*` paths
-and the removed `/api/v1/runs*`, `/prompts`, `/session` and `/approvals` routes
-return 404. The workspace reads the split v1 projections. Offline replay is
-`GET /api/v1/backtest/example` and `POST /api/v1/backtest`; it still refuses
-while a session can trade.
-
-### Settings and retention
-
-Defaults are omitted from serialized configuration to preserve sealed
-configuration hashes. Validation ranges are enforced on load; changing any value
-requires a reviewed configuration change.
-
-| Key | Default | Effect |
-|---|---:|---|
-| `dashboard.workers` | 4 | HTTP worker threads; 1–16. |
-| `dashboard.queue` | 16 | Accepted-but-unserved requests; 1–256; full queue returns 503 `busy` with `Retry-After: 1`. |
-| `dashboard.static_max_age_s` | 86400 | Retired/ignored compatibility key; the shell and its assets always revalidate with ETags. Validation at most 31536000. |
-| `dashboard.gzip_min_bytes` | 1024 | Gzip threshold for assets and JSON; at most 1048576. |
-| `dashboard.history_read_max_bytes` | 8000000 | Maximum per-file history read; 1000000–64000000. |
-| `dashboard.history_list_cache` | true | Retired, ignored compatibility key; preserves existing config serialization. |
-| `dashboard.history_max_files` | 256 | Response files per legacy run; 1–256. |
-| `dashboard.backtest_timeout_ms` | 3000 | Offline backtest compute deadline; 1–3000. |
-| `dashboard.model_feed_unavailable_grace_ms` | 5000 | Retired, ignored compatibility key; original 0–60000 validation remains. |
-| `dashboard.sse_max_streams` | 3 | Concurrent SSE readers; 0–16; beyond the cap clients fall back to long-poll. |
-| `dashboard.sse_heartbeat_ms` | 15000 | SSE comment heartbeat; 1000–60000. |
-| `dashboard.sse_write_timeout_ms` | 30000 | Per-write SSE timeout; 1000–60000. |
-| `dashboard.longpoll_hold_ms` | 25000 | Long-poll hold; 1000–60000. |
-| `dashboard.transcript_max_bytes` | 2097152 | No reader since the transcript viewer was removed; still validated and reported in meta `limits` for configuration compatibility. Range 65536–16777216. |
-| `dashboard.transcript_text_max_bytes` | 16384 | No reader since the transcript viewer was removed; still validated and reported in meta `limits` for configuration compatibility. Range 1024–262144. |
-| `dashboard.transcript_args_max_bytes` | 4096 | No reader since the transcript viewer was removed; still validated and reported in meta `limits` for configuration compatibility. Range 256–65536. |
-| `dashboard.blob_slice_max_bytes` | 262144 | No reader since the transcript viewer was removed; still validated and reported in meta `limits` for configuration compatibility. Range 4096–4194304. |
-| `dashboard.series_max_points` | 2000 | Maximum points in one series response and the default page; 64–10000. |
-| `dashboard.series_max_range_ms` | 86400000 | Maximum explicit `from`–`to` span; 60000–604800000. |
-| `dashboard.equity_max_points` | 4096 | Bounded account-equity observation ring; 64–65536. |
-| `dashboard.equity_sample_interval_ms` | 15000 | Minimum spacing between recorded equity checkpoints; 1000–300000. |
-| `dashboard.price_batch_instruments` | 24 | Instruments in a full `price_batch` frame; 1–256. |
-| `dashboard.price_batch_interval_ms` | 2000 | Display batch cadence; 500–60000. Execution and telemetry keep original precision. |
-| `dashboard.retention.pack_after_days` | off | Pack eligible raw model archives after this age; 1–365. |
-| `dashboard.retention.delete_after_days` | off | Delete expired raw archives and packed copies; 1–365 and greater than the pack age. |
-| `dashboard.failed_auth_per_minute` | 30 | Token bucket capacity for failed auth attempts per minute; 1–600; returns 429 when exhausted. |
-| `dashboard.model_prices.*` | none | Exact decimal INR per million input/output/cached tokens for cost estimates. |
-
-Opt-in retention keeps `model/transcripts/<run>.ndjson`, `model/runs.ndjson`,
-prompts and the live stream while raw run directories and blob artifacts are
-packed or deleted. The workspace no longer renders these archives. See
-[retention operations](OPERATIONS.md#model-archive-retention) for eligibility,
-conflict handling and dry-run/apply commands.
-
-## pi lanes view
-
-`#/lanes` shows each pi lane as a chat session. It reads
-`GET /api/v1/agent/transcript` for the selected lane and `GET /api/v1/agent`
-for the stats and charts. The chat thread reloads when `revisions.agent_turns`
-changes, that is when a turn row lands. The stats reload when `revisions.agent`
-changes, which also covers triggers and usage.
-
-- **Lane tabs** for decision, gate, research and review, then any other lane.
-  Each tab shows a status dot and the turn and error counts. A side-by-side
-  toggle shows two lanes next to each other. The selected lane and layout are
-  remembered in this browser only.
-- **Chat thread**, oldest at the top and newest at the bottom, with
-  **Load earlier** for older exchanges. A dashed divider marks each pi session
-  (a controller restart starts a new one) with its model and thinking level.
-  Each trigger is a user message naming its instruments, or its reason when
-  it names none. Its IST time, kind and reason sit below the message, with a
-  brief icon that opens the full brief sent to the model. Thinking and each
-  tool call are single lines; a tool line shows a plain tool name and its
-  argument values and marks only failed, running or missing results. Lines
-  expand to the full text, arguments and result. Long tool chains fold their
-  middle calls. The answer carries a chip: escalated or declined for the
-  gate, the trades proposed (or no trade) for decision, or the turn error.
-  The chip repeats the gate reason or plan stance only when the model wrote
-  no answer. A brief without a reply shows as interrupted. A footer gives
-  the reply time, total tokens and cost.
-- **Lane stats** below the thread: turns, failures, fallbacks, typical and
-  slow reply time, tokens, cost, provider calls, calls and spend against the daily
-  budget (from `readiness.models.roles` in `/api/v1/health`) and the last
-  turn. Usage totals come from the API's `usage.lanes`; latency and failure
-  figures come from the loaded turns and say so.
-- **Session charts**, collapsed by default: the lane timeline, gate funnel,
-  latency distribution and cumulative cost by lane.
-
-Briefs, model text, tool arguments and results are untrusted model or tool
-text rendered as text. Capped fields are marked as truncated. The view is
-display evidence only and carries no order authority. A truncated journal is
-labelled as showing the newest rows, never as a complete total.
-
-## Offline backtest lab
-
-Supply an explicit manifest and its exact quote NDJSON. The shared engine checks
-engine/data hashes, chronology, identities, fees, slippage and residual exposure.
-No candle-to-quote conversion or invented closing fill. The optional synthetic
-example is labelled. Limits: 512 KiB manifest, 4 MiB events, 500 symbols, 5,000 events,
-50,000 observations, three-second HTTP compute deadline (five seconds for CLI).
-
-Stateless requests accept content, never host paths; they change no trading state.
-The paper-worker view refuses compute; only the research-only dashboard admits it. Host/origin checks still apply; this is not resource qualification.
-At most ten reports are stored in the browser without silent eviction; export
-preserves a convenience copy, not an authoritative experiment record.
-
-Use `nivra backtest-fingerprint` / `nivra backtest --manifest FILE --events FILE`
-for matching CLI replay. [Shared replay](reference/SHARED_REPLAY.md) explains formats.
-
-Static assets have SHA-256 ETags and configurable cache lifetimes; the HTML shell
-revalidates with `no-cache`. Gzip is negotiated for assets and JSON; API responses
-retain `no-store`. No font download is needed.
-
-Connections use a bounded `dashboard.workers` pool and `dashboard.queue`.
-When the queue is full, the server returns 503 `busy` with `Retry-After: 1`.
-A slow request occupies one worker rather than the accept loop.
-
-`GET /api/v1/meta` is an authenticated, versioned projection of the binary version,
-explicit paper/live status, account alias, broker roles, dashboard limits and the
-capability names; every advertised capability has a route. It uses ETags and
-`Cache-Control: private, no-cache`. V1 queries have a fixed 2 KiB wire bound,
-strict UTF-8 percent decoding, and reject duplicate/unknown keys. V1 errors
-include `v:1`; unknown v1 paths return 404.
-
-The pi lane roster and per-lane budgets come from `readiness.models.roles`.
-
-## Instrument metadata and F&O contract chains
-
-The scanner's Instrument catalog reads captured BOD metadata separately from the
-verified cash execution catalog. Filters use recorded segment, class, symbol/key
-and underlying; counts describe the captured metadata, not fresh quote coverage.
-Selecting a derivative opens a read-only call/strike/put chain and matching
-futures for the recorded underlying key, expiry milliseconds and segment.
-Missing legs remain unknown; colliding contracts leave an ambiguous leg rather
-than selecting one. Strike and lot values retain their source precision.
-
-`GET /api/v1/instruments` retains its original verified-cash default. Add
-`scope=all` for display metadata, with `market_segment`, `kind`, `q`, `cursor`
-and `limit` filters. `GET /api/v1/instruments/chain` requires `underlying_key` and
-`expiry_ms`; optional `market_segment`, `cursor` and `limit` bound the chain.
-Both routes retain the authenticated paper envelope and no execution authority.
-The summary's `instrument_display` status/hash triggers one UI refresh when the
-background catalog finishes; metadata parsing cannot block the paper loop.
-
-An absent `dashboard.instrument_catalog` uses the original hash-bound NSE BOD
-archive and its retained receipt time. Configuring `source:"complete"` enables a
-separate public complete-market BOD capture. Its original bytes/hash/receipt stay
-in the session directory; incomplete or changed captures refuse without overwrite
-or source fallback. Source provenance and rejected-row counts stay visible.
-The schema follows the [Upstox instrument reference](https://upstox.com/developer/api-documentation/instruments/).
-
-Only a matching existing cash identity, symbol, unit lot and qualified tick can
-carry the verified cash tick in INR; its separate source hashes remain inspectable.
-Other tick values stay in raw provider units. `EQ` rows are not guessed to be ETFs
-from names or ISIN prefixes; explicit ETF metadata is rendered when supplied.
-BOD data supplies no current option quote, Greek, spot or margin: those remain
-uncaptured, never zero. Existing recorded position margin fields still require
-matching instrument identity and display-only provenance. The verified cash
-allowlist and financial freshness/fee/protection gates are unchanged; derivatives
-remain excluded from paper execution. Target-host resource/source qualification
-and additional quote/margin evidence remain tracked in GitHub Issues.
-
-The Strategies Library tab projects bounded original registered-research versions
-and terminal outcomes from the current controller's dedicated experiment ledger.
-It exposes hashes and provenance, not accepted strategies or switch qualification.
-Reads never create, migrate or repair the ledger. Missing/corrupt/busy originals
-stay unavailable; output is redacted and no promotion or trading control exists.
-`research_tools.library_max_candidates` (default 32, maximum 256) and
-`library_max_bytes` (default 262144, maximum 1048576) configure the read budget.

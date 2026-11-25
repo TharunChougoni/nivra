@@ -1,250 +1,83 @@
 # Operations
 
-**Paper only.** Use application-owned credentials; never print tokens, dump service
-environments or edit SQLite/hash-sealed files. Future work is tracked in
-[GitHub Issues](https://github.com/TharunChougoni/nivra/issues).
-Commands below use placeholders or the conventional installation layout.
+This guide covers the procedures you run on a paper host. Nivra trades on
+paper only, and nothing here enables live orders.
+
+Today a pi decision lane chooses paper actions on each trigger, and Rust
+validates and fills them. The project is moving to model-written strategies
+that code executes. See [direction](DIRECTION.md).
+
+Commands use placeholders: `PAPER_CONFIG` is the runtime paper config,
+`UPDATER_CONFIG` is the updater config, and `NEW_PLANNER` is a planner file.
+Every command that changes a book needs `--confirm-paper-review`.
+
+## Rules for every procedure
+
+- Use the application's own credentials. Never print tokens, `auth.json`,
+  account payloads or service environments. Share redacted outcomes only.
+- Never edit `paper.sqlite`, `current.json`, seals, receipts or usage journals
+  by hand. Never create a replacement journal or reset a quota.
+- A restart never clears a stop or a halt. Only the commands in this guide do.
+- A refused command leaves the original state in place. Keep its output and
+  any files it wrote, and inspect them before you try again.
 
 ## Services and files
 
-Units, the release pointer, the deploy directory and updater state use the
-`nivra` names below. A host first installed from the retired `ind-sadr` repository
-keeps its `~/ind-sadr-data` and `~/.config/ind-sadr` directories, because the book
-binding hashes paths inside them.
-
 | Item | Purpose |
 | --- | --- |
-| `nivra-paper.service` | `nivra paper --config PAPER_CONFIG` |
-| `nivra-update.timer` / `.service` | Guarded update check every 30 minutes |
-| `nivra-dashboard.service` | Optional research-only dashboard (Backtest lab) using the installed `nivra` |
-| `PAPER_CONFIG` | Account/capital, original book/read journal, source/history/planner paths |
-| `SESSIONS_ROOT/current.json` | Application-owned committed dated-book pointer |
-| `<session>/paper.sqlite` | Original ledger, control and planner/review journals |
-| `<session>/model/` | Inputs, results, usage receipts, identities and status |
-| `<session>/report.json`, `review.json` | Sealed financial close/review evidence |
-| `RELEASES_ROOT/vX.Y.Z-<commit>/` | Immutable releases; `CURRENT` selects one |
+| `nivra-paper.service` | Runs `nivra preflight`, then `nivra paper --config PAPER_CONFIG` |
+| `nivra-update.timer` | Starts `nivra-update.service` (`nivra update`) at :00 and :30 |
+| `nivra-dashboard.service` | Optional research-only dashboard for when the paper service is stopped |
+| `~/nivra-current` | Symlink to the installed release; only the updater moves it |
+| `SESSIONS_ROOT/current.json` | Pointer to the current dated session |
+| `<session>/paper.sqlite` | Ledger, control state and planner journals |
+| `<session>/model/` | Model inputs, results, usage receipts and pi turn journals |
+| `<session>/report.json`, `review.json` | Sealed close report and review |
+| `~/.local/state/nivra/` | Updater status, failure and recovery records |
 
-Inspect `systemctl --user status UNIT` and `journalctl --user -u UNIT` privately;
-share only redacted outcomes. Tokens/grants/webhook settings stay private outside
-Git, owned by the service user, single-link mode 0600 without symlink traversal.
-
-For remote diagnostics, put a bounded timeout around the command on the paper
-host; a local remote-command timeout can leave its child running. Prefer
-authenticated status projections and bounded journal windows over recursive
-model/history archive inventories during a session. After a timeout, identify and
-terminate only the orphaned diagnostic process; preserve the paper controller and
-existing downloads. Large archive walks can add substantial disk and swap
-pressure on a small paper host.
-
-The packaged service profile uses MemoryHigh 1G, MemoryMax 1280M,
-MemorySwapMax 256M, TasksMax 32 and NOFILE 256, with read-only home, PrivateTmp,
-ProtectSystem=strict and NoNewPrivileges. Shared research staging is private
-mode-0700 `RESEARCH_STAGE`; service-private `/tmp` cannot serve that
-purpose.
-
-The effective limit is whatever systemd actually loads for the unit, not the
-packaged profile alone. A previously installed unit or a drop-in can keep older
-values, and drop-ins survive package upgrades. After installing a release,
-operators must check the effective values and update or remove any stale
-unit/drop-in that overrides the packaged profile. Check rather than trusting the
-packaged file:
+The unit files are in `packaging/rust/`. A host first installed from the
+retired `ind-sadr` repository keeps its old data directories, because the book
+binding hashes paths inside them. The paper unit sets memory, task and file
+limits. A drop-in survives upgrades and can override them, so after each
+install check what systemd loaded:
 
 ```sh
 systemctl --user show nivra-paper.service \
-  --property=MemoryHigh,MemoryMax,MemorySwapMax,TasksMax,LimitNOFILE
+	--property=MemoryHigh,MemoryMax,MemorySwapMax,TasksMax,LimitNOFILE
 ```
 
-## Current configuration baseline
+The unit can write only to `~/nivra-data`, `~/.config/nivra` and
+`~/.local/state/nivra`. Keep the pi `agent_dir` under `~/.local/state/nivra`.
+A custom path needs a `ReadWritePaths` drop-in and `systemctl --user
+daemon-reload`.
 
-For a fresh configuration baseline, prepare new paper and planner files
-outside every original session directory. Retain predecessor configs and immutable
-release evidence unchanged. Installation,
-authority application and a paper start are separate operator actions.
+## Install a fresh paper account
 
-Review the complete set together:
+A fresh account needs an explicit decision by the repository owner. Follow
+[configuration](../packaging/rust/CONFIGURATION.md).
 
-| Input | Required current baseline |
+## Daily schedule
+
+Times are IST on NSE trading days from the compiled 2026 calendar. A date
+outside that calendar refuses at startup with `calendar_coverage_missing`.
+
+| Time | What the controller does |
 | --- | --- |
-| Paper config | Explicit broker, account, session, original read-journal and sessions/history/source paths; continuing account cash comes from its original ledger, never a replacement journal |
-| Costs and instruments | Complete `paper_costs` (see packaged fragment), verified cash instrument identities/tick units, calendar and provider metadata; no derivative execution |
-| Planner | Pi paper policy: `enabled`, `model_led`, and an `agent` block in `paper` mode with a decision lane; any key outside the pi policy shape refuses |
-| Models | One reviewed provider/model spec per enabled pi lane, authenticated in the application's own pi directory; catalog or directory presence does not establish entitlement |
-| Prompts | Pi lane prompts come from the built agent (`agent/prompts/`) or `planner.agent.prompts`. See [pi agent lanes](AGENT.md) |
-| Credentials | Application-owned pi `auth.json`/`models.json`; never reuse another application's authentication or put credentials in templates/history |
-| Limits | Explicit reviewed per-lane daily call/cost budgets, turn timeouts, tool limits and source bounds; no new trading risk caps and no silent provider fallback |
+| 08:00–09:10 | Prepares prior-session daily history, if enabled in [configuration](../packaging/rust/CONFIGURATION.md) |
+| Before 15:00 | Rolls over to the next eligible session and protects carried holdings |
+| 09:15–15:30 | Protects holdings, scans, runs pi decision turns on triggers and validates paper fills |
+| Close | Seals the report with actual cash, fees and carried holdings |
+| After the seal | Runs the pi review lane once |
 
-Choose each existing book's disposition before applying any new policy. Archived
-books remain read-only with their original config, journal, usage and failed
-artifacts. Reviewed continuation uses the original book and authority transition;
-it never creates a replacement ledger, resets allowances, replays an ambiguous
-attempt or clears stop/halt flags. A fresh config is not a fresh account.
+A controller that first starts after 09:15 still adopts the day's session
+until 15:00. Carried holdings get protection at once, and new entries wait for
+history. After 15:00 the day is `missed_preopen_idle` and the next trading date
+rolls over normally.
+No eligible evidence means no model call.
 
-Use `planner config-check --planner NEW_PLANNER --session SESSION` for offline
-planner validation; it reports the pi paper prerequisites and resolved lanes. Source/fixture
-validation does not establish credential entitlement or installed-host readiness.
-Before any separately authorized paper start, validate the original authority,
-self-check and preflight under the reviewed configuration. Preserve stopped or
-halted state; a failed check is evidence to retain, not permission to restart.
+## Check readiness
 
-Use the [current setup templates](../packaging/rust/CONFIGURATION.md) for the
-complete input set and compatibility inventory. Target-host preparation and
-qualification remain separate.
-
-## Startup and daily flow
-
-For an explicitly requested fresh account, use the Rust
-[`setup` workflow](../packaging/rust/CONFIGURATION.md#explicit-fresh-paper-installation).
-It prepares a fresh pi paper planner (`enabled`, `model_led` and the reviewed
-`agent` block) in unused private config/state directories, preserves original
-evidence and shared quotas, and does not activate a session.
-Keep the old installation archived and the new paper service stopped after
-installation. Future updates use the canonical updater and stable new config;
-do not replay setup or reset a journal to work around
-`decision_owner_migration_required`.
-
-Supply explicit account/broker/session identities, positive capital, original
-read-journal binding, source credentials, sessions/history directories and planner
-path in ordinary config. Legacy `directory/session/previous_session` fields remain
-bound to their original book; do not rewrite them each morning. The runtime follows
-its committed current pointer under a root-wide writer lock.
-
-| Phase, IST | Behaviour |
-| --- | --- |
-| Pre-open | Validate calendar, predecessor/carry, dated metadata, pi settings and history |
-| 08:00–09:10 | Optional prior-session daily-history preparation under original read quota |
-| Before 15:00 | Commit the next eligible session. A session first committed after the preparation cutoff prepares history immediately with the bounded retries and protects carried holdings at once |
-| After 15:00 | An uncommitted session waits for the next trading date (`missed_preopen_idle`) |
-| 09:15–15:30 | Protect holdings, rotate scans, wake the pi decision lane on eligible triggers, serve research requests and validate paper fills independently |
-| Close | Seal/report actual cash, fees and unresolved/carried holdings; no forced 15:15 liquidation for model-led holdings |
-| After close, before 18:00 | Seal financial reporting; the configured pi review lane may run once after the seal |
-
-An open operator-stopped book is expected protection: startup diagnostics,
-stop alerts and `/api/v1/health` book / summary state classify it as
-`expected_not_failure`. It still requires explicit reviewed resume; installation
-never clears the stop. Halted or incomplete/unknown stop evidence remains an
-operator-review condition, separate from updater preflight or rollback failure.
-
-A service stop or restart (`systemctl --user restart`, the updater's stop, a host
-shutdown or a crash) continues the same dated book when the controller returns.
-Only an explicit [`nivra stop`](#operator-stop-and-service-restart) makes the next
-stop an operator stop that needs a reviewed `resume`. Stop/halt flags and original
-attempts are preserved. A normal model-led account carries actual cash/holdings
-across verified successors. Closed books are never resumed. No replacement intraday book, quota
-reset or automatic unhalt is a recovery procedure.
-
-### Late session start
-
-A controller that first comes up after 09:15 IST still starts the day's
-session: a fresh install, a restart after a long outage, or a predecessor that
-needed review before it could seal. An eligible predecessor seal, flat or
-carried under the unchanged carry rules, rolls over from pre-open until the
-late-start cutoff at 15:00 IST. A first-ever book whose configured session is
-today starts the same way. After 15:00 the day is `missed_preopen_idle` and the
-next trading date rolls over normally.
-
-Carried holdings get protection and exits as soon as the session is adopted.
-New entries still wait for prior-session history. Past the configured cutoff,
-the controller prepares history immediately with the same read-quota journal,
-validation and bounded attempts as pre-open: a recorded failure retries after its
-delay until 15:00, and an attempt left in progress by a crash is never replayed.
-Each acquisition deadline keeps the pre-open window's length and never passes the
-session end. The read-only coverage check then decides whether entries are
-admitted. Readiness judges the next session at its 08:30 pre-open, or at the
-current time once that has passed. The two-second financial freshness gate and
-the archived quote receipt times are unchanged.
-
-The reviewed compiled 2026 NSE calendar is bounded; holidays and previous-session
-selection come from it. Unreviewed special hours/dates refuse. Calendar/source
-coverage is evidence, not an inferred provider promise.
-
-## Paper-cost configuration
-
-Set the complete `paper_costs` object in the runtime paper config before using
-this source version; see [fees](STRATEGY.md#fees) and the packaged paper-cost
-fragment. Missing costs refuse validation. A same-session book retains its
-recorded policy: a changed or absent stored policy refuses with
-`paper_cost_policy_changed`. Review the existing book and any migration separately
-before installing this change; never rewrite the original journal or silently
-assign a new policy to an existing session. New verified successor books use the
-configured policy, but changing the source config before rollover can also change
-its book binding.
-
-For a reviewed cost-only change to the continuing model-led account, save the
-source session's complete config outside the session directory, set the new
-`paper_costs` in the runtime config, and add:
-
-```json
-"paper_cost_transition": {
-  "source_session": "2026-10-16",
-  "prior_config": "/absolute/path/to/paper-20261016.json"
-}
-```
-
-The prior config is read-only evidence: every field except `paper_costs` must
-match the new config, its journal device/inode must match, and the source book
-must be closed, non-stopped, non-halted and model-led. Carried positions are
-allowed; an open source book is refused. The source book keeps its original
-binding and same-session policy; a same-session restart with the new policy still
-refuses `paper_cost_policy_changed`. At the verified rollover, the successor keeps
-cash, positions and fills but uses the new policy for new fills; existing fills
-retain their recorded fees. Legacy books without a stored policy can use the same
-transition, but their legacy fee arithmetic remains unknown. The transition
-is evidence for the named source session and is not serialized into the policy
-binding. Keep it in place until the successor book has been written, then remove
-it with the next reviewed config change. Do not use this to mutate a stopped,
-halted or open book.
-
-### Stopped-controller offline advance
-
-After the reviewed source book has closed and the controller is stopped, complete
-an already-validated rollover without starting the service. Preview first, then
-advance explicitly:
-
-```sh
-nivra rollover --config PAPER_CONFIG --now 2026-10-28T09:00:00+05:30 --dry-run
-nivra rollover --config PAPER_CONFIG --now 2026-10-28T09:00:00+05:30 --advance --confirm-paper-review
-```
-
-`--now` is mandatory; the command never samples the wall clock. `--advance`
-requires `--confirm-paper-review`, takes the root controller lock before the
-selected source book controller lock, validates the config (live activation
-remains disabled), and requires `preview.status == rollover_ready`. Run it on the
-target session date before the 15:00 IST late-start cutoff; the same clock rule
-as the controller applies. It advances at most one transition, from the session
-committed in `current.json` to the `--now` session, and runs the same transition,
-closed-book and carry validation and the single rollover commit used by the
-controller, then prints JSON evidence containing `status`, source and target
-sessions, bindings and migration kind. The source binding, fills and fees remain
-unchanged; the successor uses the configured costs for new fills. The command
-never starts the service, opens a market connection, places orders, mutates
-source fills/state or replays a failed attempt.
-
-The command resolves its source book from `current.json`, not from the config's
-`session` field. Keep the reviewed config and its original identity: it may still
-name the original session after later sessions started, and each verified
-successor becomes the source for a later invocation. Do not edit the pointer or
-rewrite the config to force a source.
-
-If `current.json` already points at or past the `--now` session, the command
-returns `status: "already_advanced"` with source/target evidence and changes
-nothing. This includes a service start that already performed the reviewed
-rollover and a repeated invocation. Do not point the pointer back or rerun an
-older config to force a second advance. Refusals print
-`rollover_advance_refused_original_state_preserved` with a stable reason code.
-The normal rollover review still owns closed-book, carry, halt and transition
-admission; this command never clears a source stop or halt. A halted book needs
-the reviewed `--accept-halted-carry` evidence first.
-
-## Preflight and readiness
-
-For an explicit manual catch-up of the current config's required daily history,
-run `nivra history-backfill --config PAPER_CONFIG`. It uses the original shared
-quota and configured history root, validates/reuses raw receipts, and coalesces
-missing reviewed trading sessions. Old descriptive replay manifests are preserved
-and are not rebuilt by operational acquisition. Automatic pre-open preparation
-uses the same receipt-only mode while retaining its cutoff/deadline. Empty or
-unavailable observations remain gaps; inspect readiness after the pass. See
-[historical candles](HISTORY_DOWNLOAD.md).
+Run these before a start, after an install and after a config change:
 
 ```sh
 nivra self-check --expected-version vX.Y.Z
@@ -253,394 +86,211 @@ nivra readiness --config PAPER_CONFIG
 nivra rollover --config PAPER_CONFIG --now RFC3339_TIME --dry-run
 ```
 
-Self-check accepts a version with or without `v` and prints the failed check.
-Preflight checks writable paths using a private temporary probe, without credentials
-or opening the read journal. When `INVOCATION_ID` is set, as it is under systemd,
-preflight also reads `ReadWritePaths` of the installed unit through
-`systemctl --user show nivra-paper.service` and refuses a required path the unit
-does not grant (`preflight_unit_path_uncovered`). To run that check from a shell
-before activation, set `INVOCATION_ID=manual`; it reads the unit systemd has
-loaded, so run `systemctl --user daemon-reload` after you edit the unit.
-`--unit-file FILE` checks the `ReadWritePaths` lines of one unit file instead.
-Without either, preflight does not check unit coverage. This is admission, not
-sandbox qualification.
+`preflight` checks writable paths and the pi agent files, then runs the agent
+with `--check` to confirm that pi knows each lane model and has a credential
+for each provider. It never reads `auth.json`. Under systemd it refuses a path
+the unit does not grant (`preflight_unit_path_uncovered`). From a shell, set
+`INVOCATION_ID=manual` or pass `--unit-file FILE` to run that check. A changed
+registered research file reports `research_registered_bytes_changed`. See
+[research](RESEARCH.md).
 
-With a pi planner, preflight also checks the agent: node, the entry, the agent
-package dependencies, the prompts directory, and an agent directory that the
-current user owns and can write. It then runs the agent with `--check` to confirm
-that pi knows every lane model and fallback and that each provider has a stored
-or passed credential. pi reports presence only; preflight never reads
-`auth.json`. The agent directory is part of the unit coverage check. The codes
-are `preflight_agent_node_missing`, `preflight_agent_entry_missing`,
-`preflight_agent_modules_missing`, `preflight_agent_prompts_missing`,
-`preflight_agent_dir_not_writable`, `preflight_agent_dir_not_owned`,
-`preflight_agent_model_unknown`, `preflight_agent_auth_missing` and
-`preflight_agent_check_failed`.
+`readiness` is read-only and calls no provider. It reports models, history and
+rollover separately. It cannot verify provider access, so a healthy pi planner
+reports `model_roles_unknown` with `agent_provider_not_checked` and exits
+non-zero. `model_roles_blocked` names a reason such as `agent_node_unavailable`
+or `daily_budget_exhausted`.
 
-Readiness is read-only: it never refreshes credentials, calls models, creates
-namespaces or repairs state. It reports grant coverage, history and rollover
-separately. Its exit code checks `models.status` and succeeds only for
-`model_roles_ready`. A pi planner never reports `model_roles_ready`, because
-readiness does not check provider access. With node, the entry, the agent
-directory and the decision lane budget in place, it reports
-`model_roles_unknown` with reason `agent_provider_not_checked` and exits non-zero.
-Otherwise it reports `model_roles_blocked` with the first blocking reason, such
-as `agent_node_unavailable`, `agent_usage_unavailable` or
-`daily_budget_exhausted`. Each lane appears in `roles` with its model, budget and
-current spend. Use preflight for credential presence. Readiness does not certify
-overall history or lifecycle readiness; inspect those fields separately. Older
-snapshots without `models` may use top-level `model_status`.
+To catch up missing daily history by hand, run
+`nivra history-backfill --config PAPER_CONFIG`. Add `--check-only` to report
+coverage without calling the provider. See [market data](MARKET_DATA.md).
 
-Preflight and readiness also read every `research_tools.registrations` file from the
-resolved planner config and compare its bytes with the registered SHA-256. A
-missing or unreadable file fails preflight with its own code
-(`research_code_unreadable`, `research_runtime_unreadable` or
-`research_input_unreadable`); a changed file reports
-`research_registered_bytes_changed`. Readiness adds a path-free `research` object
-with `status` and per-artifact reasons, so a stale runtime path is visible before
-the owner's next research call. A blocked research registration does not change the
-model-readiness exit code. Re-register a stale runtime outside a session against
-a retained release's `nivra-analysis` binary as described in the
-[research worker](RESEARCH_WORKER.md#re-registering-a-stale-runtime), then rerun
-preflight and readiness.
+## Start and stop
 
-The pi lanes can queue registered analysis through the `analysis` tool. Its optional planner setting is:
+Start with `systemctl --user start nivra-paper.service`. The controller treats
+each stop signal as one of two kinds.
 
-| Setting | Default | Valid range | Meaning |
-| --- | --- | --- | --- |
-| `research_tools.task_ttl_ms` | 21,600,000 (6 hours) | 60,000–86,400,000 | Expiry measured from task creation, including queue time; the registered `wall_millis` separately bounds sandbox execution. |
-| `research_tools.termination_grace_ms` | 30,000 | 0–300,000 | Additional time to obtain trusted whole-sandbox termination after cancellation or execution expiry; exhaustion retains an occupied, reconciliation-required attempt. |
+| Stop | How | After restart |
+| --- | --- | --- |
+| Service stop | `systemctl --user stop` or `restart`, the updater, a host shutdown or a crash | The same session continues |
+| Operator stop | `nivra stop`, then a stop signal | The book stays stopped until `nivra resume` |
 
-Omitting the default retains the original serialized policy bytes. Changing this
-setting follows the normal reviewed policy transition; it does not extend an
-already queued task's recorded expiry. See [registered research](RESEARCH_WORKER.md).
-
-Candidate compute additionally requires a running systemd user manager, cgroup
-v2, `/usr/bin/systemd-run`, `/usr/bin/systemctl`, `/usr/bin/bwrap`,
-`/usr/bin/python3`, a usable `XDG_RUNTIME_DIR` user bus, a readable machine
-identity (`/etc/machine-id` or `/var/lib/dbus/machine-id`) and unprivileged user
-namespaces. Readiness checks configured prerequisites only
-(`readiness_scope: configured_prerequisites_only`): it verifies the executable
-paths, cgroup v2 marker, user-bus path and machine identity, reports `configured`
-when they pass, and never claims a live manager, user-namespace operation or
-host qualification.
-`runtime_verified` and `host_qualified` stay false until a separate host
-qualification drill observes the actual unit/cgroup behaviour. The overall
-projection reports `configured`, not `ready`, while candidate compute is
-configured but runtime-unverified; a missing known prerequisite reports
-`blocked`. It never advertises a weaker process-group fallback. The stage root must be private (0700), outside `/tmp`/`/var/tmp`
-because the unit uses `PrivateTmp=yes`, and outside a forbidden home/root
-component. Candidate units are `nivra-candidate-<lease>.service`; the controller
-stops only that original unit and releases the lease only after the typed
-unit/cgroup proof. A retained `candidate_recovery_required` lease is never
-replayed or reset; inspect the original unit and result receipts before any
-reviewed recovery. The hidden `nivra candidate-supervise` command is not an
-operator workflow and accepts only the staged launch manifest; it claims a
-one-run marker before reading source, so a unit restart refuses instead of
-executing the payload twice. The reviewed `max_result_bytes` cap is recorded in
-the task and enforced on the helper output, envelope and artifact; an oversized
-result is a bounded terminal failure, not a success.
-
-The optional `research_tools.candidate_compute.execution` block enables the
-after-cost cash replay. It is absent by default; omitting it keeps the existing
-policy bytes, tool schema and ranking-only behaviour unchanged. A reviewed
-enablement is configuration, for example:
-
-```json
-"execution": {
-  "enabled": true,
-  "abi": "cash_quote_action_tape_v1",
-  "max_quote_events": 2000,
-  "max_observations": 20000,
-  "max_tape_bytes": 4194304,
-  "max_entries": 100,
-  "max_capital": "100000",
-  "max_cost_stress": 4
-}
-```
-
-Only when it is enabled does `candidate_submit` advertise the nullable
-`execution` JSON-string argument. The submit freezes the executable quote tape
-from the original read-only paper quote journal at the submission clock and
-stores it separately from the scorer dataset; a later exit quote is never
-fetched. Scanner/OHLC/compacted evidence alone returns
-`candidate_execution_quotes_unavailable` and creates no task. The fixed helper
-runs the existing scorer replay, then the trusted Rust adapter over the staged
-tape, and reuses the existing cash engine for base and stress costs. The result
-kind is `executable_replay`; `execution_unavailable` is distinct and carries no
-cash/PnL summary. All execution results are retrospective research evidence and
-never authorize a broker order, promotion, activation, prospective shadow or
-account-funds claim.
-
-Rollback is configuration-only: remove the block or set `enabled: false`.
-Existing tasks, results and lifecycle records remain readable from their
-recorded hashes; do not reset the queue, delete artifacts or migrate the book.
-The readiness projection reports the execution capability separately and keeps
-`runtime_verified` and `host_qualified` false.
-
-For #7, the running paper controller checks readiness every
-`model_readiness_check_interval_ms` (default 60000; must be positive). With alerts
-configured, enabled roles whose credentials fail validation or whose future
-refresh is unverified emit `model_credential_unavailable` warnings throughout the
-configured session date, including after market open. These warnings are
-independent of usage availability and deduplicated per role and failure category
-by the existing delivery policy. A blocked role keeps its real stable reason code
-instead of a generic credential failure. Only static role/category details are sent.
-xAI refresh-attempt failures also immediately enqueue `model_refresh_failed`
-(critical), with only static provider/reason/action details. No error bodies,
-account identifiers, tokens or paths enter that alert. The paper planner uses
-its existing `alert_webhook_file`; a model config may also set optional
-`alert_webhook_file` for standalone model commands (otherwise the existing default
-alert destination applies). Delivery retains the configured timeout, dedupe and
-admission limits; an unavailable receiver is not proof of delivery.
-
-A successfully validated, same-account xAI refresh records `refresh_verified_at`
-only with the durable authenticated revision. Readiness can then report validated
-refreshability beyond the current access-token expiry, provided verification is
-at most 36 hours old at the evaluation time, matches the revision's update time, and the grant
-covers the entire requested window. This is evidence that refresh worked, not a
-provider guarantee about the next attempt. Legacy records without that evidence
-remain UNKNOWN beyond expiry. An in-progress/failed refresh, stale evidence or
-future-dated verification cannot establish readiness. Readiness itself never
-contacts the provider or attempts refresh.
-
-The packaged unit grants stable data/config/state parents. Create intended
-sessions/state directories once; custom paths need explicit `ReadWritePaths`
-drop-ins and `systemctl --user daemon-reload`. Do not create replacement journals
-or move their original device/inode identity to satisfy preflight.
-
-## Planner configuration
-
-The paper config points to ordinary planner JSON. A pi paper planner sets
-`enabled: true`, `model_led: true` and an `agent` block in `paper` mode with a
-reviewed `decision` lane; the setup workflow writes that shape. Each enabled lane
-needs an exact provider/model spec, positive daily call and cost budgets, a valid
-turn timeout and tool-call bound. Unknown keys refuse with
-`planner_config_invalid`. `enabled: false` or `model_led: false` is an explicit
-no-call policy and needs no lane.
-
-An enabled planner without `agent.mode: "paper"` and a decision lane refuses with
-`pi_paper_planner_required` or `pi_paper_decision_lane_required`.
-
-`planner.tools` bounds call-time reads and defaults are omitted from policy bytes:
-
-```json
-"tools":{"scanner_limit":40,"ranking_limit":50,"history_limit":5,"max_instrument_keys":20}
-```
-
-[Lane tools](LANE_TOOLS.md) explains the lane tool boundary and budgets.
-
-Prefer dated configuration for the next session:
-
-```json
-{"effective_from":"2026-10-23","previous_config":"/absolute/original-planner.json"}
-```
-
-These fields belong in a complete new planner config retaining the reviewed
-lanes and policy. Before the effective date, resolution uses the untouched
-previous config; it detects missing pairs/cycles. Point only the ordinary paper
-config at the new file after review, and compare resolved policies:
+To stop the book for review:
 
 ```sh
-nivra planner config-check --planner NEW_PLANNER --session 2026-10-22
-nivra planner config-check --planner NEW_PLANNER --session 2026-10-23
+nivra stop --config PAPER_CONFIG --confirm-paper-review
+systemctl --user stop nivra-paper.service
 ```
 
-For a reviewed **current flat, non-halted, open book**, stop the controller, edit
-only ordinary planner config, then:
+With the controller running, `nivra stop` writes `stop-request.json` next to
+`current.json`, valid for ten minutes. The controller reads it on the next stop
+signal, blocks any in-flight planner attempt and marks the book stopped. With
+no controller running, `nivra stop` stops the open book directly. A closed
+book refuses with `stop_session_closed`.
+
+To resume an operator-stopped open book after review:
 
 ```sh
-nivra config-apply --confirm-paper-review --config PAPER_CONFIG
-nivra resume --confirm-paper-review --config PAPER_CONFIG
+nivra resume --config PAPER_CONFIG --confirm-paper-review
+nivra readiness --config PAPER_CONFIG
 systemctl --user start nivra-paper.service
 ```
 
-`config-apply` takes controller/book locks, validates and records old/new policy
-and complete configuration hashes, supersedes the old plan and leaves the book
-stopped. It refuses closed/halted/non-flat books, pending attempts, planner blocks
-or changed/missing usage authority. It also refuses an enabled model role blocked
-by a missing or invalid grant, so the last valid authority and
-config stay in place instead of an unauthenticated model becoming active. Model-led
-conversion additionally needs a pristine flat book. An initialised namespace
-cannot move. Never hand-edit a sealed policy or rely on an arbitrary restart to
-adopt trading-policy changes.
+`resume` refuses a closed book (`resume_session_closed`) and an edited planner
+that is not applied yet (`resume_planner_config_not_applied`). A model-led book
+resumes with its holdings.
 
-The original session namespace is created and pinned during authorised controller
-initialisation before model work. `usage_namespace` is a validated 1–64 character
-name under `model/`; omitted means `usage`. Never mkdir/copy/reset pins or receipts
-to repair readiness. Failed provider/transport/interrupted model attempts remain
-recorded in the usage journal and failure artifacts for audit but do not consume the
-daily call allowance; successful model calls still count. No usage reset, refund,
-deletion or journal replacement.
+## Change the planner policy
 
-## Enabling the decision-evidence policy
+The planner file sets `enabled`, `model_led` and the `agent` block with the pi
+lanes, their models, budgets and timeouts. See [agent](AGENT.md) for the keys.
+Any other key refuses with `planner_config_invalid`.
 
-The optional planner fragment
-[`decision-evidence.fragment.json`](../packaging/rust/decision-evidence.fragment.json)
-adds intraday context and the uncertainty instructions described in the
-[lane tools guide](LANE_TOOLS.md#intraday-decision-evidence). Defaults:
-20 completed price bars, 20 retained scanner samples, return windows `[1,5,15]`,
-180,000 ms price age, 300,000 ms metadata age and 200 benchmark contributors.
-Bars and sample limits are 1–20; one to six unique return windows may each be
-1–60 minutes; ages must be 1–86,400,000 ms and contributors positive. Volume-proxy
-parameters use the existing validated strategy-feature settings. These are
-screening/resource parameters and never replace the two-second financial gate.
+1. Write the new policy to a new file. Check it offline. The check calls no
+   model and writes nothing.
 
-Install a supporting annotated release through the normal updater before adding
-this key: v0.8.7 and earlier cannot parse it, while v0.8.8 does. Merge the
-fragment into a complete reviewed planner config, preserving identities,
-approvals, allowance namespace and other policy. Use dated configuration for
-the next session, or the supported stopped
-controller `config-apply`/`resume` procedure for an eligible reviewed open book.
-Closed books are not resumed; use the existing reviewed successor/rollover path.
-The option and instruction hashes change policy bytes, so do not silently edit
-an active same-session policy or add the key before its supporting binary is
-installed. Keep the rollback binary's compatible config available under the
-normal updater guards. No existing book, journal, usage or failed request is
-replaced by enabling this policy. Source tests do not qualify a real session.
+	```sh
+	nivra planner config-check --planner NEW_PLANNER --session SESSION
+	```
 
-## Diagnosing a running book with no fills
+2. Point `planner_config` in `PAPER_CONFIG` at the new file.
+3. Apply it in the way that matches the book.
 
-Separate model choice from execution refusal. Check current book stop/halt/close
-flags, pi readiness and remaining lane allowances, feed/scanner eligibility and
-history admission first. Then inspect the original ledger read-only: the active
-`planner_plan.body.parsed_plan.actions`, its `verdicts`, `planner_action` verdict
-counts and failed/planned attempt counts. Inspect `model/agent/triggers.ndjson`,
-`model/agent/turns.ndjson` and `model/agent/plans.ndjson` for why a lane turn did
-not run or which plan was refused. Share aggregates and bounded reason codes only;
-never dump book bodies, account context or model requests. `agent-turn --dry` prints
-the current brief and published tools; `agent-shadow-report` summarizes recorded
-shadow turns.
+**Open book.** Stop, apply, then resume:
 
-An accepted empty action list is a model abstention and has no execution verdicts.
-It does not establish stale-quote, affordability or price-limit rejection. A
-`model_plan_unavailable_no_trades` label alone does not diagnose why a plan was not
-produced. Distinguish current readiness from earlier failed turns, and do not count
-repeated log lines as new calls. PARTIAL history is admitted
-under the documented conditions; it is not itself proof that inference is blocked.
-
-Do not manufacture a trade to verify the pipeline. Compare a proposed prompt or
-strategy against preserved genuine evidence offline, retaining costs, timestamps,
-missing observations and original outcomes. Prompt changes belong to reviewed
-policy/release handling; do not silently replace same-session model instructions.
-Future work is tracked in
-[GitHub Issues](https://github.com/TharunChougoni/nivra/issues).
-
-## Live strategy-selection ranking (paper only)
-
-Discovery normally runs the strategy selector in `shadow` mode: it records which
-strategy it would choose but does not change ranking. The opt-in live mode lets
-that selected strategy's scorer rank scanner prospects in paper:
-
-```json
-"strategy_selection": {
-  "enabled": true,
-  "mode": "live",
-  "library_path": "/absolute/strategy-library.sqlite",
-  "evaluate_ms": 60000,
-  "regime": {},
-  "selector": {}
-}
+```sh
+nivra stop --config PAPER_CONFIG --confirm-paper-review
+systemctl --user stop nivra-paper.service
+nivra config-apply --config PAPER_CONFIG --confirm-paper-review
+nivra resume --config PAPER_CONFIG --confirm-paper-review
+systemctl --user start nivra-paper.service
 ```
 
-`mode` defaults to `shadow` when omitted, so existing configs keep the old
-diagnostic-only behaviour and the old trading-policy hash. Live requires an
-enabled selector, a nonempty library path, no enabled Tier 1
-`discovery.strategy` champion, and a valid selector/regime configuration. The
-runtime reads the exact chosen source by SHA from a read-only library, scores the
-current fresh scanner snapshot in the existing bwrap/seccomp sandbox, and ranks
-the existing scanner prospects by descending finite score with instrument-key
-tie-break. Unscored prospects are omitted before the normal shortlist limits.
-This only changes the paper scanner shortlist used for candidates, triggers and
-depth polling; orders, validation, risk controls and the owner's decision are
-unchanged. `LIVE_ENABLED` remains false.
+`config-apply` records the old and new policy hashes and leaves the book
+stopped. It refuses a halted book
+(`config_apply_halted_requires_planner_recover`) and pending orders. It refuses
+positions unless the book is model-led. Switching `model_led` needs a book with
+no fills.
 
-Live ranking fails closed to the default ranking on unknown regime, stale data,
-scorer/library failure, paper-floor breach, invalid config, missing or invalid
-source, sandbox failure/timeout/output-limit breach, invalid scores, no scored
-prospect, or when the selector keeps the default identity. The controller logs
-`strategy_selection_fallback` with a stable reason/detail, attempted identity,
-previous active strategy and regime; recovery logs
-`strategy_selection_recovered`. Dashboard discovery status exposes `mode`,
-`chosen_id`/`chosen_name`, `previous_active`, regime, `switched`, `live_applied`,
-score count, bounded fallback/recent-switch evidence, and scorer/stale flags. Do
-not paste source or model output into incident notes from these logs.
+**Closed book.** `config-apply` refuses with `config_apply_book_closed`. Leave
+the book alone. The next rollover binds the edited planner.
 
-Turning live mode on or off changes trading-policy bytes (shadow/absent selection
-settings stay excluded). Treat it as a policy change: review the resolved config,
-use `config-apply --confirm-paper-review`, and follow the normal stop/resume
-procedure; never hand-edit a sealed policy. This feature is paper-only and must
-never be used to enable live trading.
+When the running controller sees an edited planner or prompt, it suspends the
+planner with `planner_configuration_changed_apply_required`. It does not halt
+the book. Run the open-book sequence.
 
-## Event and history behaviour
+To schedule a change, add `effective_from` (a date) and `previous_config` (an
+absolute path) to the new file. Sessions before the date use the previous file.
+Run `config-check` for a session on each side of the date.
 
-The pi trigger engine replaces the earlier scanner-refresh event queue: a fill,
-position risk, persistent top-K candidate, the hourly schedule turn or the
-pre-close minute wakes the decision lane; triggers that arrive while a turn runs
-merge into the next batch. Only a completed turn with a validated plan reaches the
-paper plan head, and no eligible evidence means no model call. Trigger settings
-live in `planner.agent.triggers`.
+To switch a lane model, change `provider` and `id` in the lane's `model` block
+and sign in to the provider in the application's pi directory. To roll back,
+point `planner_config` at the previous file. Apply either change as above.
 
-A legacy `events` block is still parsed for archived policies but is inert on a pi
-paper planner. Archived events still decode for journal validation. Failed pi lane
-turns keep their bounded status/error in `model/agent/turns.ndjson` and produce no
-order and no book halt. Raw provider bodies, headers, credentials, account context
-and model text are never retained.
+## Change paper costs
 
-Scanner samples carry optional `avg_daily_volume` and `avg_daily_volume_sessions`
-from validated daily receipts within the prepared 21-session window.
-`history_avg_daily_volume_min_sessions` defaults to 10; missing or below-minimum
-coverage leaves both fields absent. Available sessions are averaged without
-filling gaps. This plumbing does not affect ranking.
+The runtime config needs a complete `paper_costs` object. See
+[strategy](STRATEGY.md) and `packaging/rust/paper-costs.fragment.json`. A
+session keeps the cost policy it started with, and a change on the same
+session refuses with `paper_cost_policy_changed`.
 
-`history_preparation_enabled:true` acquires missing prior-session daily spans
-pre-open without blocking protection. On market-hours restart, cached coverage is
-verified read-only. At least one fully covered instrument and completed READY or
-PARTIAL preparation are needed when enabled. Missing bars remain missing.
-`history_skip_unavailable:true` records specific HTTP-400 ranges as exclusions,
-without retrying them as a new allowance. Other per-instrument fetch failures
-(timeouts, 5xx) skip that instrument and continue, up to
-`history_preparation_max_fetch_failures` (default 25); the report records
-`history_fetch_failures_skipped:N`. One more failure, cancellation or the 09:10
-deadline stops preparation. Authentication, quota/journal integrity and malformed
-response failures stop immediately; the skip allowance covers only transient
-transport errors, HTTP 429 and HTTP 5xx. A completed PARTIAL pass retries only missing ranges
-before 09:10, using the original shared quota and immutable receipts.
-`history_preparation_max_attempts` defaults to 3 (0 disables acquisition), with
-`history_preparation_retry_ms` defaulting to 60000 between PARTIAL passes.
-Completed FAILED attempts also retry within the same attempt budget and preparation
-window, using `history_preparation_failed_retry_ms` (default 60000, positive),
-including failures that may not be transient. A cancelled or deadline-stopped
-pass is FAILED with its specific code (`history_preparation_cancelled`,
-`history_preparation_deadline`, or `history_preparation_cancelled_or_expired`)
-so remaining budget can retry before cutoff. The configured
-`history_preparation_cutoff_minute` (default 550, 09:10 IST) stops admission
-and cancels active work before market open. Failed attempts and their artifacts
-remain recorded; retries do not reset the shared quota or journals.
-BLOCKED/UNKNOWN results and admission failures require review and are not
-automatically retried.
-Coverage includes `missing_sessions` per instrument. After the cutoff the dashboard
-retains `last_attempt` and its failure beside current read-only coverage, plus the
-durable attempt count. `history_preparation_check_interval_ms` (default 60000,
-positive) controls read-only coverage refresh after the cutoff. Each session's
-`history-attempts.json` uses the existing atomic durable writer and binds the
-account/session; it retains all attempt start/completion times and reports.
-Claims are persisted before worker admission as `IN_PROGRESS` (not BLOCKED).
-An incomplete claim, admission failure, BLOCKED/UNKNOWN result or invalid state
-cannot trigger automatic replay;
-restarts retain the count, original backoff deadline and diagnostics. Missing state
-supports older sessions; invalid/unreadable or mismatched state fails closed.
-Redacted per-range `*.failure.json` artifacts retain fetch errors even when a pass
-aborts. Restarting reuses archived receipts; no allowance or journal is reset.
-See [history](HISTORY_DOWNLOAD.md) for explicit downloads.
+To change costs for a continuing model-led account, save the current config
+outside the session directory, set the new `paper_costs`, and add:
 
-### Interrupted history attempt recovery
+```json
+"paper_cost_transition": {"source_session": "2026-10-16", "prior_config": "/absolute/paper-20261016.json"}
+```
 
-An interrupted claim is never retried automatically. After stopping the
-controller and reviewing the session, settle the current session's latest
-incomplete attempt (`completed_ms:null`) whose status is `IN_PROGRESS` or,
-for files written before that status existed, whose reason is exactly
-`history_attempt_interrupted_no_replay`:
+Every field except `paper_costs` must match the prior config. The source book
+must be closed, not stopped and not halted. The successor keeps cash, positions
+and fills, and uses the new costs for new fills. Remove the block with the
+next config change.
+
+## Rollover
+
+The controller rolls over by itself before 15:00 when the source book is sealed
+and eligible. With the controller stopped, you can preview and advance one
+rollover yourself:
+
+```sh
+nivra rollover --config PAPER_CONFIG --now RFC3339_TIME --dry-run
+nivra rollover --config PAPER_CONFIG --now RFC3339_TIME --advance --confirm-paper-review
+```
+
+`--now` is required. Run it on the target date before 15:00. `--advance` needs
+the preview status `rollover_ready` and takes its source from `current.json`.
+If the target is already current, it returns `already_advanced` and changes
+nothing. Rollover never starts the service or places an order.
+
+Some closed books need an acceptance first. Each acceptance writes an
+append-only receipt in the session directory, and a repeat returns the same
+receipt.
+
+| Closed source book | Flag before the advance |
+| --- | --- |
+| Flat, stopped, not halted, missing its review seal | `--acknowledge-closed-book` |
+| Model-led, operator-stopped, not halted, holding positions | `--accept-stopped-carry` |
+| Model-led, halted, not stopped, holding positions | `--accept-halted-carry` |
+
+For a carried book, with the controller stopped:
+
+```sh
+nivra rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --dry-run
+nivra rollover --config PAPER_CONFIG --accept-stopped-carry --confirm-paper-review
+nivra rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --dry-run
+nivra rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --advance --confirm-paper-review
+systemctl --user start nivra-paper.service
+```
+
+Use `--accept-halted-carry` for a halted book. The second preview must show
+`rollover_ready` and `carry_admitted: true`. The successor gets the same cash,
+positions, fills and fees. After a halted carry it starts halted, with entries
+blocked and exits protected. A multi-day halted hold needs a new acceptance
+for each closed session. If you start the controller instead of advancing, it
+performs the same rollover.
+
+## Recover from a halt
+
+A halt blocks new entries. Stop and inspect the book first. `planner-recover`
+clears planner halts only. It refuses risk halts, non-flat open books and
+missing authority, and changes nothing when it refuses.
+
+| Book | Procedure |
+| --- | --- |
+| Open, flat | Stop, `planner-recover`, `resume`, start |
+| Open, model-led, holding positions | Stop the service, `planner-recover --protection-only`, start; when flat, run the open flat procedure |
+| Closed, flat | Stop the service, `planner-recover`; no resume |
+| Closed, holding positions | `--accept-halted-carry` rollover; when the successor is flat, run the open flat procedure |
+
+Open flat book:
+
+```sh
+nivra stop --config PAPER_CONFIG --confirm-paper-review
+systemctl --user stop nivra-paper.service
+nivra planner-recover --config PAPER_CONFIG --confirm-paper-review
+nivra resume --config PAPER_CONFIG --confirm-paper-review
+systemctl --user start nivra-paper.service
+```
+
+If the halt came from the policy, run `config-apply` before `resume`.
+Recovery makes no model call and no fill, and leaves the book stopped.
+
+`--protection-only` clears the operator stop and keeps the halt. Held positions
+keep fresh two-second quotes and their exit policy.
+
+On a closed flat book, `planner-recover` clears only the halt. The book stays
+closed, and its cash, fills and report do not change.
+
+Some failures block the planner without a halt.
+`planner_read_unavailable_no_replay` (transport, HTTP or quota failure) clears
+by itself after a validated fresh quote. Data, news, configuration and
+interrupted-attempt blocks stay until `planner-recover` or `config-apply`. A
+failed pi turn, such as a provider error or an invalid plan, does not block the
+next turn.
+
+### Interrupted history attempt
+
+The controller never retries an interrupted history preparation. With the
+controller stopped, settle it as failed:
 
 ```sh
 systemctl --user stop nivra-paper.service
@@ -648,1013 +298,155 @@ nivra history-recover --config PAPER_CONFIG --confirm-paper-review
 systemctl --user start nivra-paper.service
 ```
 
-`--now RFC3339` is optional and defaults to the wall clock. The command validates
-the paper config, takes the root controller lock before the current session
-controller lock, and refuses a running controller or a live-enabled build. It
-operates only on the current committed session. It requires a latest record with
-`completed_ms:null` and either `IN_PROGRESS` or the legacy interrupted reason,
-and refuses a completed attempt, a different incomplete reason, wrong
-account/session, malformed or non-regular state, or an exhausted
-`history_preparation_max_attempts` budget.
-Refusals print `history_recover_refused_original_state_preserved:` with a stable
-bounded code and change nothing.
+It settles the current session's latest incomplete attempt and writes an audit
+receipt. The controller may then start a fresh attempt inside the window.
 
-Successful recovery preserves the original start, keeps the original report as
-nested evidence, sets `completed_ms`, records `FAILED` /
-`history_attempt_interrupted_recovered_no_replay` with a bounded operator-review
-marker, and keeps the original count/sequence. It sets `retry_at` to recovery
-time plus `history_preparation_failed_retry_ms`; normal admission may then start
-a fresh attempt only inside the configured window and remaining budget. The
-ambiguous request is not replayed. A deterministic audit receipt
-(`history-recovery-<sequence>-<started_ms>.json`, mode 0600, atomic create)
-records the account, session, previous and new attempt state, operator
-confirmation and timestamp. A repeated invocation returns `already_recovered`
-without a second state mutation. The command does not open or modify
-`paper.sqlite`, read journals, quota receipts, fills or hash-sealed state, and
-prints a redacted JSON summary to stdout.
+## Diagnose a book with no fills
 
-This recovery path does not address memory configuration or prove that memory
-pressure caused the interruption. Update any stale installed unit/drop-in
-separately using the effective-limit note above.
+Check the book's stop, halt and closed flags, then `nivra readiness` and the
+lane budgets, then history coverage. Then read `model/agent/triggers.ndjson`,
+`turns.ndjson` and `plans.ndjson` to see why a turn did not run or which plan
+was refused.
 
-Runtime timing keys are optional and retain the original millisecond defaults:
-
-| Runtime config key | Default (ms) | Accepted range (ms) |
-| --- | ---: | ---: |
-| `universe_prepare_retry_ms` | 300000 | 1–86400000 |
-| `idle_poll_interval_ms` | 15000 | 1–300000 |
-| `market_data_transport.http_timeout_ms` | 7000 | 1–120000 |
-| `storage.read_journal_busy_timeout_ms` | 1000 | 1–60000 |
-| `dashboard.refresh_interval_ms` | 5000 | 1–300000 |
-| `dashboard.model_feed_unavailable_grace_ms` | 5000 | Retired/ignored; 0–60000 validation retained for config compatibility |
-| `dashboard.workers` | 4 | 1–16 threads serving dashboard connections |
-| `dashboard.queue` | 16 | 1–256 queued connections before a busy refusal |
-| `dashboard.static_max_age_s` | 86400 | Retired/ignored compatibility key; shell assets always revalidate (0–31536000 validation retained) |
-| `dashboard.gzip_min_bytes` | 1024 | 0–1048576 bytes gzip threshold |
-| `dashboard.history_read_max_bytes` | 8000000 | 1000000–64000000 bytes per model-history read |
-| `dashboard.history_list_cache` | true | Retired/ignored; accepted to preserve deployed config bytes |
-| `dashboard.sse_max_streams` | 3 | 0–16 concurrent SSE streams (0 disables SSE) |
-| `dashboard.sse_heartbeat_ms` | 15000 | 1000–60000 |
-| `dashboard.sse_write_timeout_ms` | 30000 | 1000–60000 |
-| `dashboard.longpoll_hold_ms` | 25000 | 1000–60000 |
-| `dashboard.transcript_max_bytes` | 2097152 | 65536–16777216 bytes per run transcript |
-| `dashboard.transcript_text_max_bytes` | 16384 | 1024–262144 bytes per assistant-text event |
-| `dashboard.transcript_args_max_bytes` | 4096 | 256–65536 bytes per tool-call arguments event |
-| `dashboard.blob_slice_max_bytes` | 262144 | 4096–4194304 bytes per blob slice |
-| `dashboard.failed_auth_per_minute` | 30 | 1–600 failed-auth token bucket per minute returning 429 when exhausted |
-| `dashboard.retention.pack_after_days` | off | 1–365 days before raw run directories are packed |
-| `dashboard.retention.delete_after_days` | off | 1–365 days; must exceed `pack_after_days` |
-| `dashboard.model_prices.<model>` | empty | decimal strings (₹ per million tokens): `input_inr_per_mtok`, `output_inr_per_mtok` and optional `cached_inr_per_mtok` |
-
-The worker/queue, static cache/gzip, history read/cache, transcript, model-price
-and opt-in retention settings are active.
-Other Phase-1 settings are validated ahead of their corresponding features.
-Invalid numeric values and model-price decimals fail as
-`dashboard_settings_invalid`; unknown keys fail strict config deserialization.
-
-The last four keys live in nested `market_data_transport`, `storage` and
-`dashboard` objects. The research dashboard reads dashboard refresh settings from
-its optional `--model-config` runtime config; without it, defaults apply. Default
-values are omitted on serialization to preserve existing sealed book bindings;
-custom values participate in the binding. HTTP timeout applies to all runtime
-market-data clients, including history and model snapshot reads.
-
-## Stop, recovery and closed incidents
-
-### Operator stop and service restart
-
-The controller decides once, when SIGTERM or SIGINT arrives, which kind of stop
-it is:
-
-| Shutdown | Trigger | Book after restart |
-| --- | --- | --- |
-| Service | Any stop without a fresh operator request: `systemctl --user stop` or `restart`, the updater, a host shutdown | Same dated session continues automatically; not stopped |
-| Operator | `nivra stop` request consumed on the next stop signal | `stopped=true`; only a reviewed `resume` restarts trading |
-
-To stop the book for review, request the operator stop first, then stop the
-service:
-
-```sh
-nivra stop --config PAPER_CONFIG --confirm-paper-review
-systemctl --user stop nivra-paper.service
-```
-
-With the controller running, `nivra stop` writes the private (0600)
-`stop-request.json` next to `current.json` under the sessions root. It is bound
-to the account and the active session and is valid for ten minutes. The command
-never signals systemd; it prints the `systemctl` step. On the next stop signal
-the controller consumes the request and behaves exactly as an operator stop:
-workers are cancelled, an in-flight planner attempt is blocked
-`operator_stopped_no_replay`, the book is marked `operator_stopped` and the Stop
-alert reports `operator_stopped:true`. A stale, foreign-session or malformed
-request is ignored. Every request file is moved into `stop-requests/` under the
-sessions root as evidence, never deleted. With no controller running,
-`nivra stop` takes both controller locks and stops the active open book directly;
-a closed book refuses with `stop_session_closed`.
-
-A service stop cancels workers. A running history preparation gets up to five
-seconds to finish its cancellation; its attempt is then recorded `FAILED` and
-retried within the pre-open window under the normal attempt limit. One that does
-not finish stays interrupted for the reviewed `history-recover`. An in-flight
-planner attempt is retired as failed `service_shutdown_interrupted_no_replay`
-with its charges preserved. It is
-never replayed and leaves no sticky block. The book is not stopped. The tick
-`service_shutdown` records the planner disposition and any ignored request. The
-Stop alert reports `operator_stopped:false` and `shutdown:service` and is a
-`warning` classified `service_restart_continues_session`. The updater writes its
-planned-restart notice before it stops the controller, so during an update the
-same alert arrives as the informational `planned_restart`. If the retirement cannot be
-proven exact, the claim stays pending behind the reviewed
-`attempt_interrupted_no_replay` block and the tick says so. Halted books stay
-halted and operator-stopped books stay stopped across any restart; nothing
-unhalts, resumes or replays automatically.
-
-Stop and inspect before recovery. A halt's durable reason survives operator stop;
-closed-book stop must preserve the sealed financial state. Review older binary
-shutdown behaviour before maintenance: older releases may mutate a closed book.
-Never use a general restart to clear stop/halt state.
-
-```sh
-nivra stop --config PAPER_CONFIG --confirm-paper-review
-systemctl --user stop nivra-paper.service
-nivra planner-recover --config PAPER_CONFIG --confirm-paper-review
-nivra resume --config PAPER_CONFIG --confirm-paper-review
-systemctl --user start nivra-paper.service
-```
-
-Use this sequence for an eligible **flat open paper planner incident**. Recovery
-validates original authority, last relevant halt history, current inputs and
-usage; an older `operator_stopped` health projection alone cannot hide a planner
-halt. Eligible pending claims receive audited failed/no-replay disposition.
-Unrelated risk halts, missing/cross-book authority and non-flat open books refuse
-with a failed-check reason. Recovery leaves the book stopped and preserves charges.
-Apply reviewed config before resume if required; recovery itself makes no call/fill.
-Recovery validates the current pi paper prerequisites (enabled planner, `model_led`, a decision lane). The same reviewed
-eligibility checks apply to flat recovery and protection-only recovery.
-
-Every recovery mode uses one shared typed block gate. A data, news or transient
-read block requires the same input validation as a stopped recovery; an
-unavailable or ineligible input refuses with
-`planner_recover_input_unavailable` or `planner_recover_no_eligible_input` and
-leaves the book, authority, attempts and usage unchanged. A configuration block
-is resolved by the exact policy rebind, not by a no-op validator. Protection-only
-and closed recovery retain a data, news or transient read block because the halt
-or seal means no new decision can execute; they never clear an unknown sticky
-block. An interrupted claim is retired only from its exact stored claim body and
-preserves its charges.
-
-Authority receipts are versioned separately from the planner event state. Every
-new authority writes its owner marker (`pi`) in the same
-transaction, and `config-apply` and `planner-recover` rewrite it with the control
-hash they bind. Startup preserves the original active head and any
-stronger sticky data/news/configuration block; a pending claim is marked
-interrupted without replacing that block or clearing the head. A journal that
-predates the marker refuses as `planner_authority_owner_missing` and stays
-archive-only; nothing reconstructs a marker. Do not hand-create or edit the
-marker table.
-
-`planner-recover` refuses a policy with missing pi prerequisites; for a retained
-legacy planner it also refuses a policy without enabled events with
-`planner_recover_events_disabled`. `config-apply` refuses a halted book. A halted
-book that recovery cannot clear stays archive-only.
-
-A present table with a missing row also refuses as
-`planner_authority_owner_missing`. A malformed receipt or one naming another
-owner, including a stored `legacy` owner, refuses as
-`planner_authority_owner_invalid`; a foreign binding, another version or a stale
-hash refuses as `planner_authority_owner_mismatch`. These refusals leave the
-book, report, charges and authority unchanged.
-
-### Workspace write safety (current pi research lane)
-
-Workspace writes replace the destination with a new owner-only inode: a private
-0600 temp file is created in the already-validated private parent, written,
-synced and atomically renamed, then the parent is synced. An existing 0644 file
-therefore becomes 0600 without truncating the old inode, so a reader holding it
-keeps the old bytes and a hardlink target outside the tree is untouched. Every
-current workspace directory component must already be owner-owned and
-owner-only (0700); a missing component is created 0700, while a symlink, foreign
-owner or wider mode fails closed without chmodding a predecessor. Pinned
-predecessor reads only validate ownership and never repair permissions.
-
-The controller samples one completion timestamp per loop and writes it as
-`as_of_ms` with a `controller_heartbeat` (`version`, `completed_at_ms`,
-`next_deadline_ms`, `loop_generation`). `/api/v1/health` reports
-`controller_liveness` as healthy, unknown, stale, future or malformed. The
-updater refuses a missing timestamp, an old completion, a future completion or a
-malformed heartbeat. API request time never refreshes an old snapshot. The
-two-second financial quote freshness gate remains separate and unchanged.
-
-A **closed, flat, halted planner-authority book** is cleared with the same
-reviewed command. Stop the service if it is still running, then run
-`planner-recover`; no `resume` or service restart is needed. It clears only the
-halt, preserves the closed/stopped flags, and records `mode=closed_flat` plus
-`financial_state_unchanged=true` in the `operator_planner_recovery_confirmed_paper_review`
-tick. A data, news or transient read block is retained because the seal means no
-new decision can execute; a configuration block is resolved by the exact policy
-rebind and an interrupted claim by exact retirement. An unknown sticky block
-refuses. Cash, holdings, fills, fees, seals and report bytes are unchanged.
-Restarting the controller after a config or prompt edit does not halt a closed
-book; planner authority is not initialized for a closed book.
-
-A **halted model-led book with open positions** enters reviewed protection-only
-mode instead of abandoning the book:
-
-```sh
-systemctl --user stop nivra-paper.service
-nivra planner-recover --config PAPER_CONFIG --protection-only --confirm-paper-review
-systemctl --user start nivra-paper.service
-```
-
-Protection-only recovery rebinds the planner authority to the corrected config,
-clears the operator stop, and **keeps `halted=true`**. New entries remain blocked;
-held positions continue to receive fresh two-second quotes and the frozen exit
-policy, including stop/backstop protection. A data, news or transient read block
-is retained because the halt already blocks new decisions; a configuration block
-is resolved by the exact policy rebind and an interrupted claim by exact
-retirement. An unknown sticky block refuses. After the position is flat, stop the
-service and run the normal `planner-recover` above to clear the halt, then
-`resume`. The audit tick is
-`operator_planner_protection_only_confirmed_paper_review` with
-`mode=protection_only`, `entries_blocked=true`, `halted=true` and
-`financial_state_unchanged=true`. A halt carried from a closed predecessor is
-cleared by the same reviewed command once its carried position is flat; that
-recovery records `mode=flat_carried_protective` instead.
-
-A **closed, halted, model-led book still holding positions** cannot use
-protection-only recovery: the book is sealed, so in-session quotes and exits are
-already over, and rollover refuses halted books. Carry it into the next session
-with the reviewed halted-carry acceptance instead. Run it after the source close
-and before the 15:00 IST late-start cutoff on the next trading date, with the
-controller stopped:
-
-```sh
-systemctl --user stop nivra-paper.service
-nivra rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --dry-run
-nivra rollover --config PAPER_CONFIG --accept-halted-carry --confirm-paper-review
-nivra rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --dry-run
-nivra rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --advance --confirm-paper-review
-systemctl --user start nivra-paper.service
-```
-
-The first preview shows the blocked book (`rollover_blocked`, `halted: true`,
-`carry_admitted: false`). Acceptance creates a private, append-only
-`halted-carry-acceptance.json` audit receipt binding account/session, config,
-report/state/review hashes, the recorded halt reason and source, the held-position
-count and settled planner attempt evidence. It preserves the original SQLite
-book, report and review seal, and it never clears the halt. Repeating acceptance
-returns the original receipt and timestamp; changed evidence refuses during
-preview, advance and successor carry verification. A partial or invalid receipt
-is retained for inspection, never replaced.
-
-The second preview must show `rollover_ready`, `model_led: true`, `halted: true`,
-`halted_carry_admitted: true`, `carry_admitted: true` and a non-zero
-`carried_positions`. The successor receives the same cash, positions, fills and
-fees and starts `halted=true`, `stopped=false`, `closed=false`, health
-`risk_halted_protective_exits_only` with entries blocked. Its carry-over records
-`halted_carry` with the source halt reason, acceptance hash,
-`entries_blocked=true`; the successor book records one
-`operator_protective_carry_adopted` tick. No model claim is reserved, and the
-held position continues under the frozen exit policy with fresh two-second
-quotes. Nothing unhalts automatically, and the source is never reopened,
-unstopped or replayed. If the controller is started instead of advancing, its
-first observation of the next trading date before 15:00 performs the same
-reviewed rollover; the `--advance` step then returns `already_advanced` and
-changes nothing.
-
-When the carried position is flat, stop the service and clear only the halt with
-the reviewed recovery, then resume:
-
-```sh
-nivra stop --config PAPER_CONFIG --confirm-paper-review
-systemctl --user stop nivra-paper.service
-nivra planner-recover --config PAPER_CONFIG --confirm-paper-review
-nivra resume --config PAPER_CONFIG --confirm-paper-review
-systemctl --user start nivra-paper.service
-```
-
-That recovery refuses while any carried position remains, requires the recorded
-protective halt plus the verified carry and adoption evidence, and records
-`mode=flat_carried_protective` with `entries_blocked_before=true`. It leaves the
-book stopped; only `resume` clears the stop. If the position goes flat only at
-the close before you clear it, the same reviewed command works on the closed
-flat book and records `mode=closed_flat` with `carried_protective=true`; the
-book stays closed and the normal closed flat rollover then applies. Acceptance,
-advance and recovery never start the service, place an order or replay a call.
-
-Non-model-led, stopped, open, flat, unreconciled, missing-halt-history,
-pending-order, interrupted or integrity-blocked and unknown-state books refuse.
-Only a non-stopped halted hold qualifies. A halted flat book keeps its
-`planner-recover` path; a stopped non-halted book
-keeps `--accept-stopped-carry` or `--acknowledge-closed-book`. The receipt binds
-one source close, so a multi-day hold repeats the reviewed sequence for each
-closed halted predecessor; the successor's own halt is carried again only after
-a fresh acceptance in that session directory.
-
-A live config or prompt edit detected by the running controller is suspended as
-`planner_configuration_changed_apply_required`; it does not halt the book. Stop
-the service, run `config-apply --confirm-paper-review`, then `resume`. Starting
-an open book after a config edit without applying it leaves the planner
-suspended on `planner_event_configuration_changed`; it does not halt the book,
-and the same `config-apply` then `resume` sequence applies. Authority incident
-ticks (`planner_incident_check`) record the exact failed check (`config_hash` or
-`prompt_sha256`), prior/current config and prompt hashes, and the supported
-recovery command. `planner_configuration_changed_apply_required` records the
-`config-apply` and `resume` commands.
-
-Planner event blocks separate read availability from data integrity.
-`planner_read_unavailable_no_replay` covers transport, HTTP, local quota-admission
-and response-encoding failures, which produce no market data. The controller clears
-it automatically only after a fully validated fresh REST quote and only when no
-attempt is pending or unsettled. An attempt that overlapped the outage is settled as
-failed/no-replay with its evidence and charges preserved; it is never replayed.
-Malformed or identity-invalid quote data (`planner_data_failed_no_replay`), news,
-configuration and interrupted-attempt blocks remain sticky and require explicit
-review and `planner-recover`.
-
-Only sticky blocks refuse a pi decision.
-A failed pi decision turn (provider, budget, deadline, invalid plan) is one bad
-attempt: it keeps its own bounded reason on the attempt and journal, and does not
-stop a later turn from producing a plan. The transient quote suspension is not
-sticky either: a completed decision waits until a validated fresh quote clears the
-block, then the committed plan becomes active. A commit is still refused with
-`planner_decision_owner_not_ready` while a sticky block is set, and an interrupted
-decision is retired without replay.
-
-Nothing to buy and nothing to manage is a normal no-op, reported as
-`model_plan_no_prospects_no_positions`. It is not a failed attempt, a block or an
-alert, and it needs no recovery.
-
-For an old reconciled closed/flat/non-halted stopped book lacking its review seal:
-
-```sh
-nivra rollover --config PAPER_CONFIG --acknowledge-closed-book --confirm-paper-review
-```
-
-This binds the original report/state and writes only acknowledgment evidence. It
-never reopens/unstops the book.
-
-For a **closed, operator-stopped, non-halted model-led book with carried positions**
-stop the controller and inspect its original report, review and recorded
-`operator_stopped` event. Keep the original config and seals. After installing a
-release containing this recovery, run the following on the next trading date,
-before the 15:00 IST late-start cutoff (the clock arguments sample the actual
-command time):
-
-```sh
-systemctl --user stop nivra-paper.service
-nivra rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --dry-run
-nivra rollover --config PAPER_CONFIG --accept-stopped-carry --confirm-paper-review
-nivra rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --dry-run
-nivra rollover --config PAPER_CONFIG --now "$(date --iso-8601=seconds)" --advance --confirm-paper-review
-```
-
-The first preview shows the blocked carried book. Acceptance creates a private,
-append-only `stopped-carry-acceptance.json` audit receipt, binding account/session,
-config, report/state hashes and exact planner control/settled attempt evidence.
-It preserves SQLite, the source stop flag and original report/review. Repeating
-acceptance returns the original receipt and timestamp; changed evidence refuses,
-including during preview, advance and successor carry verification. A partial or
-invalid receipt is retained for inspection, never replaced automatically.
-The second preview must show `rollover_ready`, `model_led: true` and
-`carry_admitted: true`; inspect it before advancing. The successor receives the
-same cash, holdings, fills and fees through normal carry validation; only the
-successor copy clears stopped/closed. Advance remains idempotent.
-
-Keep the controller stopped from the first preview through the advance. If it is
-started first, startup performs the same reviewed rollover; the `--advance` step
-then returns `already_advanced` and changes nothing. Treat that as an
-already-completed transition, not a failure: do not reset `current.json`, restart
-the source session or rerun an older config to force a second commit. The
-advance uses the committed pointer as its source, so a later stopped-controller
-advance works from the successor even while the config still names the original
-session.
-
-Live or non-paper reports, non-planner strategies, non-model-led/open/halted/flat
-books, financial reconciliation failures, pending orders/attempts, missing stop
-history, mismatched seals and unresolved planner blocks refuse. Only an unset
-planner block or the operator-stop admission block is eligible; no integrity
-block or interrupted attempt is silently retired. A halted book uses the
-reviewed `--accept-halted-carry` route above, never this acceptance. Flat books
-keep the existing `--acknowledge-closed-book` path. Do not run `resume` on the
-closed source.
-Run readiness for the successor and follow the separately authorized paper-service
-startup procedure. Acceptance and advance themselves never start the service.
-
-Review output now separates the account fact `model_led` from `carry_admitted`;
-older `model_led_account` verdicts remain readable. A restart of an operator-stopped,
-still-open book logs `stopped_open_session_restart_requires_review` with explicit
-resume instructions. The book remains stopped; a restart is never a resume.
-
-Planner authority changes on a closed sealed book apply to the next session.
-
-A `prior_config` transition admits only exact documented original
-bindings. Keep original configs
-and predecessor seals; do not generalise compatibility flags to new successors.
-
-## Switch a pi lane model
-
-Change `provider` and `id` in the lane's `model` block. Authenticate the
-selected provider in the application's pi directory and validate the planner
-config before applying the reviewed policy transition.
-[Pi lane configuration](AGENT.md#prepare-and-verify)
-
-### Reviewing a planner policy change
-
-Review a planner policy without applying it. Write the new planner config to a
-new file and validate it offline:
-
-```sh
-nivra planner config-check --planner NEW_PLANNER.json --session SESSION
-```
-
-The check refuses any missing pi paper prerequisite and writes nothing. Point the
-paper config's `planner_config` at the new file, run
-`config-apply --confirm-paper-review`, then `resume`. Rollback uses the
-predecessor planner file and the same reviewed transition.
-
-A policy that differs from the one that initialized the durable authority is
-refused at controller startup until a reviewed `config-apply` rebinds the policy;
-host protection continues meanwhile.
+An accepted empty plan is a model abstention.
+`nivra agent-turn --config PAPER_CONFIG --lane decision --dry` prints the
+current brief and tools without calling a model.
 
 ## Releases and updates
 
-Build and test on a development host using [development](DEVELOPMENT.md). The
-main CI run builds and publishes musl after its required checks when an annotated
-version tag matches that commit. The **Fast musl release** workflow reuses passed
-exact-commit CI for a tag added later, or resumes a publication whose immutable
-asset ref already exists, without repeating tests. A failed release step is
-resumable from that verified ref; it never overwrites or moves published assets.
-Annotated stable tags publish musl binary, SHA-256 and `release.json` both as
-attachments and in immutable `refs/release-assets/<tag>`. Verify tag, exact source
-commit, target and SHA-256; a tag is not session authority. Published tags never
-move.
-
-Nivra is the only deployment source. Releases are published from
-`github.com/TharunChougoni/nivra` when explicitly requested by the repository
-owner; the first is `v0.9.26`. The predecessor `ind-sadr` repository is retired:
-its release assets are no longer installed, and new work, tags and deployment
-instructions live here.
-
-Updater config selects the configured Git remote and absolute `paper_config` path.
-It never reads keys itself or needs a GitHub token. Remote transport is a
-deploy-key SSH host alias, and only `github-nivra:` is accepted; the host
-migration is the one path that rewrites a retired `github-ind-sadr:` remote
-([example config](../packaging/rust/updater.example.json)):
-
-```json
-{
-  "remote": "github-nivra:TharunChougoni/nivra.git",
-  "paper_config": "/absolute/paper.json"
-}
-```
-
-The host's private alias/key details and the concrete host addresses stay outside
-Git, in the git-ignored private host inventory described in
-[AGENTS.md](../AGENTS.md). Preview/install:
+Releases come from this repository only, and a push to `main` does not deploy.
+See [development](DEVELOPMENT.md) for tagging. The updater config names the
+paper config and the Git remote, which must use the `github-nivra:` SSH host
+alias. See `packaging/rust/updater.example.json`. Preview and install:
 
 ```sh
 nivra update --check --config UPDATER_CONFIG
 nivra update --dry-run --config UPDATER_CONFIG
-systemctl --user start nivra-update.service
-```
-
-`--check` lists only; dry-run fetches/verifies but never activates. Both write status.
-Manual deploys go through `update --tag` or `update --sha`. Never flip the
-symlink by hand. Explicit selection does not bypass hold, halt or integrity guards.
-Run as the service/home owner, using the installed binary and absolute updater
-configuration path (replace `UPDATER_CONFIG`):
-
-```sh
 nivra update --tag vX.Y.Z --config UPDATER_CONFIG
 ```
 
-Operator-stopped deploy (inside the blackout or with carried holdings): request the
-operator stop, stop the paper service, then deploy:
+`--check` lists releases. `--dry-run` fetches and verifies without activating.
+Without `--tag` or `--sha`, the updater picks the newest stable tag. An older
+`--tag` is a rollback with the same checks. Never move `~/nivra-current` by
+hand.
 
-```
+The updater verifies the annotated tag, source commit, target and SHA-256. It
+runs the new binary's `self-check` and `preflight`, stops the service, swaps
+the pointer, restarts and checks `/api/v1/health`. On a failure it restores the
+previous release and writes `failed-update.json`, which stops that release from
+being retried.
+
+Activation needs all of these:
+
+- No `~/nivra-deploy/HOLD` file, and a clock that reports NTP synchronization.
+- A time outside the weekday 09:00–15:45 IST blackout, unless the NSE calendar
+  says the market is closed.
+- A closed, flat book that is not halted. A closed model-led book that carries
+  positions overnight also qualifies, if nothing is pending.
+- The installed binary passes `preflight` on the current config, because it is
+  the rollback target. If not, the update refuses with
+  `update_rollback_config_incompatible`.
+
+Otherwise the updater defers with a reason such as `deferred_market_open` or
+`deferred_open_positions`. `--force-unwatched-window` accepts a short
+unwatched restart of an open book and records it. The same session continues.
+It never bypasses a halt, a hold or an integrity check.
+
+To deploy to an operator-stopped book or inside the blackout:
+
+```sh
 nivra stop --config PAPER_CONFIG --confirm-paper-review
 systemctl --user stop nivra-paper.service
 nivra update --tag vX.Y.Z --operator-stopped --confirm-paper-review --config UPDATER_CONFIG
 ```
 
-It requires an inactive service and a book with no pending orders that is either
-operator-stopped and non-halted, or closed and flat (a closed flat book may still
-carry a planner halt). It smokes the new binary and leaves the service stopped.
-Preserve any existing stop or halt. Deployment does not authorize recovery or
-continuation. With a separate recovery mandate for a closed flat halted book,
-install first and follow [closed-book recovery](#stop-recovery-and-closed-incidents)
-using the new release. Do not rebind authority with a candidate binary before
-the swap, because an older installed release will re-halt on that authority.
+The book must be operator-stopped and not halted, or closed and flat. The
+service stays stopped. Recover or resume afterward with the new release.
 
-If the installed updater does not honor `--operator-stopped`, stage the binary
-from the verified successor release in a private directory. Check its
-published SHA-256 and exact version, then run that binary's `update` command
-with the same configuration and flags. It verifies the installed release and
-performs the guarded swap.
+| File in `~/.local/state/nivra/` | Meaning |
+| --- | --- |
+| `update.json` | Last updater status |
+| `preflight-failure.json` | Last failed candidate preflight; a later pass clears it |
+| `update-recovery.json` | The previous release could not be restored; a critical alert is sent |
+| `pending-review.json` | An interrupted update needs inspection |
+| `git-diagnostic.json` | Redacted Git failure details |
 
-A closed book refuses both `config-apply` and `resume`. A separately authorized
-successor session binds the reviewed policy during rollover.
+Keep these files and every release directory.
 
-For an open, non-halted book with an explicit paper continuation mandate, apply
-the reviewed config, resume, check readiness, and start the service. Model-led
-carried books keep their holdings:
+To add config keys, install the release that understands them first, with the
+old config. Then stop the controller, apply the change, and run the new
+binary's `preflight`. If the config already has keys the installed binary
+cannot parse, restore the last compatible config, install, then reapply.
 
-```sh
-nivra config-apply --confirm-paper-review --config PAPER_CONFIG
-nivra resume --confirm-paper-review --config PAPER_CONFIG
-nivra readiness --config PAPER_CONFIG
-systemctl --user start nivra-paper.service
-```
+## Publish a release by hand
 
-Run these only for the reviewed stopped book; a failed check requires inspection.
-Deployment alone never resumes the book.
-
-`--tag vX.Y.Z` also accepts the same tag without its leading `v`. The diagnostic
-`--sha <commit>` selector accepts only an unambiguous commit of a published
-annotated stable release, never an arbitrary source build. Without a selector the
-timer chooses the newest newer stable tag.
-All invocations take the same updater and deployment locks; contention reports
-`skipped_lock_busy` without activation. Git fetches use a private bare cache,
-independent of the caller's checkout, with bounded redacted failure diagnostics.
-
-Manual and automatic activation require a reconciled closed non-halted bound
-book, NTP-synchronised clock, no `DEPLOY_ROOT/HOLD`, and time outside the
-weekday **09:00–15:45 inclusive IST** blackout. A closed flat non-halted book
-is admitted by the original rule. The deploy guard also reads the real book: while the session is
-open and any position or pending order exists, activation defers with an
-explicit `deferred_*` reason instead of silently reporting `deferred`. An
-explicit forced deploy (`--force-unwatched-window`) accepts a bounded restart
-window for that exposure, but never bypasses a risk halt, hold, identity,
-integrity or preflight check. The same explicit flag also admits a **flat**
-in-session book (no positions and no pending orders, not halted and not an
-operator-stopped book) with reason `market_open_flat`. The updater's stop is a
-service stop, so for every forced reason the original book is preserved and the
-same session continues after the health-checked restart. Health refuses an open
-book that comes back operator-stopped (`update_health_book_operator_stopped`,
-without waiting out the health budget), which rolls the activation back. A
-halted book still defers, and an open operator-stopped book defers with
-`deferred_operator_stopped_book_requires_operator_stopped_update` unless the
-update uses `--operator-stopped`. A forced activation records
-`unwatched` (`started_at`, `stopped_at`, `duration_ms`, `reason`, `forced:true`)
-in the transaction receipt and logs the same record; the window is never hidden.
-`--operator-stopped` remains the separate path that leaves the controller
-stopped and is mutually exclusive with the forced window.
-
-A closed model-led book that is already carrying positions overnight is
-admitted only outside market hours (the NSE calendar is closed at the sampled
-clock), and only when a read-only adoption check passes: the bound book is
-readable and reconciled, closed, model-led, non-stopped, non-halted, with no
-pending orders and no pending or
-reserved planner attempt. The check never rewrites, clears or replays the book,
-and the successor session still starts only through the reviewed
-rollover/carry path. An open in-session book, a halted or stopped book, an
-unknown/unreconciled state and any unsettled claim or attempt defer activation
-to their reviewed paths. Carried holdings therefore no longer defer updates
-indefinitely: post-close, weekend and holiday windows admit them. Manual
-selection does not otherwise bypass session admission or authorize a session.
-The updater verifies annotated tag, source commit, target and SHA-256, then runs
-binary version, self-check and deployed-config preflight checks. It detects the
-installed release from the current symlink target and binary, including installs
-without VERSION/SOURCE_COMMIT files. Release directories are owner-only 0700,
-binaries 0755 and metadata 0600.
-
-The updater stops the service, atomically flips current, and repeats preflight.
-A normal update then restarts the service and checks authenticated health, with
-a 4 MiB response limit for detailed readiness reports. A stop failure, a swap/activation
-failure and a failed health check take the same recovery path: stop the
-candidate, restore the previous pointer if it was swapped, restart and probe the
-previous release, then finalise `pending.json` as the release's
-`failed-update.json` receipt with bounded recovery evidence. If the previous
-release cannot be restored or restarted, the updater writes
-`~/.local/state/nivra/update-recovery.json` (`kind`, `cause`, timestamp and
-pointer/restart verdicts) and emits a critical `updater_failure` alert naming
-`update_rollback_restart_failed` or `update_rollback_pointer_restore_failed`;
-it never returns success. `failed-update.json` blocks retry of that release.
-
-A stale `pending.json` is never replayed. If the pointer still matches
-`previous`, the original evidence is preserved as
-`interrupted-update.<millis>.json` and a fresh, fully checked transaction runs.
-If the pointer already reached `new`, or evidence is invalid or unrecognised,
-the updater keeps `pending.json` untouched, writes a bounded
-`pending-review.json` naming the pointer state and returns a specific
-`interrupted_update_*_requires_review` reason for operator inspection.
-Previews (`--check`/`--dry-run`) report these conditions without moving evidence.
-Preserve pending/recovery files, all releases, previous pointer and original
-journals. Status is in `~/.local/state/nivra/update.json`; Git failure details
-are in the adjacent `git-diagnostic.json` with secrets redacted.
-
-Before writing transaction state, stopping the controller or flipping the pointer,
-the updater also runs `preflight --config PAPER_CONFIG` with the currently
-installed binary. That binary is the rollback target, so it must still parse the
-current reviewed config. If that preflight fails for any reason, including a key
-the old binary cannot parse, activation refuses with
-`update_rollback_config_incompatible`; the pointer, service state, config and
-pending state are left untouched. The check applies to automatic and manual
-activation, explicit rollback and the `--operator-stopped` path. It never repairs
-or rewrites reviewed config.
-
-Candidate and rollback preflight output is discarded except for a bounded reason
-code and timestamp in `~/.local/state/nivra/preflight-failure.json`; never
-config bytes, paths, tokens or account data. A failed candidate preflight is
-retried by the timer, and the record appears in `update.json`, the CLI status
-line (`updater_preflight_failed: version=… reason=… phase=… since=…`), the
-`updater_failure` alert and the bounded `updater` object in
-`GET /api/v1/health`. A later successful preflight clears it, so fixing the
-configuration lets the update pass without review.
-
-Config-schema transitions therefore require an orderly sequence:
-
-1. With the old config still in place, install the release that supports the new
-   keys through the normal update path (or a reviewed operator-stopped deploy).
-2. Stop the controller, apply the reviewed config transition, and run the new
-   binary's `preflight --config PAPER_CONFIG` before resuming or starting.
-3. For a closed source book, complete the documented reviewed rollover/advance
-   path; never restart a same-session closed book to adopt a changed policy.
-
-Do not introduce config keys that the currently installed binary cannot parse
-before installing the supporting binary. The updater's rollback target is the
-previously installed release, and a failed activation must be able to restore a
-runnable controller.
-
-If the config was already changed and the installed binary cannot parse it, the
-same guard also refuses the forward install. Stop the controller, restore the
-last reviewed compatible config, install the supporting release, then reapply the
-reviewed transition and preflight it. Never bypass the guard by editing the
-pointer or pending transaction.
-
-To roll back a successfully installed release, identify the previous verified
-published tag from the preserved release manifest/history, then run the same
-command with that tag, for example:
+Use this only when GitHub Actions cannot publish. Run it on a development host
+after the full gate in [AGENTS.md](../AGENTS.md) passes on the tagged commit.
+Push the annotated tag `vX.Y.Z` and check it out with a clean tree. Install
+`musl-tools`. Build with the commands below, then copy `nivra-analysis` to
+`dist/nivra-analysis-x86_64-unknown-linux-musl` with its `.sha256`. The
+empty-ref check and `--force-with-lease` make a second publish fail.
 
 ```sh
-nivra update --tag vX.Y.Z --config UPDATER_CONFIG
+rustup target add x86_64-unknown-linux-musl
+target/debug/nivra-tools check-release
+cargo build --release --locked --offline --target x86_64-unknown-linux-musl -p nivra-cli
+target/x86_64-unknown-linux-musl/release/nivra self-check --expected-version vX.Y.Z
+target/debug/nivra-tools release-artifact --tag vX.Y.Z \
+	--binary target/x86_64-unknown-linux-musl/release/nivra --output dist
+# Add nivra-analysis and its .sha256 to dist/, then publish the asset ref:
+asset_ref=refs/release-assets/vX.Y.Z
+test -z "$(git ls-remote origin "$asset_ref")"
+index=$(mktemp); rm "$index"; export GIT_INDEX_FILE="$index"
+git read-tree --empty
+for file in nivra-x86_64-unknown-linux-musl nivra-x86_64-unknown-linux-musl.sha256 \
+	release.json nivra-analysis-x86_64-unknown-linux-musl \
+	nivra-analysis-x86_64-unknown-linux-musl.sha256; do
+	git update-index --add --cacheinfo "100644,$(git hash-object -w "dist/$file"),$file"
+done
+export GIT_AUTHOR_NAME=nivra-release GIT_COMMITTER_NAME=nivra-release
+export GIT_AUTHOR_EMAIL=release@users.noreply.github.com
+export GIT_COMMITTER_EMAIL=release@users.noreply.github.com
+commit=$(git commit-tree "$(git write-tree)" -m "Assets for vX.Y.Z")
+git push --force-with-lease="$asset_ref:" origin "$commit:$asset_ref"
+rm "$index"
+gh release create vX.Y.Z dist/* --verify-tag
 ```
 
-Rollback runs all the same checks and guards. If blocked by holdings, halt,
-blackout, interrupted transaction or failed-release evidence, preserve the state
-for operator review; never delete evidence or bypass guards to force activation.
-Verify state/seal/usage continuity and actual installed version afterward.
-
-Use the current Rust `setup` workflow for fresh paper preparation; the retired
-dated shell installer is not shipped. During updates, the verified prompt bundle
-and checksum stay in the immutable release directory. For an existing book,
-review and extract prompt files beside the planner JSON, then use suspend and
-reviewed `config-apply`; the updater never edits these policy inputs. Custom
-writable paths require preflight. Resume only an eligible reviewed stopped open
-book, never a closed book.
+Check the attachments, the asset ref, the source commit in `release.json` and
+every SHA-256 before the updater installs it. Do not also run the GitHub
+workflow for that tag. Published tags never move.
 
 ## Dashboard and alerts
 
-The paper worker serves loopback `127.0.0.1:8771`; enter the application dashboard
-token through the login UI, never a URL/command. Data APIs/model streams require
-bearer authentication. There are no trading control endpoints. Avoid a competing
-standalone server on the same port. See [dashboard](DASHBOARD.md).
+The paper controller serves a read-only dashboard on `127.0.0.1:8771`. Enter
+the token on the login page, never in a URL. It has no trading controls. See
+[dashboard](DASHBOARD.md). Run `nivra-dashboard.service` only while the paper
+service is stopped, because both use the same port.
 
-The paper worker's embedded dashboard is canonical. Enable the standalone
-`nivra-dashboard.service` only when the research-only Backtest lab is
-needed while the paper worker is stopped. Its unit uses
-the installed `nivra`, the same release pointer as paper and updater;
-do not run both dashboard servers on port 8771. Host unit enablement and symlink
-targets still need verification.
+To rotate the token, run `nivra dashboard-token rotate --config PAPER_CONFIG`
+and restart the service. Without `--token`, it generates a random token.
 
-Rotate the dashboard token using `nivra dashboard-token rotate [--config PAPER_CONFIG] [--token TOKEN]`.
-When `--token` is omitted, 32 bytes of secure random hex entropy are generated.
-Missing parent directories are created without following symlinks; existing path
-components must not be symlinks. Existing token files must be regular, owned by
-the service user, and single-link. Rotation sets mode `0600` (`-rw-------`)
-before writing the new token. Service restart is required to load it.
+Alerts go to the HTTPS receiver in the private file that `alert_webhook_file`
+names. Without the key, no alert is sent. Events include halt, stop, restart
+loop, rollover blocked, missed pre-open, stale feed, readiness blocked, model
+credential unavailable and updater failure. Alerts wait in a local outbox of up
+to 64 messages and retry with backoff, so a receiver can get a duplicate.
+`nivra alert --test --config PAPER_CONFIG` sends a real notification. A dead
+host sends nothing, so watch it from outside as well.
 
-The workspace is served at `/` and the API under `/api/v1/`. The updater probes
-`/api/v1/health`. The older `/v2/`, `/legacy/`, `/api/model-*` and `/api/status`
-paths are not served.
-Its static shell and vendored modules load before login, but every `/api/v1/*`
-read still needs the bearer token. **Lock** clears the token, ETag cache and page
-state. The workspace holds one SSE stream while live (or one held long-poll per
-`longpoll_hold_ms` after fallback) and does not use 500 ms model polling. Running
-transcripts append matched `archive_run` display hints and refetch the archived
-transcript once on `run_ended`. Live events are hints only and carry
-`execution_authority:false`; they never imply an order, fill or validation fact.
-The workspace remains read-only and exposes no controls.
+## Model archive retention
 
-Pi lane status and turn journals are exposed by the controller's `agent` status.
-System health lists each component's own status; missing evidence stays unknown.
-
-An optional authenticated tunnel uses the exact `dashboard_public_host` hostname
-(no scheme/path) and proxies to loopback. Enable it only through the operator's
-reviewed tunnel. The standalone `nivra dashboard` reads the same key from its
-optional `--model-config`; without that config only loopback is admitted. Exact
-Host/origin and authentication checks still apply. Tunnel reachability is not
-trading health.
-
-Optional `alert_webhook_file` points to private HTTPS receiver settings; absence
-disables delivery. `nivra alert --test --config PAPER_CONFIG` sends an actual
-notification, so use only for an authorised destination. Events include halt/stop,
-restart loop, rollover blocked, stale feed, start/end, model fallback and updater
-failure. A clean
-operator/updater signal stop is informational and reports that explicit resume is
-required. A halt or runtime failure remains critical for an open book, including
-when an operator also stops it; closed-book notices remain informational. Persisted
-dedupe/admission bounds attempts; `suppressed_count` is per dedupe key since that
-key's last successful delivery, so unrelated event types do not inflate it. With a
-valid configured receiver, the controller's background alert events enter a private
-SQLite outbox before the sender is woken; `nivra alert --test` remains synchronous.
-At most 64 messages wait in the outbox; transport failures, 429s and server
-errors remain queued with bounded backoff and resume after process
-restart. Other 4xx responses are terminal under the existing delivery policy. A
-crash after receiver acceptance but before the local receipt commits can resend that
-alert after restart; retries can deliver duplicates and do not guarantee delivery.
-The payload includes its dedupe key, but receiver-side deduplication is not guaranteed.
-An absent or invalid receiver disables sending, and a full or unwritable outbox
-leaves the existing redacted failure marker for operator review. A dead host still
-needs an independent observer. Never share webhook URLs/headers.
-
-### Operational health projection (backend foundation)
-
-The controller captures one read-only `operational_health` snapshot per loop after
-its work and exposes it as `view.operational_health`. `/api/v1/health` and
-`/api/v1/summary` copy that snapshot only when present; they never generate a new
-one. `captured_at_ms` is the loop's single completion sample, so an API request
-clock never renews the projection, the controller heartbeat, `as_of_ms` or a
-quote receipt. There is no UI for this projection yet.
-
-The snapshot has `version` (2), `captured_at_ms`, `calendar` and
-`alert_transport`. New fields are nullable and mean unknown, not zero.
-
-- `calendar` reports the verified embedded `NSE/CMTR/71775` coverage
-  (`2026-01-01`..`2026-12-31`), the current operational date, the requested
-  session and the recorded book session separately, plus `days_remaining`.
-  `expiring` uses an operator-chosen 30-day warning; it is not an exchange
-  guarantee or a new trading risk cap. A current date outside verified coverage
-  refuses at startup as `calendar_coverage_missing` before broker/model work; no
-  2027 holiday or weekday fallback is invented.
-- `alert_transport` is a read-only projection of the host alert outbox. It never
-  creates the database, schema or rows, never updates a row and never reads
-  payload, token, destination or webhook fields. A live WAL database may still
-  create or maintain `delivery.sqlite-shm` lock metadata on a read-only
-  connection; `immutable=1` is not used. Missing or malformed stores report
-  `missing`/`malformed` with null counts. `delivery.at` is Unix seconds and is
-  converted with a checked multiply to milliseconds. Two scopes are separate:
-  `queued`/`retrying`/`dead` are current host-outbox rows, capped at 64
-  (`outbox_scope`/`outbox_max_rows`/`queued_scope`/`retrying_scope`/
-  `dead_scope`), while `transport_accepted` and the last-accepted/last-failure
-  timestamps cover the retained delivery window
-  `[captured_now_s - 3600, captured_now_s]` with at most 20 retained rows
-  (`retained_window`). The window counts are a lower bound, not lifetime delivery
-  history, and truncation is unknown. A future timestamp sets `clock_anomaly`.
-  Status 0 (or NULL) is `in_flight_or_transport_error`, not a confirmed failure;
-  the `last-failure` marker proves presence only, not that a particular attempt
-  failed. `dropped` stays null because the store does not record it; `dead` is
-  quarantined outbox rows only. A sender 2xx is an ACK, not a human read or a
-  delivery guarantee.
-
-## Release build and publish (manual fallback)
-
-This is the off-GitHub fallback. Normally push main and the explicitly requested
-annotated stable tag atomically
-after the local gate; the same CI run then tests, builds musl and publishes.
-Use **Fast musl release** on `main` for a tag added after its CI run completed,
-or to finish a failed publication. Pushing a tag alone does not publish. See [development](DEVELOPMENT.md#cutting-a-release) for CI/artifact checks
-and retry rules. Never build or test on the paper host. On a development host,
-run this only after the full gate passes on the exact commit (`fmt --check`,
-strict Clippy, `cargo test --workspace`, `check-release`).
-
-1. Run `sudo apt-get install -y musl-tools` and `rustup target add x86_64-unknown-linux-musl`.
-2. Push the annotated tag `vX.Y.Z`, then check out that tag with a clean tree.
-3. Run `git rev-parse HEAD` and confirm it is the annotated tag's source commit.
-4. Run `target/debug/nivra-tools check-release`; the full gate above already built
-   this binary with the same feature set.
-5. Run `cargo build --release --locked --offline --target x86_64-unknown-linux-musl -p nivra-cli`.
-6. Run `target/x86_64-unknown-linux-musl/release/nivra self-check --expected-version vX.Y.Z`.
-7. Run `target/debug/nivra-tools release-artifact --tag vX.Y.Z --binary target/x86_64-unknown-linux-musl/release/nivra --output dist`.
-8. Install `nivra-analysis` as `dist/nivra-analysis-x86_64-unknown-linux-musl` and write its `.sha256`.
-9. Publish the five files locally as the tree of `refs/release-assets/vX.Y.Z`;
-   do not also dispatch the GitHub workflow for that tag. The empty-ref check and
-   `--force-with-lease` make a duplicate publish fail without replacing assets:
-
-   ```sh
-   asset_ref=refs/release-assets/vX.Y.Z
-   test -z "$(git ls-remote origin "$asset_ref")"
-   index=$(mktemp)
-   rm "$index"
-   export GIT_INDEX_FILE="$index"
-   git read-tree --empty
-   for file in nivra-x86_64-unknown-linux-musl \
-       nivra-x86_64-unknown-linux-musl.sha256 release.json \
-       nivra-analysis-x86_64-unknown-linux-musl \
-       nivra-analysis-x86_64-unknown-linux-musl.sha256; do
-     blob=$(git hash-object -w "dist/$file")
-     git update-index --add --cacheinfo "100644,$blob,$file"
-   done
-   tree=$(git write-tree)
-   export GIT_AUTHOR_NAME=nivra-release GIT_COMMITTER_NAME=nivra-release
-   export GIT_AUTHOR_EMAIL=release@users.noreply.github.com
-   export GIT_COMMITTER_EMAIL=release@users.noreply.github.com
-   commit=$(git commit-tree "$tree" -m "Assets for vX.Y.Z")
-   git push --force-with-lease="$asset_ref:" origin "$commit:$asset_ref"
-   rm "$index"
-   ```
-
-10. Run `gh release create vX.Y.Z dist/* --verify-tag`.
-11. Verify the release attachments, immutable asset ref, `release.json` source
-    commit and all SHA-256 files before allowing the updater to install.
-
-Each tag gets one publisher. The empty-ref check makes a duplicate publish fail
-without replacing assets. Manually built and GitHub-built binaries are not
-bit-identical. The updater verifies against the published `.sha256`, so either
-artifact installs through `nivra update --tag` unchanged.
-
-Scanner screens and optional streaming settings are documented in
-[Upstox V3 market feed](UPSTOX_MARKET_FEED.md). Enabling the feed requires a reviewed
-planner config change; installing source alone keeps REST-only deployments on REST.
-
-### Configuration bounds
-
-Omitted keys preserve the previous values. Default-valued additions are omitted
-from serialized configuration so existing sealed configuration hashes remain stable.
-
-| Configuration file / key | Default | Valid range |
-| --- | --- | --- |
-| Planner: `max_handoff_instruments` | 20 | 1–20 keys per snapshot or feature tool request |
-| Runtime: `history_download.quota_wait_max_attempts` | 1800 | 0–1800 retries after the initial shared-quota reservation attempt |
-| Runtime: `history_download.quota_wait_poll_ms` | 1000 | 1–60000 ms between denied reservations |
-| Runtime: `history_download.reserve_half_hour_reads` | 300 | 0–1499 shared reads held back from history requests in each rolling 30-minute window; other reads may use them |
-| Runtime: `history_download.reserve_second_reads` | 2 | 0–4 reads held back from history in the rolling second window |
-| Runtime: `history_download.reserve_minute_reads` | 30 | 0–119 reads held back from history in the rolling minute window |
-| Runtime: `dashboard.backtest_timeout_ms` | 3000 | 1–3000 ms |
-| Runtime: `dashboard.history_max_files` | 256 | 1–256 response files per archived model run |
-| Runtime: `dashboard.workers` / `dashboard.queue` | 4 / 16 | 1–16 workers; 1–256 queued requests; a full queue returns 503 `busy` |
-| Runtime: `dashboard.static_max_age_s` | 86400 | Retired/ignored compatibility key; the React shell and its stable-named assets always revalidate with ETags |
-| Runtime: `dashboard.gzip_min_bytes` | 1024 | 0–1048576 bytes before gzip is attempted |
-| Runtime: `dashboard.history_read_max_bytes` | 8000000 | 1000000–64000000 bytes per history file |
-| Runtime: `dashboard.history_list_cache` | true | Retired/ignored compatibility key; serialization unchanged |
-| Runtime: `dashboard.model_feed_unavailable_grace_ms` | 5000 | Retired/ignored compatibility key; original 0–60000 ms validation remains |
-| Runtime: `dashboard.sse_max_streams` | 3 | 0–16 concurrent SSE readers; over the cap clients fall back to long-poll |
-| Runtime: `dashboard.sse_heartbeat_ms` | 15000 | 1000–60000 ms |
-| Runtime: `dashboard.sse_write_timeout_ms` | 30000 | 1000–60000 ms |
-| Runtime: `dashboard.longpoll_hold_ms` | 25000 | 1000–60000 ms |
-| Runtime: `dashboard.transcript_max_bytes` | 2097152 | 65536–16777216 bytes per transcript |
-| Runtime: `dashboard.transcript_text_max_bytes` | 16384 | 1024–262144 bytes per clipped text |
-| Runtime: `dashboard.transcript_args_max_bytes` | 4096 | 256–65536 bytes per clipped tool arguments |
-| Runtime: `dashboard.blob_slice_max_bytes` | 262144 | 4096–4194304 bytes per blob slice |
-| Runtime: `dashboard.series_max_points` | 2000 | 64–10000 points per series response |
-| Runtime: `dashboard.series_max_range_ms` | 86400000 | 60000–604800000 ms explicit series range |
-| Runtime: `dashboard.equity_max_points` | 4096 | 64–65536 recorded equity checkpoints |
-| Runtime: `dashboard.equity_sample_interval_ms` | 15000 | 1000–300000 ms minimum checkpoint spacing |
-| Runtime: `dashboard.price_batch_instruments` | 24 | 1–256 instruments per display batch |
-| Runtime: `dashboard.price_batch_interval_ms` | 2000 | 500–60000 ms display batch cadence |
-| Runtime: `dashboard.failed_auth_per_minute` | 30 | 1–600 failed-auth token bucket per minute returning 429 when exhausted |
-| Runtime: `dashboard.retention.pack_after_days` / `delete_after_days` | off | 1–365 days; delete must be greater than pack |
-
-Instrument parsing retains an independent 20-key ceiling. Dashboard evaluation
-and archive response scans retain absolute ceilings of 3000 ms and 256 files.
-Quota waiting preserves cancellation and preparation deadlines; HTTP errors are
-not retried, and shared quotas are never reset. A zero retry setting keeps the
-initial reservation attempt and the existing final-denial sleep semantics.
-
-Runtime config accepts `execution` with defaults `history_sample_interval_ms: 30000`,
-`history_max_samples: 20`, `legacy_entry_cutoff_minute: 915`,
-`legacy_liquidation_minute: 915`, `legacy_stop_multiplier: "0.98"`,
-`legacy_target_multiplier: "1.02"`, `session_start_minute: 555` and
-`session_end_minute: 930` (IST minutes). These settings are excluded from book and
-scanner state. Model-led protection still uses model exit intents. Financial
-freshness remains two seconds. Session start must precede end; history length
-must be positive. Runtime `daily_history_sessions` defaults to 21 and must be at
-least 21; planner feature
-lookbacks retain their existing schema and need at least 21 bars. Preparation uses
-`history_preparation_start_minute: 480` and
-`history_preparation_cutoff_minute: 550`, including its deadline/cancellation;
-start must precede cutoff and cutoff must be before 555 (09:15 IST). A session
-adopted after the cutoff runs one late preparation whose deadline is the same
-window length from its start, capped at `session_end_minute`; the late-start
-cutoff is fixed at 900 (15:00 IST).
-
-### Model archive retention
-
-Archive pack and delete are off unless `dashboard.retention.pack_after_days`
-and/or `delete_after_days` is configured. The paper runtime runs retention
-after persisting post-close; it never activates a session. Manual preview is
-the default:
+Retention packs or deletes old model run directories. It is off until you set
+`dashboard.retention.pack_after_days` or `delete_after_days`, each 1 to 365,
+with delete greater than pack. The controller runs it after the close. To run
+it by hand:
 
 ```sh
-nivra retention --config /private/session-config.json --dry-run
-nivra retention --config /private/session-config.json --apply
+nivra retention --config PAPER_CONFIG --dry-run
+nivra retention --config PAPER_CONFIG --apply
 ```
 
-Only dated sibling sessions older than the configured age are eligible. They
-need a matching paper report with `portfolio.closed=true`, `stopped=false` and
-`halted=false`; current/future dates, open/stopped/halted or unknown reports are
-skipped. Pack and delete do not open a book, journal or credential. Eligible model run directories
-are compressed into private `model-archive/<date>.tar.gz` using ustar, published
-atomically before raw directories are removed. Their transcripts are retained
-under `model/transcripts/`; `runs.ndjson`, `prompts/`, `live-stream.json` and all
-non-model files are preserved. Delete retention removes expired raw runs and the
-compressed archive while preserving those display files. The JSON result/log and
-status `retention` field report completed/planned dates and logical bytes freed.
-
-A failed pack keeps the raw artifacts and its temporary file; the next apply
-cleans that exact temp path. An existing published archive with remaining raw
-directories is a conflict: both are preserved for inspection, never overwritten
-or assumed equivalent. Conflicting transcript copies are also preserved. No pack or delete settings are active unless configured.
-
-Closed sibling sessions are size-bounded by default, including when pack and
-delete are off. The bound does not rewrite the configured session directory,
-so the running paper book stays untouched across midnight. It keeps the newest
-`dashboard.retention.keep_full_quote_bodies` `wide_quotes` bodies (default 32)
-and replaces older bodies over `max_quote_body_bytes` (default 4,096) with a
-`compacted_quote_receipt` that records sha256 and original length. `plan.json`,
-`output.json` and `input.json` over `max_model_file_bytes` (default 65,536)
-become `compacted_model_artifact` receipts. The `state` book row, `failure.json`,
-transcripts and shared journals stay byte-for-byte. A `paper.sqlite-wal` or
-`paper.sqlite-shm` file skips that database. After vacuum the book-identity file keeps its binding and
-records the new device and inode. A compacted quote row fails paper replay with
-`paper_replay_compacted_quote_body` instead of being treated as a live quote.
-
-Retained transcripts remain available to the workspace and the v1 API after the raw
-run directory is packed or deleted. The list index, transcript detail and
-content-addressed prompts stay readable; a blob whose original artifact is gone
-returns 404, so the transcript is shown without inventing the missing value.
-
-### Prompt files
-
-A pi paper planner reads each lane's standing prompt from the built agent's
-`agent/prompts/decision.md`, `research.md` and `review.md`, or from the directory in
-`planner.agent.prompts`. Rust hands pi the brief and trigger; the agent reports each
-prompt's SHA-256 in the turn record. The prompt text is not sealed into the planner
-policy; changing it is a reviewed agent-build or configuration change, and the
-controller never swaps lane prompts during a running turn.
-
-### Pi paper planner policy
-
-The pi decision lane owns the paper plan head. Planner JSON with a key outside
-the pi policy shape refuses with `planner_config_invalid`, and a book bound to an
-older policy hash refuses with `decision_owner_migration_required`. To change the policy, write it to a new
-planner config, check it with `planner config-check`, and review its lane model,
-budget, prompt and credential bindings. On an open, non-halted book, use
-`config-apply --confirm-paper-review`. Preserve an existing operator stop unless
-the owner separately authorizes continuation. A halted book needs separate
-reviewed recovery, and a closed book refuses both config apply and resume.
-The authority checks preserve original journals and separate lane usage.
-Installing a build does not change a book's policy. Rollback means restoring the
-reviewed predecessor config and compatible binary through the documented updater
-guards; never edit seals or replay pending work. Inspect the current decision brief
-with `agent-turn --dry`. Use `agent-check` for an offline round trip through the pi
-subprocess.
-
-Lane model profiles are the per-lane `model` blocks in `planner.agent`; review their
-exact provider and model IDs before applying policy. Changing a lane model is a
-reviewed policy transition; there is no live per-turn selection profile. A
-provider/model listing does not replace a valid provider account in the
-application's own pi directory, and a refused lane start never falls back to
-another model.
-
-### Display instrument sources
-
-Existing configs read the frozen session's `upstox-NSE.json.gz` for catalog display
-without an extra provider request. To capture complete-market public BOD metadata,
-set the following dashboard option through the normal reviewed config workflow:
-
-```json
-{"instrument_catalog":{"source":"complete","max_source_bytes":20000000,"max_decoded_bytes":100000000,"max_rows":300000,"max_text_bytes":256}}
-```
-
-The object is inside `dashboard`. `source:"session_nse"` explicitly selects the
-legacy source; absence has the same behavior and preserves serialized config
-compatibility. All size/row/text limits must be positive resource bounds, not
-trading risk caps. A source exceeding them becomes visibly unavailable; there is
-no automatic limit increase or fallback to another source/broker.
-
-Capture runs once in a background worker after cash-universe preparation. The
-complete source is stored as `upstox-display-complete.json.gz` with original
-`instrument-display-source.json` hash/receipt/session binding. Existing complete,
-incomplete and failed captures are preserved; they are never downloaded over.
-Nonregular, linked, changed or mismatched sources refuse. No metadata worker
-starts/resumes a session or alters financial journals. Confirm source receipt,
-observed segments, rejected/ambiguous rows and memory/bandwidth on the target host
-before treating display coverage as qualified. BOD contract chains do not provide
-current prices or margin; the UI reports those as uncaptured.
-
-### Prospective observation status
-
-When the reviewed observation capability is enabled, the controller's
-`research_tasks` projection carries an `observation` block derived read-only
-from the original candidate queue and lifecycle ledgers:
-
-- `queue`: pending/running/unknown/cancel-requested/succeeded counts, total,
-  oldest age, next deadline, remaining time and an explicit `truncated` flag;
-- `lifecycle`: recorded/matured counts and the actual milestone, origin
-  session/continuation, score status, gaps, `source_scope`, exit status,
-  measurement gaps and measurement SHA per candidate; a broken predecessor
-  ledger makes the block `unavailable`, never zero;
-- `cohort`: account, stable cohort key, feed and dataset ABI;
-- `trials`: the global fold of admissions, executions, terminal
-  failures/cancellations and unknown exposure across every verified lineage;
-  counts are null or explicitly lower-bound when the fold is partial;
-- `measurement`: `independent_episodes`, no portfolio claim and no aggregate
-  PnL;
-
-`as_of_ms` is the controller sample; a later GET never renews it. Missing or
-malformed source state is `unavailable`, never a fake zero, idle or progress
-claim. The projection is operational metadata, not a financial-profit or
-activation claim. A disabled capability reports `disabled`; a stopped or
-halted book reports `not_eligible` for capture and is never restarted.
+Only past sessions whose report is closed, not stopped and not halted qualify.
+Packing writes `model-archive/<date>.tar.gz`. Transcripts stay readable on the
+dashboard.

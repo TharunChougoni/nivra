@@ -1,190 +1,230 @@
-# pi lanes
+# Model lanes
 
-Nivra uses pi for the decision, research, review, and optional gate lanes. Pi owns providers,
-conversation state, tool calls, compaction, and usage reports. Rust builds the
-briefs, publishes tools per lane, schedules turns, and enforces lane budgets.
+Nivra runs models through pi in four lanes. Pi owns providers, conversation
+sessions, tool calls, compaction and usage reports. Rust owns everything else:
+it chooses when a turn runs, builds the brief, publishes and executes the
+tools, enforces budgets and validates plans. Paper only. No lane can place an
+order or read a broker credential.
 
-The controller requires an enabled planner with `agent.mode: "paper"` and a
-decision lane. Give each enabled lane a reviewed provider, model, call budget,
-and cost budget. Pi reads the application's own `auth.json` and `models.json`
-from its configured agent directory. Rust starts the agent as a subprocess with
-an explicit environment allowlist.
+Today the decision lane chooses each paper trade. The plan is for models to
+research and supervise while code executes strategies ([DIRECTION](DIRECTION.md)).
 
-## Agent directory
+| Lane | Runs when | Output |
+| --- | --- | --- |
+| Decision | A decision trigger fires during the session | A `plan` of paper actions |
+| Gate | Optional. A decision batch holds only entry candidates | A `verdict`: escalate or drop |
+| Research | The decision lane asks, the session is quiet, or the review leaves an agenda | A text answer and workspace files |
+| Review | Once, after the session seal | A review carried into the next session |
 
-The agent directory holds the application's own pi `auth.json` and optional
-`models.json`. Do not point it at an interactive pi directory such as
-`~/.pi/agent`. The paper unit runs with `ProtectHome=read-only`, so keep the
-directory under the granted state root, for example
-`~/.local/state/nivra/pi`. Create it with mode `0700` and log in to each
-configured provider with pi's own command:
+## Configure the lanes
+
+The lanes live in the planner's `agent` block. The paper controller needs
+`"mode": "paper"` and a `decision` lane. A `gate` lane needs a `decision` lane.
+Start from [agent-settings.example.json](../packaging/rust/agent-settings.example.json)
+and the [configuration guide](../packaging/rust/CONFIGURATION.md).
+
+| Field | Rule |
+| --- | --- |
+| `node`, `entry`, `agent_dir`, `prompts` | Absolute paths. `entry` is `agent/dist/src/main.js`. `prompts` is optional; the agent reads `<lane>.md` from it, or from `agent/prompts/`. |
+| `pass_env` | Up to 16 variable names passed to the agent. Only `PATH` and these are inherited; `HOME` is set to `agent_dir`. |
+| `lanes.<lane>.model` | `provider`, `id` and optional `thinking`: `off`, `minimal`, `low`, `medium`, `high` or `xhigh`. |
+| `lanes.<lane>.fallback` | Optional second model. It must differ from `model`. |
+| `daily_calls`, `daily_cost_usd` | Required, positive. See [Budgets](#budgets). |
+| `turn_timeout_ms` | 1,000 to 3,600,000. Default 180,000. |
+| `max_tool_calls` | 1 to 200. Default 40. |
+| `compact_at_tokens` | Optional, 32,000 to 2,000,000. See [Compaction](#compaction). |
+| `triggers` | Optional trigger thresholds. See [Triggers](#triggers). |
+
+### Agent directory
+
+`agent_dir` holds the application's own pi `auth.json` and optional
+`models.json`. Rust never reads it. Never use an interactive pi directory.
+The paper unit runs with `ProtectHome=read-only`, so keep the directory under
+the state root the unit can write:
 
 ```sh
-install -d -m 0700 ~/.local/state/nivra/pi
-PI_CODING_AGENT_DIR=~/.local/state/nivra/pi pi auth login openai-codex
-PI_CODING_AGENT_DIR=~/.local/state/nivra/pi pi auth login mistral --api-key
+install -d -m 0700 AGENT_DIR
+PI_CODING_AGENT_DIR=AGENT_DIR pi auth login openai-codex
+PI_CODING_AGENT_DIR=AGENT_DIR pi auth login mistral --api-key
 ```
 
-`nivra preflight` checks that pi knows every lane model and fallback and that
-each provider has a credential, without reading it.
+## Triggers
+
+Rust's trigger engine
+([triggers.rs](../rust/nivra-cli/src/runtime/agent/triggers.rs)) reads one
+observation per scan cycle. Each trigger fires once. Triggers that arrive while
+a turn runs merge into the next batch for their lane. The worker runs one turn
+at a time, decision first, then research, then review. A waiting decision
+trigger aborts a running research or review turn with `agent_preempted`.
+
+| Trigger | Lane | Fires when |
+| --- | --- | --- |
+| `position_risk` | Decision | A held position comes within `proximity_bps` (50) of its stop or target, falls `adverse_move_bps` (150) since the last decision turn, or ranks below `exit_score` (off by default) |
+| `fill` | Decision | New fills appear |
+| `entry_candidate` | Decision | An unheld instrument stays in the top `top_k` (5) with score at least `entry_score` (10) for `persist_cycles` (2) scans; then `cooldown_ms` (15 min) per instrument |
+| `schedule` | Decision | Within 30 minutes of the open, at `pre_close_minute` (15:00), and on the hour when `material_change` (2) new names entered the top K |
+| `request` | Research | The decision lane queued a research request |
+| `quiet` | Research | No decision turn for `quiet_ms` (30 min) during the session, with research budget left |
+| `agenda` | Research | The review finished and left text |
+| `seal` | Review | The session is reported and sealed |
+
+As the decision lane spends its budget, the entry bar rises by
+`entry_score_rise` (40) times the spent share, and the top K shrinks in
+proportion.
+
+Research runs only in the three cases above: the decision lane asks for it,
+no decision turn has happened for 30 minutes, or the review left an agenda.
+The plan is to run research after the close every day; see
+[DIRECTION](DIRECTION.md).
+
+A due decision or gate turn is skipped, never invented, when the book is not
+trading, or when there is no ranking, no held position and no fill. Any turn
+is skipped when its lane is not configured or its budget is spent. Each
+outcome goes to `triggers.ndjson` as `fired`, `dispatched`, `skipped`,
+`deferred`, `gated` or `gate_bypassed`.
+
+### Gate routing
+
+With a gate lane, a decision batch made only of entry candidates runs on the
+gate first. The gate calls `verdict` with `escalate` and a reason. On `true`,
+the same batch runs next on the decision lane. On `false`, the batch ends. A
+gate turn that fails or gives no verdict escalates. A batch with a fill,
+position risk or schedule trigger goes straight to the decision lane. When the
+gate budget is spent, batches bypass the gate. When the decision budget is
+spent, the gate does not run.
+
+## Tools
+
+Rust publishes a JSON schema per tool and lane, and only for tools the planner
+config enables. A call to a tool outside the lane fails with
+`agent_tool_not_in_lane`.
+
+| Tool | Lanes | Purpose |
+| --- | --- | --- |
+| `evidence`, `snapshot`, `prospects`, `rank`, `features`, `portfolio`, `session` | All | Frozen evidence, fresh quotes, scanner rows, ranking, features, cash and holdings, clock and trigger |
+| `intraday` | All | Minute bars from the scanner store; only with `planner.decision_evidence` |
+| `decisions` | Decision, research, review | Recent decisions |
+| `analysis`, `research_status`, `research_result` | Decision, research, review | Queue and read registered analysis tasks and research answers |
+| `list`, `read` | Decision, research, review | Read the workspace |
+| `plan` | Decision | Submit the paper plan |
+| `research` | Decision | Queue a research request with up to eight `refs` |
+| `verdict` | Gate | Escalate the batch or drop it |
+| `write`, `install`, `run` | Research | Write workspace files, install an allowlisted, hash-matched file into `tools/`, run a `scripts/<name>.py` ranker in the no-network sandbox |
+| `backtest`, `backtest_status`, `backtest_result`, `backtest_cancel` | Research | Ranker backtests on configured datasets |
+| `quotes`, `research_cancel` | Research | Archived quote receipts, cancel a request |
+| `search`, `fetch`, `news` | Decision, research | Opt-in web tools under `planner.web_tools`; each call is logged in `model/web-tools.ndjson` |
+
+Per-tool row limits live under `planner.tools`. A `plan` action is `buy`,
+`sell` or `revise_exit`. A buy's time exit is a future Unix epoch millisecond.
+Research results are advisory and never place, size or promote a trade.
+
+### Research requests
+
+Requests sit in `model/agent/requests.sqlite`. At most `max_open_requests` (4)
+are open, and each expires after `request_ttl_ms` (2 hours). One research pass
+answers up to four requests, one turn each. A finished answer goes into the
+next decision brief. A failed or preempted turn fails its request, which never
+runs again. If publishing an answer fails, the turn reports
+`agent_research_answer_failed` and the artifact stays for audit.
+
+The review lane runs once per session, after the seal. Rust saves its redacted
+text to `model/agent/memory.json`. The next session's decision brief carries
+it after Rust checks the previous session's closed paper report.
+
+## Budgets
+
+Each lane has a daily allowance per session date in `model/agent/usage.json`.
+
+- `daily_calls` counts provider calls, not turns. Pi reports one call per model
+  response, so every tool round in a turn adds a call.
+- `daily_cost_usd` counts the cost pi reports, fallback usage included.
+- Rust aborts a running turn with `agent_budget_exhausted` as soon as either
+  limit is reached. The lane then runs no more turns that day.
+- `max_tool_calls` caps tool calls per turn. Further calls return
+  `agent_tool_budget_exhausted`.
+- A turn cut off by a crash is charged once from its last usage checkpoint.
+
+A lane budget limits model spend only, never positions, losses or exposure.
+
+## Compaction
+
+`compact_at_tokens` sets the context size at which pi compacts a lane session,
+for the primary and fallback models alike. Pi keeps the most recent fifth of
+the threshold, at least 20,000 tokens, and summarizes the rest. Without it, pi
+compacts 16,384 tokens short of the model's context window, so a long-context
+model pays for a nearly full context on every call.
 
 ## Fallback
 
-A lane may name a fallback model. pi's catalog already includes Mistral's
-`deepseek-v4-1-flash-1017`, so it needs no `models.json` entry. pi maps the
-`medium` thinking level to `high` for that model.
-
-```json
-"decision": {
-  "model": { "provider": "openai-codex", "id": "gpt-6.1-sol", "thinking": "medium" },
-  "fallback": { "provider": "mistral", "id": "deepseek-v4-1-flash-1017", "thinking": "high" },
-  "daily_calls": 300,
-  "daily_cost_usd": 10.0
-}
-```
-
-A turn moves to the fallback only when the primary fails before any model
-output or tool call:
+A turn moves to the fallback model only when the primary fails before any
+model output or tool call.
 
 | Primary failure | Fallback |
 | --- | --- |
-| Usage, quota or rate limit still failing after pi's retries (`quota`) | Yes |
-| Authentication or entitlement failure, such as 401, 403 or a missing credential (`auth`) | Yes |
+| Quota, usage or rate limit still failing after pi's retries (`quota`) | Yes |
+| Authentication or entitlement failure, such as 401 or 403 (`auth`) | Yes |
 | Another provider rejection that pi does not retry (`rejected`) | Yes |
 | Timeout, 5xx, network error or context overflow | No |
 | Abort, preemption, budget or turn deadline | No |
-| Any model output or tool call earlier in the turn | No |
 
-The agent rewinds the lane session to the state before the brief and runs the
-brief once on the fallback. The failed attempt stays in the session file. Rust
-accepts the switch only if it served no tool call in the turn; otherwise it
-aborts the turn with `agent_fallback_refused`. The turn journal records
-`fallback` with `from`, `to`, `reason` and the bounded error. The turn events
-and the log carry the same switch. Lane budgets count the fallback's usage at
-the cost pi reports for it. A decision claim accepts a plan from the primary or
-the configured fallback. The fallback is part of the planner policy, so set it
-before the session starts. A book already bound to the earlier policy needs the
-reviewed config-apply transition.
+The agent rewinds the session to before the brief and runs the brief once on
+the fallback. If Rust already served a tool call in the turn, it aborts with
+`agent_fallback_refused`. The turn journal records `fallback` with `from`,
+`to`, `reason` and the bounded error. The fallback is part of the planner
+policy, so set it before the session starts.
 
-## Gate
+## Plan binding
 
-The optional gate lane is a cheap, fast screen for entry-candidate triggers, so
-frequent market coverage does not spend the decision model's quota. Use a
-long-context, low-cache-cost model with a small tool cap and a compaction
-threshold, for example:
+Before a decision turn, Rust reserves a claim that binds the portfolio hash,
+policy hash, input hash, trigger, model and fallback, and a deadline of
+`turn_timeout_ms`. When the turn completes, Rust commits the plan only if all
+of these still hold, and refuses it otherwise:
 
-```json
-"gate": {
-  "model": { "provider": "mistral", "id": "deepseek-v4-1-flash-1017", "thinking": "low" },
-  "daily_calls": 2000,
-  "daily_cost_usd": 3.0,
-  "turn_timeout_ms": 60000,
-  "max_tool_calls": 8,
-  "compact_at_tokens": 300000
-}
-```
+| Refusal | Cause |
+| --- | --- |
+| `agent_paper_decision_expired` | The claim deadline passed |
+| `agent_paper_portfolio_changed` | Cash, positions, fills or exit intents changed |
+| `agent_paper_policy_changed` | The planner policy on disk changed |
+| `agent_paper_turn_binding_invalid` | Turn ID, model, input or policy hash differs |
+| `agent_paper_instrument_revision_changed` | The allowlist changed |
+| `agent_paper_outside_session` | The book stopped, halted, closed or left the session window |
 
-The gate session keeps its earlier verdicts, so it does not rescreen unchanged
-evidence. See [lane tools](LANE_TOOLS.md#triggers) for how verdicts route
-batches.
+A committed plan is validated again at execution. A changed portfolio records
+`portfolio_changed` and a changed policy records `policy_changed`; neither
+fills. Execution uses the original quote receipt and the two-second freshness
+gate. An interrupted decision is recorded and never replayed.
 
-## Decision
+## Failures
 
-Rust wakes the decision lane when eligible evidence supports a trigger, such as
-a fill, position risk, a persistent candidate, or a scheduled scan. The decision
-lane can inspect the book and market and submit a `plan`. Only a completed turn
-with a final validated proposal can reach the paper plan head. Rust checks the
-book, policy, model, instrument allowlist, turn deadline, and exact claim before
-committing the plan. Rust uses original quote receipts and the two-second gate
-for paper execution. A buy's time exit uses absolute Unix epoch milliseconds.
-If supplied, the deadline must still be in the future when Rust validates and
-fills the buy. The lane has no order or broker credential access.
+A provider, schema or timeout failure means no trade for that trigger and
+never halts the book. A corrupt `usage.json`, identity mismatch or failed
+durable write is an integrity failure. Protection and fills stay deterministic.
 
-An interrupted decision is recorded and is never replayed. A book already
-bound to another authority requires the reviewed config-apply transition.
+## Check an agent
 
-## Research and review
+Build and test the agent with the [pi agent gate](../AGENTS.md). Then:
 
-The decision lane can post `research` questions. Rust delivers each completed
-answer in a subsequent decision brief. Rust checks the request deadline when it
-claims the question, including questions selected earlier in the same batch.
-After saving the answer artifact, Rust publishes the result and completes the
-request in one SQLite transaction. If publication fails, the turn reports
-`agent_research_answer_failed` and the artifact stays available for audit. The research lane can write
-`scripts/<name>.py` and test the source with bounded inline feature rows. The
-scores-only sandbox has no network access. The response includes the executed
-source hash. Configured analysis and backtest tools use the existing research
-runner and evidence policy.
+| Command | What it does |
+| --- | --- |
+| `nivra preflight --config PAPER_CONFIG` | Checks node, entry, modules, prompts and the agent directory, and that pi knows every lane model and fallback and has a credential for each. It does not read credentials. |
+| `nivra agent-check --config AGENT_SETTINGS --fixture fixtures/agent-check.json` | Runs a decision turn, its research request and the next decision turn through the real agent against pi's scripted fake provider. No network, no book. |
+| `nivra agent-turn --config PAPER_CONFIG --lane decision --dry` | Prints the brief and published tools. Starts no agent. |
+| `nivra agent-turn --config PAPER_CONFIG --lane research --research-question 'QUESTION'` | Runs one real research turn on that question against the current book. Needs the controller stopped. Uses the lane budget. Without `--dry`, a decision turn prints its plan and never executes it. |
+| `nivra agent-shadow-report --config PAPER_CONFIG` | Reports trigger coverage and gaps from the journals. |
+| `nivra probe --config PAPER_CONFIG` | Checks the broker read path. |
 
-### Review a research ranker for paper scanning
+To register a ranker that a research turn wrote, take the source hash from the
+sandbox run and use `nivra planner register-ranker` with `--planner`,
+`--session`, `--book`, `--script`, `--expected-sha256` and `--author-model`.
+See [STRATEGY](STRATEGY.md) and [RESEARCH](RESEARCH.md).
 
-Use the decision lane's research request or run a specific research task with
-the controller stopped. The manual turn uses the research budget and can write
-workspace artifacts.
+## Files in the book's `model/agent/` directory
 
-```sh
-nivra agent-turn --config PAPER_CONFIG --lane research \
-  --research-question 'Write and sandbox-test a Python prospect ranker in scripts/. Report its source hash and any replay evidence.'
-```
-
-Inspect the script and its sandbox and replay evidence. Use the hash from the
-successful workspace run to register the exact source in the configured
-`discovery.strategy_selection.library_path`:
-
-```sh
-nivra planner register-ranker --planner PLANNER_CONFIG --session YYYY-MM-DD \
-  --book DATED_SOURCE_BOOK --script scripts/ranker.py \
-  --expected-sha256 REVIEWED_SHA256 --author-model PROVIDER/MODEL
-```
-
-The CLI reads the workspace settings from the supplied dated planner config.
-Use a private path for the strategy library. Registration stores an immutable
-library version and leaves the scanner policy alone. To trial it, set
-`paper_trial_sha256` to the registered hash in the reviewed planner's enabled
-`discovery.strategy_selection` block with `mode: "live"`. Apply the normal
-reviewed configuration transition for the target paper session. Check the
-scanner's `live_ranking.sha256` and `strategy_selection` status for the applied
-hash or the reason it fell back to built-in ranking. See
-[Strategy sandbox](STRATEGY_SANDBOX.md#strategy-selection-shadow-diagnostics-and-live-paper-ranking).
-
-### Post-close review
-
-The review lane runs once after the session seal. Rust saves its redacted
-review and checks the previous session's closed report and account before
-including the review's date, turn ID, and text in a successor brief.
-
-## Prepare and verify
-
-Build the application and agent:
-
-```sh
-cargo build --workspace --all-targets --locked
-npm ci --prefix agent
-npm run build --prefix agent
-npm test --prefix agent
-```
-
-Use the [configuration guide](../packaging/rust/CONFIGURATION.md) for the
-application-owned market-data binding, pi settings, and fresh paper workspace.
-Provider account authorization is separate from offline verification. Use the
-configured pi directory for login. Use `nivra probe --config PAPER_CONFIG.json`
-to check the broker read path. A ready binary and valid config do not confirm
-provider access.
-
-For the scripted decision and research round trip, provide agent settings with
-both lanes and run:
-
-```sh
-target/debug/nivra agent-check --config AGENT_SETTINGS.json --fixture fixtures/agent-check.json
-```
-
-`nivra agent-turn --config PAPER_CONFIG.json --lane decision --dry` prints a
-brief from the existing book without calling pi. A manual decision proposal
-has no execution authority. `nivra agent-shadow-report` reads the historical
-shadow journals and reports their observed coverage and gaps.
-
-## Evidence
-
-The book's `model/agent` directory holds trigger batches, turn receipts, plan
-outcomes, usage, and lane sessions. Original model-harness journals remain
-readable for audit. The paper controller uses pi for provider calls.
+| File | Contents |
+| --- | --- |
+| `triggers.ndjson` | Fired, dispatched, skipped and gated triggers |
+| `turns/<turn-id>/` | The turn's archived tool calls and events |
+| `plans.ndjson` | Plan outcomes |
+| `usage.json` | Daily spend per lane |
+| `requests.sqlite` | The research request queue |
+| `memory.json` | The review text |
