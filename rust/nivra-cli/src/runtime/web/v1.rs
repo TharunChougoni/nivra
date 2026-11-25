@@ -13,6 +13,7 @@ mod revision;
 mod series;
 mod stream;
 mod summary;
+mod transcript;
 use book::*;
 use market::*;
 use ops::*;
@@ -64,6 +65,9 @@ pub(crate) fn dispatch(
         Ok(Route::Alerts(query)) => alerts(head, query, view),
         Ok(Route::Tools(query)) => tool_calls(head, query, view, session_root),
         Ok(Route::Agent(query)) => agent_turns(head, query, session_root),
+        Ok(Route::AgentTranscript(query)) => {
+            transcript::agent_transcript(head, query, session_root, settings)
+        }
         Ok(Route::Series(query)) => series(head, query, view, settings, features, equity),
         Ok(Route::Events(query)) => poll_source(head, query, EventSource::Global, settings),
         Ok(_) => error("404 Not Found", "route_not_found"),

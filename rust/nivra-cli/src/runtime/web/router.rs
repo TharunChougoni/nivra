@@ -19,6 +19,8 @@ pub(super) enum Route {
     Tools(Query),
     /// The pi lane turns, tool calls, gate verdicts and lane spend.
     Agent(Query),
+    /// One pi lane as a chat: its session files grouped into exchanges.
+    AgentTranscript(Query),
     Series(Query),
     Events(Query),
     Backtest,
@@ -161,6 +163,10 @@ pub(super) fn parse(line: &str) -> Result<Route, &'static str> {
                 )?))
             }
             "/api/v1/agent" => Ok(Route::Agent(Query::parse(raw, &["cursor", "limit"])?)),
+            "/api/v1/agent/transcript" => Ok(Route::AgentTranscript(Query::parse(
+                raw,
+                &["lane", "cursor", "limit"],
+            )?)),
             "/api/v1/series" => Ok(Route::Series(Query::parse(
                 raw,
                 &["instrument", "kind", "from", "to", "limit"],

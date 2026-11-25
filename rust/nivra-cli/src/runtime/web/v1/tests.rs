@@ -91,7 +91,8 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
     assert_eq!(body["limits"]["sse_max_streams"], 3);
     // Every advertised capability is a route.
     for capability in body["capabilities"].as_array().unwrap() {
-        let line = format!("GET /api/v1/{} HTTP/1.1", capability.as_str().unwrap());
+        let path = capability.as_str().unwrap().replace('_', "/");
+        let line = format!("GET /api/v1/{path} HTTP/1.1");
         assert!(
             !matches!(router::parse(&line), Ok(router::Route::UnknownV1)),
             "{line}"
@@ -838,4 +839,296 @@ fn agent_route_pages_pi_turns_newest_first_with_gate_counts() {
     assert_eq!(tail["rows_not_loaded"]["turns"], 2);
     assert_eq!(tail["total"], 1);
     assert_eq!(tail["turns"][0]["turn_id"], "decision-2");
+}
+
+fn transcript_get(
+    root: Option<&Path>,
+    target: &str,
+    settings: &DashboardSettings,
+) -> (String, serde_json::Value) {
+    let Ok(router::Route::AgentTranscript(query)) =
+        router::parse(&format!("GET {target} HTTP/1.1"))
+    else {
+        panic!("transcript route");
+    };
+    let reply = transcript::agent_transcript("", query, root, settings);
+    (
+        reply.code.to_string(),
+        serde_json::from_slice(&reply.body).unwrap(),
+    )
+}
+
+#[test]
+fn transcript_route_groups_exchanges_across_a_restart_and_joins_turns() {
+    let dir = tempfile::tempdir().unwrap();
+    let agent = dir.path().join("model/agent");
+    let lane = agent.join("pi/gate");
+    std::fs::create_dir_all(&lane).unwrap();
+    let message = |role: &str, at: i64, extra: serde_json::Value| {
+        let mut message = serde_json::json!({"role":role,"timestamp":at});
+        message
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::json!({"type":"message","message":message}).to_string()
+    };
+    let user = |at: i64, text: &str| {
+        message(
+            "user",
+            at,
+            serde_json::json!({"content":[{"type":"text","text":text}]}),
+        )
+    };
+    let result = |at: i64, id: &str, text: &str, is_error: bool, ms: u64| {
+        message(
+            "toolResult",
+            at,
+            serde_json::json!({"toolCallId":id,"toolName":"x","isError":is_error,"durationMs":ms,
+                "content":[{"type":"text","text":text}]}),
+        )
+    };
+    let header = |id: &str, stamp: &str| {
+        [
+            serde_json::json!({"type":"session","id":id,"timestamp":stamp,"cwd":"/never/served"}),
+            serde_json::json!({"type":"model_change","provider":"mistral","modelId":"m-1"}),
+            serde_json::json!({"type":"thinking_level_change","thinkingLevel":"low"}),
+            serde_json::from_str(&message(
+                "system",
+                1,
+                serde_json::json!({"content":"SYSTEM-PROMPT-TEXT"}),
+            ))
+            .unwrap(),
+        ]
+        .map(|line| line.to_string())
+        .join("\n")
+    };
+    let wide = "é".repeat(20);
+    let first = [
+        header("sess-a", "2026-11-25T03:46:02.966Z"),
+        user(1_000_000, &format!("Brief:\n{wide}")),
+        message(
+            "assistant",
+            1_000_100,
+            serde_json::json!({"stopReason":"toolUse","content":[
+                {"type":"thinking","thinking":"plan","thinkingSignature":"opaque"},
+                {"type":"text","text":"checking"},
+                {"type":"toolCall","id":"call_1","name":"intraday","arguments":{"keys":[wide]}},
+                {"type":"toolCall","id":"call_2","name":"session","arguments":"{ \"a\" : 1 }"}]}),
+        ),
+        result(1_000_200, "call_2", "denied", true, 3),
+        result(1_000_300, "call_1", "0123456789ABCDEF", false, 9),
+        message(
+            "assistant",
+            1_000_400,
+            serde_json::json!({"stopReason":"stop","content":[{"type":"text","text":"done"}]}),
+        ),
+        user(2_000_000, "Brief:\nnever answered"),
+    ]
+    .join("\n");
+    let second = [
+        header("sess-b", "2026-11-25T04:00:00.000Z"),
+        user(3_000_000, "Brief:\nafter restart"),
+        serde_json::json!({"type":"compaction"}).to_string(),
+        message(
+            "assistant",
+            3_000_100,
+            serde_json::json!({"stopReason":"error","errorMessage":"provider failed","content":[]}),
+        ),
+    ]
+    .join("\n");
+    std::fs::write(
+        lane.join("2026-11-25T03-46-02-966Z_sess-a.jsonl"),
+        format!("{first}\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        lane.join("2026-11-25T04-00-00-000Z_sess-b.jsonl"),
+        format!("{second}\n"),
+    )
+    .unwrap();
+    let turn = |id: &str, lane: &str, at: i64, status: &str, error: serde_json::Value| {
+        serde_json::json!({"turn_id":id,"lane":lane,"at_ms":at,"status":status,"error":error})
+            .to_string()
+    };
+    std::fs::write(
+        agent.join("turns.ndjson"),
+        [
+            turn("gate-old", "gate", 900_000, "ok", serde_json::Value::Null),
+            turn("gate-1", "gate", 999_980, "ok", serde_json::Value::Null),
+            turn("gate-2", "gate", 1_999_990, "error", "agent_exited".into()),
+            turn(
+                "decision-3",
+                "decision",
+                2_999_990,
+                "ok",
+                serde_json::Value::Null,
+            ),
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    let settings = DashboardSettings {
+        transcript_text_max_bytes: 10,
+        transcript_args_max_bytes: 13,
+        ..DashboardSettings::default()
+    };
+
+    let (code, page) = transcript_get(
+        Some(dir.path()),
+        "/api/v1/agent/transcript?lane=gate&limit=2",
+        &settings,
+    );
+    assert_eq!(code, "200 OK");
+    assert_eq!(page["sessions"][0]["id"], "sess-a");
+    assert_eq!(page["sessions"][0]["started_ms"], 1_795_578_362_966_i64);
+    assert_eq!(page["sessions"][1]["model"], "m-1");
+    assert_eq!(page["sessions"][1]["thinking"], "low");
+    assert_eq!(
+        (page["total"].clone(), page["next"].clone()),
+        (3.into(), "2".into())
+    );
+    assert_eq!(page["truncated"], false);
+    assert!(!page.to_string().contains("SYSTEM-PROMPT-TEXT"));
+    assert!(!page.to_string().contains("never/served"));
+    // Newest first: the exchange after the restart, with its provider error
+    // and compaction note, joined to no turn of another lane.
+    let after = &page["exchanges"][0];
+    assert_eq!(after["session"], "sess-b");
+    assert_eq!(after["complete"], true);
+    assert_eq!(after["items"][0]["kind"], "note");
+    assert_eq!(after["items"][1]["text"], "provider f");
+    assert_eq!(after["items"][1]["truncated"], true);
+    assert!(after["turn"].is_null());
+    // A brief with no reply is an interrupted exchange tied to its exited turn.
+    let interrupted = &page["exchanges"][1];
+    assert_eq!(interrupted["complete"], false);
+    assert_eq!(interrupted["items"], serde_json::json!([]));
+    assert!(interrupted["ended_ms"].is_null());
+    assert_eq!(interrupted["turn"]["turn_id"], "gate-2");
+    assert_eq!(interrupted["turn"]["error"], "agent_exited");
+
+    let (_, older) = transcript_get(
+        Some(dir.path()),
+        "/api/v1/agent/transcript?lane=gate&limit=2&cursor=2",
+        &settings,
+    );
+    assert!(older["next"].is_null());
+    let exchange = &older["exchanges"][0];
+    assert_eq!(exchange["session"], "sess-a");
+    assert_eq!(exchange["turn"]["turn_id"], "gate-1");
+    assert_eq!(exchange["complete"], true);
+    assert_eq!(exchange["ended_ms"], 1_000_400);
+    // The brief keeps its full byte length and is cut on a char boundary.
+    assert_eq!(exchange["brief"]["text"], "Brief:\né");
+    assert_eq!(exchange["brief"]["bytes"], 47);
+    assert_eq!(exchange["brief"]["truncated"], true);
+    let kinds: Vec<_> = exchange["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["thinking", "text", "tool", "tool", "text"]);
+    // Results are paired by call id even when they arrive out of order.
+    let (call_1, call_2) = (&exchange["items"][2], &exchange["items"][3]);
+    assert_eq!(call_1["id"], "call_1");
+    assert_eq!(call_1["args"]["text"], "{\"keys\":[\"é");
+    assert_eq!(call_1["args"]["truncated"], true);
+    assert_eq!(call_1["result"]["text"], "0123456789");
+    assert_eq!(call_1["result"]["truncated"], true);
+    assert_eq!(
+        (call_1["is_error"].clone(), call_1["duration_ms"].clone()),
+        (false.into(), 9.into())
+    );
+    assert_eq!(call_2["args"]["text"], "{\"a\":1}");
+    assert_eq!(call_2["args"]["truncated"], false);
+    assert_eq!(call_2["result"]["text"], "denied");
+    assert_eq!(call_2["is_error"], true);
+}
+
+#[test]
+fn transcript_route_rejects_bad_queries_and_serves_an_empty_missing_lane() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = DashboardSettings::default();
+    let long_lane = "a".repeat(33);
+    for (target, reason) in [
+        (
+            "/api/v1/agent/transcript".to_owned(),
+            "transcript_lane_invalid",
+        ),
+        (
+            "/api/v1/agent/transcript?lane=Gate".to_owned(),
+            "transcript_lane_invalid",
+        ),
+        (
+            "/api/v1/agent/transcript?lane=1gate".to_owned(),
+            "transcript_lane_invalid",
+        ),
+        (
+            format!("/api/v1/agent/transcript?lane={long_lane}"),
+            "transcript_lane_invalid",
+        ),
+        (
+            "/api/v1/agent/transcript?lane=gate&limit=0".to_owned(),
+            "transcript_limit_invalid",
+        ),
+        (
+            "/api/v1/agent/transcript?lane=gate&limit=51".to_owned(),
+            "transcript_limit_invalid",
+        ),
+        (
+            "/api/v1/agent/transcript?lane=gate&limit=x".to_owned(),
+            "transcript_limit_invalid",
+        ),
+        (
+            "/api/v1/agent/transcript?lane=gate&cursor=100001".to_owned(),
+            "transcript_cursor_invalid",
+        ),
+        (
+            "/api/v1/agent/transcript?lane=gate&cursor=-1".to_owned(),
+            "transcript_cursor_invalid",
+        ),
+    ] {
+        let (code, body) = transcript_get(Some(dir.path()), &target, &settings);
+        assert_eq!(
+            (code.as_str(), body["error"].as_str()),
+            ("400 Bad Request", Some(reason)),
+            "{target}"
+        );
+    }
+    let (code, body) = transcript_get(None, "/api/v1/agent/transcript?lane=gate", &settings);
+    assert_eq!(
+        (code.as_str(), body["error"].as_str()),
+        ("503 Service Unavailable", Some("session_unavailable"))
+    );
+
+    // A lane that never ran, or holds only symlinks and other files, is empty.
+    let (code, body) = transcript_get(
+        Some(dir.path()),
+        "/api/v1/agent/transcript?lane=gate",
+        &settings,
+    );
+    assert_eq!(code, "200 OK");
+    assert_eq!(
+        (
+            body["exchanges"].clone(),
+            body["sessions"].clone(),
+            body["total"].clone()
+        ),
+        (serde_json::json!([]), serde_json::json!([]), 0.into())
+    );
+    assert!(body["next"].is_null());
+    let lane = dir.path().join("model/agent/pi/gate");
+    std::fs::create_dir_all(&lane).unwrap();
+    std::fs::write(lane.join("notes.txt"), "x").unwrap();
+    std::os::unix::fs::symlink("/dev/null", lane.join("2026_linked.jsonl")).unwrap();
+    let (code, body) = transcript_get(
+        Some(dir.path()),
+        "/api/v1/agent/transcript?lane=gate",
+        &settings,
+    );
+    assert_eq!(
+        (code.as_str(), body["sessions"].clone()),
+        ("200 OK", serde_json::json!([]))
+    );
 }

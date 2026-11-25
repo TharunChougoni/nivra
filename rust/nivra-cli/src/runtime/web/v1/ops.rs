@@ -13,7 +13,7 @@ pub(crate) fn meta(
         "v":1,"version":env!("CARGO_PKG_VERSION"),"mode":if live {"live"} else {"paper"},
         "paper_only":view["paper_only"].as_bool().unwrap_or(!live),"live_enabled":live,
         "broker":{"data":"upstox","orders":order_authority(live)},"account":view["account"].as_str().map(|alias| super::super::super::transcript::redact(&serde_json::json!(alias))),
-        "capabilities":["summary","portfolio","positions","orders","fills","plans","scanner","instruments","sessions","health","alerts","series","agent","events","tools","backtest"],
+        "capabilities":["summary","portfolio","positions","orders","fills","plans","scanner","instruments","sessions","health","alerts","series","agent","agent_transcript","events","tools","backtest"],
         "limits":{"sse_max_streams":settings.sse_max_streams,"sse_heartbeat_ms":settings.sse_heartbeat_ms,"longpoll_hold_ms":settings.longpoll_hold_ms,"blob_slice_max_bytes":settings.blob_slice_max_bytes,"transcript_max_bytes":settings.transcript_max_bytes,"transcript_text_max_bytes":settings.transcript_text_max_bytes,"transcript_args_max_bytes":settings.transcript_args_max_bytes,"series_max_points":settings.series_max_points,"series_max_range_ms":settings.series_max_range_ms,"equity_max_points":settings.equity_max_points,"equity_sample_interval_ms":settings.equity_sample_interval_ms,"price_batch_instruments":settings.price_batch_instruments,"price_batch_interval_ms":settings.price_batch_interval_ms}
     });
     drop(view);
@@ -257,11 +257,11 @@ pub(super) const AGENT_FILES: [&str; 3] = ["turns.ndjson", "triggers.ndjson", "u
 
 /// Newest bytes of each lane journal the dashboard holds; older rows are
 /// reported as not loaded.
-const AGENT_JOURNAL_MAX_BYTES: u64 = 16 * 1024 * 1024;
+pub(super) const AGENT_JOURNAL_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
 /// One journalled pi turn, without its brief or model text: lane, model,
 /// outcome, usage, tool calls, the plan's stance and the gate's verdict.
-fn agent_turn_row(turn: serde_json::Value) -> serde_json::Value {
+pub(super) fn agent_turn_row(turn: serde_json::Value) -> serde_json::Value {
     let trigger = &turn["trigger"];
     let instruments: Vec<&serde_json::Value> = trigger["triggers"]
         .as_array()

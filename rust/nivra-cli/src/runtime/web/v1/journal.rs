@@ -130,19 +130,18 @@ fn count_lines(file: &mut std::fs::File, end: u64) -> std::io::Result<(u64, bool
 
 static JOURNALS: Mutex<BTreeMap<PathBuf, Journal>> = Mutex::new(BTreeMap::new());
 
-/// Refreshes the named journals and hands them to `read` under one lock.
-/// A missing file reads as an empty journal.
-pub(super) fn with_journals<const N: usize, R>(
-    files: [(PathBuf, Project); N],
-    max_bytes: u64,
-    read: impl FnOnce([&Journal; N]) -> R,
+/// Refreshes the named journals, each with its own held window, and hands
+/// them to `read` under one lock. A missing file reads as an empty journal.
+pub(super) fn with_journal_list<R>(
+    files: &[(PathBuf, Project, u64)],
+    read: impl FnOnce(&[&Journal]) -> R,
 ) -> std::result::Result<R, &'static str> {
     let mut cache = JOURNALS.lock().map_err(|_| "agent_journal_unavailable")?;
-    for (path, project) in &files {
+    for (path, project, max_bytes) in files {
         match cache
             .entry(path.clone())
             .or_default()
-            .refresh(path, max_bytes, *project)
+            .refresh(path, *max_bytes, *project)
         {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -155,9 +154,21 @@ pub(super) fn with_journals<const N: usize, R>(
         }
     }
     let empty = Journal::default();
-    Ok(read(
-        files
-            .each_ref()
-            .map(|(path, _)| cache.get(path).unwrap_or(&empty)),
-    ))
+    let held: Vec<&Journal> = files
+        .iter()
+        .map(|(path, ..)| cache.get(path).unwrap_or(&empty))
+        .collect();
+    Ok(read(&held))
+}
+
+/// [`with_journal_list`] for a fixed set of files that share one window.
+pub(super) fn with_journals<const N: usize, R>(
+    files: [(PathBuf, Project); N],
+    max_bytes: u64,
+    read: impl FnOnce([&Journal; N]) -> R,
+) -> std::result::Result<R, &'static str> {
+    let files = files.map(|(path, project)| (path, project, max_bytes));
+    with_journal_list(&files, |held| {
+        read(<[&Journal; N]>::try_from(held).expect("one journal per file"))
+    })
 }
