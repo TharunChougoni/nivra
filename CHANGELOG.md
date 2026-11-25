@@ -1,5 +1,18 @@
 # Source snapshot
 
+## 0.12.6 — 2026-11-25
+
+An idle dashboard tab uses far less bandwidth during market hours (#33).
+Projection revisions hash content only, without per-loop clocks, ages, loop
+counters or feed tick counters, so a page refetches a projection only when it
+changed. `summary_changed` fires at most once a second when a revision moves,
+and every 5 s otherwise so summary figures stay current; the scanner revision
+moves at most every 15 s. `/api/v1/health` revalidates on content, so a repeat
+read returns 304 while only ages differ. The event stream is gzipped when the
+browser accepts it. The Lanes thread reloads only when a turn lands, through a
+new `agent_turns` revision. The Health page ages quote and loop times locally
+from the summary.
+
 ## 0.12.5 — 2026-11-25
 
 The dashboard reads in plain language. Code names, internal field names,
