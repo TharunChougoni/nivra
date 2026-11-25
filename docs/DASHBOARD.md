@@ -415,9 +415,9 @@ for the stats and charts, and reloads both when `revisions.agent` changes.
 - **Chat thread**, oldest at the top and newest at the bottom, with
   **Load earlier** for older exchanges. A dashed divider marks each pi session
   (a controller restart starts a new one) with its model and thinking level.
-  Each trigger is a user message with its IST time, kind, reason and
-  instruments; the full brief sent to the model folds under
-  **Show full brief**. Thinking and each tool call are single lines that expand
+  Each trigger is a user message naming its instruments. Its IST time, kind
+  and reason sit below the message, with a brief icon that opens the full
+  brief sent to the model. Thinking and each tool call are single lines that expand
   to the full text, arguments and result. Long tool chains fold their middle
   calls. The answer carries a chip: escalated or declined for the gate, the
   validated plan and its action count for decision, or the turn error. A brief

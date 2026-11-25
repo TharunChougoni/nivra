@@ -5,7 +5,7 @@ import type {
   TranscriptText,
 } from "./types";
 import React, { useLayoutEffect, useRef, useState } from "react";
-import { Brain, ChevronRight } from "lucide-react";
+import { Brain, ChevronRight, FileText } from "lucide-react";
 import { clock, count, datetime, duration, numeric, usd, words } from "./data";
 import { turnFailed } from "./model";
 import { Tag } from "./ui";
@@ -135,16 +135,20 @@ function UserBubble({ ex }: { ex: TranscriptExchange }) {
     trigger?.reason ? words(trigger.reason) : null,
   ].filter(Boolean);
   return (
-    <div className="chat-user">
-      <div className="chat-meta">{meta.join(" · ")}</div>
-      <p>{triggerBody(ex)}</p>
-      <button
-        className="chat-link"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
-        {open ? "Hide full brief" : "Show full brief"}
-      </button>
+    <div className={open ? "chat-user open" : "chat-user"}>
+      <p className="chat-bubble">{triggerBody(ex)}</p>
+      <div className="chat-user-meta">
+        <span>{meta.join(" · ")}</span>
+        <button
+          className="chat-icon"
+          aria-expanded={open}
+          aria-label={open ? "Hide full brief" : "Show full brief"}
+          title={open ? "Hide full brief" : "Show full brief"}
+          onClick={() => setOpen(!open)}
+        >
+          <FileText size={13} aria-hidden="true" />
+        </button>
+      </div>
       {open && (
         <>
           <pre>{ex.brief.text || "(empty)"}</pre>
