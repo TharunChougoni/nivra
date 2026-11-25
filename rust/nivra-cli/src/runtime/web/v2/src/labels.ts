@@ -9,7 +9,7 @@ import type { AgentTurn } from "./types";
 /** Known codes → plain labels. Anything missing falls back to `plain`'s sentence case. */
 export const LABELS: Record<string, string> = {
   paper_only: "Paper only",
-  live_enabled: "Live trading off",
+  live_enabled: "Live trading",
   session_nse_bod: "NSE start-of-day file",
   nse_cm_security_sha256: "NSE security file",
   upstox_nse_bod_sha256: "Upstox NSE file",

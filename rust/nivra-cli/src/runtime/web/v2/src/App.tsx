@@ -222,7 +222,7 @@ function Login() {
 
 type Tone = "pos" | "warn" | "neg" | "off";
 const STREAM: Record<Connection, [Tone, string]> = {
-  live: ["pos", "Live"],
+  live: ["pos", "Streaming"],
   polling: ["warn", "Polling"],
   stale: ["neg", "Stale"],
   locked: ["off", "Locked"],

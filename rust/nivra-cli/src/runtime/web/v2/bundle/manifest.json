@@ -6,7 +6,7 @@
     "scripts/manifest.ts": "c8f2694395ea6f48c116c9769a56456d7af8c7dd729ac477f3b741ff18f44f81",
     "scripts/mock-api.ts": "0e5ee2c478e74d0fdabcfc4a7a17dd65ca4867fd54bb61044bf569f55d8b4410",
     "scripts/mock-data.ts": "1e6cbb84d29b978b51997d499151cbbbadf479dd10a325836980d39c9edaae12",
-    "src/App.tsx": "aa9db05a7cca1a88e73d17cd0681774d613017fccde864631bbbab0d27fa5496",
+    "src/App.tsx": "6e688f90fe6f707648553d904bf136754671e297b401fa46ac4b0d5c361892d9",
     "src/Chart.tsx": "ef3a8f97f0fe4b7da9eb28003076bb7f29a469e47240e06c9775f4ffcb5f4d58",
     "src/Instruments.tsx": "58b0c63974d28060b195ead7b3f0044294b9c8cbfe46a8d6ff30e587f7710fd0",
     "src/LaneChat.tsx": "43dab2a024903781c855466181c6cd80159688c87e24321d9d32d7e10267895b",
@@ -34,7 +34,7 @@
     "src/events.test.ts": "3a327b543ae1a705d329e2d572f87aa83c403b70a275b20953e19c557ea78a27",
     "src/events.ts": "fe3286e008a6f6c91c613b7489b41885a29d952020aa8cabefb207e0ea4a8f49",
     "src/labels.test.ts": "e917ca44cbde6bd7840f6fa9aa70e20a786e2d26deb6aafbd73c81d84d92a30e",
-    "src/labels.ts": "0102091e0e884875ecf8c42c0ecbaf99f29a50b9b6b911fce8db1ce5bddb5a7f",
+    "src/labels.ts": "cbbfed30947c9f521c3dc45e371b42cd095e0df34bee9d16fd42659b2f8d7666",
     "src/lanes.css": "c31e5bb3617458955d2b29cc509c925cb3c146c76d4f9c726658afb020c4b767",
     "src/layout.css": "56a5a415afc5a6e5963fd77a63ab3062013c1b7358827cd56e5d810754bbb491",
     "src/main.tsx": "a16b68bc523e176685550d1c8c47ff67774e5ef0552492089a18a023c2dc4078",
@@ -62,7 +62,7 @@
   "assets": {
     "LICENSES.txt": "4d6b5933ec22b8f9b9243f369650ca858b121b7e168aefea9ea5879bd461542b",
     "app.css": "862392de3f6367f52d391859a39059a53ad7f9e61c0bb770db49e6232093cfba",
-    "app.js": "cc3f3310537034dd27747c0aa5355d405433a4d4fa05bdd57060a2a22f27b7d3",
+    "app.js": "714bfd214a7d22159d2b10140136f8e5bcffb2976310739970113164f9badef3",
     "index.html": "fc95cc951d8466b66a6b4f0bcdcc11ffbfdad3b79e3fd8e3615633fedfb9670e",
     "uPlot.esm.js": "068506d72590b07d0e53e012ff1541813c52c09bded848b3f97fcd1d4b0fd3b2"
   }
