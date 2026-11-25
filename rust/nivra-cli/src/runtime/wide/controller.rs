@@ -683,7 +683,7 @@ impl<'a> Controller<'a> {
             && now >= self.option_retry
         {
             self.option_retry = millis() + 15_000;
-            match options::spot_quote(&self.scan, c, now) {
+            match options::spot_quote(&self.index_context, c, now) {
                 Some(spot) => match options::prepare(self.client, c, spot, now) {
                     Ok(prepared) => {
                         let catalog = prepared.catalog()?;

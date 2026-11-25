@@ -128,6 +128,14 @@ impl IndexContext {
         }
     }
 
+    /// Price, source time and original receipt time of a captured index
+    /// point. The caller applies its own freshness gate to the receipt.
+    pub(super) fn point(&self, key: &str) -> Option<(Price, i64, i64)> {
+        self.observations
+            .get(key)
+            .map(|o| (o.price, o.source, o.receipt))
+    }
+
     /// Additive digest/status projection. `tradeable: false` is explicit.
     pub(super) fn json(&self) -> serde_json::Value {
         let observations = self
