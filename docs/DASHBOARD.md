@@ -60,6 +60,13 @@ tables. Stylesheets are split by concern: `tokens`, `base`, `layout`,
 `components`, `charts` and `pages`. Components read colours from tokens, never
 from literals.
 
+Screen text is plain language. `src/labels.ts` maps code values (statuses,
+trigger kinds, tool names, turn errors, source files and segments) to short
+labels, with a sentence-case fallback for anything unmapped. Hashes show
+their first eight characters with the full value on hover, and instrument
+keys show the symbol, or the ISIN without the segment prefix. Raw JSON stays
+behind **Raw data** folds and in expanded tool calls.
+
 ### Shell
 
 A status bar shows the brand, the mode pill, the data and order brokers, the
@@ -73,8 +80,10 @@ becomes a focus-managed Radix dialog. `Ctrl/Cmd+K` opens section navigation.
 
 Mode chrome comes from one derived value, `modeOf(meta, summary)` in
 `src/model.ts`: `paper`, `live` (with order broker and account) or `unknown`.
-Paper is neutral. Live adds a 2 px `--live` rule above the shell and a `LIVE`
-pill. A missing or contradictory report shows `MODE UNKNOWN`. The broker
+Paper is neutral. Live adds a 2 px `--live` rule above the shell and a **Live**
+pill. A missing or contradictory report shows **Mode unknown**. Only the mode
+pill says Live; the stream indicator reads **Streaming**, **Polling**,
+**Stale** or **Locked**. The broker
 fields are display evidence and do not establish live readiness.
 
 ### Sections
@@ -415,15 +424,19 @@ for the stats and charts, and reloads both when `revisions.agent` changes.
 - **Chat thread**, oldest at the top and newest at the bottom, with
   **Load earlier** for older exchanges. A dashed divider marks each pi session
   (a controller restart starts a new one) with its model and thinking level.
-  Each trigger is a user message naming its instruments. Its IST time, kind
-  and reason sit below the message, with a brief icon that opens the full
-  brief sent to the model. Thinking and each tool call are single lines that expand
-  to the full text, arguments and result. Long tool chains fold their middle
-  calls. The answer carries a chip: escalated or declined for the gate, the
-  validated plan and its action count for decision, or the turn error. A brief
-  without a reply shows as interrupted.
-- **Lane stats** below the thread: turns, failures, fallbacks, p50/p95
-  latency, tokens, cost, provider calls, calls and spend against the daily
+  Each trigger is a user message naming its instruments, or its reason when
+  it names none. Its IST time, kind and reason sit below the message, with a
+  brief icon that opens the full brief sent to the model. Thinking and each
+  tool call are single lines; a tool line shows a plain tool name and its
+  argument values and marks only failed, running or missing results. Lines
+  expand to the full text, arguments and result. Long tool chains fold their
+  middle calls. The answer carries a chip: escalated or declined for the
+  gate, the trades proposed (or no trade) for decision, or the turn error.
+  The chip repeats the gate reason or plan stance only when the model wrote
+  no answer. A brief without a reply shows as interrupted. A footer gives
+  the reply time, total tokens and cost.
+- **Lane stats** below the thread: turns, failures, fallbacks, typical and
+  slow reply time, tokens, cost, provider calls, calls and spend against the daily
   budget (from `readiness.models.roles` in `/api/v1/health`) and the last
   turn. Usage totals come from the API's `usage.lanes`; latency and failure
   figures come from the loaded turns and say so.

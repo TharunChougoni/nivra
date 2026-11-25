@@ -1,5 +1,20 @@
 # Source snapshot
 
+## 0.12.5 — 2026-11-25
+
+The dashboard reads in plain language. Code names, internal field names,
+`NSE_EQ|` keys and full hashes give way to short labels, symbols and
+eight-character IDs with the full value on hover. Repeated disclaimers are
+gone; the few safety facts an operator needs, such as "an acknowledgement is
+not a fill", stay as one short sentence. Tables hide columns that are empty
+for every row. Only the mode pill says Live; the stream indicator says
+Streaming.
+
+In the Lanes tab, tool calls show plain names and argument values, only
+failed or unfinished calls carry a tag, and decision answers say how many
+trades were proposed. The trigger message holds only the trigger, with its
+time, reason and a brief icon below it.
+
 ## 0.12.4 — 2026-11-25
 
 The Lanes tab shows each pi lane as a chat. Browser-style tabs switch between
