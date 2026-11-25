@@ -44,8 +44,6 @@ export const count = (v: unknown) =>
     : new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(
         Number(v),
       );
-export const words = (v: unknown) =>
-  v == null || v === "" ? "Not reported" : String(v).replaceAll("_", " ");
 export const clock = (v: unknown) =>
   numeric(v) === null
     ? "—"
@@ -321,11 +319,6 @@ export function instrumentClasses(
         (right < 0 ? classOrder.length : right) || a.localeCompare(b)
     );
   });
-}
-export function classLabel(kind?: string | null) {
-  return kind
-    ? instrumentClassLabels[kind] || words(kind)
-    : "Class not reported";
 }
 // Links only what the projections actually record. Null means the source
 // projection is unavailable; an empty list means no matching record.

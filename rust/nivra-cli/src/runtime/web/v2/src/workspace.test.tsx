@@ -500,11 +500,9 @@ test("client renders every section, archived books and private lock state", asyn
         );
       }
       if (section === "instruments") {
-        await until(() =>
-          document.body.textContent?.includes("Instrument catalog"),
-        );
+        await until(() => document.body.textContent?.includes("Lot size"));
         await until(() => document.body.textContent?.includes("CATALOG"));
-        assert.ok(document.body.textContent?.includes("fixture-broker-hash"));
+        assert.ok(document.querySelector('[title="fixture-broker-hash"]'));
         const future = [
           ...document.querySelectorAll<HTMLButtonElement>(".row-link"),
         ].find((button) => button.textContent?.includes("FIXTURE FUTURE"));
@@ -514,7 +512,7 @@ test("client renders every section, archived books and private lock state", asyn
           document.body.textContent?.includes("F&O contract chain"),
         );
         await until(() => document.body.textContent?.includes("FIXTURE CALL"));
-        assert.ok(document.body.textContent?.includes("25 units / lot"));
+        assert.ok(document.body.textContent?.includes("Lot size 25"));
         assert.ok(document.body.textContent?.includes("Not captured"));
         assert.ok(
           requests.some(
@@ -529,14 +527,14 @@ test("client renders every section, archived books and private lock state", asyn
       }
       if (section === "strategies") {
         await until(() =>
-          document.body.textContent?.includes("1 recorded strategy reference"),
+          document.body.textContent?.includes("1 strategy behind"),
         );
-        assert.ok(document.body.textContent?.includes("champion"));
-        assert.ok(document.body.textContent?.includes("spec-hash"));
+        assert.ok(document.body.textContent?.includes("Champion"));
+        assert.ok(document.querySelector('[title="spec-hash"]'));
         assert.ok(document.body.textContent?.includes("scan-1"));
         const library = [
           ...document.querySelectorAll<HTMLButtonElement>("button"),
-        ].find((button) => button.textContent === "Library & switches");
+        ].find((button) => button.textContent === "Library");
         assert.ok(library);
         library.dispatchEvent(
           new dom.window.MouseEvent("mousedown", {
@@ -549,13 +547,7 @@ test("client renders every section, archived books and private lock state", asyn
         await until(() =>
           document.body.textContent?.includes("fixture-candidate"),
         );
-        assert.ok(
-          document.body.textContent?.includes("Original registered analysis"),
-        );
-        assert.ok(document.body.textContent?.includes("fixture-source-hash"));
-        assert.ok(
-          document.body.textContent?.includes("No automatic promotion"),
-        );
+        assert.ok(document.querySelector('[title="fixture-source-hash"]'));
       }
       if (section === "sessions") {
         await until(() => document.querySelector(".row-link"));
@@ -572,7 +564,7 @@ test("client renders every section, archived books and private lock state", asyn
         const modes = [...sessionTable.querySelectorAll("tbody tr")].map(
           (row) => row.children[modeIndex]?.textContent,
         );
-        assert.ok(modes.includes("PAPER"));
+        assert.ok(modes.includes("Paper"));
         assert.ok(modes.includes("Not reported"));
         document.querySelector<HTMLButtonElement>(".row-link")!.click();
         await until(() => document.querySelector(".drawer"));
@@ -586,18 +578,18 @@ test("client renders every section, archived books and private lock state", asyn
       }
       if (section === "health") {
         await until(() =>
-          document.body.textContent?.includes("fixture-source-hash"),
+          document.querySelector('[title="fixture-source-hash"]'),
         );
-        assert.ok(document.body.textContent?.includes("Activity attribution"));
-        assert.ok(document.body.textContent?.includes("Net after cost"));
+        assert.ok(document.body.textContent?.includes("Activity"));
+        assert.ok(document.body.textContent?.includes("Net P&L"));
         assert.ok(document.body.textContent?.includes("13.00"));
-        assert.ok(document.body.textContent?.includes("Live activation"));
-        assert.ok(document.body.textContent?.includes("Disabled"));
+        assert.ok(document.body.textContent?.includes("Live trading"));
+        assert.ok(document.body.textContent?.includes("Off"));
         assert.ok(document.body.textContent?.includes("Order broker"));
-        assert.ok(document.body.textContent?.includes("Display only"));
+        assert.ok(document.body.textContent?.includes("Read only"));
         const bar = document.querySelector(".statusbar")?.textContent || "";
         assert.ok(bar.includes("fixture-upstox"));
-        assert.ok(bar.includes("PAPER"));
+        assert.ok(bar.includes("Paper"));
         // The paper ledger is the explicit order authority, not "Not reported".
         assert.match(bar, /orders\s*paper/);
       }
@@ -760,27 +752,24 @@ test("operational panel keeps the published capture and separates operational ev
   try {
     await app.authenticate("fixture-only");
     location.hash = "#/health";
+    await until(() => document.body.textContent?.includes("Status checks"));
     await until(() =>
-      document.body.textContent?.includes("Operational health"),
+      document.body.textContent?.includes("Accepted by receiver"),
     );
-    await until(() => document.body.textContent?.includes("Sender HTTP 2xx"));
     for (const label of [
-      "Paper financial status",
-      "Controller liveness",
-      "Research & advisory",
-      "Calendar coverage",
-      "Alert transport",
+      "Paper finances",
+      "Controller",
+      "Research",
+      "Calendar",
+      "Alert delivery",
     ])
       assert.ok(document.body.textContent?.includes(label), label);
     assert.ok(document.body.textContent?.includes("5,000"));
-    assert.ok(document.body.textContent?.includes("Sender HTTP 2xx"));
-    assert.ok(document.body.textContent?.includes("not a confirmed failure"));
-    assert.ok(
-      document.body.textContent?.includes("Not recorded (unknown, not zero)"),
-    );
+    assert.ok(document.body.textContent?.includes("Accepted by receiver"));
+    assert.ok(document.body.textContent?.includes("Not recorded"));
     const capturedText = () =>
       [...document.querySelectorAll("dt")].find(
-        (dt) => dt.textContent === "Published capture",
+        (dt) => dt.textContent === "Snapshot taken",
       )?.nextElementSibling?.textContent;
     const before = capturedText();
     assert.ok(before);
@@ -896,7 +885,7 @@ test("controller starting renders a retrying loading state instead of unavailabl
       document.body.textContent?.includes("Controller starting"),
     );
     assert.equal(
-      document.body.textContent?.includes("Unavailable v1 evidence"),
+      document.body.textContent?.includes("Some data is unavailable"),
       false,
     );
     // The page retries by itself and renders the evidence once it is published.
@@ -912,9 +901,9 @@ test("controller starting renders a retrying loading state instead of unavailabl
     mode = "unavailable";
     await app.refresh();
     await waitFor(() =>
-      document.body.textContent?.includes("Unavailable v1 evidence"),
+      document.body.textContent?.includes("Some data is unavailable"),
     );
-    assert.ok(document.body.textContent?.includes("portfolio_not_reported"));
+    assert.ok(document.body.textContent?.includes("portfolio not reported"));
   } finally {
     app.stop();
     root.unmount();
@@ -1144,31 +1133,49 @@ test("#/lanes reads each lane as a chat with expandable tools and outcome chips"
   try {
     // decision is the first tab: the trigger bubble and the plan chip
     await until(() => page.text().includes("Holding the book."));
-    assert.ok(page.text().includes("price move · move over 30 bps"));
-    assert.ok(page.text().includes("plan validated · 2 actions"));
-    assert.ok(page.text().includes("session 01a210cf · decision-model"));
+    assert.ok(page.text().includes("Price move"));
+    assert.ok(page.text().includes("2 trades proposed"));
+    assert.ok(page.text().includes("New session · decision-model"));
+    assert.equal(page.text().includes("01a210cf"), false);
     // the stats strip sits under the thread, with spend against budget
     assert.ok(page.text().includes("$0.31 of $4.00"));
-    page.tab("gate").click();
+    page.tab("Gate").click();
     await until(() => page.text().includes("Escalating RELIANCE."));
     assert.ok(page.text().includes("Instruments: RELIANCE"));
-    assert.ok(page.text().includes("escalated"));
-    assert.ok(page.text().includes("spread tight"));
+    assert.ok(page.text().includes("Escalated"));
+    // the written answer already says it; the gate reason is not repeated
+    assert.equal(
+      document
+        .querySelector(".chat-chips")
+        ?.textContent?.includes("spread tight"),
+      false,
+    );
     // a tool call is one collapsed line until opened
-    const tool = page.button("intraday")!;
+    const tool = page.button("Intraday bars")!;
     assert.equal(tool.getAttribute("aria-expanded"), "false");
     assert.equal(page.text().includes('"bid": "100.0"'), false);
-    assert.equal(page.text().includes("truncated"), false);
+    assert.equal(page.text().includes("Cut short"), false);
     tool.click();
     await until(() => page.text().includes('"bid": "100.0"'));
-    assert.ok(page.text().includes("truncated"));
+    assert.ok(page.text().includes("Cut short"));
     assert.equal(page.text().includes("Declining."), false);
     // older exchanges arrive through the cursor
     page.button("Load earlier")!.click();
     await until(() => page.text().includes("Declining."));
-    assert.ok(page.text().includes("declined"));
-    assert.ok(page.text().includes("no volume confirmation"));
+    assert.ok(page.text().includes("Declined"));
     assert.equal(page.button("Load earlier"), undefined);
+  } finally {
+    page.close();
+  }
+});
+test("#/lanes shows plain labels, never raw code names", async () => {
+  const page = await openLanes();
+  try {
+    await until(() => page.text().includes("Holding the book."));
+    assert.doesNotMatch(page.text(), /\b[a-z]+(?:_[a-z]+)+\b/);
+    page.tab("Gate").click();
+    await until(() => page.text().includes("Escalating RELIANCE."));
+    assert.doesNotMatch(page.text(), /\b[a-z]+(?:_[a-z]+)+\b/);
   } finally {
     page.close();
   }
@@ -1177,15 +1184,13 @@ test("#/lanes marks an interrupted exchange and keeps a failed transcript read t
   const page = await openLanes("review");
   try {
     await until(() => page.text().includes("Holding the book."));
-    assert.ok(page.text().includes("interrupted"));
-    page.tab("review").click();
-    await until(() =>
-      page.text().includes("The lane transcript could not be read"),
-    );
+    assert.ok(page.text().includes("Interrupted"));
+    page.tab("Review").click();
+    await until(() => page.text().includes("Could not load this lane"));
     assert.equal(page.text().includes("No turns yet"), false);
-    page.tab("research").click();
+    page.tab("Research").click();
     await until(() => page.text().includes("No turns yet"));
-    assert.ok(page.text().includes("Runs on research requests"));
+    assert.ok(page.text().includes("Runs when requested"));
   } finally {
     page.close();
   }

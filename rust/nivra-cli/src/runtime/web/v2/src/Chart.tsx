@@ -2,7 +2,8 @@ import type uPlot from "uplot";
 import type { Point, SeriesCoverage } from "./types";
 import React, { useMemo, useState } from "react";
 import { Crosshair, Pause, Play } from "lucide-react";
-import { amount, clock, downsamplePoints, words } from "./data";
+import { amount, clock, downsamplePoints } from "./data";
+import { plain } from "./labels";
 import { Button, Empty, Segments } from "./ui";
 import { TimeChart } from "./charts/TimeChart";
 import type { Band, Marker } from "./charts/TimeChart";
@@ -63,11 +64,11 @@ function valueAt(x: number[], values: (number | null)[], at: number) {
 export default function Chart({
   points = [],
   label = "Price",
-  source = "Recorded observations",
+  source = "Recorded quotes",
   coverage = null,
   height = 280,
-  emptyTitle = "Waiting for recorded chart evidence",
-  emptyDetail = "The authenticated series read is unavailable or still loading. No synthetic history is drawn.",
+  emptyTitle = "No chart data",
+  emptyDetail = "Not loaded yet.",
   baseline = null,
   drawdown = false,
   markers = [],
@@ -190,14 +191,14 @@ export default function Chart({
     if (gap)
       return {
         title: `${clock(at)} IST`,
-        rows: [["unobserved", words(gap.reason)]] as [string, string][],
+        rows: [["Not observed", plain(gap.reason)]] as [string, string][],
       };
     const value = values[i] ?? carried[i];
     if (value === null || value === undefined) return null;
     const rows: [string, string][] = [
-      [values[i] === null ? "carried · no trade" : label, amount(value)],
+      [values[i] === null ? "Carried, no trade" : label, amount(value)],
     ];
-    if (baseline !== null) rows.push(["day net", amount(value - baseline)]);
+    if (baseline !== null) rows.push(["Day net", amount(value - baseline)]);
     if (drawdown && peaks[i] !== null)
       rows.push(["drawdown", `${peaks[i]!.toFixed(2)}%`]);
     return { title: `${clock(at)} IST`, rows };
@@ -245,18 +246,18 @@ export default function Chart({
         </div>
       ) : (
         <div className="chart-unavailable" style={{ minHeight: height }}>
-          <Empty title={failed ? "Chart could not be loaded" : emptyTitle}>
+          <Empty title={failed ? "Could not load the chart" : emptyTitle}>
             {emptyDetail}
             {valid.length === 1
-              ? ` One observation: ${amount(valid[0].value)} at ${clock(valid[0].at)} IST.`
+              ? ` One point: ${amount(valid[0].value)} at ${clock(valid[0].at)} IST.`
               : ""}
           </Empty>
         </div>
       )}
       {historyStart !== null ? (
         <div className="chart-history-note">
-          History since {clock(historyStart)} IST · the in-memory minute store
-          restarted after session open, so earlier minutes are not shown.
+          History starts at {clock(historyStart)} IST. Earlier minutes are not
+          available.
         </div>
       ) : null}
       <div className="chart-foot">
@@ -266,9 +267,9 @@ export default function Chart({
         <span>
           {enough
             ? plotted < points.length
-              ? `Extrema-preserving view · ${plotted} of ${points.length} points · no-trade minutes carried; unobserved intervals stay open`
-              : "Drag to zoom · hover to inspect · no-trade minutes carried; unobserved intervals stay open"
-            : "No synthetic history or interpolated prices"}
+              ? `Showing ${plotted} of ${points.length} points`
+              : "Drag to zoom"
+            : ""}
         </span>
       </div>
     </div>

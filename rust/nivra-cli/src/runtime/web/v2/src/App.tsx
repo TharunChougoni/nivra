@@ -48,6 +48,7 @@ import {
   useWorkspace,
 } from "./ui";
 import { PAGES } from "./Pages";
+import { plain } from "./labels";
 import { PROJECTION_NAMES } from "./types";
 import type { Connection, SummaryResponse, WorkspaceState } from "./types";
 
@@ -64,24 +65,24 @@ function loginError(e: unknown): LoginError {
   if (e instanceof ApiError && e.status === 401)
     return {
       title: "Token rejected",
-      body: "The dashboard answered but did not accept this token. Check the token file for this installation and retry.",
+      body: "The dashboard did not accept this token. Check it and try again.",
     };
   if (e instanceof ApiError)
     return {
       title: `Dashboard error${e.status ? ` · HTTP ${e.status}` : ""}`,
-      body: `The dashboard answered with ${e.code}. Nothing was unlocked.`,
+      body: `The dashboard replied: ${plain(e.code)}.`,
     };
   if (e instanceof Error && /enter a dashboard token/i.test(e.message))
     return { title: "Token required", body: e.message };
   return {
     title: "Dashboard unreachable",
-    body: "Connection refused or unavailable. Check that the dashboard is running on this host, then retry.",
+    body: "Could not connect. Check that the dashboard is running.",
   };
 }
 const LOGIN_FEATURES: [LucideIcon, string, string][] = [
-  [Wallet, "Paper account", "Positions, fills and the continuing book"],
-  [Sparkles, "pi lane turns", "Decision, gate, research and review evidence"],
-  [Radio, "Market observations", "Original quotes with their receipt time"],
+  [Wallet, "Paper account", "Positions, fills and cash"],
+  [Sparkles, "pi lanes", "What each model saw and decided"],
+  [Radio, "Market data", "Quotes with their receipt time"],
 ];
 function Login() {
   const [state, app] = useWorkspace(),
@@ -112,23 +113,19 @@ function Login() {
       <div className="login-brand">
         <Brand />
         <span className="login-badges">
-          <span className="mode-pill">PAPER ONLY</span>
-          <span>READ-ONLY WORKSPACE</span>
+          <span className="mode-pill">Paper only</span>
+          <span>Read only</span>
         </span>
       </div>
       <main className="login-content">
         <section className="login-hero">
           <LogoMark size={46} animated className="login-logo" />
-          <span className="eyebrow">NIVRA / OWNER ACCESS</span>
+          <span className="eyebrow">Owner access</span>
           <h1>
             Every decision.
             <br />
             <span>The evidence behind it.</span>
           </h1>
-          <p>
-            Connect to inspect the account, pi lane turns and original market
-            observations.
-          </p>
           <ul className="login-features">
             {LOGIN_FEATURES.map(([Icon, title, note]) => (
               <li key={title}>
@@ -153,7 +150,7 @@ function Login() {
             </span>
             <div>
               <h2>Unlock the workspace</h2>
-              <small>Paste the token this installation generated.</small>
+              <small>Paste your dashboard token.</small>
             </div>
           </header>
           <form onSubmit={submit} aria-label="Connect to Nivra">
@@ -212,13 +209,11 @@ function Login() {
           </form>
           <footer>
             <ShieldCheck size={13} aria-hidden="true" />
-            The token stays in this browser tab. Broker and model credentials do
-            not belong here.
+            The token stays in this browser tab.
           </footer>
         </section>
       </main>
       <div className="login-footer">
-        <span>Authenticated evidence · client-side workspace</span>
         <span>No orders can be placed from this dashboard</span>
       </div>
     </div>
@@ -227,10 +222,10 @@ function Login() {
 
 type Tone = "pos" | "warn" | "neg" | "off";
 const STREAM: Record<Connection, [Tone, string]> = {
-  live: ["pos", "SSE"],
-  polling: ["warn", "long-poll"],
-  stale: ["neg", "stale"],
-  locked: ["off", "locked"],
+  live: ["pos", "Live"],
+  polling: ["warn", "Polling"],
+  stale: ["neg", "Stale"],
+  locked: ["off", "Locked"],
 };
 function feedTone(summary: SummaryResponse | null): Tone {
   const feed = summary?.market_feed;
@@ -245,10 +240,10 @@ function ModePill({ mode }: { mode: Mode }) {
   return (
     <span className={"mode-pill " + mode.kind}>
       {mode.kind === "paper"
-        ? "PAPER"
+        ? "Paper"
         : mode.kind === "live"
-          ? "LIVE"
-          : "MODE UNKNOWN"}
+          ? "Live"
+          : "Mode unknown"}
     </span>
   );
 }
@@ -283,10 +278,7 @@ function StatusBar({
       <span className="kv hide-narrow">
         data <span>{meta?.broker?.data || "Not reported"}</span>
       </span>
-      <span
-        className="kv hide-narrow"
-        title="The broker identity that orders are bound to"
-      >
+      <span className="kv hide-narrow" title="Broker that orders go to">
         orders <span>{orders || "Not reported"}</span>
       </span>
       <span className="kv hide-narrow">
@@ -295,7 +287,10 @@ function StatusBar({
       <button className="kv row-link hide-narrow" onClick={onProvenance}>
         session{" "}
         <span>
-          {[summary?.session, summary?.state?.phase]
+          {[
+            summary?.session,
+            summary?.state?.phase && plain(summary.state.phase),
+          ]
             .filter(Boolean)
             .join(" · ") || "Not reported"}
         </span>
@@ -318,10 +313,7 @@ function StatusBar({
         />{" "}
         alerts <span>{alerts === null ? "—" : alerts}</span>
       </a>
-      <time
-        className="kv hide-narrow"
-        title="Display only; never a receipt time"
-      >
+      <time className="kv hide-narrow" title="Your browser clock">
         {clock(now)} IST
       </time>
       <IconButton
@@ -636,7 +628,7 @@ export default function App() {
             <Page />
           ) : (
             <Empty title="Page not found">
-              Choose a section from the workspace navigation.
+              Choose a section from the sidebar.
             </Empty>
           )}
         </div>
@@ -690,7 +682,7 @@ export default function App() {
               ))}
             </div>
             <div className="command-footer">
-              Workspace navigation <span>↵ Open</span>
+              Go to section <span>↵ Open</span>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
@@ -719,7 +711,7 @@ export default function App() {
         open={source}
         onClose={() => setSource(false)}
         title="Snapshot provenance"
-        description="A received snapshot is not a live quote or worker heartbeat."
+        description="Where this view's data came from."
       >
         <Facts
           items={[
@@ -731,21 +723,21 @@ export default function App() {
               datetime(state.summary?.as_of_ms || state.portfolio?.as_of_ms),
             ],
             ["Browser received", datetime(state.received)],
-            ["Transport", state.connection],
+            ["Connection", plain(state.connection)],
             [
-              "v1 projections",
+              "Data sources",
               PROJECTION_NAMES.map(
-                (name) => `${name}:${state[`${name}State`]}`,
+                (name) => `${plain(name)} ${state[`${name}State`]}`,
               ).join(" · "),
             ],
             [
               "Chart series",
               state.series?.price?.length || state.series?.equity?.length
-                ? `${state.series.price.length} price · ${state.series.equity.length} equity · ${state.series.priceCached || state.series.equityCached ? "stale cache" : "read-through"}`
+                ? `${state.series.price.length} price · ${state.series.equity.length} equity · ${state.series.priceCached || state.series.equityCached ? "cached, may be stale" : "fresh"}`
                 : "Not loaded",
             ],
-            ["Mode", state.meta.mode],
-            ["Execution gate", "Original quote source and receipt · 2 seconds"],
+            ["Mode", plain(state.meta.mode)],
+            ["Quote freshness limit", "2 seconds from receipt"],
           ]}
         />
       </Drawer>

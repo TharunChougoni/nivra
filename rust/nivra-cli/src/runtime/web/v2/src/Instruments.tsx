@@ -1,13 +1,15 @@
 import type { CatalogInstrument, ContractStrike } from "./types";
 import type { Column } from "./ui";
 import React, { useEffect, useState } from "react";
-import { amount, classLabel, count, datetime, words } from "./data";
+import { amount, count, datetime } from "./data";
+import { classLabel, instrumentName, plain } from "./labels";
 import {
   Button,
   Drawer,
   Facts,
   Instrument,
   Panel,
+  ShortId,
   Table,
   useWorkspace,
 } from "./ui";
@@ -30,11 +32,15 @@ const catalogColumns: Column<CatalogInstrument>[] = [
       />
     ),
   },
-  { key: "segment", label: "Segment" },
+  {
+    key: "segment",
+    label: "Segment",
+    render: (row) => plain(row.segment),
+  },
   { key: "kind", label: "Class", render: (row) => classLabel(row.kind) },
   {
     key: "lot_size",
-    label: "Units / lot",
+    label: "Lot size",
     render: (row) =>
       row.lot_size == null ? "Not reported" : String(row.lot_size),
   },
@@ -73,8 +79,7 @@ function VerifiedCatalog() {
   return (
     <>
       <Panel
-        title="Instrument catalog"
-        note="Captured BOD metadata · cash execution allowlist is separate · quotes and margins are not inferred"
+        title="Instruments"
         actions={
           <div className="panel-actions">
             <Button
@@ -94,7 +99,7 @@ function VerifiedCatalog() {
       >
         <div className="filter-bar">
           <label>
-            Market segment{" "}
+            Segment{" "}
             <select
               aria-label="Catalog segment"
               value={segment}
@@ -103,16 +108,16 @@ function VerifiedCatalog() {
                 setCursor(0);
               }}
             >
-              <option value="">All captured segments</option>
+              <option value="">All segments</option>
               {Object.entries(response?.segments || {}).map(([name, n]) => (
                 <option key={name} value={name}>
-                  {name} ({count(n)})
+                  {plain(name)} ({count(n)})
                 </option>
               ))}
             </select>
           </label>
           <label>
-            Instrument class{" "}
+            Class{" "}
             <select
               aria-label="Catalog class"
               value={kind}
@@ -121,7 +126,7 @@ function VerifiedCatalog() {
                 setCursor(0);
               }}
             >
-              <option value="">All recorded classes</option>
+              <option value="">All classes</option>
               {Object.entries(response?.kinds || {}).map(([name, n]) => (
                 <option key={name} value={name}>
                   {classLabel(name)} ({count(n)})
@@ -131,7 +136,7 @@ function VerifiedCatalog() {
           </label>
           <input
             aria-label="Search catalog"
-            placeholder="Symbol, key or underlying…"
+            placeholder="Search by symbol…"
             value={search}
             onChange={(e) => {
               setSearch(e.target.value);
@@ -140,38 +145,42 @@ function VerifiedCatalog() {
           />
         </div>
         {catalog.state === "idle" || catalog.state === "loading" ? (
-          <p className="panel-note">Loading instrument metadata…</p>
+          <p className="panel-note">Loading…</p>
         ) : catalog.state === "unavailable" ? (
           <p className="panel-note">
-            Display catalog unavailable · {words(response?.reason)}
+            Catalog unavailable · {plain(response?.reason)}
           </p>
         ) : catalog.state === "error" ? (
-          <p className="panel-note">Instrument catalog request failed.</p>
+          <p className="panel-note">Could not load the catalog.</p>
         ) : (
           <>
             <Facts
               items={[
-                ["Source", response?.source],
-                ["Coverage", words(response?.coverage_kind)],
-                ["Source received", datetime(response?.received_at_ms)],
-                ["Matching rows", count(response?.total)],
+                ["Source", plain(response?.source)],
+                ["Coverage", plain(response?.coverage_kind)],
+                ["Received", datetime(response?.received_at_ms)],
+                ["Matches", count(response?.total)],
                 ["Rows read", count(response?.rows_seen)],
-                ["Rejected / ambiguous rows", count(response?.rejected_rows)],
+                ["Skipped rows", count(response?.rejected_rows)],
               ]}
             />
             <Table
+              hideEmpty
               columns={catalogColumns}
               rows={rows}
               getKey={(row) => row.instrument_key}
               onSelect={setSelected}
-              empty="No captured instruments match these filters"
+              empty="No matches"
             />
             {response?.source_hashes && (
               <details className="raw-evidence">
-                <summary>Inspect catalog source hashes</summary>
+                <summary>Source files</summary>
                 <Facts
                   items={Object.entries(response.source_hashes).map(
-                    ([name, hash]) => [name, hash],
+                    ([name, hash]) => [
+                      plain(name),
+                      <ShortId key={name} value={hash} />,
+                    ],
                   )}
                 />
               </details>
@@ -182,35 +191,38 @@ function VerifiedCatalog() {
       <Drawer
         open={!!selected}
         onClose={() => setSelected(null)}
-        title={selected?.symbol || "Instrument metadata"}
-        description={selected?.instrument_key}
+        title={selected?.symbol || "Instrument"}
+        description={instrumentName(selected?.instrument_key)}
       >
         <Facts
           items={[
             ["Class", classLabel(selected?.kind)],
-            ["Segment", selected?.segment],
+            ["Segment", plain(selected?.segment)],
             ["Exchange", selected?.exchange],
-            ["Provider type", selected?.instrument_type],
-            ["Underlying", selected?.underlying_key],
+            ["Type", selected?.instrument_type],
+            [
+              "Underlying",
+              selected?.underlying_key
+                ? instrumentName(selected.underlying_key)
+                : null,
+            ],
             ["Expiry", datetime(selected?.expiry_ms)],
             [
-              "Strike · provider value",
+              "Strike",
               selected?.strike == null
                 ? "Not reported"
                 : String(selected.strike),
             ],
             [
-              "Units per lot",
+              "Lot size",
               selected?.lot_size == null
                 ? "Not reported"
                 : String(selected.lot_size),
             ],
             ["Tick", selected ? catalogTick(selected) : null],
             [
-              "Cash allowlist",
-              selected?.cash_execution_verified
-                ? "Verified cash identity; fresh execution checks still required"
-                : "Display only",
+              "Cash trading",
+              selected?.cash_execution_verified ? "Verified" : "Not verified",
             ],
             [
               "Margin",
@@ -219,7 +231,6 @@ function VerifiedCatalog() {
                 ? amount(selected.margin.total_margin)
                 : "Not captured",
             ],
-            ["Quote", "Not captured by BOD catalog"],
           ]}
         />
         {selected?.underlying_key && selected.expiry_ms && (
@@ -251,7 +262,7 @@ function ContractChain({ instrument }: { instrument: CatalogInstrument }) {
     ambiguous?: boolean,
   ) =>
     ambiguous ? (
-      "Ambiguous contracts"
+      "Ambiguous"
     ) : row ? (
       <>
         <Instrument
@@ -259,8 +270,8 @@ function ContractChain({ instrument }: { instrument: CatalogInstrument }) {
           instrumentKey={row.instrument_key}
         />
         <small>
-          {row.lot_size == null ? "Not reported" : String(row.lot_size)} units /
-          lot
+          Lot size{" "}
+          {row.lot_size == null ? "not reported" : String(row.lot_size)}
         </small>
       </>
     ) : (
@@ -274,7 +285,7 @@ function ContractChain({ instrument }: { instrument: CatalogInstrument }) {
     },
     {
       key: "strike",
-      label: "Strike · provider value",
+      label: "Strike",
       render: (row) => String(row.strike),
     },
     {
@@ -286,7 +297,6 @@ function ContractChain({ instrument }: { instrument: CatalogInstrument }) {
   return (
     <Panel
       title="F&O contract chain"
-      note="Captured contract definitions only · missing legs stay unknown · no quote, margin or execution authority"
       actions={
         <div className="panel-actions">
           <Button
@@ -305,41 +315,38 @@ function ContractChain({ instrument }: { instrument: CatalogInstrument }) {
       }
     >
       {chain.state === "loading" || chain.state === "idle" ? (
-        <p className="panel-note">Loading contract chain…</p>
+        <p className="panel-note">Loading…</p>
       ) : chain.state === "unavailable" ? (
         <p className="panel-note">
-          Contract chain unavailable · {words(response?.reason)}
+          Contract chain unavailable · {plain(response?.reason)}
         </p>
       ) : chain.state === "error" ? (
-        <p className="panel-note">Contract chain request failed.</p>
+        <p className="panel-note">Could not load the chain.</p>
       ) : (
         <>
           <Facts
             items={[
-              ["Source", response?.source],
+              ["Source", plain(response?.source)],
               ["Received", datetime(response?.received_at_ms)],
               ["Strikes", count(response?.total)],
-              [
-                "Contracts without usable strikes",
-                count(response?.unavailable_strikes),
-              ],
+              ["Unusable contracts", count(response?.unavailable_strikes)],
             ]}
           />
           <Table
             columns={columns}
             rows={response?.items || []}
             getKey={(row) => String(row.strike)}
-            empty="No matching strikes were captured"
+            empty="No strikes captured"
           />
           <p className="panel-note">
-            Futures: {count(response?.futures_total)} recorded
-            {response?.futures_truncated ? " · list truncated" : ""}
+            Futures: {count(response?.futures_total)}
+            {response?.futures_truncated ? " · list cut off" : ""}
           </p>
           <Table
             columns={catalogColumns}
             rows={response?.futures || []}
             getKey={(row) => row.instrument_key}
-            empty="No matching futures were captured"
+            empty="No futures captured"
           />
         </>
       )}

@@ -46,7 +46,7 @@ test("trial debt keeps null separate from an authoritative zero", () => {
   );
   assert.equal(
     trialLowerBound(partialTrials),
-    ">= 3 known; incomplete history",
+    "At least 3 (incomplete history)",
   );
   assert.equal(trialLowerBound(availableTrials), "Available");
   assert.equal(trialLowerBound({ status: "unavailable" }), "Unavailable");
@@ -219,23 +219,17 @@ test("observation source and version guards stay explicit", () => {
 });
 
 test("hashes are shortened and anything that is not a hash is not reported", () => {
-  assert.equal(safeHash("a".repeat(64)), `${"a".repeat(12)}…`);
+  assert.equal(safeHash("a".repeat(64)), "a".repeat(8));
   assert.equal(safeHash("/home/private/account.json"), "Not reported");
   assert.equal(safeHash("<img src=x>"), "Not reported");
 });
 
 test("cohort and reason labels are bounded and never claim validation", () => {
-  assert.equal(
-    cohortStatus("runtime_changed"),
-    "Runtime changed; cohort not proven",
-  );
-  assert.equal(
-    cohortStatus("runtime_unknown"),
-    "Runtime unknown; cohort not proven",
-  );
+  assert.equal(cohortStatus("runtime_changed"), "Runtime changed");
+  assert.equal(cohortStatus("runtime_unknown"), "Runtime unknown");
   assert.equal(
     cohortStatus("runtime_matched_cohort_unknown"),
-    "Runtime matched; cohort match unknown",
+    "Runtime matched, cohort unknown",
   );
   assert.doesNotMatch(cohortStatus("anything"), /validated/i);
   assert.equal(
@@ -275,7 +269,7 @@ test("continuation receipt hash is not the immutable episode projection", () => 
       projection_sha256: receipt,
       measurement_sha256: "b".repeat(64),
     }),
-    `${receipt.slice(0, 12)}…`,
+    receipt.slice(0, 8),
   );
   const timeline = measurementTimeline({
     version: 1,

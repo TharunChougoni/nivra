@@ -285,8 +285,8 @@ export function orderTracks(
             : verdict
               ? verdict.replaceAll("_", " ")
               : validated === "done"
-                ? "awaiting execution record"
-                : "validation not recorded",
+                ? "awaiting execution"
+                : "not validated yet",
       ),
     );
   }
@@ -450,19 +450,6 @@ export function instrumentIndex(sources: {
       symbol: r.instrument?.symbol ?? r.symbol,
     });
   return index;
-}
-
-/** One line for a lane turn: gate verdict, plan status or error. */
-export function turnOutcome(t: AgentTurn) {
-  if (t.verdict)
-    return (t.verdict.escalate ? "escalate · " : "pass · ") + t.verdict.reason;
-  if (t.plan)
-    return (
-      (t.plan.status === "validated" ? "" : (t.plan.status || "plan") + " · ") +
-      (t.plan.stance || "") +
-      (t.plan.actions ? ` · ${count(t.plan.actions)} actions` : "")
-    );
-  return t.error || t.status || "—";
 }
 
 /** What the loaded lane journal covers. A truncated journal never yields a total. */

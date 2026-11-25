@@ -29,7 +29,6 @@ import {
   laneStats,
   modeOf,
   orderTracks,
-  turnOutcome,
 } from "./model";
 import {
   Empty,
@@ -45,6 +44,7 @@ import {
   useWorkspace,
 } from "./ui";
 import type { KpiItem } from "./ui";
+import { sentenceCase, turnOutcome } from "./labels";
 import { useRead, useRevision } from "./reads";
 
 const signed = (v: number | null) =>
@@ -56,10 +56,10 @@ const tone = (v: number | null) =>
       ? ("pos" as const)
       : ("neg" as const);
 const KINDS: [string, string][] = [
-  ["all", "all"],
-  ["cash", "cash"],
-  ["future", "future"],
-  ["option", "option"],
+  ["all", "All"],
+  ["cash", "Cash"],
+  ["future", "Future"],
+  ["option", "Option"],
 ];
 const kindGroup = (p: Position) => {
   const k = instrumentLabel(p.instrument).kind;
@@ -80,10 +80,7 @@ const RESEARCH_DESTINATIONS = [
 /** Research-only dashboards have no book: show what can be inspected instead. */
 function ResearchOverview() {
   return (
-    <Panel
-      title="Available in research mode"
-      note="Sections that work without an attached paper book"
-    >
+    <Panel title="Available in research mode" note="Works without a paper book">
       <div className="destination-grid">
         {RESEARCH_DESTINATIONS.flatMap((id) => {
           const item = NAV.find((n) => n.id === id);
@@ -186,8 +183,8 @@ function BookOverview() {
       "Day P&L net",
       signed(stats.dayNet),
       stats.dayNet === null
-        ? "Needs two recorded equity checkpoints"
-        : `since ${clock(stats.first!.at)} · after fees`,
+        ? "Needs two checkpoints"
+        : `since ${clock(stats.first!.at)}, after fees`,
       { tone: tone(stats.dayNet) },
     ],
     [
@@ -195,21 +192,17 @@ function BookOverview() {
       attribution?.realized_pnl == null
         ? "—"
         : signed(numeric(attribution.realized_pnl)),
-      attribution?.realized_pnl == null
-        ? "Health attribution not loaded"
-        : "attribution",
+      attribution?.realized_pnl == null ? "Not loaded" : "recorded",
       { tone: tone(numeric(attribution?.realized_pnl)) },
     ],
     [
       "Unrealized",
       signed(f.unrealized),
-      f.unrealized === null
-        ? "A position lacks a recorded mark"
-        : "marks − entry",
+      f.unrealized === null ? "A position has no mark" : "vs entry",
       { tone: tone(f.unrealized) },
     ],
     ["Fees", amount(f.fees), f.fees === null ? "Not recorded" : "recorded"],
-    ["Cash", amount(f.cash), "continuing"],
+    ["Cash", amount(f.cash), "recorded"],
     [
       "Gross exposure",
       amount(f.gross),
@@ -223,19 +216,17 @@ function BookOverview() {
         ? "—"
         : `${stats.maxDrawdownPct.toFixed(2)}%`,
       stats.maxDrawdownPct === null
-        ? "Needs two recorded equity checkpoints"
+        ? "Needs two checkpoints"
         : `${stats.count} pts${stats.troughAt ? ` · ${clock(stats.troughAt)}` : ""}`,
       { tone: stats.maxDrawdownPct ? "neg" : undefined },
     ],
     [
       "Fills",
       fills ? count(fills.length) : "—",
-      fills
-        ? `${count(rejected)} rejected · plan`
-        : "Fill evidence unavailable",
+      fills ? `${count(rejected)} rejected` : "Fill evidence unavailable",
     ],
     [
-      "pi spend",
+      "Model spend",
       usd(spend),
       spend === null
         ? "Usage not reported"
@@ -266,11 +257,16 @@ function BookOverview() {
       render: (p) => <InstrumentCell record={p.instrument} />,
     },
     { key: "units", label: "Qty", num: true, render: (p) => count(p.units) },
-    { key: "entry", label: "Avg", num: true, render: (p) => amount(p.entry) },
+    {
+      key: "entry",
+      label: "Avg price",
+      num: true,
+      render: (p) => amount(p.entry),
+    },
     { key: "mark", label: "Mark", num: true, render: (p) => amount(p.mark) },
     {
       key: "pnl",
-      label: "Unreal.",
+      label: "P&L",
       num: true,
       render: (p) => {
         const v = [p.mark, p.entry, p.units].every((x) => numeric(x) !== null)
@@ -328,10 +324,10 @@ function BookOverview() {
           title={showEquity ? "Account equity" : "Instrument price"}
           note={
             historical
-              ? "Selected archive · no live history inferred"
+              ? "Archived session"
               : showEquity
-                ? "recorded checkpoints · fills marked · drawdown below"
-                : "receipt price · not executable depth"
+                ? "Fills marked, drawdown below"
+                : "Last received price"
           }
           actions={
             <>
@@ -342,7 +338,7 @@ function BookOverview() {
                   onChange={(e) => app.watch(e.target.value)}
                 >
                   {!prospects.length && (
-                    <option value="">No instruments supplied</option>
+                    <option value="">No instruments</option>
                   )}
                   {prospects.map((p) => (
                     <option key={p.instrument_key} value={p.instrument_key}>
@@ -381,38 +377,34 @@ function BookOverview() {
               historical
                 ? "Archive has no chart history"
                 : cached
-                  ? "Cached series · stale · original receipt timestamps"
+                  ? "Cached, may be stale"
                   : active?.length
                     ? showEquity
                       ? series.equitySource
-                        ? "Recorded portfolio checkpoints · exact timestamps"
-                        : "This tab · original observation timestamps"
+                        ? "Recorded checkpoints"
+                        : "Seen in this tab"
                       : series.priceSource
-                        ? "Receipt-minute bars · display evidence, not certified exchange OHLCV"
-                        : "Live receipt-price batches · this tab"
-                    : "This tab · original observation timestamps"
+                        ? "Minute bars from received quotes"
+                        : "Live quotes, this tab"
+                    : "Seen in this tab"
             }
             height={showEquity ? 300 : 280}
-            emptyTitle={
-              showEquity
-                ? "Account-equity series unavailable"
-                : "Price series unavailable"
-            }
+            emptyTitle={showEquity ? "No equity history" : "No price history"}
             emptyDetail={
               historical
-                ? "The selected session exposes a checkpoint only."
+                ? "This archive has one checkpoint only."
                 : loadState === "loading" || loadState === "idle"
-                  ? "Loading originally recorded observations. Daily allocations are never summed as wealth."
+                  ? "Loading…"
                   : showEquity
-                    ? "No recorded account-equity checkpoints are available for this session. New checkpoints will appear with their original times."
-                    : "No receipt-minute bars are available yet. Missing minutes remain missing; no synthetic candles are drawn."
+                    ? "No equity checkpoints recorded yet."
+                    : "No minute bars yet. Missing minutes stay blank."
             }
           />
         </Panel>
         <Panel
           className="span-4"
-          title="pi lanes now"
-          note="today"
+          title="pi lanes"
+          note="Today"
           actions={
             <a href="#/lanes" className="text-link">
               Lanes <ArrowUpRight size={12} />
@@ -429,20 +421,20 @@ function BookOverview() {
                   </span>
                 </div>
                 <div className="sub">
-                  <span>last</span>
+                  <span>Last</span>
                   <span title={l.last ? turnOutcome(l.last) : ""}>
                     {l.last ? turnOutcome(l.last) : "—"}
                   </span>
                 </div>
                 <div className="sub">
-                  <span>p50 latency · fallbacks</span>
+                  <span>Reply time · fallbacks</span>
                   <span>
                     {duration(l.p50_ms)} · {count(l.fallbacks)}
                   </span>
                 </div>
                 <Sparkline
                   color={laneColor(l.lane)}
-                  label={`${l.lane} activity`}
+                  label={`${sentenceCase(l.lane)} activity`}
                   values={bucketize(
                     turns
                       .filter((t) => t.lane === l.lane)
@@ -454,20 +446,20 @@ function BookOverview() {
               </div>
             ))}
           </div>
-          <div className="panel-foot">
-            Display evidence only · no order authority
-          </div>
         </Panel>
         <Panel
           className="span-12"
           title="Lane timeline"
-          note="each mark is one pi turn · height = latency · hollow = failed · ◆ gate escalated"
+          note="One mark per turn · taller = slower · hollow = failed · ◆ gate escalated"
           actions={
             <Segments
               value={laneFilter}
               onChange={setLaneFilter}
               label="Lane filter"
-              items={[["all", "all"], ...laneRows.map((l) => [l.lane, l.lane])]}
+              items={[
+                ["all", "All"],
+                ...laneRows.map((l) => [l.lane, sentenceCase(l.lane)]),
+              ]}
             />
           }
         >
@@ -484,17 +476,17 @@ function BookOverview() {
               />
             </div>
           ) : (
-            <Empty title="No lane turns recorded">
+            <Empty title="No turns recorded">
               {state.agentState === "error"
-                ? "The lane journal could not be read."
-                : "Turns appear after an eligible pi lane runs."}
+                ? "Lane history could not be read."
+                : undefined}
             </Empty>
           )}
         </Panel>
         <Panel
           className="span-7"
           title="Positions"
-          note={greeks ? "cash + F&O · Greeks as recorded" : "cash + F&O"}
+          note="Cash and F&O"
           actions={
             <Segments
               value={kind}
@@ -570,16 +562,15 @@ function BookOverview() {
                       t.stages.validated === "failed" ? "neg" : "muted"
                     }
                   >
-                    {t.outcome}
+                    {sentenceCase(t.outcome)}
                   </span>
                 ),
               },
             ]}
           />
           <div className="panel-foot">
-            {mode.kind === "paper"
-              ? "Paper: submit/ACK stages are simulated (dashed). An ACK is never shown as a fill."
-              : "Submit/ACK come from recorded order events only. An ACK is never shown as a fill."}
+            {mode.kind === "paper" ? "Dashed stages are simulated. " : ""}An
+            acknowledgement is not a fill.
           </div>
         </Panel>
         <Panel
@@ -596,9 +587,7 @@ function BookOverview() {
             getKey={(a) =>
               a.id ?? `${a.source}:${a.observed_at_ms}:${a.message}`
             }
-            empty={
-              s?.alerts ? "No derived alerts" : "Alert evidence not reported"
-            }
+            empty={s?.alerts ? "No alerts" : "Alerts not reported"}
             columns={[
               {
                 key: "severity",
@@ -629,7 +618,7 @@ function BookOverview() {
             getKey={(t) => t.turn_id}
             empty={
               state.agentState === "error"
-                ? "Lane journal unavailable"
+                ? "Lane history unavailable"
                 : "No lane turns yet"
             }
             columns={[

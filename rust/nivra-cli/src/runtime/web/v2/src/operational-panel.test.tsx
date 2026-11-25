@@ -166,11 +166,11 @@ test("operational panel separates paper finance, liveness, research, calendar an
     />,
   );
   for (const label of [
-    "Paper financial status",
-    "Controller liveness",
-    "Research & advisory",
-    "Calendar coverage",
-    "Alert transport",
+    "Paper finances",
+    "Controller",
+    "Research",
+    "Calendar",
+    "Alert delivery",
   ])
     assert.ok(body.includes(label), label);
   assert.ok(body.includes("5,000"));
@@ -179,17 +179,9 @@ test("operational panel separates paper finance, liveness, research, calendar an
   assert.ok(body.includes("Covered"));
   assert.ok(body.includes("63 days"));
   assert.ok(body.includes("3600 s"));
-  assert.ok(body.includes("20 rows max"));
-  assert.ok(body.includes("Sender HTTP 2xx"));
-  assert.ok(body.includes("not a confirmed failure"));
-  assert.ok(body.includes("Not recorded (unknown, not zero)"));
-  assert.ok(body.includes("Marker presence only"));
-  assert.ok(body.includes("No delivery guarantee"));
-  assert.ok(
-    body.includes(
-      "A stale last completed loop is not evidence that the controller is hung.",
-    ),
-  );
+  assert.ok(body.includes("Not recorded"));
+  assert.ok(body.includes("Delivery guarantee"));
+  assert.equal(body.includes("hung"), false);
 });
 
 test("operational panel keeps corrupt state, unknown reasons and null counts honest", () => {
@@ -250,16 +242,15 @@ test("operational panel keeps corrupt state, unknown reasons and null counts hon
       health={health(undefined, operational)}
     />,
   );
-  assert.ok(body.includes("Unknown"));
+  assert.ok(body.includes("Malformed"));
   assert.ok(body.includes("Not reported"));
   assert.ok(body.includes("No 2027 data"));
   assert.ok(body.includes("4 days past coverage"));
   assert.ok(body.includes("Counts unavailable"));
-  assert.ok(body.includes("not treated as zero"));
-  assert.ok(body.includes("Alert transport"));
-  assert.ok(body.includes("Marker presence only"));
-  assert.ok(body.includes("Not recorded in retained window"));
-  assert.ok(body.includes("Clock anomaly: future-dated delivery rows"));
+  assert.ok(body.includes("Alert counts unavailable"));
+  assert.ok(body.includes("Alert delivery"));
+  assert.ok(body.includes("None in window"));
+  assert.ok(body.includes("dated in the future"));
   assert.equal(body.includes("private-fixture"), false);
   assert.equal(body.includes("raw source with spaces"), false);
   assert.equal(body.includes("raw failure text"), false);
@@ -310,7 +301,7 @@ test("operational panel shows disabled alert transport and expiring calendar war
   );
   assert.ok(body.includes("Disabled"));
   assert.ok(body.includes("Expiring"));
-  assert.ok(body.includes("30-day operator default warning"));
+  assert.ok(body.includes("warns 30 days ahead"));
   assert.ok(body.includes("11 days"));
   assert.ok(body.includes("Counts unavailable"));
 });
@@ -323,9 +314,9 @@ test("operational panel degrades honestly when an older snapshot omits the proje
       health={health()}
     />,
   );
-  assert.ok(body.includes("not present in this snapshot"));
+  assert.ok(body.includes("missing from this snapshot"));
   assert.ok(body.includes("5,000"));
-  assert.ok(body.includes("Paper financial status"));
+  assert.ok(body.includes("Paper finances"));
   assert.ok(body.includes("Not reported"));
   assert.equal(body.includes("undefined"), false);
   assert.equal(body.includes("0 alerts"), false);
@@ -351,6 +342,6 @@ test("operational panel keeps the published capture when rerendered", () => {
     }).format(operational.captured_at_ms!) + " IST";
   assert.ok(first.includes(stamp));
   assert.ok(second.includes(stamp));
-  assert.equal(first.includes("Published capture"), true);
-  assert.equal(second.includes("Published capture"), true);
+  assert.equal(first.includes("Snapshot taken"), true);
+  assert.equal(second.includes("Snapshot taken"), true);
 });

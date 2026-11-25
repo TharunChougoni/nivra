@@ -19,7 +19,6 @@ import {
   Download,
   Radio,
   Layers,
-  GitBranch,
   Search,
 } from "lucide-react";
 import Chart from "./Chart";
@@ -32,7 +31,6 @@ import type { InstrumentRecord, OrderTrack } from "./model";
 import { OperationalPanel } from "./Operational";
 import {
   amount,
-  classLabel,
   count,
   currentSession,
   datetime,
@@ -51,8 +49,8 @@ import {
   strategyLinkFor,
   strategyLinks,
   strategyReferences,
-  words,
 } from "./data";
+import { classLabel, instrumentName, plain, sentenceCase } from "./labels";
 import {
   Button,
   Drawer,
@@ -61,6 +59,7 @@ import {
   Instrument,
   InstrumentCell,
   KpiStrip,
+  ShortId,
   Steps,
   Notice,
   Panel,
@@ -102,7 +101,7 @@ const fillColumns: Column<Fill>[] = [
   },
   {
     key: "at",
-    label: "Recorded · IST",
+    label: "Time (IST)",
     num: true,
     render: (v) => datetime(v.at),
   },
@@ -124,10 +123,7 @@ function Ledger({
       rows={fills || []}
       selected={selected}
       onSelect={onSelect}
-      empty={
-        empty ||
-        (fills === null ? "Fill evidence unavailable" : "No recorded fills")
-      }
+      empty={empty || (fills === null ? "Fills unavailable" : "No fills")}
     />
   );
 }
@@ -140,6 +136,66 @@ function percentPoints(value?: number | null) {
   return typeof value === "number" && Number.isFinite(value)
     ? `${value.toFixed(2)}%`
     : "Not reported";
+}
+/** Plan actions that match one position or fill. */
+function PlanActions({
+  linked,
+  missing,
+  index,
+}: {
+  linked: ReturnType<typeof linkedPlan>;
+  missing: string;
+  index: Map<string, InstrumentRecord>;
+}) {
+  if (linked === null)
+    return <p className="panel-note">Plan data unavailable.</p>;
+  if (!linked.actions.length) return <p className="panel-note">{missing}</p>;
+  return (
+    <Table
+      rows={linked.actions}
+      columns={[
+        { key: "index", label: "Action" },
+        {
+          key: "key",
+          label: "Instrument",
+          render: (v) => instrumentName(v.action?.instrument_key, index),
+        },
+        { key: "side", label: "Side", render: (v) => plain(v.action?.side) },
+        { key: "units", label: "Units", render: (v) => count(v.units) },
+        {
+          key: "reason",
+          label: "Validation",
+          render: (v) => <Status value={v.reason} />,
+        },
+        {
+          key: "execution",
+          label: "Execution",
+          render: (v) => plain(v.execution?.verdict),
+        },
+      ]}
+    />
+  );
+}
+/** The strategy a scanner row came from, or why there is none. */
+function StrategyLink({
+  link,
+  none,
+}: {
+  link: StrategyReference | ScannerRow | null;
+  none: string;
+}) {
+  if (!link) return <p className="panel-note">{none}</p>;
+  return (
+    <Facts
+      items={[
+        ["Strategy", plain(link.strategy_spec_id)],
+        ["Version", link.strategy_spec_version],
+        ["Spec hash", <ShortId key="h" value={link.strategy_spec_hash} />],
+        ["Scan", link.strategy_scan_id],
+        ["Score", count(link.strategy_score)],
+      ]}
+    />
+  );
 }
 export function Portfolio() {
   const [state, app] = useWorkspace(),
@@ -192,7 +248,7 @@ export function Portfolio() {
     { key: "mark", label: "Mark", num: true, render: (p) => amount(p.mark) },
     {
       key: "value",
-      label: "Marked value",
+      label: "Value",
       num: true,
       render: (p) =>
         numeric(p.mark) !== null && numeric(p.units) !== null
@@ -201,7 +257,7 @@ export function Portfolio() {
     },
     {
       key: "pnl",
-      label: "Unrealized P&L",
+      label: "P&L",
       num: true,
       render: (p) =>
         [p.mark, p.entry, p.units].every((v) => numeric(v) !== null)
@@ -216,11 +272,16 @@ export function Portfolio() {
     },
     {
       key: "marked_at",
-      label: "Mark time",
+      label: "Marked at",
       render: (p) => datetime(p.marked_at),
     },
   ];
-  const linked = linkedPlan(
+  const index = instrumentIndex({
+      positions: f.positions,
+      fills,
+      scanner: state.scanner?.items,
+    }),
+    linked = linkedPlan(
       plans,
       selected?.decision_id,
       selected?.instrument?.key,
@@ -247,24 +308,23 @@ export function Portfolio() {
     <>
       <KpiStrip
         items={[
-          ["Account equity", amount(f.equity), "Recorded checkpoint"],
-          ["Cash", amount(f.cash), "Continuing cash balance"],
-          ["Marked holdings", amount(f.exposure), "Open paper exposure"],
-          ["Recorded fees", amount(f.fees), "Simulation assumptions"],
+          ["Account equity", amount(f.equity), "Latest checkpoint"],
+          ["Cash", amount(f.cash), "Recorded balance"],
+          ["Holdings", amount(f.exposure), "At marked prices"],
+          ["Fees", amount(f.fees), "Paid so far"],
         ]}
       />
       <Panel
-        title="Portfolio ledger"
-        note="Marks, fills and validation are distinct records."
+        title="Portfolio"
         actions={
           <Segments
             value={tab}
             onChange={setTab}
             items={[
               ["positions", "Positions"],
-              ["orders", "Order lifecycle"],
+              ["orders", "Orders"],
               ["fills", "Fills"],
-              ["plans", "Plans & validation"],
+              ["plans", "Plans"],
             ]}
           />
         }
@@ -272,18 +332,21 @@ export function Portfolio() {
         {(state.portfolioState === "error" ||
           state.portfolioState === "unavailable") && (
           <Notice>
-            Portfolio projection{" "}
-            {state.portfolioState === "unavailable" ? "unavailable" : "failed"}.
-            Positions, marks, equity and fees are not inferred from another
-            source; only explicitly supplied session fields remain visible.
+            Portfolio data{" "}
+            {state.portfolioState === "unavailable"
+              ? "unavailable"
+              : "could not be read"}
+            . Positions and fees are unknown.
           </Notice>
         )}
         {(state.fillsState === "error" ||
           state.fillsState === "unavailable") && (
           <Notice>
-            Fill projection{" "}
-            {state.fillsState === "unavailable" ? "unavailable" : "failed"}. No
-            fill rows or fee totals are reconstructed.
+            Fill data{" "}
+            {state.fillsState === "unavailable"
+              ? "unavailable"
+              : "could not be read"}
+            . Fills and fee totals are unknown.
           </Notice>
         )}
         {tab === "plans" ? (
@@ -291,11 +354,7 @@ export function Portfolio() {
         ) : tab === "orders" ? (
           <OrderLifecycle
             tracks={orderTracks(plans, fills, mode)}
-            index={instrumentIndex({
-              positions: f.positions,
-              fills,
-              scanner: state.scanner?.items,
-            })}
+            index={index}
             paper={mode.kind === "paper"}
             historical={historical}
           />
@@ -305,8 +364,8 @@ export function Portfolio() {
               <div className="table-controls">
                 <span>
                   {tab === "fills"
-                    ? `${count(fills?.length)} recorded fills`
-                    : `${count(f.positionsKnown ? f.positions.length : null)} recorded positions`}
+                    ? `${count(fills?.length)} fills`
+                    : `${count(f.positionsKnown ? f.positions.length : null)} positions`}
                 </span>
                 {tab === "fills" && (
                   <Segments
@@ -330,11 +389,7 @@ export function Portfolio() {
                   ]}
                   label="Instrument class"
                 />
-              ) : (
-                <span className="caption">
-                  No instrument-class rows are recorded for this projection.
-                </span>
-              )}
+              ) : null}
             </div>
             {tab === "positions" ? (
               <Table
@@ -344,9 +399,9 @@ export function Portfolio() {
                 empty={
                   f.positionsKnown
                     ? activeKind === "all"
-                      ? "The recorded book is flat"
-                      : "No recorded position in this instrument class"
-                    : "Position ledger unavailable"
+                      ? "No open positions"
+                      : "No positions in this class"
+                    : "Positions unavailable"
                 }
                 onSelect={(p) => {
                   setSelected(p);
@@ -360,9 +415,7 @@ export function Portfolio() {
                 onSelect={setSelectedFill}
                 selected={selectedFill}
                 empty={
-                  fills === null
-                    ? "Fill evidence unavailable"
-                    : "No matching recorded fills"
+                  fills === null ? "Fills unavailable" : "No matching fills"
                 }
               />
             )}
@@ -370,17 +423,13 @@ export function Portfolio() {
         )}
       </Panel>
       <p className="footnote">
-        Paper ledger · source marks are not executable prices · an
-        acknowledgement is not a fill. Instrument classes come from recorded
-        instrument.kind; ETF and derivative coverage follows the D5 contract.
+        Marks are not fill prices, and an acknowledgement is not a fill.
       </p>
       <Drawer
         open={!!selected}
         onClose={() => setSelected(null)}
-        title={selected?.instrument?.symbol || "Position evidence"}
-        description={
-          selected?.instrument?.key || "Original instrument identity"
-        }
+        title={selected?.instrument?.symbol || "Position"}
+        description={instrumentName(selected?.instrument?.key, index)}
       >
         <Facts
           items={[
@@ -389,15 +438,15 @@ export function Portfolio() {
               "Broker / account",
               [r?.id?.broker, r?.id?.account].filter(Boolean).join(" / "),
             ],
-            ["Instrument class", classLabel(instrumentClass(selected))],
-            ["Segment", selected?.instrument?.segment],
+            ["Class", classLabel(instrumentClass(selected))],
+            ["Segment", plain(selected?.instrument?.segment)],
             ["Underlying", selected?.instrument?.underlying],
             ["Expiry", selected?.instrument?.expiry],
             ["Strike", amount(selected?.instrument?.strike)],
             ["Lots", count(lotQuantity(selected)?.lots)],
             ["Lot size", count(lotQuantity(selected)?.lot_size)],
             [
-              "Margin · display only",
+              "Margin",
               selected?.margin?.display_only === true &&
               selected.margin.instrument_key === selected.instrument?.key
                 ? amount(selected.margin.total_margin)
@@ -405,8 +454,8 @@ export function Portfolio() {
             ],
             ["Units", count(selected?.units)],
             ["Entry", amount(selected?.entry)],
-            ["Recorded mark", amount(selected?.mark)],
-            ["Mark time", datetime(selected?.marked_at)],
+            ["Mark", amount(selected?.mark)],
+            ["Marked at", datetime(selected?.marked_at)],
             ["Decision", selected?.decision_id || "Not recorded"],
             ["Exit target", amount(selected?.exit_intent?.target)],
             ["Exit stop", amount(selected?.exit_intent?.stop)],
@@ -424,84 +473,44 @@ export function Portfolio() {
           height={220}
           source={
             state.series?.priceCached && state.series?.price?.length
-              ? "Cached receipt-minute bars · stale"
+              ? "Cached minute bars, may be stale"
               : state.series?.price?.length
-                ? "Receipt-minute bars · original receipt timestamps"
-                : "Tab-local screening observations"
+                ? "Minute bars from received quotes"
+                : "Seen in this tab"
           }
         />
-        <Panel title="Linked plan & validation">
-          {linked === null ? (
-            <p className="panel-note">
-              Plans projection unavailable for this selection. No order or
-              strategy state is inferred.
-            </p>
-          ) : linked.actions.length ? (
-            <Table
-              rows={linked.actions}
-              columns={[
-                { key: "index", label: "Action" },
-                {
-                  key: "key",
-                  label: "Instrument",
-                  render: (v) => v.action?.instrument_key || "Not reported",
-                },
-                {
-                  key: "side",
-                  label: "Side",
-                  render: (v) => words(v.action?.side),
-                },
-                { key: "units", label: "Units", render: (v) => count(v.units) },
-                {
-                  key: "reason",
-                  label: "Validation",
-                  render: (v) => <Status value={v.reason} />,
-                },
-                {
-                  key: "execution",
-                  label: "Execution",
-                  render: (v) => words(v.execution?.verdict),
-                },
-              ]}
-            />
-          ) : (
-            <p className="panel-note">
-              {selected?.decision_id && selected?.instrument?.key
-                ? "No loaded plan action matched this decision and instrument."
-                : "No decision ID and instrument identity were recorded for this position."}
-            </p>
-          )}
+        <Panel title="Plan">
+          <PlanActions
+            linked={linked}
+            index={index}
+            missing={
+              selected?.decision_id && selected?.instrument?.key
+                ? "No matching plan action."
+                : "No decision recorded for this position."
+            }
+          />
         </Panel>
-        <Panel title="Strategy link">
-          {strategy ? (
-            <Facts
-              items={[
-                ["Spec ID", strategy.strategy_spec_id],
-                ["Spec version", strategy.strategy_spec_version],
-                ["Spec hash", strategy.strategy_spec_hash],
-                ["Scan ID", strategy.strategy_scan_id],
-                ["Strategy score", count(strategy.strategy_score)],
-              ]}
-            />
-          ) : (
-            <p className="panel-note">
-              {historical
-                ? "The selected archive has no scanner projection; no strategy reference is inferred."
+        <Panel title="Strategy">
+          <StrategyLink
+            link={strategy}
+            none={
+              historical
+                ? "Archives keep no strategy reference."
                 : state.scanner?.unavailable || state.scannerState === "error"
-                  ? "Scanner projection unavailable; no strategy reference is inferred."
-                  : "No strategy reference was recorded for this instrument."}
-            </p>
-          )}
+                  ? "Scanner data unavailable."
+                  : "No strategy recorded for this instrument."
+            }
+          />
         </Panel>
         <Panel title="Related fills">
           <Ledger
             fills={linkedFillRows}
             empty={
               linkedFillRows === null
-                ? "Fill evidence unavailable"
+                ? "Fills unavailable"
                 : selected?.decision_id && selected?.instrument?.key
-                  ? "No recorded fills match this decision and instrument"
-                  : "No decision ID and instrument identity were recorded for this position"
+                  ? "No fills match this decision"
+                  : "No decision recorded for this position"
             }
           />
         </Panel>
@@ -509,10 +518,8 @@ export function Portfolio() {
       <Drawer
         open={!!selectedFill}
         onClose={() => setSelectedFill(null)}
-        title={selectedFill?.instrument?.symbol || "Fill evidence"}
-        description={
-          selectedFill?.instrument?.key || "Original instrument identity"
-        }
+        title={selectedFill?.instrument?.symbol || "Fill"}
+        description={instrumentName(selectedFill?.instrument?.key, index)}
       >
         <Facts
           items={[
@@ -521,82 +528,42 @@ export function Portfolio() {
               "Broker / account",
               [r?.id?.broker, r?.id?.account].filter(Boolean).join(" / "),
             ],
-            ["Instrument class", classLabel(instrumentClass(selectedFill))],
-            ["Segment", selectedFill?.instrument?.segment],
+            ["Class", classLabel(instrumentClass(selectedFill))],
+            ["Segment", plain(selectedFill?.instrument?.segment)],
             ["Lots", count(lotQuantity(selectedFill)?.lots)],
             ["Lot size", count(lotQuantity(selectedFill)?.lot_size)],
-            ["Side", selectedFill ? (selectedFill.buy ? "BUY" : "SELL") : null],
+            ["Side", selectedFill ? (selectedFill.buy ? "Buy" : "Sell") : null],
             ["Units", count(selectedFill?.units)],
             ["Fill price", amount(selectedFill?.price)],
             ["Expected price", amount(selectedFill?.expected_price)],
-            ["Slippage · bps", count(selectedFill?.slippage_bps)],
+            ["Slippage (bps)", count(selectedFill?.slippage_bps)],
             ["Fee", amount(selectedFill?.fee)],
             ["Decision", selectedFill?.decision_id || "Not recorded"],
-            ["Recorded", datetime(selectedFill?.at)],
+            ["Time", datetime(selectedFill?.at)],
           ]}
         />
-        <Panel title="Linked plan & validation">
-          {fillLinked === null ? (
-            <p className="panel-note">
-              Plans projection unavailable for this selection. No order or
-              strategy state is inferred.
-            </p>
-          ) : fillLinked.actions.length ? (
-            <Table
-              rows={fillLinked.actions}
-              columns={[
-                { key: "index", label: "Action" },
-                {
-                  key: "key",
-                  label: "Instrument",
-                  render: (v) => v.action?.instrument_key || "Not reported",
-                },
-                {
-                  key: "side",
-                  label: "Side",
-                  render: (v) => words(v.action?.side),
-                },
-                { key: "units", label: "Units", render: (v) => count(v.units) },
-                {
-                  key: "reason",
-                  label: "Validation",
-                  render: (v) => <Status value={v.reason} />,
-                },
-                {
-                  key: "execution",
-                  label: "Execution",
-                  render: (v) => words(v.execution?.verdict),
-                },
-              ]}
-            />
-          ) : (
-            <p className="panel-note">
-              {selectedFill?.decision_id && selectedFill?.instrument?.key
-                ? "No loaded plan action matched this decision and instrument."
-                : "No decision ID and instrument identity were recorded for this fill."}
-            </p>
-          )}
+        <Panel title="Plan">
+          <PlanActions
+            linked={fillLinked}
+            index={index}
+            missing={
+              selectedFill?.decision_id && selectedFill?.instrument?.key
+                ? "No matching plan action."
+                : "No decision recorded for this fill."
+            }
+          />
         </Panel>
-        <Panel title="Strategy link">
-          {fillStrategy ? (
-            <Facts
-              items={[
-                ["Spec ID", fillStrategy.strategy_spec_id],
-                ["Spec version", fillStrategy.strategy_spec_version],
-                ["Spec hash", fillStrategy.strategy_spec_hash],
-                ["Scan ID", fillStrategy.strategy_scan_id],
-                ["Strategy score", count(fillStrategy.strategy_score)],
-              ]}
-            />
-          ) : (
-            <p className="panel-note">
-              {historical
-                ? "The selected archive has no scanner projection; no strategy reference is inferred."
+        <Panel title="Strategy">
+          <StrategyLink
+            link={fillStrategy}
+            none={
+              historical
+                ? "Archives keep no strategy reference."
                 : state.scanner?.unavailable || state.scannerState === "error"
-                  ? "Scanner projection unavailable; no strategy reference is inferred."
-                  : "No strategy reference was recorded for this instrument."}
-            </p>
-          )}
+                  ? "Scanner data unavailable."
+                  : "No strategy recorded for this instrument."
+            }
+          />
         </Panel>
       </Drawer>
     </>
@@ -619,14 +586,12 @@ function OrderLifecycle({
         rows={tracks}
         getKey={(t, i) => `${t.decisionId}:${t.instrument}:${t.at_ms}:${i}`}
         empty={
-          historical
-            ? "Archived sessions carry fills only; no plan lifecycle is recorded"
-            : "No plan actions or fills recorded"
+          historical ? "Archives keep fills only" : "No plan actions or fills"
         }
         columns={[
           {
             key: "at",
-            label: "Recorded · IST",
+            label: "Time (IST)",
             num: true,
             render: (t) => (t.at_ms ? datetime(t.at_ms) : "—"),
           },
@@ -654,7 +619,11 @@ function OrderLifecycle({
             label: "Stages",
             render: (t) => <Steps track={t} />,
           },
-          { key: "outcome", label: "State" },
+          {
+            key: "outcome",
+            label: "State",
+            render: (t) => sentenceCase(t.outcome),
+          },
           {
             key: "decision",
             label: "Decision",
@@ -664,13 +633,8 @@ function OrderLifecycle({
         ]}
       />
       <div className="panel-foot">
-        <span>
-          intent → validated → submitted → acknowledged → filled.{" "}
-          {paper
-            ? "Paper: submit and ACK are simulated by the ledger (dashed) and shown only beside a recorded fill."
-            : "Submit and ACK come from recorded order events only."}
-        </span>
-        <span>An ACK is never a fill; only a fill record marks filled.</span>
+        {paper ? "Dashed stages are simulated. " : ""}An acknowledgement is not
+        a fill.
       </div>
     </>
   );
@@ -682,20 +646,9 @@ function Plans({
   plans: PlansResponse | null;
   fills: Fill[] | null;
 }) {
-  if (!plans)
-    return (
-      <Empty title="Plan projection unavailable">
-        No recorded planner actions or execution verdicts are loaded for this
-        session. Nothing is reconstructed from model prose or fills.
-      </Empty>
-    );
+  if (!plans) return <Empty title="Plans unavailable" />;
   if (plans.unavailable)
-    return (
-      <Empty title="Plan projection unavailable">
-        {words(plans.reason)}. Raw model output does not establish an accepted
-        plan or fill.
-      </Empty>
-    );
+    return <Empty title="Plans unavailable">{plain(plans.reason)}</Empty>;
   const p = plans.planner;
   return (
     <>
@@ -704,9 +657,9 @@ function Plans({
         <span>
           Decision <code>{p?.decision_id || "not reported"}</code>
         </span>
-        <span>{count(p?.pending_events)} pending events</span>
+        <span>{count(p?.pending_events)} pending</span>
         <a href="#/lanes" className="text-link">
-          Inspect pi lane turns <ArrowUpRight size={12} />
+          See lane turns <ArrowUpRight size={12} />
         </a>
       </div>
       <Table
@@ -716,9 +669,9 @@ function Plans({
           {
             key: "key",
             label: "Instrument",
-            render: (v) => v.action?.instrument_key || "Not reported",
+            render: (v) => instrumentName(v.action?.instrument_key),
           },
-          { key: "side", label: "Side", render: (v) => words(v.action?.side) },
+          { key: "side", label: "Side", render: (v) => plain(v.action?.side) },
           { key: "units", label: "Units", render: (v) => count(v.units) },
           {
             key: "reason",
@@ -729,7 +682,7 @@ function Plans({
             key: "execution",
             label: "Execution",
             render: (v) =>
-              words(
+              plain(
                 plans.execution?.find(
                   (e) =>
                     e.index === v.index && e.decision_id === p?.decision_id,
@@ -749,12 +702,8 @@ function Plans({
             },
           },
         ]}
-        empty="No recorded proposed actions"
+        empty="No proposed actions"
       />
-      <div className="panel-note">
-        An abstention is a valid outcome. Raw model output does not prove host
-        acceptance or execution; execution verdicts are not fills.
-      </div>
     </>
   );
 }
@@ -834,14 +783,14 @@ export function Scanner() {
           },
           {
             key: "price",
-            label: "Screening price",
+            label: "Price",
             num: true,
             render: (r) =>
               amount(r.latest_screening_price ?? r.latest_sampled_bid),
           },
           {
             key: "sample_change_bps",
-            label: "Sampled Δ · bps",
+            label: "Change (bps)",
             num: true,
             render: (r) => (
               <span
@@ -861,25 +810,23 @@ export function Scanner() {
           },
           {
             key: "observed_ms",
-            label: "Original receipt",
+            label: "Received",
             num: true,
             render: (r) => datetime(r.observed_ms),
           },
           {
             key: "strategy_spec_id",
-            label: "Strategy reference",
+            label: "Strategy",
             render: (r) =>
-              strategyLinks([r]).length ? (
-                <code>{r.strategy_spec_id || "Recorded reference"}</code>
-              ) : (
-                "Not recorded"
-              ),
+              strategyLinks([r]).length
+                ? plain(r.strategy_spec_id || "recorded")
+                : "Not recorded",
           },
           {
             key: "screening_reason",
-            label: "Screen",
+            label: "Status",
             render: (r) => (
-              <span className="caption">{words(r.screening_reason)}</span>
+              <span className="caption">{plain(r.screening_reason)}</span>
             ),
           },
         ]
@@ -893,11 +840,11 @@ export function Scanner() {
           {
             key: "diagnostic",
             label: "Diagnostic",
-            render: (r) => words(r.diagnostic),
+            render: (r) => plain(r.diagnostic),
           },
           {
             key: "last_observed_ms",
-            label: "Last valid receipt",
+            label: "Last received",
             render: (r) => datetime(r.last_observed_ms),
           },
         ];
@@ -910,37 +857,34 @@ export function Scanner() {
   const tableEmpty =
     tab === "screens"
       ? screens.state === "error"
-        ? "Screen outcomes unavailable"
-        : "No screen outcomes supplied"
-      : sourceUnavailable
+        ? "Screen results unavailable"
+        : "No screen results"
+      : sourceUnavailable || sourceState === "error"
         ? tab === "missing"
-          ? "Missing observations unavailable"
-          : "Scanner projection unavailable"
-        : sourceState === "error"
-          ? tab === "missing"
-            ? "Missing observations unavailable"
-            : "Scanner projection unavailable"
-          : "No matching observations";
+          ? "Stale and missing data unavailable"
+          : "Scanner unavailable"
+        : "No matches";
   return (
     <>
       <KpiStrip
         items={[
           [
-            "Coverage scope",
-            [coverage?.market_segment, classLabel(coverage?.instrument_kind)]
+            "Scope",
+            [
+              coverage?.market_segment && plain(coverage.market_segment),
+              classLabel(coverage?.instrument_kind),
+            ]
               .filter(Boolean)
               .join(" · "),
-            "Only the reported segment",
           ],
-          ["Universe", count(coverage?.universe), "Supplied instruments"],
-          ["Fresh", count(coverage?.fresh), "Screening observations"],
-          ["Stale", count(coverage?.stale), "Retained with original age"],
-          ["Unseen", count(coverage?.unseen), "No valid observation"],
+          ["Universe", count(coverage?.universe), "Instruments tracked"],
+          ["Fresh", count(coverage?.fresh), "Recent quote"],
+          ["Stale", count(coverage?.stale), "Old quote kept"],
+          ["Unseen", count(coverage?.unseen), "No quote yet"],
         ]}
       />
       <Panel
-        title="Discovery workspace"
-        note="Compare evidence, then select an instrument to inspect its original observations."
+        title="Scanner"
         actions={<Status value={state.summary?.market_feed?.state} />}
       >
         <div className="filter-bar">
@@ -948,9 +892,9 @@ export function Scanner() {
             value={tab}
             onChange={setTab}
             items={[
-              ["prospects", "Prospects"],
-              ["missing", "Stale & missing"],
-              ["screens", "Screen outcomes"],
+              ["prospects", "Picks"],
+              ["missing", "Stale or missing"],
+              ["screens", "Screen results"],
             ]}
           />
           {tab !== "screens" && (
@@ -970,8 +914,8 @@ export function Scanner() {
                 value={sort}
                 onChange={(e) => setSort(e.target.value)}
               >
-                <option value="priority">Original priority</option>
-                <option value="change">Absolute sampled change</option>
+                <option value="priority">Scanner order</option>
+                <option value="change">Biggest move</option>
                 <option value="symbol">Symbol A–Z</option>
               </select>
             </div>
@@ -983,8 +927,8 @@ export function Scanner() {
             columns={[
               {
                 key: "reason",
-                label: "Screen outcome",
-                render: (r) => words(r.reason),
+                label: "Result",
+                render: (r) => plain(r.reason),
               },
               {
                 key: "total",
@@ -1007,23 +951,20 @@ export function Scanner() {
         <div className="table-footer">
           <span>
             {tab === "screens"
-              ? `${count(screenRows.length)} screen outcomes · /api/v1/scanner?segment=screens`
-              : `${count(coverage?.presented ?? rows.length)} presented · ${count(coverage?.eligible)} eligible · ${
-                  tab === "prospects"
-                    ? coverage?.unavailable_truncated
-                      ? "missing rows truncated by source"
-                      : "missing rows as supplied"
-                    : "missing rows loaded on this page"
+              ? `${count(screenRows.length)} results`
+              : `${count(coverage?.presented ?? rows.length)} shown · ${count(coverage?.eligible)} eligible${
+                  tab === "prospects" && coverage?.unavailable_truncated
+                    ? " · missing rows cut off"
+                    : ""
                 }`}
           </span>
-          <span>Priority is not expected profit</span>
         </div>
       </Panel>
       <Drawer
         open={!!selected}
         onClose={() => setSelected(null)}
-        title={selected?.symbol || "Instrument evidence"}
-        description={selected?.instrument_key || "Instrument identity"}
+        title={selected?.symbol || "Instrument"}
+        description={instrumentName(selected?.instrument_key)}
       >
         <div className="instrument-summary">
           <strong>
@@ -1031,7 +972,7 @@ export function Scanner() {
               selected?.latest_screening_price ?? selected?.latest_sampled_bid,
             )}
           </strong>
-          <span>{count(selected?.sample_change_bps)} bps sampled change</span>
+          <span>{count(selected?.sample_change_bps)} bps change</span>
           <Status value={selected?.screening_reason || selected?.reason} />
         </div>
         <Chart
@@ -1041,52 +982,38 @@ export function Scanner() {
           }
           source={
             state.series?.priceCached && state.series?.price?.length
-              ? "Cached receipt-minute bars · stale"
+              ? "Cached minute bars, may be stale"
               : state.series?.price?.length
-                ? "Receipt-minute bars · original receipt timestamps"
-                : "Original sampled-price timestamps · this tab only"
+                ? "Minute bars from received quotes"
+                : "Seen in this tab"
           }
           height={250}
         />
         <Facts
           items={[
-            ["Original receipt", datetime(selected?.observed_ms)],
+            ["Received", datetime(selected?.observed_ms)],
             [
-              "Sampled price time",
+              "Price time",
               datetime(selected?.sampled_price_ms ?? selected?.sampled_bid_ms),
             ],
-            ["Provider source time", datetime(selected?.source_ms)],
-            ["Price kind", words(selected?.price_kind)],
-            ["Retained samples at source", count(selected?.sample_count)],
-            ["Quote status", "Screening evidence · not executable depth"],
-            ["Diagnostic", words(selected?.diagnostic)],
+            ["Source time", datetime(selected?.source_ms)],
+            ["Price type", plain(selected?.price_kind)],
+            ["Samples", count(selected?.sample_count)],
+            ["Diagnostic", plain(selected?.diagnostic)],
           ]}
         />
-        <Panel title="Recorded strategy reference">
-          {strategy ? (
-            <Facts
-              items={[
-                ["Spec ID", strategy.strategy_spec_id],
-                ["Spec version", strategy.strategy_spec_version],
-                ["Spec hash", strategy.strategy_spec_hash],
-                ["Scan ID", strategy.strategy_scan_id],
-                ["Strategy score", count(strategy.strategy_score)],
-                [
-                  "Scope",
-                  "Scanner prospect fields only; library and switch history are not exposed.",
-                ],
-              ]}
-            />
-          ) : (
-            <p className="panel-note">
-              {sourceUnavailable
-                ? "Scanner projection unavailable; no strategy reference is inferred."
-                : "No strategy reference was recorded for this instrument."}
-            </p>
-          )}
+        <Panel title="Strategy">
+          <StrategyLink
+            link={strategy}
+            none={
+              sourceUnavailable
+                ? "Scanner data unavailable."
+                : "No strategy recorded for this instrument."
+            }
+          />
         </Panel>
         <details className="raw-evidence">
-          <summary>Inspect raw scanner evidence</summary>
+          <summary>Raw data</summary>
           <pre>{JSON.stringify(selected, null, 2)}</pre>
         </details>
       </Drawer>
@@ -1102,11 +1029,11 @@ function columnsInstrument(): Column<ScannerRow> {
     ),
   };
 }
+const yesNo = (v: unknown) => (v == null ? "Not reported" : v ? "Yes" : "No");
 function sessionMode(row: SessionRecord) {
-  if (row.mode === "paper" || row.mode === "live")
-    return row.mode.toUpperCase();
-  if (row.paper_only === true && row.live_enabled === false) return "PAPER";
-  if (row.paper_only === false && row.live_enabled === true) return "LIVE";
+  if (row.mode === "paper" || row.mode === "live") return plain(row.mode);
+  if (row.paper_only === true && row.live_enabled === false) return "Paper";
+  if (row.paper_only === false && row.live_enabled === true) return "Live";
   return "Not reported";
 }
 export function Sessions() {
@@ -1126,8 +1053,7 @@ export function Sessions() {
   return (
     <>
       <Panel
-        title="Session archive"
-        note="Dated books retain broker, account, disposition and original evidence."
+        title="Sessions"
         actions={
           <label className="search-field">
             <Search size={13} />
@@ -1143,11 +1069,11 @@ export function Sessions() {
       >
         {archiveUnavailable && (
           <Notice>
-            Session archive projection{" "}
-            {state.sessionsState === "unavailable" ? "unavailable" : "failed"}.
-            {state.summary
-              ? " The current checkpoint is still shown from the summary projection."
-              : " No session rows are inferred."}
+            Session archive{" "}
+            {state.sessionsState === "unavailable"
+              ? "unavailable"
+              : "could not be read"}
+            .{state.summary ? " Showing the current session only." : ""}
           </Notice>
         )}
         <Table
@@ -1174,7 +1100,7 @@ export function Sessions() {
             },
             {
               key: "state",
-              label: "Disposition",
+              label: "Status",
               render: (r) => <Status value={r.status || r.phase} />,
             },
             {
@@ -1184,14 +1110,14 @@ export function Sessions() {
                 r.unavailable
                   ? "Unavailable"
                   : r.stale
-                    ? "Archived checkpoint"
+                    ? "Archived"
                     : r.portfolio
-                      ? "Ledger snapshot"
-                      : "Registry only",
+                      ? "Full ledger"
+                      : "Listed only",
             },
             {
               key: "net",
-              label: "Net P&L · flat book",
+              label: "Net P&L",
               render: (r) => amount(finance(r).net),
             },
             {
@@ -1204,12 +1130,9 @@ export function Sessions() {
         />
         <div className="table-footer">
           <span>
-            {count(state.sessions?.total ?? records.length)} supplied sessions
-            {state.sessions?.next != null
-              ? " · more archive pages available"
-              : ""}
+            {count(state.sessions?.total ?? records.length)} sessions
+            {state.sessions?.next != null ? " · more available" : ""}
           </span>
-          <span>Daily allocations are never summed as wealth.</span>
         </div>
       </Panel>
       <Drawer
@@ -1223,40 +1146,35 @@ export function Sessions() {
         <KpiStrip
           items={[
             ["Cash", amount(f.cash)],
-            ["Net P&L · flat", amount(f.net)],
+            ["Net P&L", amount(f.net)],
           ]}
         />
         <Facts
           items={[
-            ["Disposition", words(selected?.status || selected?.phase)],
+            ["Status", plain(selected?.status || selected?.phase)],
             [
-              "Checkpoint at",
+              "Checkpoint",
               datetime(selected?.as_of_ms || selected?.observed_at_ms),
             ],
             [
               "Stopped",
               selected?.portfolio
-                ? words(selected.portfolio.stopped)
+                ? yesNo(selected.portfolio.stopped)
                 : "Not reported",
             ],
             [
               "Halted",
               selected?.portfolio
-                ? words(selected.portfolio.halted)
+                ? yesNo(selected.portfolio.halted)
                 : "Not reported",
             ],
             [
               "Closed",
               selected?.portfolio
-                ? words(selected.portfolio.closed)
+                ? yesNo(selected.portfolio.closed)
                 : "Not reported",
             ],
-            [
-              "Evidence",
-              selected?.portfolio
-                ? "Ledger snapshot"
-                : "Registry lifecycle only",
-            ],
+            ["Evidence", selected?.portfolio ? "Full ledger" : "Listed only"],
           ]}
         />
         <Button
@@ -1267,7 +1185,7 @@ export function Sessions() {
             location.hash = "#/portfolio";
           }}
         >
-          Inspect this portfolio
+          Open portfolio
         </Button>
       </Drawer>
     </>
@@ -1277,28 +1195,22 @@ export function Strategies() {
   const [state] = useWorkspace(),
     [tab, setTab] = useState("references"),
     [selected, setSelected] = useState<StrategyReference | null>(null);
-  const references = strategyReferences(state.scanner?.items);
+  const references = strategyReferences(state.scanner?.items),
+    index = instrumentIndex({ scanner: state.scanner?.items });
   const library = state.summary?.research_library;
   return (
     <>
       <div className="strategy-header">
         <div>
-          <span className="eyebrow">PROJECTED STRATEGY EVIDENCE</span>
           <h2>
             {references.length
-              ? `${count(references.length)} recorded strategy reference${references.length === 1 ? "" : "s"}`
-              : "No strategy reference supplied"}
+              ? `${count(references.length)} ${references.length === 1 ? "strategy" : "strategies"} behind today's picks`
+              : "No strategies recorded"}
           </h2>
-          <p>
-            The v1 scanner exposes prospect strategy IDs, versions, hashes, scan
-            IDs and scores. The Library tab shows original registered-research
-            versions and terminal outcomes for the current controller session.
-            Strategy qualification and switch history remain separate.
-          </p>
         </div>
         <div>
           <Status value={library?.status || "not_reported"}>
-            Research library: {words(library?.status || "not_reported")}
+            Research library: {plain(library?.status || "not_reported")}
           </Status>
           <a href="#/backtest" className="text-link">
             Open backtest lab <ArrowUpRight size={13} />
@@ -1306,15 +1218,14 @@ export function Strategies() {
         </div>
       </div>
       <Panel
-        title="Research workspace"
-        note="Registered analysis outcomes are research evidence. They do not establish executable strategies, accepted edges or activation authority."
+        title="Research"
         actions={
           <Segments
             value={tab}
             onChange={setTab}
             items={[
-              ["references", "Strategy references"],
-              ["library", "Library & switches"],
+              ["references", "In use"],
+              ["library", "Library"],
             ]}
           />
         }
@@ -1322,9 +1233,7 @@ export function Strategies() {
         {tab === "references" ? (
           <>
             {state.scannerState === "error" && (
-              <Notice>
-                Scanner projection failed; no strategy reference is inferred.
-              </Notice>
+              <Notice>Scanner data could not be read.</Notice>
             )}
             <Table
               rows={references}
@@ -1332,10 +1241,14 @@ export function Strategies() {
               columns={[
                 {
                   key: "id",
-                  label: "Strategy reference",
+                  label: "Strategy",
                   render: (r) => (
                     <Instrument
-                      symbol={r.strategy_spec_id || "Spec ID not recorded"}
+                      symbol={
+                        r.strategy_spec_id
+                          ? plain(r.strategy_spec_id)
+                          : "Not recorded"
+                      }
                       sub={
                         r.strategy_spec_version
                           ? "version " + r.strategy_spec_version
@@ -1347,20 +1260,18 @@ export function Strategies() {
                 {
                   key: "hash",
                   label: "Spec hash",
-                  render: (r) => (
-                    <code>{r.strategy_spec_hash || "Not recorded"}</code>
-                  ),
+                  render: (r) => <ShortId value={r.strategy_spec_hash} />,
                 },
                 {
                   key: "scan",
-                  label: "Scan ID",
+                  label: "Scan",
                   render: (r) => (
                     <code>{r.strategy_scan_id || "Not recorded"}</code>
                   ),
                 },
                 {
                   key: "score",
-                  label: "Recorded score",
+                  label: "Score",
                   render: (r) =>
                     r.scores.length
                       ? r.scores.map((v) => count(v)).join(" / ")
@@ -1371,27 +1282,27 @@ export function Strategies() {
                   label: "Instruments",
                   render: (r) =>
                     r.instruments.length
-                      ? `${count(r.instruments.length)} · ${r.instruments.slice(0, 2).join(", ")}${r.instruments.length > 2 ? "…" : ""}`
+                      ? `${count(r.instruments.length)} · ${r.instruments
+                          .slice(0, 2)
+                          .map((k) => instrumentName(k, index))
+                          .join(", ")}${r.instruments.length > 2 ? "…" : ""}`
                       : "—",
                 },
               ]}
               empty={
                 state.scannerState === "unavailable"
-                  ? "Scanner projection unavailable; no strategy references are inferred"
-                  : "No strategy references recorded in the scanner projection"
+                  ? "Scanner unavailable"
+                  : "No strategies recorded"
               }
             />
           </>
         ) : (
           <>
-            <p className="panel-note">
-              Original registered-research ledger · current controller session.
-              No automatic promotion. Strategy ABI, holding horizon and regime
-              remain unknown unless separately qualified.
-              {library?.truncated
-                ? " The configured page/byte limit was reached."
-                : ""}
-            </p>
+            {library?.truncated && (
+              <p className="panel-note">
+                Limit reached. Some rows are missing.
+              </p>
+            )}
             <Table
               rows={library?.items || []}
               columns={[
@@ -1409,15 +1320,13 @@ export function Strategies() {
                 { key: "hypothesis", label: "Hypothesis" },
                 {
                   key: "source_sha256",
-                  label: "Source hash",
-                  render: (r) => <code>{r.source_sha256 || "Unknown"}</code>,
+                  label: "Source",
+                  render: (r) => <ShortId value={r.source_sha256} />,
                 },
                 {
                   key: "result_sha256",
-                  label: "Result hash",
-                  render: (r) => (
-                    <code>{r.result_sha256 || "Not recorded"}</code>
-                  ),
+                  label: "Result",
+                  render: (r) => <ShortId value={r.result_sha256} />,
                 },
                 {
                   key: "scientific_state",
@@ -1427,24 +1336,42 @@ export function Strategies() {
               ]}
               empty={
                 library?.status === "unavailable"
-                  ? "Original research library unavailable; no records reconstructed"
-                  : "No registered-research candidates recorded"
+                  ? "Research library unavailable"
+                  : "No research candidates yet"
               }
             />
           </>
         )}
       </Panel>
-      <div className="panel-note">
-        <GitBranch size={14} /> Research evidence does not authorize automatic
-        promotion.
-      </div>
       <Drawer
         open={!!selected}
         onClose={() => setSelected(null)}
-        title="Research artifact"
-        description="Original supplied record · advisory evidence"
+        title="Strategy details"
       >
-        <pre>{JSON.stringify(selected, null, 2)}</pre>
+        {selected && (
+          <Facts
+            items={[
+              ["Strategy", plain(selected.strategy_spec_id)],
+              ["Version", selected.strategy_spec_version],
+              [
+                "Spec hash",
+                <ShortId key="h" value={selected.strategy_spec_hash} />,
+              ],
+              ["Scan", selected.strategy_scan_id],
+              ["Score", selected.scores.map((v) => count(v)).join(" / ")],
+              [
+                "Instruments",
+                selected.instruments
+                  .map((k) => instrumentName(k, index))
+                  .join(", "),
+              ],
+            ]}
+          />
+        )}
+        <details className="raw-evidence">
+          <summary>Raw data</summary>
+          <pre>{JSON.stringify(selected, null, 2)}</pre>
+        </details>
       </Drawer>
     </>
   );
@@ -1481,11 +1408,10 @@ export function Backtest() {
         if (alive.current) setInput(payload);
       }
       if (!payload) {
-        if (!files.manifest || !files.events)
-          throw Error("Select both the manifest and original event file.");
+        if (!files.manifest || !files.events) throw Error("Choose both files.");
         if (files.manifest.size > 524288 || files.events.size > 4194304)
           throw Error(
-            "Existing preview limits: 512 KiB manifest and 4 MiB events.",
+            "File too large. Limits: 512 KiB manifest, 4 MiB events.",
           );
         payload = {
           manifest: await files.manifest.text(),
@@ -1505,7 +1431,7 @@ export function Backtest() {
         setResult({ ...v, synthetic: payload.synthetic, label: payload.label });
     } catch (e) {
       if (alive.current && token === app.getSnapshot().token)
-        setError(words(errorMessage(e)) + " · No new result published.");
+        setError(plain(errorMessage(e)) + " · Result not updated.");
     } finally {
       if (alive.current) setBusy(false);
     }
@@ -1526,21 +1452,14 @@ export function Backtest() {
   return (
     <>
       <div className="lab-layout">
-        <Panel
-          title="Dataset"
-          note="Reproduce original quote evidence with the existing deterministic replay engine."
-          className="lab-input"
-        >
+        <Panel title="Replay files" className="lab-input">
           <div className="file-drop">
             <FileUp size={22} />
-            <strong>Original manifest & event bytes</strong>
-            <p>
-              Files are read locally, then sent only to this dashboard's bounded
-              replay endpoint.
-            </p>
+            <strong>Manifest and quote events</strong>
+            <p>Read in your browser, sent to this dashboard only.</p>
             {[
-              ["manifest", "Manifest · JSON", ".json"],
-              ["events", "Quote events · NDJSON", ".ndjson,.jsonl,.json"],
+              ["manifest", "Manifest (JSON)", ".json"],
+              ["events", "Quote events (NDJSON)", ".ndjson,.jsonl,.json"],
             ].map(([id, label, accept]) => (
               <label key={id} className="file-choice">
                 <span>{label}</span>
@@ -1563,18 +1482,15 @@ export function Backtest() {
               onClick={() => run()}
               disabled={busy}
             >
-              {busy ? "Validating & replaying…" : "Run offline replay"}
+              {busy ? "Replaying…" : "Run replay"}
             </Button>
             <Button onClick={() => run(true)} disabled={busy}>
-              Run synthetic example
+              Run example
             </Button>
           </div>
           <Notice error>{error}</Notice>
           <div className="panel-note">
-            Local research only. Active paper workers and remote origins may
-            refuse this endpoint. The v1 projections do not expose a separate
-            replay-availability or fee-policy flag; the endpoint response stays
-            authoritative.
+            Local use only. A running paper session may refuse a replay.
           </div>
         </Panel>
         <div className="lab-results">
@@ -1582,9 +1498,9 @@ export function Backtest() {
             title={
               result
                 ? result.synthetic
-                  ? "Synthetic demonstration"
-                  : "Replay result · provenance unverified"
-                : "Replay output"
+                  ? "Example result"
+                  : "Replay result"
+                : "Result"
             }
             actions={
               result && (
@@ -1598,10 +1514,7 @@ export function Backtest() {
               <>
                 <KpiStrip
                   items={[
-                    [
-                      "Net P&L · flat",
-                      amount(result.report?.realized_pnl_if_flat),
-                    ],
+                    ["Net P&L", amount(result.report?.realized_pnl_if_flat)],
                     ["Drawdown", amount(result.report?.maximum_drawdown)],
                     ["Fees", amount(result.report?.fees)],
                     ["Events", count(result.report?.events)],
@@ -1610,19 +1523,15 @@ export function Backtest() {
                 <Chart
                   points={points}
                   label="Replay equity"
-                  source="Exact replay report timestamps"
-                  emptyTitle="No equity observations in this report"
-                  emptyDetail="The replay result did not supply enough time-aligned equity points."
+                  source="Replay timestamps"
+                  emptyTitle="No equity data"
+                  emptyDetail="The replay returned too few equity points."
                 />
                 <Ledger fills={result.report?.portfolio?.fills} />
               </>
             ) : (
-              <Empty
-                icon={Layers}
-                title="Inspect the outcome, not just the return"
-              >
-                A replay will show its equity path, fills, fees and exact input
-                fingerprints here.
+              <Empty icon={Layers} title="No replay yet">
+                Run a replay to see equity, fills and fees.
               </Empty>
             )}
           </Panel>
@@ -1632,12 +1541,24 @@ export function Backtest() {
                 items={[
                   ["Session", result.report?.session],
                   ["Dataset", result.label],
-                  ["Engine hash", result.engine_hash],
-                  ["Manifest hash", result.manifest_hash],
-                  ["Event bytes hash", result.data_hash],
-                  ["Receipt clock", result.report?.receipt_clock],
-                  ["Limitations", result.report?.limitations?.join(" · ")],
-                  ["Acceptance", "Research only · no strategy promotion"],
+                  ["Engine", <ShortId key="e" value={result.engine_hash} />],
+                  [
+                    "Manifest",
+                    <ShortId key="m" value={result.manifest_hash} />,
+                  ],
+                  ["Events", <ShortId key="d" value={result.data_hash} />],
+                  [
+                    "Clock",
+                    result.report?.receipt_clock
+                      ? plain(result.report.receipt_clock)
+                      : null,
+                  ],
+                  [
+                    "Limitations",
+                    result.report?.limitations
+                      ?.map((l) => plain(l))
+                      .join(" · "),
+                  ],
                 ]}
               />
             </Panel>
@@ -1655,49 +1576,39 @@ function LiveReadiness({ health }: { health: HealthResponse | null }) {
     state.summary?.live_enabled ??
     state.meta?.live_enabled;
   return (
-    <Panel
-      title="Live readiness"
-      note="read-only · this workspace has no live controls"
-    >
+    <Panel title="Live readiness">
       <Facts
         items={[
           [
             "Mode",
             mode.kind === "paper"
-              ? "PAPER"
+              ? "Paper"
               : mode.kind === "live"
-                ? "LIVE"
-                : "MODE UNKNOWN · meta missing or contradictory",
+                ? "Live"
+                : "Unknown",
           ],
           [
-            "Order broker identity",
+            "Order broker",
             mode.kind === "live"
               ? mode.orderBroker
               : state.meta?.broker?.orders || "Not reported",
           ],
-          ["Market data broker", state.meta?.broker?.data || "Not reported"],
+          ["Data broker", state.meta?.broker?.data || "Not reported"],
           [
             "Account",
             (mode.kind === "live" ? mode.account : state.meta?.account) ||
               "Not reported",
           ],
           [
-            "live_enabled",
+            "Live trading",
             liveEnabled === undefined || liveEnabled === null
               ? "Not reported"
-              : String(liveEnabled),
+              : liveEnabled
+                ? "On"
+                : "Off",
           ],
-          [
-            "paper_only",
-            state.meta?.paper_only === undefined
-              ? "Not reported"
-              : String(state.meta.paper_only),
-          ],
-          [
-            "Activation",
-            "Needs a separate explicit live mandate; a tag, install or passing build never authorizes a session",
-          ],
-          ["Dashboard authority", "Display only"],
+          ["Paper only", yesNo(state.meta?.paper_only)],
+          ["This dashboard", "Read only"],
         ]}
       />
     </Panel>
@@ -1725,11 +1636,7 @@ export function Health() {
           <ActivityIcon />
         </div>
         <div>
-          <h2>Operating evidence</h2>
-          <p>
-            Transport, feed quality and financial freshness are separate
-            observations.
-          </p>
+          <h2>System health</h2>
         </div>
         <Status value={readiness?.status} />
       </div>
@@ -1740,48 +1647,45 @@ export function Health() {
       />
       {(health.state === "error" || health.state === "unavailable") && (
         <Notice>
-          Health projection{" "}
-          {health.state === "unavailable" ? "unavailable" : "failed"}. Only
-          summary readiness and feed fields with explicit values are shown.
+          Health data{" "}
+          {health.state === "unavailable" ? "unavailable" : "could not be read"}
+          .
         </Notice>
       )}
       <div className="cols-2">
         <Panel title="Market data">
           <Facts
             items={[
-              ["Feed mode", words(feed?.mode)],
-              ["Connection state", words(feed?.state)],
-              ["Last tick age", duration(feed?.last_tick_age_ms)],
-              ["Cached keys", count(feed?.cached_keys)],
+              ["Mode", plain(feed?.mode)],
+              ["Connection", plain(feed?.state)],
+              ["Last quote age", duration(feed?.last_tick_age_ms)],
+              ["Cached instruments", count(feed?.cached_keys)],
               ["Reconnects", count(feed?.reconnects)],
-              ["Fallback", feed ? words(feed.fallback) : "Not reported"],
-              ["Reason", words(feed?.reason)],
+              ["Fallback", feed ? yesNo(feed.fallback) : "Not reported"],
+              ["Reason", plain(feed?.reason)],
             ]}
           />
         </Panel>
-        <Panel title="History & readiness">
+        <Panel title="History">
           <Facts
             items={[
-              ["History status", words(h?.status)],
+              ["Status", plain(h?.status)],
               [
                 "Ready / universe",
                 count(h?.ready_instruments) + " / " + count(h?.instruments),
               ],
               ["Target session", h?.target_session],
-              ["Lifecycle", words(readiness?.lifecycle?.status)],
+              ["Lifecycle", plain(readiness?.lifecycle?.status)],
               ["Checked", datetime(readiness?.checked_at_ms)],
-              ["Failure", words(h?.failure)],
-              ["Provider-empty dates", "Remain partial; not counted as ready"],
+              ["Failure", plain(h?.failure)],
             ]}
           />
         </Panel>
       </div>
       <Panel
-        title="Activity attribution"
+        title="Activity"
         note={
-          attribution?.session
-            ? `Controller report for ${attribution.session}; read-only paper activity and financial attribution. Net after-cost P&L subtracts fees; slippage is diagnostic because it is already reflected in fill prices. Drawdown coverage: ${words(attribution.drawdown_coverage?.reason)}`
-            : "Read-only activity and financial attribution from the controller snapshot. Net after-cost P&L subtracts fees; slippage is diagnostic because it is already reflected in fill prices. Drawdown coverage is incomplete."
+          attribution?.session ? `Session ${attribution.session}` : undefined
         }
       >
         {attribution ? (
@@ -1826,7 +1730,7 @@ export function Health() {
                     count(attribution.abstentions?.total_abstentions),
                   ],
                   [
-                    "Decision latency · p50 / p95",
+                    "Decision time (typical / slow)",
                     `${count(attribution.latency?.p50_ms)} / ${count(attribution.latency?.p95_ms)} ms`,
                   ],
                 ]}
@@ -1839,12 +1743,9 @@ export function Health() {
                   ],
                   ["Marked P&L", amount(attribution.financials?.marked_pnl)],
                   ["Fees deducted", amount(attribution.financials?.total_fees)],
+                  ["Slippage", amount(attribution.financials?.total_slippage)],
                   [
-                    "Slippage · diagnostic",
-                    amount(attribution.financials?.total_slippage),
-                  ],
-                  [
-                    "Total cost drag · diagnostic",
+                    "Cost drag",
                     amount(attribution.financials?.total_cost_drag),
                   ],
                   [
@@ -1856,7 +1757,7 @@ export function Health() {
                     amount(attribution.turnover?.notional_traded),
                   ],
                   [
-                    "Cost drag · bps · diagnostic",
+                    "Cost drag (bps)",
                     count(attribution.turnover?.total_cost_drag_bps),
                   ],
                   [
@@ -1864,27 +1765,33 @@ export function Health() {
                     `${amount(attribution.drawdown?.current_drawdown)} / ${amount(attribution.drawdown?.max_drawdown)}`,
                   ],
                   [
-                    "Maximum drawdown · %",
+                    "Max drawdown (%)",
                     percentPoints(attribution.drawdown?.max_drawdown_pct),
                   ],
+                  ...(attribution.drawdown_coverage?.reason
+                    ? [
+                        [
+                          "Drawdown coverage",
+                          plain(attribution.drawdown_coverage.reason),
+                        ] as [string, string],
+                      ]
+                    : []),
                 ]}
               />
             </div>
-            <Panel
-              title="Experiment attribution"
-              note="Recorded selection provenance and associated paper fills; empty rows mean no eligible source attribution was recorded."
-              className="stack-top"
-            >
+            <Panel title="By strategy" className="stack-top">
               <Table
                 rows={attribution.experiment_attributions || []}
                 columns={[
                   {
                     key: "spec",
-                    label: "Spec / source",
+                    label: "Strategy",
                     render: (row) => (
                       <Instrument
-                        symbol={row.spec_id || "Spec not recorded"}
-                        sub={row.source_hash || "Source hash not recorded"}
+                        symbol={
+                          row.spec_id ? plain(row.spec_id) : "Not recorded"
+                        }
+                        sub={<ShortId value={row.source_hash} />}
                       />
                     ),
                   },
@@ -1900,36 +1807,29 @@ export function Health() {
                   },
                   {
                     key: "net",
-                    label: "Net after cost",
+                    label: "Net P&L",
                     render: (row) => amount(row.net_after_cost_pnl),
                   },
                   {
                     key: "trial",
                     label: "Trial",
-                    render: (row) => words(row.trial_status),
+                    render: (row) => plain(row.trial_status),
                   },
                 ]}
-                empty="No source-level experiment attribution recorded"
+                empty="No strategy attribution recorded"
               />
             </Panel>
           </>
         ) : (
-          <Empty title="Activity attribution unavailable">
-            The loaded controller snapshot did not include an activity
-            attribution report.
-          </Empty>
+          <Empty title="Activity unavailable" />
         )}
       </Panel>
-      <Panel
-        title="Derived alerts"
-        note="Alerts are derived from the same recorded status view; they are not worker telemetry."
-      >
+      <Panel title="Alerts">
         {alerts.state === "error" || alerts.state === "unavailable" ? (
-          <Empty title="Alert projection unavailable">
+          <Empty title="Alerts unavailable">
             {alerts.state === "unavailable"
-              ? words(alerts.value?.reason)
-              : "The authenticated alerts read failed."}{" "}
-            No alert count is inferred.
+              ? plain(alerts.value?.reason)
+              : "Could not read alerts."}
           </Empty>
         ) : (
           <Table
@@ -1944,7 +1844,7 @@ export function Health() {
               {
                 key: "source",
                 label: "Source",
-                render: (v) => words(v.source),
+                render: (v) => plain(v.source),
               },
               {
                 key: "observed_at_ms",
@@ -1952,76 +1852,35 @@ export function Health() {
                 render: (v) => datetime(v.observed_at_ms),
               },
             ]}
-            empty="No derived alerts supplied"
+            empty="No alerts"
           />
         )}
       </Panel>
       <LiveReadiness health={health.value} />
       <div className="cols-2">
-        <Panel title="Financial protection">
+        <Panel title="Other checks">
           <Facts
             items={[
-              ["Mode", state.meta?.mode || "Unknown"],
+              ["Quote freshness limit", "2 seconds from receipt"],
+              ["Protection check", "Not reported"],
+              ["Worker heartbeat", "Not reported"],
+              ["Updater / tunnel", "Not reported"],
+              ["Disk and request metrics", "Not reported"],
               [
-                "Live activation",
-                health.value?.live_enabled === true
-                  ? "Enabled"
-                  : health.value?.live_enabled === false
-                    ? "Disabled"
-                    : "Not reported",
-              ],
-              [
-                "Market data broker",
-                words(health.value?.broker?.data ?? state.meta?.broker?.data),
-              ],
-              [
-                "Order broker",
-                words(
-                  health.value?.broker?.orders ?? state.meta?.broker?.orders,
-                ),
-              ],
-              [
-                "Dashboard authority",
-                health.value?.execution_authority === false
-                  ? "Display only"
-                  : "Not reported",
-              ],
-              ["Execution gate", "Original source & receipt · 2 seconds"],
-              ["Stopped / halted books", "Preserved; no dashboard controls"],
-              ["Independent protection", "Observation not supplied"],
-            ]}
-          />
-        </Panel>
-        <Panel title="Unconnected telemetry">
-          <Facts
-            items={[
-              ["Worker heartbeat", "A snapshot does not establish liveness"],
-              ["Updater / tunnel", "Not supplied"],
-              [
-                "Disk / retention / request metrics",
-                "No independent projection supplied",
-              ],
-              [
-                "Health projection",
+                "Health data",
                 health.state === "ready"
-                  ? `${count(health.value?.alert_count)} alerts · /api/v1/health`
+                  ? `${count(health.value?.alert_count)} alerts`
                   : health.state === "unavailable"
-                    ? `Unavailable · ${words(health.value?.reason)}`
-                    : "Failed or not loaded",
+                    ? `Unavailable · ${plain(health.value?.reason)}`
+                    : "Not loaded",
               ],
               [
-                "Alert projection",
+                "Alert data",
                 alerts.state === "ready"
-                  ? `${count(alerts.value?.total ?? alerts.value?.items?.length)} alerts · /api/v1/alerts`
+                  ? `${count(alerts.value?.total ?? alerts.value?.items?.length)} alerts`
                   : alerts.state === "unavailable"
-                    ? `Unavailable · ${words(alerts.value?.reason)}`
-                    : "Failed or not loaded",
-              ],
-              [
-                "Historical price stream",
-                health.state === "ready"
-                  ? "Receipt-minute display series; not certified exchange OHLCV"
-                  : "Series evidence loads from the authenticated API",
+                    ? `Unavailable · ${plain(alerts.value?.reason)}`
+                    : "Not loaded",
               ],
             ]}
           />

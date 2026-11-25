@@ -20,7 +20,7 @@ import {
   Info,
   TriangleAlert,
 } from "lucide-react";
-import { words } from "./data";
+import { instrumentName, plain, sentenceCase, shortId } from "./labels";
 import { STAGES, instrumentLabel } from "./model";
 import type { InstrumentRecord, OrderTrack } from "./model";
 import type { RouteName } from "./data";
@@ -39,83 +39,81 @@ export interface NavItem {
 }
 export const NAV_GROUPS: { group: string; items: NavItem[] }[] = [
   {
-    group: "TRADE",
+    group: "Trade",
     items: [
       {
         id: "overview",
         label: "Overview",
         icon: LayoutDashboard,
-        blurb: "Book, equity, pi lanes and order flow at a glance",
+        blurb: "Account, equity and what the models are doing",
       },
       {
         id: "portfolio",
         label: "Portfolio & fills",
         icon: Wallet,
-        blurb: "Positions, order lifecycle, recorded fills and plans",
+        blurb: "Positions, orders, fills and plans",
       },
       {
         id: "instruments",
         label: "Instruments & F&O",
         icon: Layers,
-        blurb:
-          "Verified cash catalog, derivatives metadata and contract chains",
+        blurb: "Tradable instruments and option chains",
       },
     ],
   },
   {
-    group: "AGENTS",
+    group: "Agents",
     items: [
       {
         id: "lanes",
         label: "pi lanes",
         icon: Sparkles,
-        blurb:
-          "pi decision, gate, research and review turns · display evidence only",
+        blurb: "What each model lane saw, did and decided",
       },
     ],
   },
   {
-    group: "MARKET",
+    group: "Market",
     items: [
       {
         id: "scanner",
         label: "Scanner",
         icon: ScanLine,
-        blurb: "Fresh prospects, missing coverage and screening reasons",
+        blurb: "Today's picks and why others were skipped",
       },
     ],
   },
   {
-    group: "RESEARCH",
+    group: "Research",
     items: [
       {
         id: "strategies",
         label: "Strategies",
         icon: Workflow,
-        blurb: "Recorded strategy references and the research library",
+        blurb: "Strategies behind the picks, and research results",
       },
       {
         id: "backtest",
         label: "Backtest lab",
         icon: FlaskConical,
-        blurb: "Deterministic replay of a supplied strategy artifact",
+        blurb: "Replay a strategy on past data",
       },
     ],
   },
   {
-    group: "SYSTEM",
+    group: "System",
     items: [
       {
         id: "sessions",
         label: "Sessions",
         icon: CalendarDays,
-        blurb: "Archived and current paper sessions",
+        blurb: "Current and past paper sessions",
       },
       {
         id: "health",
         label: "Health",
         icon: HeartPulse,
-        blurb: "Transport, feed, protection and live readiness",
+        blurb: "Feed, alerts and system checks",
       },
     ],
   },
@@ -140,7 +138,7 @@ export function Status({
   return (
     <span className={`status ${kind}`}>
       <i />
-      {children || words(value)}
+      {children || plain(value)}
     </span>
   );
 }
@@ -185,7 +183,7 @@ export function Empty({
       </span>
       <div>
         <strong>{title}</strong>
-        <p>{children || "No evidence has been supplied for this view."}</p>
+        {children && <p>{children}</p>}
         {action && <div className="empty-action">{action}</div>}
       </div>
     </div>
@@ -235,7 +233,7 @@ export function LaneSwatch({ lane }: { lane: string }) {
   return (
     <span className={`lane-swatch ${known ? "lane-" + lane : ""}`}>
       <i />
-      {lane}
+      {sentenceCase(lane)}
     </span>
   );
 }
@@ -310,22 +308,36 @@ export interface TableProps<T> {
   onSelect?: (row: T) => void;
   empty?: string;
   compact?: boolean;
+  /** Drop columns whose every cell reads "Not reported" or the like. The first column stays. */
+  hideEmpty?: boolean;
 }
+const EMPTY_CELLS = new Set(["Not reported", "Unknown", "Not recorded", "—"]);
 function cell<T>(row: T, key: string): React.ReactNode {
   if (typeof row !== "object" || row === null || !(key in row)) return "—";
   const value: unknown = Reflect.get(row, key);
   return typeof value === "string" || typeof value === "number" ? value : "—";
 }
 export function Table<T>({
-  columns,
+  columns: allColumns,
   rows,
   getKey = (_, i) => i,
   selected,
   onSelect,
   empty,
   compact = false,
+  hideEmpty = false,
 }: TableProps<T>) {
   if (!rows.length) return <Empty title={empty || "No matching records"} />;
+  const columns = hideEmpty
+    ? allColumns.filter(
+        (c, j) =>
+          j === 0 ||
+          !rows.every((row) => {
+            const shown = c.render ? c.render(row) : cell(row, c.key);
+            return typeof shown === "string" && EMPTY_CELLS.has(shown);
+          }),
+      )
+    : allColumns;
   return (
     <div className={`table-scroll ${compact ? "compact" : ""}`}>
       <table>
@@ -375,10 +387,17 @@ export function Instrument({
 }) {
   return (
     <span className="instrument">
-      <strong>{symbol || instrumentKey || "Unknown instrument"}</strong>
-      <small>{sub || instrumentKey}</small>
+      <strong>{symbol || instrumentName(instrumentKey)}</strong>
+      <small>
+        {sub || (symbol && instrumentKey ? instrumentName(instrumentKey) : "")}
+      </small>
     </span>
   );
+}
+/** First 8 characters of a hash, full value on hover. */
+export function ShortId({ value }: { value: unknown }) {
+  const { text, title } = shortId(value);
+  return title ? <code title={title}>{text}</code> : <>{text}</>;
 }
 export function Facts({
   items,
@@ -478,8 +497,7 @@ export function KpiStrip({
     return (
       <div className="kpis kpis-empty">
         <Empty title={emptyTitle} tone="unavailable">
-          None of {items.map(([name]) => name).join(", ")} has a recorded value
-          in this snapshot. Unknown is shown as unknown, never as zero.
+          {items.map(([name]) => name).join(", ")}: unknown, not zero.
         </Empty>
       </div>
     );

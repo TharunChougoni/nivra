@@ -1,4 +1,5 @@
-import { count, datetime, numeric, words } from "./data";
+import { count, datetime, numeric } from "./data";
+import { plain } from "./labels";
 import { ageLabel, validTimestampMs } from "./operational";
 import type {
   EpisodeMeasurement,
@@ -284,7 +285,7 @@ const SOURCE_REF_STATUS_LABELS: Record<string, string> = {
 
 const CAPTURE_COVERAGE: Record<string, string> = {
   journal_readable: "Journal readable",
-  journal_readability_only: "Journal readability only",
+  journal_readability_only: "Journal readable only",
   book_unavailable: "Book unavailable",
   journal_unavailable: "Journal unavailable",
   disabled: "Disabled",
@@ -344,7 +345,7 @@ export function researchReason(value: unknown, known?: boolean): string {
 
 export function safeHash(value: unknown): string {
   return typeof value === "string" && /^[0-9a-f]{64}$/.test(value)
-    ? `${value.slice(0, 12)}…`
+    ? value.slice(0, 8)
     : "Not reported";
 }
 
@@ -392,7 +393,7 @@ export function observationStatusLabel(value: unknown): string {
 
 export function observationSourceLabel(value: unknown): string {
   return value === "original_queue_and_lifecycle_read_only"
-    ? "Original queue and lifecycle ledgers (read-only)"
+    ? "Queue and lifecycle ledgers"
     : "Not reported";
 }
 
@@ -439,7 +440,7 @@ export function trialGapReason(trials?: ObservationTrialFold | null): string {
   if (!trials) return "Not reported";
   if (trials.status === "partial" || trials.counts_lower_bound === true) {
     const reasons = trialGapReasons(trials);
-    return reasons.length ? reasons.join("; ") : "Reason not reported";
+    return reasons.length ? reasons.join("; ") : "Not reported";
   }
   return "Not applicable";
 }
@@ -449,8 +450,8 @@ export function trialLowerBound(trials?: ObservationTrialFold | null): string {
   if (trials.status === "partial" || trials.counts_lower_bound === true) {
     const tested = trials.known_lower_bound_counts?.global_tested_trial_count;
     return numeric(tested) === null
-      ? "Known lower bound; incomplete history"
-      : `>= ${count(tested)} known; incomplete history`;
+      ? "Incomplete history"
+      : `At least ${count(tested)} (incomplete history)`;
   }
   if (trials.status === "unavailable") return "Unavailable";
   if (trials.status === "disabled") return "Disabled";
@@ -481,8 +482,8 @@ export function trialFamilyKeyNote(
   trials?: ObservationTrialFold | null,
 ): string {
   return trials?.family_key_is_label_only === true
-    ? "Family key is a label only; not a multiple-testing adjustment."
-    : "Family key scope not reported.";
+    ? "Label only, not adjusted"
+    : "Not reported";
 }
 
 export function trialReset(trials?: ObservationTrialFold | null): string {
@@ -502,13 +503,13 @@ export function cohortStatus(value: unknown): string {
         : null;
   switch (status) {
     case "runtime_matched_cohort_unknown":
-      return "Runtime matched; cohort match unknown";
+      return "Runtime matched, cohort unknown";
     case "runtime_changed":
-      return "Runtime changed; cohort not proven";
+      return "Runtime changed";
     case "runtime_unknown":
-      return "Runtime unknown; cohort not proven";
+      return "Runtime unknown";
     default:
-      return "Cohort unknown; not proven";
+      return "Unknown";
   }
 }
 
@@ -765,9 +766,9 @@ export function measurementScope(
 ): string {
   if (!measurement) return "Not reported";
   if (measurement.source_scope === "continuation_original_episode")
-    return "Independent virtual episode continuation — not portfolio returns";
+    return "Virtual episode continuation, not portfolio returns";
   return measurement.evaluation_scope === "independent_episodes"
-    ? "Independent virtual episodes — not portfolio returns"
+    ? "Virtual episodes, not portfolio returns"
     : "Unsupported measurement scope";
 }
 
@@ -780,8 +781,8 @@ export function measurementEpisodeCount(
   const countValue = numeric(measurement.episode_count);
   if (countValue === null) return "Not reported";
   return countValue === 1
-    ? "1 independent virtual episode"
-    : `${count(countValue)} episodes; this panel does not sum them`;
+    ? "1 virtual episode"
+    : `${count(countValue)} episodes`;
 }
 
 export function measurementHash(
@@ -1022,7 +1023,7 @@ export function captureReason(capture?: ObservationCapture | null): string {
   if (capture.reason == null) {
     return capture.status === "journal_readable"
       ? "Not applicable"
-      : "Reason not reported";
+      : "Not reported";
   }
   return researchReason(capture.reason, true);
 }
@@ -1063,7 +1064,7 @@ export function observationEvaluationScope(value: unknown): string {
       ? (value as { evaluation_scope?: unknown })
       : null;
   return measurement?.evaluation_scope === "independent_episodes"
-    ? "Independent virtual episodes — not portfolio returns"
+    ? "Virtual episodes, not portfolio returns"
     : "Not reported";
 }
 
@@ -1230,7 +1231,7 @@ export function milestoneWindow(
 
 export function lifecycleStateLabel(value: unknown): string {
   return typeof value === "string" && LIFECYCLE_STATES.has(value)
-    ? words(value)
+    ? plain(value)
     : "Unknown";
 }
 
@@ -1266,7 +1267,7 @@ export function sourceRefStatusLabel(value: unknown): string {
 
 export function continuationStateLabel(value: unknown): string {
   return typeof value === "string" && CONTINUATION_STATES.has(value)
-    ? words(value)
+    ? plain(value)
     : "Unknown";
 }
 

@@ -6,9 +6,22 @@ import type {
 } from "./types";
 import React, { useLayoutEffect, useRef, useState } from "react";
 import { Brain, ChevronRight, FileText } from "lucide-react";
-import { clock, count, datetime, duration, numeric, usd, words } from "./data";
+import { clock, datetime, duration, numeric, usd } from "./data";
+import {
+  TOOL_LABELS,
+  TRIGGER_LABELS,
+  TURN_ERROR_LABELS,
+  instrumentName,
+  plain,
+  sentenceCase,
+  spoken,
+  tradesProposed,
+} from "./labels";
 import { turnFailed } from "./model";
+import type { InstrumentRecord } from "./model";
 import { Tag } from "./ui";
+
+type Index = Map<string, InstrumentRecord>;
 
 /** Tool calls shown before the middle of a long exchange folds away. */
 const TOOL_HEAD = 3,
@@ -28,15 +41,53 @@ function pretty(t: TranscriptText) {
     return t.text;
   }
 }
-const kib = (bytes: number) =>
-  bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
+/** 5600 → "5.6k"; small counts stay whole. */
+function compact(n: number) {
+  if (n < 1000) return String(Math.round(n));
+  const [value, unit] = n < 1e6 ? [n / 1e3, "k"] : [n / 1e6, "M"];
+  return value.toFixed(value < 10 ? 1 : 0).replace(/\.0$/, "") + unit;
+}
+/** Tool arguments as short plain values: "INE397D01024" or "limit 20 · sort scanner". */
+function argsPreview(args: TranscriptText, index?: Index) {
+  if (args.truncated) return "";
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(args.text);
+  } catch {
+    return "";
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+    return "";
+  const value = (v: unknown): string | null => {
+    if (typeof v === "string")
+      return v.includes("|") ? instrumentName(v, index) : v;
+    if (typeof v === "number") return String(v);
+    if (typeof v === "boolean") return v ? "yes" : "no";
+    if (Array.isArray(v)) {
+      const items = v.map(value).filter((x): x is string => x !== null);
+      return items.length
+        ? items.slice(0, 3).join(", ") +
+            (items.length > 3 ? ` +${items.length - 3}` : "")
+        : null;
+    }
+    return null;
+  };
+  const entries = Object.entries(parsed).flatMap(([key, v]) => {
+    const shown = value(v);
+    return shown === null ? [] : [[key, shown] as const];
+  });
+  if (entries.length === 1) return entries[0][1];
+  return entries
+    .map(([key, shown]) => `${plain(key).toLowerCase()} ${shown}`)
+    .join(" · ");
+}
 
 function Block({ label, value }: { label: string; value: TranscriptText }) {
   return (
     <div className="chat-block">
       <span className="chat-block-label">
         {label}
-        {value.truncated && <Tag tone="warn">truncated</Tag>}
+        {value.truncated && <Tag tone="warn">Cut short</Tag>}
       </span>
       <pre>{value.text ? pretty(value) : "(empty)"}</pre>
     </div>
@@ -60,12 +111,12 @@ function ThinkingLine({
       >
         <ChevronRight size={12} className="chat-chevron" aria-hidden="true" />
         <Brain size={12} aria-hidden="true" />
-        <span className="chat-line-text muted">{firstLine(text)}</span>
+        <span className="chat-line-text muted">{spoken(firstLine(text))}</span>
       </button>
       {open && (
         <div className="chat-detail">
           <pre>{text}</pre>
-          {truncated && <Tag tone="warn">truncated</Tag>}
+          {truncated && <Tag tone="warn">Cut short</Tag>}
         </div>
       )}
     </div>
@@ -75,18 +126,21 @@ function ThinkingLine({
 function ToolLine({
   tool,
   live,
+  index,
 }: {
   tool: Extract<TranscriptItem, { kind: "tool" }>;
   live: boolean;
+  index?: Index;
 }) {
   const [open, setOpen] = useState(false);
-  const status: { label: string; tone?: "pos" | "neg" | "warn" } = tool.result
-    ? tool.is_error
-      ? { label: "failed", tone: "neg" }
-      : { label: "ok", tone: "pos" }
-    : live
-      ? { label: "running" }
-      : { label: "no result", tone: "warn" };
+  const status: { label: string; tone?: "pos" | "neg" | "warn" } | null =
+    tool.result
+      ? tool.is_error
+        ? { label: "Failed", tone: "neg" }
+        : null
+      : live
+        ? { label: "Running" }
+        : { label: "No result", tone: "warn" };
   return (
     <div className="chat-item">
       <button
@@ -95,9 +149,11 @@ function ToolLine({
         onClick={() => setOpen(!open)}
       >
         <ChevronRight size={12} className="chat-chevron" aria-hidden="true" />
-        <strong>{tool.name}</strong>
-        <span className="chat-line-text muted">{preview(tool.args.text)}</span>
-        <Tag tone={status.tone}>{status.label}</Tag>
+        <strong title={tool.name}>{plain(tool.name, TOOL_LABELS)}</strong>
+        <span className="chat-line-text muted">
+          {preview(argsPreview(tool.args, index))}
+        </span>
+        {status && <Tag tone={status.tone}>{status.label}</Tag>}
         <span className="chat-duration num muted">
           {duration(tool.duration_ms)}
         </span>
@@ -108,7 +164,7 @@ function ToolLine({
           {tool.result ? (
             <Block label="Result" value={tool.result} />
           ) : (
-            <p className="muted">No result recorded yet.</p>
+            <p className="muted">No result yet.</p>
           )}
         </div>
       )}
@@ -116,27 +172,35 @@ function ToolLine({
   );
 }
 
-/** The lane's own trigger as a short sentence: named instruments, else the brief size. */
-function triggerBody(ex: TranscriptExchange) {
-  const names = (ex.turn?.trigger?.instruments ?? []).map(
-    (k) => k.split("|")[1] || k,
+/** The lane's own trigger as a short sentence: named instruments, else why the turn ran. */
+function triggerBody(ex: TranscriptExchange, index?: Index) {
+  const trigger = ex.turn?.trigger;
+  const names = (trigger?.instruments ?? []).map((k) =>
+    instrumentName(k, index),
   );
-  if (!names.length) return `Brief · ${kib(ex.brief.bytes)}`;
+  if (!names.length) {
+    const why = trigger?.reason || trigger?.kind;
+    return why
+      ? sentenceCase(plain(why, TRIGGER_LABELS))
+      : "No trigger recorded";
+  }
   const shown = names.slice(0, 6).join(", ");
   return `Instruments: ${shown}${names.length > 6 ? ` and ${names.length - 6} more` : ""}`;
 }
 
-function UserBubble({ ex }: { ex: TranscriptExchange }) {
+function UserBubble({ ex, index }: { ex: TranscriptExchange; index?: Index }) {
   const [open, setOpen] = useState(false);
   const trigger = ex.turn?.trigger;
   const meta = [
     clock(ex.at_ms) + " IST",
-    trigger?.kind ? words(trigger.kind) : null,
-    trigger?.reason ? words(trigger.reason) : null,
+    trigger?.kind ? plain(trigger.kind, TRIGGER_LABELS) : null,
+    trigger?.reason && trigger.instruments?.length
+      ? plain(trigger.reason, TRIGGER_LABELS)
+      : null,
   ].filter(Boolean);
   return (
     <div className={open ? "chat-user open" : "chat-user"}>
-      <p className="chat-bubble">{triggerBody(ex)}</p>
+      <p className="chat-bubble">{triggerBody(ex, index)}</p>
       <div className="chat-user-meta">
         <span>{meta.join(" · ")}</span>
         <button
@@ -153,9 +217,7 @@ function UserBubble({ ex }: { ex: TranscriptExchange }) {
         <>
           <pre>{ex.brief.text || "(empty)"}</pre>
           {ex.brief.truncated && (
-            <p className="chat-note">
-              Brief truncated: showing the first part of {kib(ex.brief.bytes)}.
-            </p>
+            <p className="chat-note">Brief cut short. Showing the start.</p>
           )}
         </>
       )}
@@ -171,44 +233,46 @@ function Outcome({
   ex: TranscriptExchange;
   hasLater: boolean;
 }) {
-  const turn = ex.turn;
+  const turn = ex.turn,
+    answered = ex.items.some((i) => i.kind === "text");
   const chips: React.ReactNode[] = [];
   if (turn?.error)
     chips.push(
-      <Tag key="error" tone="neg">
-        {turn.error}
+      <Tag key="error" tone="neg" title={turn.error}>
+        {plain(turn.error, TURN_ERROR_LABELS)}
       </Tag>,
     );
   else if (turn && turnFailed(turn))
     chips.push(
       <Tag key="status" tone="neg">
-        {words(turn.status)}
+        {plain(turn.status)}
       </Tag>,
     );
   else if (!ex.complete)
     chips.push(
       <Tag key="open" tone={hasLater ? "warn" : undefined}>
-        {hasLater ? "interrupted" : "in progress"}
+        {hasLater ? "Interrupted" : "In progress"}
       </Tag>,
     );
-  if (turn?.verdict)
+  if (turn?.verdict) {
     chips.push(
       <Tag key="verdict" tone={turn.verdict.escalate ? "pos" : "warn"}>
-        {turn.verdict.escalate ? "escalated" : "declined"}
+        {turn.verdict.escalate ? "Escalated" : "Declined"}
       </Tag>,
-      <span key="reason">{turn.verdict.reason}</span>,
     );
+    if (!answered) chips.push(<span key="reason">{turn.verdict.reason}</span>);
+  }
   if (turn?.plan) {
     const plan = turn.plan,
       validated = plan.status === "validated";
     chips.push(
       <Tag key="plan" tone={validated ? "pos" : "warn"}>
         {validated
-          ? `plan validated · ${count(plan.actions ?? 0)} actions`
-          : `plan ${words(plan.status)}`}
+          ? (tradesProposed(plan.actions) ?? "Validated")
+          : plain(plan.status)}
       </Tag>,
     );
-    const detail = [plan.stance && words(plan.stance), plan.error]
+    const detail = [!answered && plan.stance && plain(plan.stance), plan.error]
       .filter(Boolean)
       .join(" · ");
     if (detail) chips.push(<span key="stance">{detail}</span>);
@@ -224,10 +288,10 @@ function Footer({ ex }: { ex: TranscriptExchange }) {
     usage = turn?.usage;
   const parts = [
     elapsed !== null && duration(elapsed),
-    usage && `${count(usage.input)} in / ${count(usage.output)} out`,
-    usage && numeric(usage.cache_read) !== null
-      ? `${count(usage.cache_read)} cached`
-      : null,
+    usage &&
+      numeric(usage.input) !== null &&
+      numeric(usage.output) !== null &&
+      `${compact(Number(usage.input) + Number(usage.output))} tokens`,
     usage && numeric(usage.cost_usd) !== null && usd(usage.cost_usd),
   ].filter(Boolean);
   if (!parts.length && !turn?.fallback) return null;
@@ -238,7 +302,7 @@ function Footer({ ex }: { ex: TranscriptExchange }) {
         <>
           {parts.length > 0 && " · "}
           <Tag tone="warn" title={turn.fallback.reason}>
-            fallback {turn.fallback.to?.id ?? "unknown"}
+            Fallback to {turn.fallback.to?.id ?? "unknown"}
           </Tag>
         </>
       )}
@@ -246,7 +310,15 @@ function Footer({ ex }: { ex: TranscriptExchange }) {
   );
 }
 
-function Answer({ items, live }: { items: TranscriptItem[]; live: boolean }) {
+function Answer({
+  items,
+  live,
+  index,
+}: {
+  items: TranscriptItem[];
+  live: boolean;
+  index?: Index;
+}) {
   const [all, setAll] = useState(false);
   const tools = items.filter((i) => i.kind === "tool");
   // Fold the middle of a long run of tool calls; a failed call always stays visible.
@@ -284,27 +356,31 @@ function Answer({ items, live }: { items: TranscriptItem[]; live: boolean }) {
         out.push(<ThinkingLine key={i} {...item} />);
         break;
       case "tool":
-        out.push(<ToolLine key={i} tool={item} live={live} />);
+        out.push(<ToolLine key={i} tool={item} live={live} index={index} />);
         break;
       case "text":
         out.push(
-          <p key={i} className="chat-answer">
-            {item.text}
-            {item.truncated && <Tag tone="warn">truncated</Tag>}
+          <p
+            key={i}
+            className="chat-answer"
+            title={spoken(item.text) === item.text ? undefined : item.text}
+          >
+            {spoken(item.text)}
+            {item.truncated && <Tag tone="warn">Cut short</Tag>}
           </p>,
         );
         break;
       case "error":
         out.push(
           <p key={i} className="chat-error" role="alert">
-            {item.text}
+            {spoken(item.text)}
           </p>,
         );
         break;
       case "note":
         out.push(
           <p key={i} className="chat-note">
-            {item.text}
+            {spoken(item.text)}
           </p>,
         );
     }
@@ -316,15 +392,21 @@ function Answer({ items, live }: { items: TranscriptItem[]; live: boolean }) {
 function Exchange({
   ex,
   hasLater,
+  index,
 }: {
   ex: TranscriptExchange;
   hasLater: boolean;
+  index?: Index;
 }) {
   return (
     <article className="chat-exchange">
-      <UserBubble ex={ex} />
+      <UserBubble ex={ex} index={index} />
       <div className="chat-assistant">
-        <Answer items={ex.items} live={!ex.complete && !hasLater} />
+        <Answer
+          items={ex.items}
+          live={!ex.complete && !hasLater}
+          index={index}
+        />
         <Outcome ex={ex} hasLater={hasLater} />
         <Footer ex={ex} />
       </div>
@@ -332,18 +414,12 @@ function Exchange({
   );
 }
 
-function SessionDivider({
-  id,
-  session,
-}: {
-  id: string;
-  session?: TranscriptSession;
-}) {
+function SessionDivider({ session }: { session?: TranscriptSession }) {
   const bits = [
-    `session ${id.slice(0, 8)}`,
+    "New session",
     session?.model,
-    session?.thinking && `thinking ${session.thinking}`,
-    session?.started_ms != null && `started ${datetime(session.started_ms)}`,
+    session?.thinking && `${session.thinking} thinking`,
+    session?.started_ms != null && datetime(session.started_ms),
   ].filter(Boolean);
   return (
     <div className="chat-session" role="separator">
@@ -356,6 +432,7 @@ function SessionDivider({
 export function LaneThread({
   exchanges,
   sessions,
+  index,
   hasMore,
   loadingMore,
   moreFailed,
@@ -363,6 +440,7 @@ export function LaneThread({
 }: {
   exchanges: TranscriptExchange[];
   sessions: Map<string, TranscriptSession>;
+  index?: Index;
   hasMore: boolean;
   loadingMore: boolean;
   moreFailed: boolean;
@@ -416,12 +494,9 @@ export function LaneThread({
       {ordered.map((ex, i) => (
         <React.Fragment key={`${ex.session}:${ex.at_ms}`}>
           {(i === 0 || ordered[i - 1].session !== ex.session) && (
-            <SessionDivider
-              id={ex.session}
-              session={sessions.get(ex.session)}
-            />
+            <SessionDivider session={sessions.get(ex.session)} />
           )}
-          <Exchange ex={ex} hasLater={i < ordered.length - 1} />
+          <Exchange ex={ex} hasLater={i < ordered.length - 1} index={index} />
         </React.Fragment>
       ))}
     </div>

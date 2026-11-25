@@ -118,9 +118,7 @@ table {
   border-collapse: collapse;
 }
 th {
-  font: 500 10px var(--sans);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font: 500 11px var(--sans);
   color: var(--fg-2);
   text-align: left;
   padding: 5px 8px;
@@ -783,13 +781,6 @@ a.button {
 }
 .state-text {
   min-width: 0;
-}
-.state-eyebrow {
-  display: block;
-  font: 600 9.5px var(--mono);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--tone);
 }
 .state-text strong {
   display: block;

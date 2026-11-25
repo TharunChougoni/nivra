@@ -322,9 +322,7 @@
 }
 .lane-stats dt {
   color: var(--fg-3);
-  font-size: 9.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-size: 10.5px;
 }
 .lane-stats dd {
   margin: 0;

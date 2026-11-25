@@ -116,36 +116,6 @@ export function calendarSource(value: unknown): string {
   if (isVerifiedCalendarSource(value)) return value as string;
   return value == null ? "Not reported" : "Not verified";
 }
-export function countsScopeLabel(value: unknown): string {
-  return value === "host_alert_outbox_not_account_filtered"
-    ? "Host alert outbox; not filtered per account"
-    : "Not reported";
-}
-export function outboxScopeLabel(value: unknown): string {
-  return value === "current_host_outbox_not_delivery_window"
-    ? "Current host outbox; not the retained delivery window"
-    : "Not reported";
-}
-export function outboxRowScopeLabel(value: unknown): string {
-  return value === "current_outbox_rows_not_retained_delivery_window"
-    ? "Current host outbox rows"
-    : "Not reported";
-}
-export function outboxDeadScopeLabel(value: unknown): string {
-  return value === "current_outbox_quarantined_rows_not_delivery_window"
-    ? "Current host outbox quarantined rows"
-    : "Not reported";
-}
-export function retainedWindowScopeLabel(value: unknown): string {
-  return value === "retained_rows_within_window_lower_bound_not_lifetime"
-    ? "Retained delivery window; lower bound, not lifetime"
-    : "Not reported";
-}
-export function timestampScopeLabel(value: unknown): string {
-  return value === "retained_window_only_not_lifetime"
-    ? "Retained window only; not lifetime"
-    : "Not reported";
-}
 export type FreshnessState = "unknown" | "future" | "recent" | "aging" | "old";
 export interface Freshness {
   state: FreshnessState;
@@ -173,7 +143,7 @@ export function freshness(captured: unknown, now: unknown): Freshness {
       state: "unknown",
       age_ms: null,
       label: "Not reported",
-      detail: "No published capture timestamp.",
+      detail: "Not reported",
     };
   const age = current - at;
   if (age < 0)
@@ -181,8 +151,7 @@ export function freshness(captured: unknown, now: unknown): Freshness {
       state: "future",
       age_ms: age,
       label: "Clock anomaly",
-      detail:
-        "Published capture is later than this browser clock; age is not trusted.",
+      detail: "Not trusted (future clock)",
     };
   const state: FreshnessState =
     age <= 60_000 ? "recent" : age <= 360_000 ? "aging" : "old";
@@ -195,7 +164,7 @@ export function freshness(captured: unknown, now: unknown): Freshness {
         : state === "aging"
           ? "Aging capture"
           : "Old capture",
-    detail: `${duration(age)} before this render; server as-of unchanged.`,
+    detail: `${duration(age)} old`,
   };
 }
 export function operationalHealthState(

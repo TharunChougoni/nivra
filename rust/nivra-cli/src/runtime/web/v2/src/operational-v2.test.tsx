@@ -197,25 +197,9 @@ function panel(options: {
 
 test("alert outbox 64-row scope is separate from the retained 3600 s / 20-row window", () => {
   const view = panel({ operational: operational() });
-  assert.ok(view.text.includes("64 rows max"), "outbox cap");
-  assert.ok(view.text.includes("20 rows max"), "retained cap");
-  assert.ok(view.text.includes("Current host outbox"), "outbox scope");
-  assert.ok(view.text.includes("Retained delivery window"), "retained scope");
-  assert.ok(view.text.includes("lower bound"));
-  assert.ok(view.text.includes("not lifetime"));
-  assert.ok(view.text.includes("Current host outbox rows"));
-  assert.ok(view.text.includes("Retained window only; not lifetime"));
-  assert.ok(view.text.includes("3600 s"));
-  assert.ok(view.text.includes("(retained window)"));
+  assert.equal(view.fact("Queued now"), "2");
+  assert.ok(view.fact("Window")?.startsWith("3600 s"), "window");
   assert.equal(view.text.includes("private-fixture"), false);
-
-  const missingCap = panel({
-    operational: operational({
-      alert_transport: alert({ counts: counts({ outbox_max_rows: null }) }),
-    }),
-  });
-  assert.equal(missingCap.text.includes("64 rows max"), false);
-  assert.equal(missingCap.fact("Outbox row cap"), "Not reported");
 
   const unavailable = panel({
     operational: operational({
@@ -230,10 +214,9 @@ test("present last accepted/failure timestamps say retained window", () => {
   const view = panel({ operational: operational() });
   const accepted = view.fact("Last accepted");
   const failure = view.fact("Last failure");
-  assert.ok(accepted?.includes("(retained window)"), String(accepted));
-  assert.ok(failure?.includes("(retained window)"), String(failure));
+  assert.ok(accepted?.includes("Nov"), String(accepted));
+  assert.ok(failure?.includes("Nov"), String(failure));
   assert.ok(failure?.includes("Rate limited"), String(failure));
-  assert.equal(view.text.includes("lifetime"), true);
 });
 
 test("last completed zero, malformed and future values never become 1970 or recent", () => {
@@ -248,8 +231,8 @@ test("last completed zero, malformed and future values never become 1970 or rece
       loop_generation: 1,
     },
   });
-  assert.equal(zero.fact("Last completed loop (original)"), "Not reported");
-  assert.equal(zero.fact("Published capture"), "Not reported");
+  assert.equal(zero.fact("Last loop finished"), "Not reported");
+  assert.equal(zero.fact("Snapshot taken"), "Not reported");
   assert.equal(zero.text.includes("1970"), false);
 
   const malformed = panel({
@@ -263,10 +246,7 @@ test("last completed zero, malformed and future values never become 1970 or rece
       loop_generation: 1,
     },
   });
-  assert.equal(
-    malformed.fact("Last completed loop (original)"),
-    "Not reported",
-  );
+  assert.equal(malformed.fact("Last loop finished"), "Not reported");
   assert.equal(malformed.text.includes("1970"), false);
 
   const future = panel({
@@ -280,9 +260,9 @@ test("last completed zero, malformed and future values never become 1970 or rece
       loop_generation: 1,
     },
   });
-  assert.ok(future.text.includes("Clock anomaly"));
+  assert.ok(future.text.includes("ahead of this browser"));
   assert.equal(future.text.includes("Recent capture"), false);
-  assert.equal(future.fact("Reported age"), "Not trusted (future clock)");
+  assert.equal(future.fact("Loop age"), "Not trusted (future clock)");
 });
 
 test("book state uses portfolio-first projectedStatus and never shows a false open", () => {
@@ -335,34 +315,32 @@ test("unsupported and versionless operational health are not interpreted", () =>
       loop_generation: 1,
     },
   });
-  assert.ok(view.text.includes("version 1 is not supported"));
-  assert.ok(view.text.includes("values are not interpreted"));
-  assert.equal(view.fact("Published capture"), "Not interpreted");
+  assert.ok(view.text.includes("format 1 is not supported"));
+  assert.ok(view.text.includes("Values are hidden"));
+  assert.equal(view.fact("Snapshot taken"), "Not shown");
   assert.equal(view.text.includes("Recent capture"), false);
   assert.equal(view.text.includes("Idle"), false);
-  assert.equal(view.text.includes("Verified NSE calendar source"), false);
-  assert.equal(view.text.includes("64 rows max"), false);
+  assert.equal(view.text.includes("(verified)"), false);
 
   const versionless = panel({
     operational: {} as OperationalHealth,
   });
-  assert.ok(versionless.text.includes("version is not reported"));
-  assert.ok(versionless.text.includes("values are not interpreted"));
+  assert.ok(versionless.text.includes("format is not reported"));
+  assert.ok(versionless.text.includes("Values are hidden"));
   assert.equal(versionless.text.includes("older API"), false);
   assert.equal(versionless.text.includes("Recent capture"), false);
 });
 
 test("calendar source is verified only for the known NSE source", () => {
   const known = panel({ operational: operational() });
-  assert.ok(known.text.includes("Verified NSE calendar source"));
-  assert.ok(known.text.includes("NSE/CMTR/71775"));
+  assert.ok(known.text.includes("NSE/CMTR/71775 (verified)"));
 
   const invalid = panel({
     operational: operational({
       calendar: calendar({ source: "NSE/EVIL/1", covered: true }),
     }),
   });
-  assert.equal(invalid.text.includes("Verified NSE calendar source"), false);
+  assert.equal(invalid.text.includes("(verified)"), false);
   assert.equal(invalid.text.includes("NSE/EVIL/1"), false);
   assert.ok(invalid.text.includes("Not verified"));
 
@@ -381,6 +359,5 @@ test("calendar source is verified only for the known NSE source", () => {
     }),
   });
   assert.ok(outside.text.includes("No 2027 data"));
-  assert.ok(outside.text.includes("no holiday is guessed"));
-  assert.ok(outside.text.includes("30-day operator default warning"));
+  assert.ok(outside.text.includes("outside verified coverage"));
 });

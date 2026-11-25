@@ -7,13 +7,22 @@ import type {
 import type { LaneStats } from "./model";
 import React, { useEffect, useMemo, useState } from "react";
 import { Columns2 } from "lucide-react";
-import { clock, count, duration, numeric, usd, words } from "./data";
+import {
+  clock,
+  count,
+  duration,
+  fillsFor,
+  finance,
+  numeric,
+  usd,
+} from "./data";
+import { plain, sentenceCase, turnOutcome } from "./labels";
 import {
   LANE_ORDER,
+  instrumentIndex,
   journalCoverage,
   laneStats,
   turnFailed,
-  turnOutcome,
 } from "./model";
 import { Empty, LaneSwatch, Notice, Panel, Segments, useWorkspace } from "./ui";
 import Bars from "./charts/Bars";
@@ -25,19 +34,21 @@ import { LaneThread } from "./LaneChat";
 const PAGE = 20;
 const VIEW_KEY = "nivra.lanes.view";
 const EMPTY_HINT: Record<string, string> = {
-  review: "Runs after the close seal.",
-  research: "Runs on research requests.",
+  review: "Runs after the market closes.",
+  research: "Runs when requested.",
 };
 
 /** Daily budget rows; absent budget fields stay unknown, never zero. */
 function laneBudgetRows(b: LaneBudget | undefined): [string, string][] {
-  if (!b) return [["budget", "not reported"]];
+  if (!b) return [["Budget", "Not reported"]];
   const of = (used: string, total: string) => `${used} of ${total}`;
   return [
-    ["model", [b.provider, b.model].filter(Boolean).join(" · ") || "—"],
-    ["calls today", of(count(b.current_usage), count(b.daily_call_budget))],
-    ["spend today", of(usd(b.current_cost_usd), usd(b.daily_cost_usd))],
-    ["status", words(b.status)],
+    ["Model", [b.provider, b.model].filter(Boolean).join(" · ") || "—"],
+    ["Calls today", of(count(b.current_usage), count(b.daily_call_budget))],
+    ["Spend today", of(usd(b.current_cost_usd), usd(b.daily_cost_usd))],
+    ...(b.status && b.status.toLowerCase() !== "unknown"
+      ? [["Status", plain(b.status)] as [string, string]]
+      : []),
   ];
 }
 /** Gate turns → escalated → decision turns → validated plans → actions → fills; recorded counts only. */
@@ -50,39 +61,35 @@ function GateFunnel({ turns }: { turns: AgentTurn[] }) {
     (gate.length ? gate.filter((t) => t.verdict?.escalate).length : null);
   const plans = decisions.filter((t) => t.plan);
   const stages: [string, number | null][] = [
-    ["gate turns", gate.length || null],
-    ["escalated", escalated],
-    ["decision turns", decisions.length || null],
+    ["Gate turns", gate.length || null],
+    ["Escalated", escalated],
+    ["Decision turns", decisions.length || null],
     [
-      "validated plans",
+      "Validated plans",
       plans.length
         ? plans.filter((t) => t.plan?.status === "validated").length
         : null,
     ],
     [
-      "actions",
+      "Actions",
       plans.length
         ? plans.reduce((n, t) => n + (t.plan?.actions ?? 0), 0)
         : null,
     ],
-    ["fills", numeric(state.fills?.total ?? state.fills?.items?.length)],
+    ["Fills", numeric(state.fills?.total ?? state.fills?.items?.length)],
   ];
   const known = stages.filter((s): s is [string, number] => s[1] !== null);
   return (
     <Panel
       title="Gate funnel"
-      note={
-        state.agent?.truncated
-          ? "recorded counts · loaded turns only"
-          : "recorded counts only"
-      }
+      note={state.agent?.truncated ? "Loaded turns only" : undefined}
     >
       {known.length ? (
         <div className="panel-body">
           <Bars items={known.map(([label, value]) => ({ label, value }))} />
         </div>
       ) : (
-        <Empty title="No funnel counts recorded" />
+        <Empty title="No counts yet" />
       )}
     </Panel>
   );
@@ -111,7 +118,7 @@ function CostChart({ turns, lanes }: { turns: AgentTurn[]; lanes: string[] }) {
         series: lanes.map((lane) => {
           let total = 0;
           return {
-            label: lane,
+            label: sentenceCase(lane),
             color: laneColor(lane),
             step: true,
             width: 1.4,
@@ -127,15 +134,15 @@ function CostChart({ turns, lanes }: { turns: AgentTurn[]; lanes: string[] }) {
   );
   if (priced.length < 2)
     return (
-      <Empty title="Not enough priced turns">
-        Cumulative cost needs at least two turns with recorded cost.
+      <Empty title="Not enough cost data">
+        Needs at least two turns with a cost.
       </Empty>
     );
   return (
     <TimeChart
       x={x}
       panes={panes}
-      ariaLabel="Cumulative pi cost by lane"
+      ariaLabel="Cumulative cost by lane"
       tooltip={(i) => ({
         title: clock(x[i] * 1000) + " IST",
         rows: panes[0].series.map(
@@ -219,24 +226,23 @@ function LaneStatsStrip({
   budget?: LaneBudget;
 }) {
   const cells: [string, string][] = [
-    ["turns · errors", `${count(stat.turns)} · ${count(stat.failed)}`],
-    ["fallbacks", count(stat.fallbacks)],
+    ["Turns / errors", `${count(stat.turns)} / ${count(stat.failed)}`],
+    ["Fallbacks", count(stat.fallbacks)],
     [
-      "latency p50 / p95",
+      "Reply time (typical / slow)",
       `${duration(stat.p50_ms)} / ${duration(stat.p95_ms)}`,
     ],
-    ["tokens in / out", `${count(stat.input)} / ${count(stat.output)}`],
-    ["cache read", count(stat.cache_read)],
-    ["cost", usd(stat.cost_usd)],
-    ["calls", count(stat.calls)],
+    ["Tokens in / out", `${count(stat.input)} / ${count(stat.output)}`],
+    ["Cost", usd(stat.cost_usd)],
+    ["Calls", count(stat.calls)],
     ...laneBudgetRows(budget),
     [
-      "last turn",
+      "Last turn",
       stat.last ? `${clock(stat.last.at_ms)} · ${turnOutcome(stat.last)}` : "—",
     ],
   ];
   return (
-    <dl className="lane-stats" aria-label={`${stat.lane} stats`}>
+    <dl className="lane-stats" aria-label={`${sentenceCase(stat.lane)} stats`}>
       {cells.map(([k, v]) => (
         <div key={k}>
           <dt>{k}</dt>
@@ -261,7 +267,7 @@ function LaneColumn({
   journalMissing: boolean;
   picker?: React.ReactNode;
 }) {
-  const [, app] = useWorkspace(),
+  const [state, app] = useWorkspace(),
     revision = useRevision("agent"),
     // Reloads the newest page whenever the agent revision changes.
     first = useRead(
@@ -300,6 +306,16 @@ function LaneColumn({
       ),
     [first.value, older.sessions],
   );
+  const record = app.record(),
+    index = useMemo(
+      () =>
+        instrumentIndex({
+          positions: finance(record).positions,
+          fills: fillsFor(state, record),
+          scanner: state.scanner?.items,
+        }),
+      [record, state],
+    );
   const cursor = older.next !== undefined ? older.next : first.value?.next;
   const loadMore = async () => {
     if (!cursor) return;
@@ -324,30 +340,21 @@ function LaneColumn({
   let body: React.ReactNode;
   if (first.state === "error")
     body = (
-      <Empty tone="failed" title="The lane transcript could not be read">
-        This lane shows no history until the transcript loads again. Other lanes
-        and the stats below are unaffected.
+      <Empty tone="failed" title="Could not load this lane">
+        Other lanes are unaffected.
       </Empty>
     );
   else if (first.state === "unavailable")
-    body = (
-      <Empty tone="unavailable" title="The lane transcript is not reported">
-        The controller has no pi session transcripts to show for this lane.
-      </Empty>
-    );
-  else if (!first.value)
-    body = <p className="panel-note">Loading lane transcript…</p>;
+    body = <Empty tone="unavailable" title="No transcript for this lane" />;
+  else if (!first.value) body = <p className="panel-note">Loading…</p>;
   else if (!exchanges.length)
-    body = (
-      <Empty title="No turns yet">
-        {EMPTY_HINT[lane] ?? "Turns appear after an eligible pi lane runs."}
-      </Empty>
-    );
+    body = <Empty title="No turns yet">{EMPTY_HINT[lane]}</Empty>;
   else
     body = (
       <LaneThread
         exchanges={exchanges}
         sessions={sessions}
+        index={index}
         hasMore={!!cursor}
         loadingMore={older.busy}
         moreFailed={older.failed}
@@ -365,7 +372,7 @@ function LaneColumn({
       {body}
       {journalMissing ? (
         <p className="panel-note">
-          Lane stats are unknown until the pi lane journal loads.
+          Stats are unknown until lane history loads.
         </p>
       ) : (
         <LaneStatsStrip stat={stat} budget={budget} />
@@ -402,13 +409,16 @@ function SessionCharts({
         <div className="session-charts-body">
           <Panel
             title="Timeline"
-            note="x = session time IST · height = log latency · hollow = failed · ◆ gate escalated"
+            note="Taller = slower · hollow = failed · ◆ gate escalated"
             actions={
               <Segments
                 value={laneFilter}
                 onChange={setLaneFilter}
                 label="Lane filter"
-                items={[["all", "all"], ...lanes.map((l) => [l, l])]}
+                items={[
+                  ["all", "All"],
+                  ...lanes.map((l) => [l, sentenceCase(l)]),
+                ]}
               />
             }
           >
@@ -423,26 +433,18 @@ function SessionCharts({
                 />
               </div>
             ) : (
-              <Empty title="No lane turns recorded">
-                Turns appear after an eligible pi lane runs.
-              </Empty>
+              <Empty title="No turns recorded" />
             )}
           </Panel>
           <div className="cols-2">
             <GateFunnel turns={turns} />
-            <Panel
-              title="Latency distribution"
-              note="turns per log-spaced latency bucket (ms)"
-            >
+            <Panel title="Reply times" note="Turns by reply time (ms)">
               <div className="panel-body">
                 <LatencyHistograms turns={turns} lanes={active} />
               </div>
             </Panel>
           </div>
-          <Panel
-            title="Cumulative cost by lane"
-            note="stepped · USD · from recorded per-turn cost"
-          >
+          <Panel title="Cumulative cost by lane" note="USD, running total">
             <CostChart turns={turns} lanes={active} />
           </Panel>
         </div>
@@ -501,16 +503,14 @@ export default function Lanes() {
     <>
       {(state.agentState === "error" || state.agentState === "unavailable") && (
         <Notice error>
-          The pi lane journal is{" "}
+          Lane history is{" "}
           {state.agentState === "error" ? "unavailable" : "not reported"}.
-          {journalMissing &&
-            " Turn counts, latency, tokens and cost stay unknown, and no lane is shown as idle."}
+          {journalMissing && " Counts stay unknown."}
         </Notice>
       )}
       {coverage.label && (
         <Notice>
-          Lane journal: {coverage.label}. Counts below cover the loaded turns
-          only; API usage totals are shown as reported.
+          {sentenceCase(coverage.label)}. Counts cover loaded turns only.
         </Notice>
       )}
       <div className="lane-tabbar">
@@ -533,11 +533,12 @@ export default function Lanes() {
                 onClick={() => setView({ ...view, lane: l })}
               >
                 <i className={`lane-dot ${tone}`} aria-hidden="true" />
-                {l}
+                {sentenceCase(l)}
                 <span className="num muted">
                   {journalMissing
                     ? "—"
-                    : count(s.turns) + (s.failed ? ` · ${s.failed} err` : "")}
+                    : count(s.turns) +
+                      (s.failed ? ` · ${s.failed} failed` : "")}
                 </span>
               </button>
             );
@@ -566,7 +567,7 @@ export default function Lanes() {
                 .filter((l) => l !== lane)
                 .map((l) => (
                   <option key={l} value={l}>
-                    {l}
+                    {sentenceCase(l)}
                   </option>
                 ))}
             </select>,

@@ -391,16 +391,14 @@ test("observation queue separates counts and trial debt is a lower bound", () =>
       portfolio={portfolio()}
     />,
   );
-  assert.match(textValue, /Prospective observation/);
-  assert.match(textValue, /Queue pending/);
-  assert.match(textValue, /Queue running/);
-  assert.match(textValue, /Queue cancel requested/);
-  assert.match(textValue, />= 3 known; incomplete history/);
-  assert.match(textValue, /main counts stay Not reported/i);
+  assert.match(textValue, /Observation/);
+  assert.match(textValue, /Pending/);
+  assert.match(textValue, /Running/);
+  assert.match(textValue, /Cancel requested/);
+  assert.match(textValue, /At least 3 \(incomplete history\)/);
+  assert.match(textValue, /Counts are a lower bound/i);
   assert.match(textValue, /2026-10-28/);
-  assert.match(textValue, /does not claim the financial fill/i);
-  assert.match(textValue, /Not validated/i);
-  assert.match(textValue, /truncated/i);
+  assert.match(textValue, /cut off/i);
 });
 
 test("measurement is independent episodes and unavailable PnL is not zero", () => {
@@ -441,22 +439,18 @@ test("measurement is independent episodes and unavailable PnL is not zero", () =
       portfolio={portfolio()}
     />,
   );
-  assert.match(
-    textValue,
-    /Independent virtual episodes — not portfolio returns/,
-  );
+  assert.match(textValue, /Virtual episodes, not portfolio returns/);
   assert.match(textValue, /No entry/i);
   assert.match(textValue, /Unavailable/);
   assert.match(textValue, /not zero/i);
-  assert.doesNotMatch(textValue, /Episode PnL\s*₹0/);
+  assert.doesNotMatch(textValue, /P&L\s*₹0/);
   assert.match(textValue, /₹2,500\.00/);
-  assert.match(textValue, /declared research capital assumption/i);
-  assert.match(textValue, /not account funds/i);
+  assert.match(textValue, /assumed, not account funds/i);
   // An unavailable checked measurement is an explicit entry even when the
   // effective body is null; the original status is preserved separately.
   assert.match(
     textValue,
-    /Measurement unavailable: Observation measurement unverified/,
+    /Result unavailable: Observation measurement unverified/,
   );
   assert.match(
     textValue,
@@ -477,17 +471,15 @@ test("measurement shows immutable episode hash separately from live context", ()
       portfolio={portfolio()}
     />,
   );
-  assert.match(textValue, /Immutable episode hash/);
-  assert.match(textValue, /Live context hash/);
-  assert.match(textValue, /does not rewrite/i);
+  assert.match(textValue, /Episode hash/);
+  assert.match(textValue, /Context hash/);
   assert.match(textValue, /-₹12\.34/);
-  assert.match(textValue, /Cohort match unknown/i);
-  assert.match(textValue, /does not claim the financial fill/i);
+  assert.match(textValue, /Unknown/);
   assert.doesNotMatch(textValue, /validated/i);
   // The checked status and original record are shown separately from the
   // effective immutable episode evidence.
-  assert.match(textValue, /Measurement state\s*Verified/);
-  assert.match(textValue, /Original record\s*Original record verified/);
+  assert.match(textValue, /Result\s*Verified/);
+  assert.match(textValue, /Original\s*Original record verified/);
 });
 
 test("cross-session continuity uses observation milestones, not library continuation", () => {
@@ -504,13 +496,12 @@ test("cross-session continuity uses observation milestones, not library continua
       portfolio={portfolio()}
     />,
   );
-  assert.match(textValue, /Cross-session continuity/);
-  assert.match(textValue, /Original recorded/);
-  assert.match(textValue, /Effective scientific/);
+  assert.match(textValue, /Across sessions/);
+  assert.match(textValue, /Recorded state/);
+  assert.match(textValue, /Scientific state/);
   assert.match(textValue, /2026-10-27/);
   assert.match(textValue, /2026-10-28/);
   assert.doesNotMatch(textValue, /2026-10-29/);
-  assert.match(textValue, /Milestones are the only cross-session source/i);
   // Actual d946 vocabulary: the scientific map is separate from the recorded
   // lifecycle state, and the original record is preserved separately.
   assert.match(textValue, /Insufficient evidence/);
@@ -537,8 +528,7 @@ test("cross-session continuity uses observation milestones, not library continua
       portfolio={portfolio()}
     />,
   );
-  assert.match(truncated, /Milestone source is truncated/i);
-  assert.match(truncated, /not a complete total/i);
+  assert.match(truncated, /Milestone list is cut off/i);
 });
 
 test("three-session milestone keeps original, recording and current read separate", () => {
@@ -570,7 +560,6 @@ test("three-session milestone keeps original, recording and current read separat
   assert.match(textValue, /2026-10-26/);
   assert.match(textValue, /2026-10-28/);
   assert.doesNotMatch(textValue, /2026-10-29/);
-  assert.match(textValue, /current session does not claim the financial fill/i);
 });
 
 test("library continued flags alone are not cross-session evidence", () => {
@@ -586,7 +575,7 @@ test("library continued flags alone are not cross-session evidence", () => {
       portfolio={portfolio()}
     />,
   );
-  assert.match(textValue, /No cross-session continuity/);
+  assert.match(textValue, /No continued episodes/);
   assert.doesNotMatch(textValue, /2026-10-29/);
 });
 
@@ -624,11 +613,11 @@ test("unavailable observation without source keeps reason, queue and trials", ()
       portfolio={portfolio()}
     />,
   );
-  assert.match(textValue, /Observation projection is unavailable/i);
+  assert.match(textValue, /Observation unavailable/i);
   assert.match(textValue, /Candidate task state unavailable/i);
-  assert.match(textValue, /Queue pending/);
-  assert.match(textValue, /Trial debt status/);
-  assert.doesNotMatch(textValue, /Queue pending\s*0/);
+  assert.match(textValue, /Pending/);
+  assert.match(textValue, /Trials/);
+  assert.doesNotMatch(textValue, /Pending\s*0/);
 });
 
 test("unknown observation version is unsupported, never available or idle", () => {
@@ -646,9 +635,9 @@ test("unknown observation version is unsupported, never available or idle", () =
       portfolio={portfolio()}
     />,
   );
-  assert.match(textValue, /version 2 is not supported/i);
-  assert.match(textValue, /not interpreted/i);
-  assert.doesNotMatch(textValue, /Queue pending\s*2/);
+  assert.match(textValue, /format 2 is not supported/i);
+  assert.match(textValue, /Values are hidden/i);
+  assert.doesNotMatch(textValue, /Pending\s*2/);
 });
 
 test("capture journal readability is separate from current eligibility", () => {
@@ -661,13 +650,10 @@ test("capture journal readability is separate from current eligibility", () => {
     />,
   );
   assert.match(textValue, /Journal readable/);
-  assert.match(textValue, /Journal readability only/);
-  assert.match(textValue, /Current eligibility/);
+  assert.match(textValue, /Eligibility/);
   assert.match(textValue, /Not evaluated/);
-  assert.match(textValue, /Eligible for attempt\s*No/);
+  assert.match(textValue, /Eligible to try\s*No/);
   assert.match(textValue, /8 keys · 64 rows · 60,000 ms interval/);
-  assert.match(textValue, /not trading risk caps/i);
-  assert.match(textValue, /makes no provider guarantee/i);
   assert.doesNotMatch(
     textValue,
     /provider guarantee\s*(?:Yes|True|Confirmed)/i,
@@ -720,18 +706,16 @@ test("continuation quote refs use typed archive hashes and receipt clocks", () =
       portfolio={portfolio()}
     />,
   );
-  assert.match(textValue, /Entry quote archive hash/);
-  assert.match(textValue, /111111111111…/);
-  assert.match(textValue, /Exit quote archive hash/);
-  assert.match(textValue, /222222222222…/);
-  assert.match(textValue, /Continuation receipt hash/);
-  assert.match(textValue, /333333333333…/);
-  assert.match(textValue, /Continuation receipt scope/);
-  assert.match(textValue, /continuation_original_episode/);
-  assert.match(textValue, /Recorded source clock/);
-  assert.match(textValue, /Processed source clock/);
-  assert.match(textValue, /Exit source clock/);
-  assert.match(textValue, /Immutable episode hash\s*Not reported/);
+  assert.match(textValue, /Entry quote hash/);
+  assert.match(textValue, /11111111/);
+  assert.match(textValue, /Exit quote hash/);
+  assert.match(textValue, /22222222/);
+  assert.match(textValue, /Receipt hash/);
+  assert.match(textValue, /33333333/);
+  assert.match(textValue, /Recorded/);
+  assert.match(textValue, /Processed/);
+  assert.match(textValue, /Exited/);
+  assert.match(textValue, /Episode hash\s*Not reported/);
 });
 
 test("partial trial debt renders bounded gap reasons, not raw JSON", () => {
@@ -754,7 +738,7 @@ test("partial trial debt renders bounded gap reasons, not raw JSON", () => {
       portfolio={portfolio()}
     />,
   );
-  assert.match(textValue, /Trial gaps/);
+  assert.match(textValue, /Gaps/);
   assert.match(textValue, /Trial queue body invalid/);
   assert.match(textValue, /Trial lifecycle missing/);
   assert.doesNotMatch(textValue, /trial_queue_body_invalid/);
@@ -786,7 +770,7 @@ test("milestone observation and measurement gaps render known reasons separately
       portfolio={portfolio()}
     />,
   );
-  assert.match(textValue, /Observation gaps/);
+  assert.match(textValue, /Data gaps/);
   assert.match(textValue, /Entry source quote was stale/);
   assert.match(textValue, /Measurement gaps/);
   assert.match(textValue, /Exit source quote missing/);
@@ -807,7 +791,7 @@ test("unsupported measurement version is an explicit entry, not no evidence", ()
     />,
   );
   assert.match(textValue, /Measurement version 2 is not supported/i);
-  assert.match(textValue, /No PnL, return or progress is inferred/i);
+  assert.match(textValue, /Financial fields are hidden/i);
   assert.doesNotMatch(textValue, /No measurement evidence/);
   assert.doesNotMatch(textValue, /₹999/);
 });
@@ -837,7 +821,6 @@ test("display caps state showing N of M and never extrapolate a total", () => {
     />,
   );
   assert.match(textValue, /Showing 20 of 21 milestones/);
-  assert.match(textValue, /display limit/i);
 });
 
 test("source-truncated milestones do not claim a total", () => {
@@ -860,8 +843,8 @@ test("source-truncated milestones do not claim a total", () => {
       portfolio={portfolio()}
     />,
   );
-  assert.match(textValue, /Milestone source is truncated/i);
-  assert.match(textValue, /total count not reported/i);
+  assert.match(textValue, /Milestone list is cut off/i);
+  assert.match(textValue, /Total unknown/i);
 });
 
 test("measurement list display cap states showing N of M", () => {
@@ -882,8 +865,7 @@ test("measurement list display cap states showing N of M", () => {
       portfolio={portfolio()}
     />,
   );
-  assert.match(textValue, /Showing 5 of 6 measurement entries/);
-  assert.match(textValue, /display limit/i);
+  assert.match(textValue, /Showing 5 of 6 episodes/);
 });
 
 test("rendered untrusted fields stay bounded and never become private text", () => {
@@ -1008,10 +990,9 @@ test("book continuity keeps stopped and halted books explicit without controls",
       portfolio={portfolio({ stopped: true })}
     />,
   );
-  assert.match(textValue, /Paper book continuity/);
+  assert.match(textValue, /Paper finances/);
   assert.match(textValue, /Stopped/);
   assert.match(textValue, /₹5,000\.00/);
-  assert.match(textValue, /no restart, unhalt or activation control/i);
 });
 
 test("halted book stays explicit and observation disabled is not zero", () => {
@@ -1030,7 +1011,7 @@ test("halted book stays explicit and observation disabled is not zero", () => {
     />,
   );
   assert.match(textValue, /Halted/);
-  assert.match(textValue, /Observation is disabled by policy/i);
-  assert.doesNotMatch(textValue, /Queue pending\s*0/);
-  assert.doesNotMatch(textValue, /Queue running\s*0/);
+  assert.match(textValue, /Observation is disabled/i);
+  assert.doesNotMatch(textValue, /Pending\s*0/);
+  assert.doesNotMatch(textValue, /Running\s*0/);
 });

@@ -9,7 +9,8 @@ import type {
   PortfolioResponse,
   SummaryResponse,
 } from "./types";
-import { amount, count, datetime, projectedStatus, words } from "./data";
+import { amount, count, datetime, projectedStatus } from "./data";
+import { plain } from "./labels";
 import { Empty, Facts, KpiStrip, Notice, Panel, Status, Table } from "./ui";
 import {
   actualScoring,
@@ -72,7 +73,6 @@ import {
   calendarOutsideLabel,
   calendarSource,
   controllerLivenessFrom,
-  countsScopeLabel,
   coverageLabel,
   daysRemaining,
   durationOrUnknown,
@@ -85,12 +85,7 @@ import {
   metric,
   operationalHealthPresence,
   operationalHealthState,
-  outboxDeadScopeLabel,
-  outboxRowScopeLabel,
-  outboxScopeLabel,
-  retainedWindowScopeLabel,
   secondsLabel,
-  timestampScopeLabel,
   validTimestampMs,
   yesNo,
 } from "./operational";
@@ -102,11 +97,6 @@ function useNow() {
     return () => clearInterval(timer);
   }, []);
   return now;
-}
-function modeLabel(summary?: SummaryResponse | null) {
-  if (summary?.live_enabled === true || summary?.mode === "live") return "LIVE";
-  if (summary?.mode === "paper" || summary?.paper_only === true) return "PAPER";
-  return "Not reported";
 }
 function bookState(
   summary?: SummaryResponse | null,
@@ -133,53 +123,15 @@ function PaperFinancialPanel({
   portfolio?: PortfolioResponse | null;
 }) {
   return (
-    <Panel
-      title="Paper financial status"
-      note="Published paper book values. This is not a P&L, profitability or operating qualification."
-    >
+    <Panel title="Paper finances">
       <KpiStrip
         items={[
-          [
-            "Capital",
-            amount(summary?.capital ?? portfolio?.capital),
-            "Published paper allocation",
-          ],
-          [
-            "Cash",
-            amount(summary?.cash ?? portfolio?.cash),
-            "Published paper cash",
-          ],
-          [
-            "Equity",
-            amount(summary?.equity ?? portfolio?.equity),
-            "Published paper equity",
-          ],
+          ["Capital", amount(summary?.capital ?? portfolio?.capital)],
+          ["Cash", amount(summary?.cash ?? portfolio?.cash)],
+          ["Equity", amount(summary?.equity ?? portfolio?.equity)],
         ]}
       />
-      <Facts
-        items={[
-          ["Mode", modeLabel(summary)],
-          ["Paper only", yesNo(summary?.paper_only)],
-          [
-            "Live activation",
-            summary?.live_enabled === true
-              ? "Enabled"
-              : summary?.live_enabled === false
-                ? "Disabled"
-                : "Not reported",
-          ],
-          ["Book state", bookState(summary, portfolio)],
-          [
-            "Book projection",
-            "Portfolio projection first; summary state fallback",
-          ],
-          [
-            "Financial freshness gate",
-            "Original quote receipt · 2 seconds (unchanged)",
-          ],
-          ["Profitability claim", "None; published values only"],
-        ]}
-      />
+      <Facts items={[["Book state", bookState(summary, portfolio)]]} />
     </Panel>
   );
 }
@@ -201,36 +153,27 @@ function ControllerLivenessPanel({
   const completed = lastCompletedAt(liveness, operational, interpret);
   const completedFuture = completed !== null && completed > now;
   return (
-    <Panel
-      title="Controller liveness"
-      note="Uses the controller's original completed-at timestamp. Browser refresh does not renew it."
-    >
+    <Panel title="Controller">
       <Facts
         items={[
-          ["Liveness status", livenessLabel(liveness?.status)],
-          ["Last completed loop (original)", datetime(completed)],
+          ["Status", livenessLabel(liveness?.status)],
+          ["Last loop finished", datetime(completed)],
           [
-            "Reported age",
+            "Loop age",
             completedFuture
               ? "Not trusted (future clock)"
               : ageLabel(liveness?.age_ms),
           ],
           [
-            "Expected next deadline",
+            "Next loop due",
             datetime(validTimestampMs(liveness?.expected_deadline_ms)),
           ],
-          ["Server max age", durationOrUnknown(liveness?.max_age_ms)],
-          ["Loop generation", metric(liveness?.loop_generation)],
+          ["Max loop age", durationOrUnknown(liveness?.max_age_ms)],
+          ["Loop count", metric(liveness?.loop_generation)],
+          ["Snapshot taken", interpret ? datetime(captured) : "Not shown"],
+          ["Snapshot age", interpret ? fresh.detail : "Not shown"],
           [
-            "Published capture",
-            interpret ? datetime(captured) : "Not interpreted",
-          ],
-          [
-            "Capture age in this browser",
-            interpret ? fresh.detail : "Not interpreted (unsupported version).",
-          ],
-          [
-            "Capture freshness",
+            "Snapshot freshness",
             interpret ? (
               <Status
                 value={
@@ -244,33 +187,24 @@ function ControllerLivenessPanel({
                 {fresh.label}
               </Status>
             ) : (
-              "Not interpreted"
+              "Not shown"
             ),
           ],
         ]}
       />
       {!interpret && (
-        <Notice>
-          Operational health version is not supported; published capture and
-          projection fields are not interpreted.
-        </Notice>
+        <Notice>Health format not supported. Values are hidden.</Notice>
       )}
       {completedFuture && (
         <Notice error>
-          Clock anomaly: last completed timestamp is later than this browser
-          clock; age and freshness are not trusted.
+          Last loop time is ahead of this browser's clock. Age is not trusted.
         </Notice>
       )}
       {fresh.state === "future" && (
         <Notice error>
-          Clock anomaly: published capture is later than this browser clock. Age
-          and freshness are unknown.
+          Snapshot time is ahead of this browser's clock. Age is unknown.
         </Notice>
       )}
-      <p className="caption">
-        A stale last completed loop is not evidence that the controller is hung.
-        Only the published liveness status is used.
-      </p>
     </Panel>
   );
 }
@@ -281,30 +215,26 @@ function ResearchPanel({ summary }: { summary?: SummaryResponse | null }) {
     ? library.items.length
     : null;
   return (
-    <Panel
-      title="Research & advisory"
-      note="Research library and advisory status from the same snapshot. No promotion, new endpoint or activation control is added."
-    >
+    <Panel title="Research">
       <Facts
         items={[
-          ["Library status", words(library?.status)],
+          ["Library", plain(library?.status)],
           [
-            "Recorded candidates",
+            "Candidates",
             candidates === null ? "Not reported" : count(candidates),
           ],
-          ["Library truncated", yesNo(library?.truncated)],
+          ["Library cut off", yesNo(library?.truncated)],
           [
-            "Activation authority",
+            "Activation",
             activation === false
               ? "Not authorized"
               : activation === true
                 ? "Reported authorized; verify independently"
                 : "Not reported",
           ],
-          ["Model status", words(summary?.model_status)],
-          ["Entry status", words(summary?.entry_status)],
-          ["Readiness", words(summary?.readiness?.status)],
-          ["Cross-session visualization", "See Cross-session continuity below"],
+          ["Model", plain(summary?.model_status)],
+          ["Entries", plain(summary?.entry_status)],
+          ["Readiness", plain(summary?.readiness?.status)],
         ]}
       />
     </Panel>
@@ -319,10 +249,8 @@ function CalendarPanel({
 }) {
   if (!interpret || !calendar)
     return (
-      <Panel title="Calendar coverage">
-        <Empty title="Calendar coverage unavailable">
-          The snapshot did not include verified NSE calendar coverage.
-        </Empty>
+      <Panel title="Calendar">
+        <Empty title="Calendar unavailable" />
       </Panel>
     );
   const outside =
@@ -333,80 +261,57 @@ function CalendarPanel({
       ? null
       : metric(calendar.expiry_warning_days);
   return (
-    <Panel
-      title="Calendar coverage"
-      note={
-        verified
-          ? "Verified NSE calendar source. Dates are exchange dates (IST); no holiday is guessed outside coverage."
-          : "Calendar source is not verified. Dates are shown as reported but are not treated as verified; no holiday is guessed outside coverage."
-      }
-    >
+    <Panel title="Calendar">
       <Facts
         items={[
-          ["Source", calendarSource(calendar.source)],
           [
-            "Source verification",
-            verified ? "Verified NSE calendar source" : "Not verified",
+            "Source",
+            verified
+              ? `${calendarSource(calendar.source)} (verified)`
+              : calendarSource(calendar.source),
           ],
           [
             "Covered range",
             `${exchangeDate(calendar.covered_from)} to ${exchangeDate(calendar.covered_to)}`,
           ],
           [
-            "Current operational date",
-            exchangeDate(calendar.current_operational_date),
+            "Today",
+            `${exchangeDate(calendar.current_operational_date)} · ${coverageLabel(calendar.covered)}`,
           ],
-          ["Current coverage", coverageLabel(calendar.covered)],
-          ["Requested session", exchangeDate(calendar.requested_session)],
           [
-            "Requested coverage",
-            coverageLabel(calendar.requested_session_covered),
+            "Requested session",
+            `${exchangeDate(calendar.requested_session)} · ${coverageLabel(calendar.requested_session_covered)}`,
           ],
-          ["Historical session", exchangeDate(calendar.historical_session)],
           [
-            "Historical coverage",
-            coverageLabel(calendar.historical_session_covered),
+            "Historical session",
+            `${exchangeDate(calendar.historical_session)} · ${coverageLabel(calendar.historical_session_covered)}`,
           ],
-          ["Days remaining", daysRemaining(calendar.days_remaining)],
+          ["Days left", daysRemaining(calendar.days_remaining)],
           [
             "Expiring",
             calendar.expiring === true
               ? warningDays === null
-                ? "Yes · operator-default warning (days not reported)"
-                : `Yes · ${warningDays}-day operator default warning`
+                ? "Yes"
+                : `Yes (warns ${warningDays} days ahead)`
               : yesNo(calendar.expiring),
           ],
           ["Expired", yesNo(calendar.expired)],
-          [
-            "Warning basis",
-            "Operator-chosen default; not an exchange guarantee",
-          ],
-          ["Update prerequisite", "Verified exchange calendar update required"],
         ]}
       />
       {outside && (
         <Notice error>
-          {calendarOutsideLabel(calendar)} — outside{" "}
-          {verified ? "verified NSE" : "reported"} coverage for{" "}
-          {calendar.covered === false
-            ? "the current operational date"
-            : "the requested session"}
-          ; no holiday is guessed.
+          {calendarOutsideLabel(calendar)}: outside{" "}
+          {verified ? "verified" : "reported"} coverage for{" "}
+          {calendar.covered === false ? "today" : "the requested session"}.
         </Notice>
       )}
       {calendar.expiring === true && (
         <Notice>
-          Calendar coverage expires in {daysRemaining(calendar.days_remaining)}.
-          {warningDays === null
-            ? " The operator-default warning is not an exchange guarantee."
-            : ` The ${warningDays}-day warning is an operator default, not an exchange guarantee.`}
+          Calendar coverage ends in {daysRemaining(calendar.days_remaining)}.
         </Notice>
       )}
       {calendar.expired === true && (
-        <Notice error>
-          Calendar coverage has expired. A verified exchange calendar update is
-          required.
-        </Notice>
+        <Notice error>Calendar coverage has expired. Update it.</Notice>
       )}
     </Panel>
   );
@@ -420,139 +325,60 @@ function AlertPanel({
 }) {
   if (!interpret || !alert)
     return (
-      <Panel title="Alert transport">
-        <Empty title="Alert transport unavailable">
-          The snapshot did not include a host alert outbox projection.
-        </Empty>
+      <Panel title="Alert delivery">
+        <Empty title="Alert delivery unavailable" />
       </Panel>
     );
   const counts = alert.counts;
   const retained = alert.retained_window;
-  const outboxCap =
-    counts && counts.outbox_max_rows != null
-      ? `${metric(counts.outbox_max_rows)} rows max`
-      : "Not reported";
-  const retainedCap =
-    retained && retained.max_retained_rows != null
-      ? `${metric(retained.max_retained_rows)} rows max`
-      : "Not reported";
-  const countValue = (value: unknown, scope: string) =>
-    counts ? `${metric(value)} · ${scope}` : "Counts unavailable";
+  const countValue = (value: unknown) =>
+    counts ? metric(value) : "Counts unavailable";
   const lastAccepted = validTimestampMs(alert.last_accepted_at_ms);
   const lastFailure = validTimestampMs(alert.last_failure_at_ms);
+  const windowStart = validTimestampMs(retained?.start_ms);
+  const windowEnd = validTimestampMs(retained?.end_ms);
   return (
-    <Panel
-      title="Alert transport"
-      note="Host alert outbox. Queued/retrying/dead are current host-outbox rows; accepted counts and delivery timestamps are the retained window. Neither is lifetime history."
-    >
+    <Panel title="Alert delivery">
       <Facts
         items={[
-          ["Store", "Host alert outbox"],
           ["Status", alertStoreLabel(alert.status)],
-          ["Counts scope", countsScopeLabel(alert.counts_scope)],
+          ["Queued now", countValue(counts?.queued)],
+          ["Retrying now", countValue(counts?.retrying)],
+          ["Dead now", countValue(counts?.dead)],
+          ["Accepted by receiver", countValue(counts?.transport_accepted)],
           [
-            "Outbox scope",
-            counts ? outboxScopeLabel(counts.outbox_scope) : "Not reported",
-          ],
-          ["Outbox row cap", outboxCap],
-          [
-            "Queued (current outbox)",
-            countValue(
-              counts?.queued,
-              outboxRowScopeLabel(counts?.queued_scope),
-            ),
-          ],
-          [
-            "Retrying (current outbox)",
-            countValue(
-              counts?.retrying,
-              outboxRowScopeLabel(counts?.retrying_scope),
-            ),
-          ],
-          [
-            "Dead / quarantined (current outbox)",
-            countValue(counts?.dead, outboxDeadScopeLabel(counts?.dead_scope)),
-          ],
-          [
-            "Sender 2xx ACKs (retained window)",
-            countValue(
-              counts?.transport_accepted,
-              timestampScopeLabel(counts?.transport_accepted_scope),
-            ),
-          ],
-          [
-            "ACK meaning",
-            "Sender HTTP 2xx receipt; not a human read or delivery guarantee.",
-          ],
-          [
-            "In-flight or transport error (retained window)",
-            countValue(
-              counts?.in_flight_or_transport_error,
-              timestampScopeLabel(counts?.in_flight_or_transport_error_scope),
-            ),
-          ],
-          [
-            "Status 0 meaning",
-            "Ambiguous in-flight or transport error; not a confirmed failure.",
+            "Errors or in flight",
+            countValue(counts?.in_flight_or_transport_error),
           ],
           [
             "Dropped",
             counts
               ? counts.dropped == null
-                ? "Not recorded (unknown, not zero)"
+                ? "Not recorded"
                 : metric(counts.dropped)
               : "Counts unavailable",
           ],
           [
-            "Retention window",
-            alert.retention_window_seconds == null
-              ? "Not reported"
-              : `${secondsLabel(alert.retention_window_seconds)} retained`,
-          ],
-          ["Retained row cap", retainedCap],
-          [
-            "Retained window scope",
+            "Window",
             retained
-              ? retainedWindowScopeLabel(retained.scope)
+              ? `${secondsLabel(alert.retention_window_seconds)} · ${datetime(windowStart)} to ${datetime(windowEnd)}`
               : "Not reported",
           ],
-          [
-            "Rows in retained window",
-            retained ? metric(retained.rows_in_window) : "Not reported",
-          ],
-          [
-            "Retained delivery rows",
-            retained ? metric(retained.retained_delivery_rows) : "Not reported",
-          ],
-          [
-            "Retained window start",
-            retained
-              ? datetime(validTimestampMs(retained.start_ms))
-              : "Not reported",
-          ],
-          [
-            "Retained window end",
-            retained
-              ? datetime(validTimestampMs(retained.end_ms))
-              : "Not reported",
-          ],
-          ["Truncation", "Unknown cap or lazy pruning"],
-          ["Dead definition", "Quarantined outbox rows only."],
           [
             "Last accepted",
             lastAccepted != null
-              ? `${datetime(lastAccepted)} (retained window)`
+              ? datetime(lastAccepted)
               : alert.last_accepted_at_ms == null
-                ? "Not recorded in retained window"
-                : "Not reported (retained window)",
+                ? "None in window"
+                : "Not reported",
           ],
           [
             "Last failure",
             lastFailure != null
-              ? `${datetime(lastFailure)} (retained window) · ${failureCategory(alert.last_failure_category)}`
+              ? `${datetime(lastFailure)} · ${failureCategory(alert.last_failure_category)}`
               : alert.last_failure_at_ms == null
-                ? "Not recorded in retained window"
-                : "Not reported (retained window)",
+                ? "None in window"
+                : "Not reported",
           ],
           [
             "Failure marker",
@@ -563,27 +389,18 @@ function AlertPanel({
                 : "Not reported",
           ],
           [
-            "Marker meaning",
-            "Marker presence only; not proof of an attempt or its outcome.",
-          ],
-          [
             "Delivery guarantee",
             alert.delivery_guarantee === false
-              ? "No delivery guarantee"
+              ? "None"
               : yesNo(alert.delivery_guarantee),
           ],
         ]}
       />
-      {counts == null && (
-        <Notice>
-          Alert counts are unavailable for this store state; they are not
-          treated as zero.
-        </Notice>
-      )}
+      {counts == null && <Notice>Alert counts unavailable.</Notice>}
       {retained?.clock_anomaly === true && (
         <Notice error>
-          Clock anomaly: future-dated delivery rows are present. Timestamps and
-          counts are not trusted as current.
+          Some delivery rows are dated in the future. Times and counts may be
+          wrong.
         </Notice>
       )}
     </Panel>
@@ -599,35 +416,16 @@ export function BookContinuity({
   const state = bookState(summary, portfolio);
   const stopped = state === "Stopped" || state === "Halted";
   return (
-    <Panel
-      title="Paper book continuity"
-      note="Portfolio-first book state. The continuing paper account is unchanged; no new trading risk cap, provider switch or activation control is added."
-    >
+    <Panel title="Paper account">
       <Facts
         className="facts-strip"
         items={[
           ["Book state", state],
-          [
-            "Continuing account",
-            amount(summary?.capital ?? portfolio?.capital),
-          ],
-          [
-            "Stopped / halted books",
-            "Preserved; no restart, unhalt or activation control",
-          ],
-          ["Actual model actions", "Separate from virtual research studies"],
-          [
-            "Financial freshness gate",
-            "Original quote receipt · 2 seconds (unchanged)",
-          ],
+          ["Capital", amount(summary?.capital ?? portfolio?.capital)],
         ]}
       />
       {stopped && (
-        <Notice error>
-          The paper book is {state.toLowerCase()}. This dashboard has no
-          restart, unhalt or activation control; the original stopped or halted
-          book is preserved.
-        </Notice>
+        <Notice error>The paper book is {state.toLowerCase()}.</Notice>
       )}
     </Panel>
   );
@@ -638,14 +436,8 @@ function ObservationPanel({ summary }: { summary?: SummaryResponse | null }) {
   const state = observationState(observation);
   if (state === "missing") {
     return (
-      <Panel
-        title="Prospective observation"
-        note="Read-only queue, lifecycle and trial-debt projection from original ledgers. No queue action, progress estimate or aggregate return is shown."
-      >
-        <Empty title="Observation projection not present in this snapshot">
-          This snapshot does not include the observation projection. Queue
-          counts, milestones and trial debt are not inferred as zero.
-        </Empty>
+      <Panel title="Observation">
+        <Empty title="No observation data in this snapshot" />
       </Panel>
     );
   }
@@ -661,30 +453,21 @@ function ObservationPanel({ summary }: { summary?: SummaryResponse | null }) {
         ? String(rawVersion)
         : "not reported";
     return (
-      <Panel
-        title="Prospective observation"
-        note="Read-only queue, lifecycle and trial-debt projection from original ledgers."
-      >
+      <Panel title="Observation">
         <Notice error>
           {observation &&
           typeof observation === "object" &&
           !Array.isArray(observation)
-            ? `Observation projection version ${versionText} is not supported; values are not interpreted. Queue counts and trial debt are not inferred.`
-            : "Observation projection is malformed or unsupported; values are not interpreted. Queue counts and trial debt are not inferred."}
+            ? `Observation format ${versionText} is not supported. Values are hidden.`
+            : "Observation data is malformed. Values are hidden."}
         </Notice>
       </Panel>
     );
   }
   if (state === "disabled") {
     return (
-      <Panel
-        title="Prospective observation"
-        note="Read-only queue, lifecycle and trial-debt projection from original ledgers."
-      >
-        <Notice>
-          Observation is disabled by policy; no queue counts, milestones or
-          trial debt are inferred as zero.
-        </Notice>
+      <Panel title="Observation">
+        <Notice>Observation is disabled.</Notice>
         <Facts items={[["Status", observationStatusLabel("disabled")]]} />
       </Panel>
     );
@@ -698,27 +481,32 @@ function ObservationPanel({ summary }: { summary?: SummaryResponse | null }) {
   const future = asOf !== null && asOf > Date.now();
   const milestone = milestoneWindow(lifecycle);
   const rows = milestone.rows;
-  const continued = rows.some(
-    (row) => row.continued === true || row.continuation_state != null,
-  );
   const partial =
     trials?.status === "partial" || trials?.counts_lower_bound === true;
+  const trialCountRows: [string, string][] = [
+    ["Tested", trialMainCount(trials, "global_tested_trial_count")],
+    ["Admitted", trialMainCount(trials, "admitted_trial_count")],
+    ["Executed", trialMainCount(trials, "executed_trial_count")],
+    ["Finished", trialMainCount(trials, "terminal_trial_count")],
+    ["Unknown exposure", trialMainCount(trials, "unknown_exposure_count")],
+    ["Sessions", trialMainCount(trials, "distinct_sessions")],
+  ];
+  const trialCounts: [string, string][] = trialCountRows.every(
+    ([, v]) => v === "Not reported",
+  )
+    ? [["Counts", "Not reported"]]
+    : trialCountRows;
   return (
-    <Panel
-      title="Prospective observation"
-      note="Read-only queue, lifecycle and trial-debt projection from original ledgers. No queue action, progress estimate or aggregate return is shown."
-    >
+    <Panel title="Observation">
       {value.status === "unavailable" && (
         <Notice error>
-          Observation projection is unavailable:{" "}
-          {researchReason((value as { reason?: unknown }).reason, true)}. Counts
-          are not inferred as zero.
+          Observation unavailable:{" "}
+          {researchReason((value as { reason?: unknown }).reason, true)}.
         </Notice>
       )}
       {future && (
         <Notice error>
-          Clock anomaly: observation source as-of is later than this browser
-          clock; age is not trusted and the source time is not renewed.
+          Source time is ahead of this browser's clock. Age is not trusted.
         </Notice>
       )}
       <div className="cols-2">
@@ -726,13 +514,13 @@ function ObservationPanel({ summary }: { summary?: SummaryResponse | null }) {
           items={[
             ["Status", observationStatusLabel(value.status)],
             ["Source", observationSourceLabel(value.source)],
-            ["Queue pending", metric(queue?.pending)],
-            ["Queue running", metric(queue?.running)],
-            ["Queue unknown", metric(queue?.unknown)],
-            ["Queue cancel requested", metric(queue?.cancel_requested)],
-            ["Queue succeeded", metric(queue?.succeeded)],
-            ["Queue rows scanned", metric(queue?.total)],
-            ["Oldest age", observationAge(queue?.oldest_age_ms)],
+            ["Pending", metric(queue?.pending)],
+            ["Running", metric(queue?.running)],
+            ["Unknown state", metric(queue?.unknown)],
+            ["Cancel requested", metric(queue?.cancel_requested)],
+            ["Succeeded", metric(queue?.succeeded)],
+            ["Rows scanned", metric(queue?.total)],
+            ["Oldest item", observationAge(queue?.oldest_age_ms)],
             [
               "Next deadline",
               queue?.next_deadline_ms == null
@@ -740,73 +528,55 @@ function ObservationPanel({ summary }: { summary?: SummaryResponse | null }) {
                 : datetime(validTimestampMs(queue.next_deadline_ms)),
             ],
             [
-              "Deadline remaining",
+              "Time to deadline",
               queue?.deadline_remaining_ms == null
                 ? "Not reported"
                 : durationOrUnknown(queue.deadline_remaining_ms),
             ],
-            ["Queue truncated", yesNo(queue?.truncated)],
+            ["Queue cut off", yesNo(queue?.truncated)],
             [
-              "Native source refs",
+              "Source refs",
               observationRefsStatusLabel(value.observation_refs_status),
             ],
-            ["Native refs scanned", metric(value.observation_refs_scanned)],
-            ["Native refs limit", metric(value.observation_refs_limit)],
-            ["Native refs truncated", yesNo(value.observation_refs_truncated)],
-            ["Native refs partial", yesNo(value.observation_refs_partial)],
-            [
-              "Native refs source error",
-              value.observation_refs_source_error_reason == null
-                ? "Not reported"
-                : researchReason(
-                    value.observation_refs_source_error_reason,
-                    true,
-                  ),
-            ],
+            ["Refs scanned", metric(value.observation_refs_scanned)],
+            ...(value.observation_refs_source_error_reason == null
+              ? []
+              : [
+                  [
+                    "Refs error",
+                    researchReason(
+                      value.observation_refs_source_error_reason,
+                      true,
+                    ),
+                  ] as [string, string],
+                ]),
           ]}
         />
         <Facts
           items={[
-            ["Lifecycle recorded", metric(lifecycle?.recorded)],
-            ["Lifecycle matured", metric(lifecycle?.matured)],
-            ["Lifecycle truncated", yesNo(lifecycle?.truncated)],
-            ["Source as of", asOf === null ? "Not reported" : datetime(asOf)],
+            ["Recorded", metric(lifecycle?.recorded)],
+            ["Matured", metric(lifecycle?.matured)],
+            ["List cut off", yesNo(lifecycle?.truncated)],
+            ["As of", asOf === null ? "Not reported" : datetime(asOf)],
             [
-              "Source age",
+              "Age",
               future
                 ? "Not trusted (future clock)"
                 : ageLabel(asOf === null ? null : Date.now() - asOf),
             ],
-            ["Cohort key (label only)", observationCohortKey(value.cohort)],
+            ["Cohort key", observationCohortKey(value.cohort)],
             ["Cohort match", cohortStatus(value.cohort)],
-            ["Evaluation scope", observationEvaluationScope(value.measurement)],
-            [
-              "Financial profit claim",
-              value.financial_profit_claim === false ? "No" : "Not reported",
-            ],
-            [
-              "Activation authority",
-              value.activation_authorized === false ? "No" : "Not reported",
-            ],
+            ["Scope", observationEvaluationScope(value.measurement)],
           ]}
         />
       </div>
       {queue?.truncated === true && (
-        <Notice>
-          Queue scan was truncated; counts are a bounded scan, not a complete
-          total.
-        </Notice>
+        <Notice>Queue list is cut off. Counts are not a full total.</Notice>
       )}
-      <Notice>
-        Not validated: cohort match is unknown or different; this projection
-        does not assert a common cohort.
-      </Notice>
-      <Panel
-        title="Lifecycle milestones"
-        note="Original recorded state and the latest verified effective state are separate. Milestones are the cross-session source."
-      >
+      <Panel title="Milestones">
         {rows.length ? (
           <Table
+            hideEmpty
             rows={rows}
             getKey={(row, index) => `${safeHash(row.candidate_id)}-${index}`}
             columns={[
@@ -817,18 +587,18 @@ function ObservationPanel({ summary }: { summary?: SummaryResponse | null }) {
               },
               {
                 key: "original",
-                label: "Original recorded",
+                label: "Recorded state",
                 render: (row) =>
                   lifecycleStateLabel(row.original_recorded_state),
               },
               {
                 key: "effective",
-                label: "Effective",
+                label: "Current state",
                 render: (row) => lifecycleStateLabel(row.effective_state),
               },
               {
                 key: "scientific",
-                label: "Effective scientific",
+                label: "Scientific state",
                 render: (row) =>
                   scientificStateLabel(row.effective_scientific_state),
               },
@@ -839,12 +609,12 @@ function ObservationPanel({ summary }: { summary?: SummaryResponse | null }) {
               },
               {
                 key: "source",
-                label: "Source session",
+                label: "From session",
                 render: (row) => safeSession(row.origin_session),
               },
               {
                 key: "recording",
-                label: "Recording session",
+                label: "Recorded in",
                 render: (row) =>
                   safeSession(row.continuation_recorded_in_session),
               },
@@ -855,7 +625,7 @@ function ObservationPanel({ summary }: { summary?: SummaryResponse | null }) {
               },
               {
                 key: "gaps",
-                label: "Observation gaps",
+                label: "Data gaps",
                 render: (row) =>
                   milestoneGapReasons(row).join("; ") || "Not reported",
               },
@@ -873,7 +643,7 @@ function ObservationPanel({ summary }: { summary?: SummaryResponse | null }) {
               },
               {
                 key: "original-measurement",
-                label: "Original measurement",
+                label: "Original result",
                 render: (row) =>
                   originalMeasurementStatusLabel(
                     row.original_measurement_status,
@@ -882,13 +652,13 @@ function ObservationPanel({ summary }: { summary?: SummaryResponse | null }) {
               },
               {
                 key: "source-ref",
-                label: "Source ref",
+                label: "Source",
                 render: (row) =>
                   sourceRefStatusLabel(row.source_observation_ref_status),
               },
               {
                 key: "measurement",
-                label: "Continuation receipt hash",
+                label: "Receipt",
                 render: (row) => safeHash(row.measurement_sha256),
               },
               {
@@ -905,110 +675,59 @@ function ObservationPanel({ summary }: { summary?: SummaryResponse | null }) {
             ]}
           />
         ) : (
-          <Empty title="No observation milestones">
-            No lifecycle milestone is present in this projection.
-          </Empty>
+          <Empty title="No milestones" />
         )}
         {milestone.truncatedByDisplay && (
           <Notice>
-            Showing {milestone.shown} of {milestone.total} milestones; the view
-            is bounded by the display limit. The remaining rows are not copied
-            or counted.
+            Showing {milestone.shown} of {milestone.total} milestones.
           </Notice>
         )}
         {milestone.sourceTruncated && (
-          <Notice>
-            Milestone source is truncated; total count not reported. This view
-            does not extrapolate a full total from the loaded rows.
-          </Notice>
+          <Notice>Milestone list is cut off. Total unknown.</Notice>
         )}
       </Panel>
-      {continued && (
-        <Notice>
-          Original recorded state is preserved. The effective state is the
-          latest verified continuation recorded by the named session; the
-          current session does not claim the financial fill. Source and
-          recording sessions are recorded source clocks; the current read time
-          is not substituted.
-        </Notice>
-      )}
-      <Panel
-        title="Global trial debt"
-        note="Folded from original queues and lifecycle ledgers. A partial read is a lower bound, never a completed count."
-      >
+      <Panel title="Trials">
         <Facts
           items={[
-            ["Trial debt status", trialStatusLabel(trials?.status)],
-            ["Trial lower bound", trialLowerBound(trials)],
-            ["Trial gaps", trialGapReason(trials)],
-            [
-              "Global tested trials",
-              trialMainCount(trials, "global_tested_trial_count"),
-            ],
-            ["Admitted trials", trialMainCount(trials, "admitted_trial_count")],
-            ["Executed trials", trialMainCount(trials, "executed_trial_count")],
-            ["Terminal trials", trialMainCount(trials, "terminal_trial_count")],
-            [
-              "Unknown exposure",
-              trialMainCount(trials, "unknown_exposure_count"),
-            ],
-            ["Distinct sessions", trialMainCount(trials, "distinct_sessions")],
+            ["Status", trialStatusLabel(trials?.status)],
+            ["Count basis", trialLowerBound(trials)],
+            ["Gaps", trialGapReason(trials)],
+            ...trialCounts,
             ["Family key", trialFamilyKeyNote(trials)],
-            ["Multiple testing", "Unadjusted; family key is a label only"],
             ["Trial reset", trialReset(trials)],
           ]}
         />
-        {partial && (
-          <Notice>
-            Trial debt is a lower bound ({trialLowerBound(trials)}). The known
-            gap reasons above explain why the history is incomplete; main counts
-            stay Not reported rather than an exact total.
-          </Notice>
-        )}
+        {partial && <Notice>Counts are a lower bound, not a total.</Notice>}
       </Panel>
-      <Panel
-        title="Observation capture"
-        note="Operational capture budget only; this is not a financial risk cap."
-      >
+      <Panel title="Capture">
         <Facts
           items={[
-            ["Capture status", captureStatusLabel(capture?.status)],
+            ["Status", captureStatusLabel(capture?.status)],
             ["Coverage", captureCoverageLabel(capture?.coverage)],
-            ["Coverage basis", captureCoverageLabel(capture?.coverage_label)],
             [
-              "Current eligibility",
+              "Eligibility",
               captureEligibilityLabel(capture?.current_eligibility),
             ],
             [
-              "Eligible for attempt",
+              "Eligible to try",
               captureEligibleForAttempt(capture?.eligible_for_attempt),
             ],
-            ["Capture reason", captureReason(capture)],
-            ["Capture budget", captureBudget(capture)],
-            ["Resource caps", captureOperationalCaps(capture)],
+            ["Reason", captureReason(capture)],
+            ["Budget", captureBudget(capture)],
+            ["Limits", captureOperationalCaps(capture)],
             ["Provider called", yesNo(capture?.provider_called)],
             ["State written", yesNo(capture?.state_written)],
-            ["Last capture age", observationAge(capture?.last_capture_age_ms)],
+            ["Last capture", observationAge(capture?.last_capture_age_ms)],
           ]}
         />
         {capture?.status === "unavailable" || capture?.status === "unknown" ? (
           <Notice error>
-            Capture projection is {captureStatusLabel(capture?.status)}:{" "}
-            {captureReason(capture)}. No capture, provider call or current
-            eligibility is inferred.
+            Capture is {captureStatusLabel(capture?.status).toLowerCase()}:{" "}
+            {captureReason(capture)}.
           </Notice>
         ) : null}
-        <Notice>
-          Journal readability is not current eligibility. This projection does
-          not evaluate the current book, session or universe and makes no
-          provider guarantee. The caps are resource limits, not trading risk
-          caps.
-        </Notice>
         {capture?.enabled === false && (
-          <Notice>
-            Observation capture is explicitly disabled; no quote request or
-            provider call is inferred.
-          </Notice>
+          <Notice>Observation capture is disabled.</Notice>
         )}
       </Panel>
     </Panel>
@@ -1019,26 +738,14 @@ function MeasurementPanel({ summary }: { summary?: SummaryResponse | null }) {
   const window = measurementWindow(library);
   if (!window.total) {
     return (
-      <Panel
-        title="Virtual research episodes"
-        note="Independent virtual episodes — not portfolio returns. Each episode uses its own declared research capital assumption, never account funds or actual book fills."
-      >
-        <Empty title="No measurement evidence">
-          No per-episode observation measurement is present in this snapshot. No
-          PnL, return or progress is inferred.
-        </Empty>
+      <Panel title="Virtual episodes">
+        <Empty title="No episode results" />
       </Panel>
     );
   }
   return (
-    <Panel
-      title="Virtual research episodes"
-      note="Independent virtual episodes — not portfolio returns. Each episode uses its own declared research capital assumption, never account funds or actual book fills."
-    >
-      <Notice>
-        Independent virtual episodes — not portfolio returns. Research quotes
-        are virtual archived receipts, not live tradeable market quotes.
-      </Notice>
+    <Panel title="Virtual episodes">
+      <Notice>Virtual episodes, not portfolio returns.</Notice>
       {window.entries.map(({ item, measurement, state, reason }, index) => {
         if (state !== "present" || !measurement) {
           return (
@@ -1050,29 +757,30 @@ function MeasurementPanel({ summary }: { summary?: SummaryResponse | null }) {
                 items={[
                   ["Candidate", safeHash(item.candidate_id)],
                   [
-                    "Measurement state",
+                    "Result",
                     state === "unsupported" ? "Unsupported" : "Unavailable",
                   ],
                   ...(item.measurement_status
                     ? ([
                         [
-                          "Checked status",
+                          "Checked",
                           measurementStatusLabel(item.measurement_status),
                         ],
                       ] as [string, string][])
                     : []),
                   ...(item.original_measurement_status
-                    ? ([
-                        ["Original record", measurementOriginalStatus(item)],
-                      ] as [string, string][])
+                    ? ([["Original", measurementOriginalStatus(item)]] as [
+                        string,
+                        string,
+                      ][])
                     : []),
                   ["Reason", reason],
                 ]}
               />
               <Notice error>
                 {state === "unsupported"
-                  ? `${reason}. No financial fields are interpreted and no PnL, return or progress is inferred.`
-                  : `Measurement unavailable: ${reason}. No PnL, return or progress is inferred as zero.`}
+                  ? `${reason}. Financial fields are hidden.`
+                  : `Result unavailable: ${reason}.`}
               </Notice>
             </div>
           );
@@ -1088,14 +796,11 @@ function MeasurementPanel({ summary }: { summary?: SummaryResponse | null }) {
         const statusFacts: [string, string][] = [];
         if (item.measurement_status)
           statusFacts.push([
-            "Measurement state",
+            "Result",
             measurementStatusLabel(item.measurement_status),
           ]);
         if (item.original_measurement_status)
-          statusFacts.push([
-            "Original record",
-            measurementOriginalStatus(item),
-          ]);
+          statusFacts.push(["Original", measurementOriginalStatus(item)]);
         return (
           <div
             key={`${safeHash(item.candidate_id)}-${index}`}
@@ -1104,15 +809,15 @@ function MeasurementPanel({ summary }: { summary?: SummaryResponse | null }) {
             <Facts
               items={[
                 ...statusFacts,
-                ["Episode id", safeHash(item.candidate_id)],
-                ["Evaluation scope", measurementScope(measurement)],
-                ["Episode count", measurementEpisodeCount(measurement)],
-                ["Episode PnL", pnl.value],
-                ["PnL reason", pnl.reason || "Not applicable"],
+                ["Episode", safeHash(item.candidate_id)],
+                ["Scope", measurementScope(measurement)],
+                ["Episodes", measurementEpisodeCount(measurement)],
+                ["P&L", pnl.value],
+                ["P&L note", pnl.reason || "Not applicable"],
                 [
-                  "Declared research capital",
+                  "Research capital",
                   capital.assumption && capital.value
-                    ? `${capital.value} declared research capital assumption; not account funds`
+                    ? `${capital.value} (assumed, not account funds)`
                     : "Unavailable",
                 ],
                 ["Entry", episodeEntryLabel(measurement)],
@@ -1123,29 +828,25 @@ function MeasurementPanel({ summary }: { summary?: SummaryResponse | null }) {
                   ),
                 ],
                 [
-                  "Entry source quote (T0)",
+                  "Entry quote",
                   continuation
                     ? continuationQuoteHash(measurement, "entry")
                     : safeHash(episode?.entry_quote_sha256),
                 ],
                 [
-                  "Exit source quote",
+                  "Exit quote",
                   continuation
                     ? continuationQuoteHash(measurement, "exit")
                     : safeHash(episode?.exit_quote_sha256),
                 ],
-                ["Immutable episode hash", measurementHash(measurement)],
+                ["Episode hash", measurementHash(measurement)],
                 [
-                  "Continuation receipt hash",
+                  "Receipt hash",
                   continuation
                     ? continuationReceiptHash(measurement)
-                    : "Not applicable (episode measurement)",
+                    : "Not applicable",
                 ],
-                [
-                  "Continuation receipt scope",
-                  continuation ? measurement.source_scope : "Not applicable",
-                ],
-                ["Live context hash", liveContextHash(measurement)],
+                ["Context hash", liveContextHash(measurement)],
                 ["Cohort match", cohortStatus(measurement.cohort)],
                 [
                   "Trial debt",
@@ -1155,59 +856,44 @@ function MeasurementPanel({ summary }: { summary?: SummaryResponse | null }) {
                     : trialStatusLabel(measurement.trials?.status),
                 ],
                 ["Family key", trialFamilyKeyNote(measurement.trials)],
-                [
-                  "Actual book fills",
-                  "None; this is a virtual research episode",
-                ],
                 ["Qualification", qualificationLabel(measurement)],
               ]}
             />
             <Facts
               items={[
-                ["Actual scoring status", scoring.status],
-                ["Actual scoring", scoring.score],
-                ["Scoring qualification", scoring.qualified],
-                ["Task 8 replay status", replay.status],
-                ["Task 8 report copied unchanged", replay.copied],
-                ["Retrospective axes", replay.retrospective],
-                ["Prospective axes", replay.prospective],
-                ["No-lookahead qualification", replay.noLookahead],
-                ["Holdout qualification", replay.holdout],
-                ["Edge qualification", replay.edge],
-                ["Promotion authority", replay.promotion],
-                [
-                  "Measurement scope",
-                  "Immutable episode evidence; live trial debt is separate",
-                ],
+                ["Scoring status", scoring.status],
+                ["Score", scoring.score],
+                ["Scoring qualified", scoring.qualified],
+                ["Replay status", replay.status],
+                ["Looked back", replay.retrospective],
+                ["Looked forward", replay.prospective],
+                ["No look-ahead", replay.noLookahead],
+                ["Holdout", replay.holdout],
+                ["Edge", replay.edge],
+                ["Promotion", replay.promotion],
               ]}
             />
             {continuation && (
               <div className="span-all">
-                <Panel
-                  title="Continuation receipt detail"
-                  note="Typed original quote refs and recorded source clocks. The continuation receipt hash is not the immutable episode projection."
-                >
+                <Panel title="Continuation detail">
                   <Facts
                     items={[
-                      ["Continuation id", continuationId(measurement)],
+                      ["Continuation", continuationId(measurement)],
+                      ["State", continuationStateLabel(measurement.state)],
                       [
-                        "Continuation state",
-                        continuationStateLabel(measurement.state),
-                      ],
-                      [
-                        "Continuation source session",
+                        "Source session",
                         safeSession(measurement.source_session),
                       ],
                       [
-                        "Continuation recording session",
+                        "Recorded in session",
                         safeSession(measurement.current_scope?.current_session),
                       ],
                       [
-                        "Entry quote archive hash",
+                        "Entry quote hash",
                         continuationQuoteHash(measurement, "entry"),
                       ],
                       [
-                        "Exit quote archive hash",
+                        "Exit quote hash",
                         continuationQuoteHash(measurement, "exit"),
                       ],
                       [
@@ -1219,105 +905,59 @@ function MeasurementPanel({ summary }: { summary?: SummaryResponse | null }) {
                         continuationQuotePurpose(measurement, "exit"),
                       ],
                       [
-                        "Entry quote source clock",
+                        "Entry quote (source time)",
                         continuationQuoteClock(measurement, "entry", "source"),
                       ],
                       [
-                        "Entry quote receipt clock",
+                        "Entry quote (received)",
                         continuationQuoteClock(measurement, "entry", "receipt"),
                       ],
                       [
-                        "Exit quote source clock",
+                        "Exit quote (source time)",
                         continuationQuoteClock(measurement, "exit", "source"),
                       ],
                       [
-                        "Exit quote receipt clock",
+                        "Exit quote (received)",
                         continuationQuoteClock(measurement, "exit", "receipt"),
                       ],
                       [
-                        "Exit due source clock",
+                        "Exit due",
                         datetime(validTimestampMs(measurement.exit_due_ms)),
                       ],
                       [
-                        "Exit deadline source clock",
+                        "Exit deadline",
                         datetime(
                           validTimestampMs(measurement.exit_deadline_ms),
                         ),
                       ],
                       [
-                        "Exit source clock",
+                        "Exited",
                         datetime(validTimestampMs(measurement.exit_at_ms)),
                       ],
                       [
-                        "Processed source clock",
+                        "Processed",
                         datetime(validTimestampMs(measurement.processed_at_ms)),
                       ],
                       [
-                        "Recorded source clock",
+                        "Recorded",
                         datetime(validTimestampMs(measurement.recorded_at_ms)),
                       ],
                     ]}
                   />
-                  <p className="caption">
-                    Original exit, processing and recording clocks are separate.
-                    The immutable episode projection hash is not replaced by the
-                    continuation receipt hash.
-                  </p>
                 </Panel>
               </div>
             )}
             <div className="span-all">
               {!pnl.available && (
-                <Notice error>
-                  Episode PnL is unavailable: {pnl.reason}. It is not zero and
-                  not green.
-                </Notice>
+                <Notice error>P&L unavailable: {pnl.reason}. Not zero.</Notice>
               )}
               {(episode?.entry === false ||
                 (continuation && measurement.entry === false)) && (
-                <Notice>
-                  No entry was recorded (source quote gap or no entry). This is
-                  not a paper loss of zero.
-                </Notice>
+                <Notice>No entry was recorded. This is not a zero loss.</Notice>
               )}
-              <Notice>
-                Reading the current cohort, trial debt or source context does
-                not rewrite the original episode or its recorded measurement and
-                does not claim the financial fill. No episode PnL is summed; no
-                portfolio return, equity curve, Sharpe or profit percentage is
-                computed.
-              </Notice>
               <details className="evidence-fold">
-                <summary>
-                  Episode clock details <span>Recorded source clocks</span>
-                </summary>
+                <summary>Episode times</summary>
                 <Facts items={timeline} />
-                <p className="caption">
-                  Authoring, target freeze, score, decision, exit and recording
-                  are separate recorded source clocks; they are not one
-                  fabricated timestamp.
-                </p>
-              </details>
-              <details className="evidence-fold">
-                <summary>
-                  Task 8 retrospective report <span>Copied unchanged</span>
-                </summary>
-                <Facts
-                  items={[
-                    ["Replay status", replay.status],
-                    ["Retrospective axes", replay.retrospective],
-                    ["Prospective axes", replay.prospective],
-                    ["No-lookahead qualification", replay.noLookahead],
-                    ["Holdout qualification", replay.holdout],
-                    ["Edge qualification", replay.edge],
-                    ["Promotion authority", replay.promotion],
-                  ]}
-                />
-                <p className="caption">
-                  The old Task 8 retrospective axes are separate from the new
-                  forward score. No qualification, edge or holdout claim is
-                  inferred.
-                </p>
               </details>
             </div>
           </div>
@@ -1325,17 +965,11 @@ function MeasurementPanel({ summary }: { summary?: SummaryResponse | null }) {
       })}
       {window.truncatedByDisplay && (
         <Notice>
-          Showing {window.shown} of {window.total} measurement entries; the view
-          is bounded by the display limit. The remaining rows are not copied or
-          counted.
+          Showing {window.shown} of {window.total} episodes.
         </Notice>
       )}
       {window.sourceTruncated && (
-        <Notice>
-          Measurement library is truncated by the source; total count not
-          reported. This view does not extrapolate a full total from the loaded
-          rows.
-        </Notice>
+        <Notice>Episode list is cut off. Total unknown.</Notice>
       )}
     </Panel>
   );
@@ -1347,25 +981,16 @@ function CrossSessionPanel({ summary }: { summary?: SummaryResponse | null }) {
   );
   if (!all.length) {
     return (
-      <Panel
-        title="Cross-session continuity"
-        note="Original episode state and the latest verified continuation from observation milestones. No predecessor row is copied or rewritten."
-      >
-        <Empty title="No cross-session continuity">
-          No continued original episode is present in the observation
-          milestones. Research-library continued/continuation flags are not used
-          as continuation evidence.
-        </Empty>
+      <Panel title="Across sessions">
+        <Empty title="No continued episodes" />
       </Panel>
     );
   }
   const rows = all.slice(0, 10);
   return (
-    <Panel
-      title="Cross-session continuity"
-      note="Original episode state and the latest verified continuation from observation milestones. No predecessor row is copied or rewritten."
-    >
+    <Panel title="Across sessions">
       <Table
+        hideEmpty
         rows={rows}
         getKey={(row, index) => `${safeHash(row.candidate_id)}-${index}`}
         columns={[
@@ -1376,22 +1001,22 @@ function CrossSessionPanel({ summary }: { summary?: SummaryResponse | null }) {
           },
           {
             key: "source",
-            label: "Original session",
+            label: "From session",
             render: (row) => safeSession(row.origin_session),
           },
           {
             key: "original",
-            label: "Original recorded state",
+            label: "Recorded state",
             render: (row) => lifecycleStateLabel(row.original_recorded_state),
           },
           {
             key: "effective",
-            label: "Effective state",
+            label: "Current state",
             render: (row) => lifecycleStateLabel(row.effective_state),
           },
           {
             key: "scientific",
-            label: "Effective scientific",
+            label: "Scientific state",
             render: (row) =>
               scientificStateLabel(row.effective_scientific_state),
           },
@@ -1407,7 +1032,7 @@ function CrossSessionPanel({ summary }: { summary?: SummaryResponse | null }) {
           },
           {
             key: "recording",
-            label: "Recording session",
+            label: "Recorded in",
             render: (row) => safeSession(row.continuation_recorded_in_session),
           },
           {
@@ -1417,7 +1042,7 @@ function CrossSessionPanel({ summary }: { summary?: SummaryResponse | null }) {
           },
           {
             key: "original-measurement",
-            label: "Original measurement",
+            label: "Original result",
             render: (row) =>
               originalMeasurementStatusLabel(
                 row.original_measurement_status,
@@ -1426,7 +1051,7 @@ function CrossSessionPanel({ summary }: { summary?: SummaryResponse | null }) {
           },
           {
             key: "measurement",
-            label: "Continuation receipt hash",
+            label: "Receipt",
             render: (row) => safeHash(row.measurement_sha256),
           },
           {
@@ -1443,24 +1068,12 @@ function CrossSessionPanel({ summary }: { summary?: SummaryResponse | null }) {
       />
       {all.length > rows.length && (
         <Notice>
-          Showing {rows.length} of {all.length} continued milestones; the view
-          is bounded by the display limit and does not copy the remaining rows.
+          Showing {rows.length} of {all.length} continued milestones.
         </Notice>
       )}
       {lifecycle?.truncated === true && (
-        <Notice>
-          Milestone source is truncated; the loaded continued milestones are not
-          a complete total. This view does not extrapolate a total or claim the
-          remaining rows.
-        </Notice>
+        <Notice>Milestone list is cut off. Total unknown.</Notice>
       )}
-      <Notice>
-        Milestones are the only cross-session source; research-library
-        continued/continuation flags are not used. The recording session is the
-        source that recorded the continuation; the current session does not
-        claim the financial fill. Source and recording sessions are recorded
-        source clocks, not a new read time.
-      </Notice>
     </Panel>
   );
 }
@@ -1494,29 +1107,23 @@ export function OperationalPanel({
         ? rawVersion
         : "not reported";
   return (
-    <Panel
-      title="Operational health"
-      note="Read-only projection. Paper finance, controller liveness, research state, calendar coverage and alert transport are separate observations. Browser refresh never renews the published server capture."
-    >
+    <Panel title="Status checks">
       {version === "missing" && (
         <Notice>
-          Operational health is not present in this snapshot (older API).
-          Unknown values stay unknown; no zero, healthy or complete state is
-          inferred.
+          Status checks are missing from this snapshot. Unknown stays unknown.
         </Notice>
       )}
       {version === "unsupported" && (
         <Notice error>
           {rawObject
             ? versionMissing
-              ? "Operational health version is not reported; this client supports only version 2; values are not interpreted."
+              ? "Status check format is not reported. Values are hidden."
               : versionMalformed
-                ? "Operational health version is malformed; this client supports only numeric version 2; values are not interpreted."
-                : `Operational health version ${versionText} is not supported by this client; values are not interpreted.`
-            : "Operational health is malformed; values are not interpreted."}
+                ? "Status check format is malformed. Values are hidden."
+                : `Status check format ${versionText} is not supported. Values are hidden.`
+            : "Status checks are malformed. Values are hidden."}
         </Notice>
       )}
-      <BookContinuity summary={summary} portfolio={portfolio} />
       <div className="cols-2">
         <PaperFinancialPanel summary={summary} portfolio={portfolio} />
         <ControllerLivenessPanel
