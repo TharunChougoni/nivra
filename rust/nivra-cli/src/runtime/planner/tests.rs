@@ -171,6 +171,7 @@ fn plan_validation_reserves_cash_and_holdings() {
             "fixture"
         )
         .unwrap()
+        .is_ok()
     );
     let plan = json!({"actions":[action(&i.key,"sell",4),action(&i.key,"sell",2),action(&i.key,"sell",2)],"stance":"hold","notes":""});
     let v = validate(&plan.to_string(), &p, std::slice::from_ref(&i), at).unwrap();

@@ -62,16 +62,18 @@ pub(crate) fn flatten_expiring(
             outcome.unsettled.push(key);
             continue;
         };
-        let filled = p.execute_plan(
-            now,
-            &position.instrument,
-            quote,
-            false,
-            position.units,
-            quote.bid,
-            ExitIntent::default(),
-            "option_expiry_flatten",
-        )?;
+        let filled = p
+            .execute_plan(
+                now,
+                &position.instrument,
+                quote,
+                false,
+                position.units,
+                quote.bid,
+                ExitIntent::default(),
+                "option_expiry_flatten",
+            )?
+            .is_ok();
         if filled {
             outcome.flattened.push(key);
         } else {
@@ -184,7 +186,7 @@ mod tests {
                 "option-open",
             )
             .unwrap();
-        assert!(opened);
+        assert!(opened.is_ok());
         if let Some(catalog) = p.options.as_mut() {
             catalog.session = ExchangeDate::parse(session).unwrap();
         }

@@ -57,6 +57,7 @@ fn cost_transition_fixture_with_planner(
             "offline-advance-fixture"
         )
         .unwrap()
+        .is_ok()
     );
     p.closed = closed;
     p.reconcile().unwrap();
@@ -180,6 +181,7 @@ fn halted_carry_fixture(dir: &Path) -> (Config, i64, planner::PlannerConfig) {
             "halted-carry-fixture"
         )
         .unwrap()
+        .is_ok()
     );
     p.model_led = true;
     // Authority exists while the book can still trade; a later restart of a
@@ -247,6 +249,7 @@ fn carried_closed_fixture(dir: &Path) -> (Config, PathBuf) {
             "carried-closed-fixture"
         )
         .unwrap()
+        .is_ok()
     );
     p.model_led = true;
     p.closed = true;
@@ -1290,6 +1293,7 @@ fn explicit_cost_transition_carries_closed_book_without_rebinding_source() {
                 "fixture"
             )
             .unwrap()
+            .is_ok()
         );
         if legacy {
             p.costs = None;
@@ -1414,6 +1418,7 @@ fn overnight_rollover_carries_account_and_preserves_original_and_terminal_books(
             "overnight-fixture"
         )
         .unwrap()
+        .is_ok()
     );
     p.closed = true;
     db.execute(

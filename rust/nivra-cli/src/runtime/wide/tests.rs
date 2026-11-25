@@ -4054,6 +4054,16 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
     let quotes = BTreeMap::from([(i.key.clone(), quote(at, 100))]);
     commit_quotes(&mut db, &c, &mut p, &quotes, at, "fixture", || at + 2001).unwrap();
     assert!(p.fills.is_empty());
+    // The refusal reason is stored beside the verdict, in the audit file and in
+    // the dashboard projection; a fill carries none.
+    let refused = execution_projection(&db).unwrap();
+    assert_eq!(refused[0]["verdict"], "execution_gate_rejected");
+    assert_eq!(refused[0]["reason"], "stale_quote");
+    let audit: serde_json::Value = serde_json::from_slice(
+        &fs::read(c.directory.join("model/fixture-stale/execution.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(audit[0]["reason"], "stale_quote");
     let mut expired = plan.clone();
     expired["decision_id"] = serde_json::json!("fixture-time-expired");
     expired["verdicts"][0]["action"]["exit_intent"]["time"] = serde_json::json!(at + 1);

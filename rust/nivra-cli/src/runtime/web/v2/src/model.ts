@@ -13,7 +13,7 @@ import type {
   SummaryResponse,
   WorkspaceState,
 } from "./types";
-import { count, numeric } from "./data";
+import { count, executionText, numeric } from "./data";
 
 // ----------------------------------------------------------- condition
 type Issue = WorkspaceState["issues"][number];
@@ -264,9 +264,9 @@ export function orderTracks(
         (side === null || f.buy === (side === "buy")),
     );
     const fill = at >= 0 ? pool.splice(at, 1)[0] : null;
-    const verdict = execution.find(
-      (e) => e.decision_id === decision && e.index === row.index,
-    )?.verdict;
+    const verdict = executionText(
+      execution.find((e) => e.decision_id === decision && e.index === row.index),
+    )?.replace(/^./, (c) => c.toLowerCase());
     out.push(
       track(
         {
@@ -283,7 +283,7 @@ export function orderTracks(
           : validated === "failed"
             ? `rejected · ${reason!.replaceAll("_", " ")}`
             : verdict
-              ? verdict.replaceAll("_", " ")
+              ? verdict
               : validated === "done"
                 ? "awaiting execution"
                 : "not validated yet",

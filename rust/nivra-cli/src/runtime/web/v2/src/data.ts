@@ -678,3 +678,35 @@ export function route(hash: string): { name: RouteName | "missing" } {
   const name = ROUTES.find((v) => v === raw);
   return { name: name || "missing" };
 }
+
+/** Why the paper desk declined an order the model proposed. */
+export const refusalLabels: Record<string, string> = {
+  book_stopped_or_closed: "the book is stopped or closed",
+  halted: "the book is halted",
+  exit_time_passed: "the exit time had already passed",
+  zero_units: "the size came to zero units",
+  stale_quote: "the quote was too old",
+  crossed_quote: "the bid was above the ask",
+  outside_session: "the market session was closed",
+  option_contract_invalid: "the option contract or lot size did not check out",
+  price_above_max: "the price was above the model's limit",
+  instrument_mismatch: "the held instrument did not match",
+  insufficient_depth: "the market did not have enough size",
+  insufficient_cash: "there was not enough cash",
+  stale_position_mark: "a held position had an old price",
+  no_held_units: "there were not enough held units to sell",
+  sell_cash_negative: "the sale would leave cash below zero",
+};
+
+/** An execution verdict with its refusal reason, in plain words. */
+export function executionText(e?: null | {
+  verdict?: string;
+  reason?: string | null;
+}): string | null {
+  if (!e?.verdict) return null;
+  const word = e.verdict.replaceAll("_", " ");
+  if (e.verdict !== "execution_gate_rejected")
+    return word.charAt(0).toUpperCase() + word.slice(1);
+  const why = e.reason ? refusalLabels[e.reason] : undefined;
+  return why ? `Refused: ${why}` : "Refused";
+}

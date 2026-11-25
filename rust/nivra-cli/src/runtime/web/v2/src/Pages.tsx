@@ -35,6 +35,7 @@ import {
   currentSession,
   datetime,
   duration,
+  executionText,
   finance,
   fillsFor,
   instrumentClass,
@@ -170,7 +171,7 @@ function PlanActions({
         {
           key: "execution",
           label: "Execution",
-          render: (v) => plain(v.execution?.verdict),
+          render: (v) => executionText(v.execution) ?? plain(null),
         },
       ]}
     />
@@ -682,12 +683,12 @@ function Plans({
             key: "execution",
             label: "Execution",
             render: (v) =>
-              plain(
+              executionText(
                 plans.execution?.find(
                   (e) =>
                     e.index === v.index && e.decision_id === p?.decision_id,
-                )?.verdict,
-              ),
+                ),
+              ) ?? plain(null),
           },
           {
             key: "fills",

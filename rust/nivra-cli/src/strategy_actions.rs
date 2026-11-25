@@ -597,6 +597,7 @@ fn execute(
 ) -> Result<bool, String> {
     portfolio
         .execute_plan(now, i, q, buy, units, max_price, ExitIntent::default(), id)
+        .map(|outcome| outcome.is_ok())
         .map_err(|_| "action_replay_execution_failed".into())
 }
 
