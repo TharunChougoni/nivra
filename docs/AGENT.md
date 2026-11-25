@@ -13,7 +13,7 @@ research and supervise while code executes strategies ([DIRECTION](DIRECTION.md)
 | --- | --- | --- |
 | Decision | A decision trigger fires during the session | A `plan` of paper actions |
 | Gate | Optional. A decision batch holds only entry candidates | A `verdict`: escalate or drop |
-| Research | The decision lane asks, the session is quiet, or the review leaves an agenda | A text answer and workspace files |
+| Research | Once after the close, and when the decision lane asks, the session is quiet or the review leaves an agenda | A text answer and workspace files |
 | Review | Once, after the session seal | A review carried into the next session |
 
 ## Configure the lanes
@@ -64,6 +64,7 @@ trigger aborts a running research or review turn with `agent_preempted`.
 | `entry_candidate` | Decision | An unheld instrument stays in the top `top_k` (5) with score at least `entry_score` (10) for `persist_cycles` (2) scans; then `cooldown_ms` (15 min) per instrument |
 | `schedule` | Decision | Within 30 minutes of the open, at `pre_close_minute` (15:00), and on the hour when `material_change` (2) new names entered the top K |
 | `request` | Research | The decision lane queued a research request |
+| `after_close` | Research | Once per session, after the seal, when the review turn has finished, failed or been skipped |
 | `quiet` | Research | No decision turn for `quiet_ms` (30 min) during the session, with research budget left |
 | `agenda` | Research | The review finished and left text |
 | `seal` | Review | The session is reported and sealed |
@@ -72,10 +73,13 @@ As the decision lane spends its budget, the entry bar rises by
 `entry_score_rise` (40) times the spent share, and the top K shrinks in
 proportion.
 
-Research runs only in the three cases above: the decision lane asks for it,
-no decision turn has happened for 30 minutes, or the review left an agenda.
-The plan is to run research after the close every day; see
-[DIRECTION](DIRECTION.md).
+The `after_close` turn (reason `post_close`) does not depend on review text.
+When the review leaves an agenda, both triggers run as one turn, and the task
+carries the review. The task asks the lane to write or revise strategies from
+the day's quote tape and backtest them after costs. Rust creates
+`model/agent/research-after-close.json` before the turn starts, so a restart
+never runs it twice. A spent research budget skips it with
+`agent_budget_exhausted`, like any other turn.
 
 A due decision or gate turn is skipped, never invented, when the book is not
 trading, or when there is no ranking, no held position and no fill. Any turn

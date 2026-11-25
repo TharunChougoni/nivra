@@ -42,7 +42,7 @@ Tracked in [#44](https://github.com/TharunChougoni/nivra/issues/44):
 
 1. Done: exact refusal reasons (#28, execution part), cost rates in the brief
    (#37), and the option spot source (#38).
-2. Run research after the close, every day, and record the quote tape it needs (#39).
+2. Done: research after the close every day, and the quote tape it needs (#39).
 3. Extend the strategy contract from scores-only rankers to entry and exit rules (#40).
 4. Add the deterministic acceptance check and automatic registration (#41).
 5. Add the strategy executor to the paper controller (#42).

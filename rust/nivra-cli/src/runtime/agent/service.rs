@@ -27,6 +27,10 @@ use std::thread::JoinHandle;
 
 const CONTEXT_RETRY_MS: i64 = 5_000;
 
+/// What the after-close research turn is for. The review, when it left text,
+/// rides along in the same task.
+const AFTER_CLOSE_TASK: &str = "The session is closed and speed does not matter. Read today's review when present. From today's recorded quote tape, write or revise strategies in the workspace, backtest each one after costs on today's session and on earlier datasets, and keep a short note per strategy under notes/ with its source hash, the costs assumed and the net result.";
+
 /// Serves intraday context from the controller's frozen evidence snapshot.
 /// It never calls a model: pi owns every model call.
 pub(crate) struct LaneBackend(pub Option<decision_evidence::Snapshot>);
@@ -117,6 +121,9 @@ pub(crate) struct LaneService {
     /// Entry triggers the gate escalated; the next dispatch runs them on the
     /// decision lane without screening them again.
     escalated: Option<Vec<Trigger>>,
+    /// This process claimed the after-close marker, so a requeued batch may
+    /// still run its turn.
+    after_close_claimed: bool,
     status: Value,
 }
 
@@ -286,12 +293,18 @@ impl LaneService {
             hold_until_ms: 0,
             agenda: None,
             escalated: None,
+            after_close_claimed: false,
             status: json!({"status":"idle"}),
         })
     }
 
     pub(crate) fn status(&self) -> Value {
         self.status.clone()
+    }
+
+    /// Ranks of the live ranking that count as the top K.
+    pub(crate) fn top_k(&self) -> usize {
+        self.engine.settings().decision.top_k
     }
 
     pub(crate) fn pending_claim(&self) -> Option<&redecision::Claim> {
@@ -387,6 +400,10 @@ impl LaneService {
             research_budget_left: research && self.fraction(Lane::Research, &spent) < 1.0,
             requests_queued: requests,
             rankers: &rankers,
+            after_close_due: research
+                && phase == Phase::Sealed
+                && !lanes::root(c).join(lanes::AFTER_CLOSE_MARKER).exists(),
+            review_running: self.busy == Some(Lane::Review),
         });
         for trigger in &fired {
             append(
@@ -430,7 +447,7 @@ impl LaneService {
         spent: &BTreeMap<Lane, Usage>,
     ) -> Result<()> {
         let c = cycle.c;
-        let (lane, triggers) = match self.escalated.take() {
+        let (lane, mut triggers) = match self.escalated.take() {
             Some(triggers) => (Lane::Decision, triggers),
             None => {
                 let Some((lane, triggers)) = self.engine.next() else {
@@ -475,8 +492,21 @@ impl LaneService {
                 return append(c, "triggers.ndjson", &entry);
             }
         };
-        if lane == Lane::Review && !lanes::claim_review(c)? {
+        if lane == Lane::Review && !lanes::claim(c, lanes::REVIEW_MARKER)? {
             return self.skip(c, lane, &triggers, "agent_review_already_ran");
+        }
+        let after_close = |t: &Trigger| t.kind == TriggerKind::AfterClose;
+        if !self.after_close_claimed && triggers.iter().any(after_close) {
+            if lanes::claim(c, lanes::AFTER_CLOSE_MARKER)? {
+                self.after_close_claimed = true;
+            } else {
+                let (ran, rest): (Vec<_>, Vec<_>) = triggers.into_iter().partition(after_close);
+                self.skip(c, lane, &ran, "agent_after_close_already_ran")?;
+                if rest.is_empty() {
+                    return Ok(());
+                }
+                triggers = rest;
+            }
         }
         let memory = lanes::memory(c, lane);
         let facts = Facts {
@@ -507,7 +537,12 @@ impl LaneService {
             && triggers
                 .iter()
                 .any(|trigger| trigger.kind == TriggerKind::Agenda);
+        let agenda = consumes_agenda.then_some(self.agenda.as_deref()).flatten();
         let task = match lane {
+            Lane::Research if triggers.iter().any(after_close) => {
+                json!({"kind":"after_close","session":c.session.to_string(),
+                    "instructions":AFTER_CLOSE_TASK,"review":agenda})
+            }
             Lane::Research if consumes_agenda => {
                 json!({"kind":"agenda","review":self.agenda})
             }

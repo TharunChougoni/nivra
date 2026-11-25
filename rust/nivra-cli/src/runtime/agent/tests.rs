@@ -1020,8 +1020,10 @@ fn next_decision_receives_only_the_sealed_predecessor_review() {
     successor.directory = successor.sessions_root.as_ref().unwrap().join("2026-10-19");
     successor.legacy_directory = Some(original.clone());
 
-    assert!(lanes::claim_review(&prior).unwrap());
-    assert!(!lanes::claim_review(&prior).unwrap());
+    for marker in [lanes::REVIEW_MARKER, lanes::AFTER_CLOSE_MARKER] {
+        assert!(lanes::claim(&prior, marker).unwrap());
+        assert!(!lanes::claim(&prior, marker).unwrap());
+    }
 
     let settings = settings(10, 1.0);
     let clock = || 1_760_600_000_000_i64;

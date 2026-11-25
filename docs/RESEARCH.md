@@ -80,6 +80,10 @@ The research lane calls `run` with `scripts/<name>.py` and inline feature rows
 of at most 64 KiB. The result has the scores and the `source_sha256` of the
 exact bytes that ran. Use that hash when you register the ranker.
 
+Every session, the research lane also gets one `after_close` turn after the
+review (see [AGENT](AGENT.md#triggers)). It writes or revises strategies from
+the day's quote tape and keeps a note per strategy under `notes/`.
+
 To ask for a ranker by hand, stop the controller and run one research turn:
 
 ```sh
@@ -115,6 +119,20 @@ two-second quote gate, cash with fees, depth, ticks and whole shares.
 `backtest_status` and read with `backtest_result`.
 
 ### Offline commands
+
+To export a closed session's quote tape as a capture, stop the controller and
+run:
+
+```sh
+nivra scanner-archive --config PAPER_CONFIG --tape --output NEW_DIRECTORY \
+  [--key INSTRUMENT_KEY ...]
+```
+
+It writes `manifest.json` and `events.jsonl` from the book's original quote
+receipts, with their original receipt times. Each `--key` keeps only that
+instrument's observations. A full day can exceed the replay input limits, so
+pass the keys you test. The manifest counts compacted receipts it skipped and
+the `quote_tape_gap` ticks by reason. The output directory must not exist.
 
 Export features from a capture, then replay a declarative ranking spec:
 

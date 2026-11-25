@@ -241,10 +241,17 @@ pub(crate) fn sealed_review_source(c: &Config, directory: &Path, session: NaiveD
     })
 }
 
-pub(crate) fn claim_review(c: &Config) -> Result<bool> {
+/// Marker of the session's review turn.
+pub(crate) const REVIEW_MARKER: &str = "review-claimed.json";
+/// Marker of the session's after-close research turn.
+pub(crate) const AFTER_CLOSE_MARKER: &str = "research-after-close.json";
+
+/// Claim a once-a-session turn. The marker is created durably before the turn
+/// starts, so a restart never runs the turn twice; `false` means it ran.
+pub(crate) fn claim(c: &Config, name: &str) -> Result<bool> {
     let directory = root(c);
     private_dir(&directory)?;
-    let marker = directory.join("review-claimed.json");
+    let marker = directory.join(name);
     let mut file = match std::fs::OpenOptions::new()
         .create_new(true)
         .write(true)

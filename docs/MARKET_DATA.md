@@ -50,6 +50,8 @@ With `mode` set to `ltpc`, the feed works as follows:
 3. REST full quotes refresh screening metadata every `metadata_poll_ms`.
    Metadata includes volume and circuit bands, which LTPC lacks. REST depth
    reads cover the shortlist, held positions and outstanding model actions.
+   See [Research quote tape](#research-quote-tape) for the top-K names the
+   shortlist read also carries.
 4. Every `tick_ms`, the scanner ranks the cached prices. It computes the market
    median from all fresh prices before it filters or truncates.
 
@@ -71,6 +73,28 @@ Main `market_feed` settings:
 | `fresh_drop_alert_fraction` | 0.5 | Drop in fresh prices that raises `scanner_fresh_drop`. |
 
 The fragment lists the other keys with their defaults.
+
+### Research quote tape
+
+Each name that enters the top `top_k` of the live ranking (see
+[AGENT](AGENT.md#triggers)) joins the shortlist depth read from that scan
+until 30 minutes after it last ranked there. The names share the existing
+request every `depth_poll_ms` (8 s), after the shortlist, so they use no
+extra reads. Held names are skipped because the protection read covers them
+every 2 s. The receipts are ordinary `wide_quotes` with their original
+receipt times, and the two-second gate is unchanged.
+
+With the default 40-name shortlist, 160 keys are left for watched names
+before the 200-key batch is full. Nivra never adds a read to cover a gap. It
+records one `quote_tape_gap` tick instead, with `reason`, `watched` and
+`dropped`:
+
+| Reason | When |
+|---|---|
+| `depth_batch_full` | More watched names than the batch has room for. The most recently ranked names are kept. |
+| `feed_fallback` | The depth read pauses in fallback. The rotating REST scan still records each name once per pass. |
+
+A controller restart forgets names that had already left the top K.
 
 ## REST fallback
 

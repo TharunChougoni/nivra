@@ -31,6 +31,8 @@ fn triggers_count_distinct_scans_and_prioritize_decision_over_research() {
         research_budget_left: true,
         requests_queued: 0,
         rankers: &[],
+        after_close_due: false,
+        review_running: false,
     };
     assert_eq!(
         kinds(&engine.observe(&observation)),
@@ -99,6 +101,8 @@ fn returning_candidate_waits_out_cooldown_without_repeating() {
         research_budget_left: false,
         requests_queued: 0,
         rankers: &[],
+        after_close_due: false,
+        review_running: false,
     };
     for (step, rows, expected) in [
         (1_000, ranking.as_slice(), false),
@@ -122,7 +126,7 @@ fn returning_candidate_waits_out_cooldown_without_repeating() {
 }
 
 #[test]
-fn drift_and_seal_fire_once_and_an_agenda_runs_in_research() {
+fn drift_seal_and_after_close_research_fire_once_after_the_review() {
     let mut engine = TriggerEngine::new(TriggerSettings::default());
     let rankers = [RankerStats {
         name: "test-ranker".into(),
@@ -130,7 +134,7 @@ fn drift_and_seal_fire_once_and_an_agenda_runs_in_research() {
         backtest_hit_rate: 0.6,
         samples: 20,
     }];
-    let observation = Observation {
+    let mut observation = Observation {
         now: 20_000,
         minute: 930,
         open_minute: 555,
@@ -143,7 +147,10 @@ fn drift_and_seal_fire_once_and_an_agenda_runs_in_research() {
         research_budget_left: true,
         requests_queued: 0,
         rankers: &rankers,
+        after_close_due: true,
+        review_running: false,
     };
+    // The after-close research turn waits while the review is queued or runs.
     let fired = engine.observe(&observation);
     assert_eq!(kinds(&fired), [TriggerKind::Drift, TriggerKind::Seal]);
     assert_eq!(
@@ -153,12 +160,37 @@ fn drift_and_seal_fire_once_and_an_agenda_runs_in_research() {
     assert!(engine.observe(&observation).is_empty());
     assert_eq!(engine.next().unwrap().0, Lane::Research);
     assert_eq!(engine.next().unwrap().0, Lane::Review);
+    observation.review_running = true;
+    assert!(engine.observe(&observation).is_empty());
+
+    // The review leaves an agenda: one research turn takes both, on the
+    // schedule and not on quiet, and never fires again.
     engine.push(Trigger::new(
         TriggerKind::Agenda,
         "review_agenda",
         observation.now,
     ));
+    observation.review_running = false;
+    let fired = engine.observe(&observation);
+    assert_eq!(kinds(&fired), [TriggerKind::AfterClose]);
+    assert_eq!(fired[0].reason, "post_close");
     let (lane, batch) = engine.next().unwrap();
     assert_eq!(lane, Lane::Research);
-    assert_eq!(kinds(&batch), [TriggerKind::Agenda]);
+    assert_eq!(
+        kinds(&batch),
+        [TriggerKind::AfterClose, TriggerKind::Agenda]
+    );
+    observation.now += 4 * engine.settings().research.quiet_ms;
+    assert!(engine.observe(&observation).is_empty());
+    assert!(engine.next().is_none());
+
+    // A failed review leaves no agenda; research still runs after the close.
+    let mut engine = TriggerEngine::new(TriggerSettings::default());
+    observation.rankers = &[];
+    assert_eq!(kinds(&engine.observe(&observation)), [TriggerKind::Seal]);
+    assert_eq!(engine.next().unwrap().0, Lane::Review);
+    assert_eq!(
+        kinds(&engine.observe(&observation)),
+        [TriggerKind::AfterClose]
+    );
 }

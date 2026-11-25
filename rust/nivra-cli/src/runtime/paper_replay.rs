@@ -4,15 +4,20 @@ use nivra_core::{execution::Instrument, finance::Amount};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 mod export;
+pub(crate) use export::*;
 mod receipts;
 pub(crate) use receipts::*;
 mod tape;
 pub(crate) use tape::*;
 
+/// Export the sealed session's scanner features, or with `tape` its quote
+/// tape for research replays, restricted to `keys` when any are given.
 pub(crate) fn scanner_archive_entry(
     config: &Path,
     output: &Path,
     max_snapshots: usize,
+    tape: bool,
+    keys: &[String],
 ) -> std::process::ExitCode {
     use std::io::Write;
     let export = || -> Result<Value> {
@@ -25,6 +30,10 @@ pub(crate) fn scanner_archive_entry(
         let book: nivra_core::execution::Portfolio = serde_json::from_str(&state)?;
         if !book.closed {
             return Err("scanner_archive_requires_closed_book".into());
+        }
+        if tape {
+            let keys = keys.iter().cloned().collect();
+            return Ok(quote_tape(&c, &keys, output).map_err(Fail::new)?);
         }
         let snapshots = session_feature_snapshots(
             &c.directory,

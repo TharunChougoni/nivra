@@ -137,6 +137,8 @@ pub(crate) enum TriggerKind {
     EntryCandidate,
     Schedule,
     Request,
+    /// The once-a-session research turn after the seal and the review.
+    AfterClose,
     Quiet,
     Agenda,
     Drift,
@@ -149,7 +151,9 @@ impl TriggerKind {
             Self::PositionRisk | Self::Fill | Self::EntryCandidate | Self::Schedule => {
                 Lane::Decision
             }
-            Self::Request | Self::Quiet | Self::Agenda | Self::Drift => Lane::Research,
+            Self::Request | Self::AfterClose | Self::Quiet | Self::Agenda | Self::Drift => {
+                Lane::Research
+            }
             Self::Seal => Lane::Review,
         }
     }
@@ -268,6 +272,11 @@ pub(crate) struct Observation<'a> {
     pub research_budget_left: bool,
     pub requests_queued: usize,
     pub rankers: &'a [RankerStats],
+    /// A research lane is configured and this session's after-close turn has
+    /// not been claimed on disk.
+    pub after_close_due: bool,
+    /// A review turn is running; the after-close turn waits for it.
+    pub review_running: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -297,6 +306,7 @@ pub(crate) struct TriggerEngine {
     quiet_at: Option<i64>,
     drifted: BTreeSet<String>,
     sealed: bool,
+    after_close: bool,
     pending: BTreeMap<Lane, Vec<Trigger>>,
 }
 
@@ -353,6 +363,20 @@ impl TriggerEngine {
         if o.phase == Phase::Sealed && self.settings.review.seal && !self.sealed {
             self.sealed = true;
             fired.push(Trigger::new(TriggerKind::Seal, "session_sealed", o.now));
+        }
+        // After the seal, once the review has run or been skipped. It does
+        // not wait for review text: a failed review still gets research.
+        if o.phase == Phase::Sealed
+            && o.after_close_due
+            && !o.review_running
+            && !self.after_close
+            && !self.queued(TriggerKind::Seal)
+            && !fired
+                .iter()
+                .any(|trigger| trigger.kind == TriggerKind::Seal)
+        {
+            self.after_close = true;
+            fired.push(Trigger::new(TriggerKind::AfterClose, "post_close", o.now));
         }
         fired.sort_by_key(|trigger| trigger.kind);
         for trigger in &fired {

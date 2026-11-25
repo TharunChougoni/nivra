@@ -114,6 +114,8 @@ struct Controller<'a> {
     agent: Option<super::super::agent::service::LaneService>,
     /// The built-in ranking the last rank pass produced, best first.
     live_ranking: Vec<super::super::agent::Ranked>,
+    /// Top-K names the depth read keeps on the research quote tape.
+    tape: super::tape::TapeWatch,
     event_config_reason: Option<&'static str>,
     event_config: Option<planner::PlannerConfig>,
     p: Portfolio,
@@ -468,6 +470,7 @@ impl<'a> Controller<'a> {
             // The research lane's own slot (#237): never shared with trading turns.
             agent,
             live_ranking: Vec::new(),
+            tape: super::tape::TapeWatch::default(),
             event_config_reason,
             event_config,
             p,
@@ -1312,8 +1315,9 @@ impl<'a> Controller<'a> {
                 ),
                 None => projection,
             };
-            if self.agent.is_some() {
+            if let Some(agent) = self.agent.as_ref() {
                 self.live_ranking = super::super::agent::service::ranking(&projection);
+                self.tape.observe(now, &self.live_ranking, agent.top_k());
             }
             let fresh_count = projection["fresh_count"].as_u64().unwrap_or(0);
             let fraction = settings
@@ -1349,9 +1353,15 @@ impl<'a> Controller<'a> {
             checkpoint_scanner(&self.db, &self.scan)?;
             if let Some(settings) = feed_settings
                 && now - self.last_depth >= settings.depth_poll_ms
-                && !feed_fallback
             {
-                self.depth_read(u, now, settings, held, &candidates)?;
+                if !feed_fallback {
+                    self.depth_read(u, now, settings, held, &candidates)?;
+                } else if !self.tape.is_empty() {
+                    // The fallback scan rotates through the universe; the
+                    // watched names lose their depth cadence until recovery.
+                    self.last_depth = now;
+                    self.tape_gap(now, "feed_fallback", 0)?;
+                }
             }
         }
         Ok(())
@@ -1366,18 +1376,28 @@ impl<'a> Controller<'a> {
         held: &[Instrument],
         candidates: &[(String, Option<f64>)],
     ) -> Result<()> {
-        let c = &self.config;
         let held_keys = held.iter().map(|i| i.key.as_str()).collect::<BTreeSet<_>>();
-        let shortlist = candidates
+        let shortlist_keys = candidates
             .iter()
             .take(settings.shortlist_size)
-            .filter_map(|(key, _)| {
-                u.instruments
-                    .iter()
-                    .find(|i| &i.key == key && !held_keys.contains(i.key.as_str()))
-                    .cloned()
-            })
+            .map(|(key, _)| key.as_str())
+            .filter(|key| !held_keys.contains(key))
             .collect::<Vec<_>>();
+        // The tape shares this read: one request whatever its key count, so
+        // only the batch and request key limits bound it, never the shortlist.
+        let cap = settings
+            .rest_batch_size
+            .min(self.config.quote_keys.max_keys)
+            .max(shortlist_keys.len());
+        let (keys, dropped) = self.tape.batch(&shortlist_keys, &held_keys, cap);
+        let shortlist = keys
+            .iter()
+            .filter_map(|key| u.instruments.iter().find(|i| i.key == *key).cloned())
+            .collect::<Vec<_>>();
+        if dropped > 0 {
+            self.tape_gap(now, "depth_batch_full", dropped)?;
+        }
+        let c = &self.config;
         if !shortlist.is_empty() {
             self.last_depth = now;
             self.read_failure = read_apply(
@@ -1396,6 +1416,20 @@ impl<'a> Controller<'a> {
             )?;
         }
         Ok(())
+    }
+
+    /// Journal a stretch the research tape could not cover.
+    fn tape_gap(&mut self, now: i64, reason: &str, dropped: usize) -> Result<()> {
+        let body = serde_json::json!({"reason":reason,"watched":self.tape.len(),"dropped":dropped});
+        persist(
+            &mut self.db,
+            &self.config,
+            &self.p,
+            now,
+            None,
+            Some(&body.to_string()),
+            QUOTE_TAPE_GAP_EVENT,
+        )
     }
 
     fn clear_read_block(&mut self, freshness: i64) -> Result<()> {

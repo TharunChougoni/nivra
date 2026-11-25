@@ -18,7 +18,7 @@ impl QuotePurposeV1 {
             Self::ResearchObservation => "research_observation",
         }
     }
-    fn archive_str(self) -> &'static str {
+    pub(super) fn archive_str(self) -> &'static str {
         match self {
             Self::Protection => "execution_or_protection",
             Self::Screen => "scanner",
@@ -59,27 +59,8 @@ pub(crate) fn quote_receipts_bounded(
     if !source.is_absolute() || !(1..=10_000).contains(&max_rows) || max_source_ms < 0 {
         return Err("scorer_snapshots_unavailable".into());
     }
-    let universe: Value = serde_json::from_slice(
-        &crate::read_bounded(&source.join("wide-universe.json"), 8_000_000)
-            .map_err(|_| "scorer_snapshots_unavailable".to_string())?,
-    )
-    .map_err(|_| "scorer_snapshots_unavailable".to_string())?;
-    let declared: NaiveDate = serde_json::from_value(universe["session"].clone())
-        .map_err(|_| "scorer_snapshots_unavailable".to_string())?;
-    let instruments: Vec<Instrument> = serde_json::from_value(universe["instruments"].clone())
-        .map_err(|_| "scorer_snapshots_unavailable".to_string())?;
-    if declared != session || instruments.is_empty() || instruments.len() > 10_000 {
-        return Err("scorer_snapshots_unavailable".into());
-    }
-    let db = Connection::open_with_flags(
-        source.join("paper.sqlite"),
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(|_| "scorer_snapshots_unavailable".to_string())?;
-    db.pragma_update(None, "query_only", true)
-        .map_err(|_| "scorer_snapshots_unavailable".to_string())?;
-    db.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH, 2_000_000)
-        .map_err(|_| "scorer_snapshots_unavailable".to_string())?;
+    let instruments = session_universe(source, session)?;
+    let db = open_quote_journal(source)?;
     let mut statement = db
         .prepare(
             "SELECT at,receipt,body FROM ticks WHERE event IN ('wide_quotes','scanner_metadata') AND at<=?2 ORDER BY id DESC LIMIT ?1",
@@ -99,85 +80,19 @@ pub(crate) fn quote_receipts_bounded(
         reversed.push(row.map_err(|_| "scorer_snapshots_unavailable".to_string())?);
     }
     reversed.reverse();
+    let index = instruments
+        .iter()
+        .map(|instrument| (instrument.key.as_str(), instrument))
+        .collect::<BTreeMap<_, _>>();
     let mut receipts = Vec::with_capacity(reversed.len());
     let mut previous = None;
     for (at, receipt, raw) in reversed {
-        if raw.len() > 2_000_000 {
-            return Err("scorer_snapshots_unavailable".into());
-        }
-        let receipt = receipt.ok_or("scorer_snapshots_receipt_missing")?;
-        let archive: Value =
-            serde_json::from_str(&raw).map_err(|_| "scorer_snapshots_invalid".to_string())?;
-        if archive["kind"] == "compacted_quote_receipt"
-            || archive["received_ms"] != receipt
-            || receipt > at
-            || at > max_source_ms
-            || receipt > max_source_ms
-        {
-            return Err("scorer_snapshots_receipt_binding".into());
-        }
-        let body: Value = serde_json::from_str(
-            archive["body"]
-                .as_str()
-                .ok_or("scorer_snapshots_not_quote_receipt")?,
-        )
-        .map_err(|_| "scorer_snapshots_invalid".to_string())?;
-        if body["status"] != "success" {
-            return Err("scorer_snapshots_quote_status".into());
-        }
-        let kind = QuotePurposeV1::from_archive(archive["purpose"].as_str())
-            .ok_or("scorer_snapshots_purpose_unknown")?;
-        // The ORIGINAL archived receipt SHA for every observation. It is never
-        // the whole-tape digest and never another key's SHA.
-        let archive_sha256 = nivra_core::replay::digest(raw.as_bytes());
-        let mut observations = Vec::new();
-        let rows = body["data"]
-            .as_object()
-            .ok_or("scorer_snapshots_quote_rows")?;
-        for row in rows.values() {
-            let Some(instrument) = instruments
-                .iter()
-                .find(|instrument| row["instrument_token"] == instrument.key)
-            else {
-                continue;
-            };
-            let quote = match data::parse_row(
-                row,
-                receipt,
-                &instrument.key,
-                &instrument.symbol,
-                instrument.tick,
-            ) {
-                Ok(quote) => quote,
-                Err(_) => continue,
-            };
-            let (lower, upper, volume) = match (
-                row["lower_circuit_limit"].as_number(),
-                row["upper_circuit_limit"].as_number(),
-                row["volume"].as_u64(),
-            ) {
-                (Some(lower), Some(upper), Some(volume)) => {
-                    (lower.to_string(), upper.to_string(), volume)
-                }
-                _ => continue,
-            };
-            observations.push(json!({
-                "key":instrument.key,"quote":quote,
-                "lower_circuit_limit":lower,"upper_circuit_limit":upper,"volume":volume,
-                "archive_sha256":archive_sha256,
-                "purpose":kind.archive_str()
-            }));
-        }
+        let receipt = archived_receipt(&index, at, receipt, &raw, max_source_ms)?;
         if previous.is_some_and(|prior| at <= prior) {
             return Err("scorer_snapshots_chronology".into());
         }
         previous = Some(at);
-        receipts.push(QuoteReceipt {
-            at_ms: at,
-            receipt_ms: receipt,
-            kind,
-            observations,
-        });
+        receipts.push(receipt);
     }
     if receipts.is_empty() {
         return Err("scorer_snapshots_unavailable".into());
@@ -185,6 +100,120 @@ pub(crate) fn quote_receipts_bounded(
     Ok(QuoteEvidence {
         instruments,
         receipts,
+    })
+}
+
+/// The session's frozen cash universe from `wide-universe.json`.
+pub(super) fn session_universe(
+    source: &Path,
+    session: NaiveDate,
+) -> std::result::Result<Vec<Instrument>, String> {
+    let universe: Value = serde_json::from_slice(
+        &crate::read_bounded(&source.join("wide-universe.json"), 8_000_000)
+            .map_err(|_| "scorer_snapshots_unavailable".to_string())?,
+    )
+    .map_err(|_| "scorer_snapshots_unavailable".to_string())?;
+    let declared: NaiveDate = serde_json::from_value(universe["session"].clone())
+        .map_err(|_| "scorer_snapshots_unavailable".to_string())?;
+    let instruments: Vec<Instrument> = serde_json::from_value(universe["instruments"].clone())
+        .map_err(|_| "scorer_snapshots_unavailable".to_string())?;
+    if declared != session || instruments.is_empty() || instruments.len() > 10_000 {
+        return Err("scorer_snapshots_unavailable".into());
+    }
+    Ok(instruments)
+}
+
+/// The book's quote journal, opened read-only.
+pub(super) fn open_quote_journal(source: &Path) -> std::result::Result<Connection, String> {
+    let db = Connection::open_with_flags(
+        source.join("paper.sqlite"),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|_| "scorer_snapshots_unavailable".to_string())?;
+    db.pragma_update(None, "query_only", true)
+        .map_err(|_| "scorer_snapshots_unavailable".to_string())?;
+    db.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH, 2_000_000)
+        .map_err(|_| "scorer_snapshots_unavailable".to_string())?;
+    Ok(db)
+}
+
+/// One archived quote receipt as observations, parsed from its original body
+/// with its original receipt time. Rows outside the universe or without a
+/// parseable quote and circuit limits are left out, never repaired.
+pub(super) fn archived_receipt(
+    index: &BTreeMap<&str, &Instrument>,
+    at: i64,
+    receipt: Option<i64>,
+    raw: &str,
+    max_source_ms: i64,
+) -> std::result::Result<QuoteReceipt, String> {
+    if raw.len() > 2_000_000 {
+        return Err("scorer_snapshots_unavailable".into());
+    }
+    let receipt = receipt.ok_or("scorer_snapshots_receipt_missing")?;
+    let archive: Value =
+        serde_json::from_str(raw).map_err(|_| "scorer_snapshots_invalid".to_string())?;
+    if archive["kind"] == "compacted_quote_receipt"
+        || archive["received_ms"] != receipt
+        || receipt > at
+        || at > max_source_ms
+        || receipt > max_source_ms
+    {
+        return Err("scorer_snapshots_receipt_binding".into());
+    }
+    let body: Value = serde_json::from_str(
+        archive["body"]
+            .as_str()
+            .ok_or("scorer_snapshots_not_quote_receipt")?,
+    )
+    .map_err(|_| "scorer_snapshots_invalid".to_string())?;
+    if body["status"] != "success" {
+        return Err("scorer_snapshots_quote_status".into());
+    }
+    let kind = QuotePurposeV1::from_archive(archive["purpose"].as_str())
+        .ok_or("scorer_snapshots_purpose_unknown")?;
+    // The ORIGINAL archived receipt SHA for every observation. It is never
+    // the whole-tape digest and never another key's SHA.
+    let archive_sha256 = nivra_core::replay::digest(raw.as_bytes());
+    let mut observations = Vec::new();
+    let rows = body["data"]
+        .as_object()
+        .ok_or("scorer_snapshots_quote_rows")?;
+    for row in rows.values() {
+        let Some(instrument) = row["instrument_token"]
+            .as_str()
+            .and_then(|key| index.get(key))
+        else {
+            continue;
+        };
+        let Ok(quote) = data::parse_row(
+            row,
+            receipt,
+            &instrument.key,
+            &instrument.symbol,
+            instrument.tick,
+        ) else {
+            continue;
+        };
+        let (Some(lower), Some(upper), Some(volume)) = (
+            row["lower_circuit_limit"].as_number(),
+            row["upper_circuit_limit"].as_number(),
+            row["volume"].as_u64(),
+        ) else {
+            continue;
+        };
+        observations.push(json!({
+            "key":instrument.key,"quote":quote,
+            "lower_circuit_limit":lower.to_string(),"upper_circuit_limit":upper.to_string(),"volume":volume,
+            "archive_sha256":archive_sha256,
+            "purpose":kind.archive_str()
+        }));
+    }
+    Ok(QuoteReceipt {
+        at_ms: at,
+        receipt_ms: receipt,
+        kind,
+        observations,
     })
 }
 

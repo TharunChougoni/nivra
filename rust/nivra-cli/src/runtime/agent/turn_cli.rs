@@ -191,7 +191,7 @@ fn turn(args: &Args) -> Result<(bool, Value)> {
             {
                 return Err("agent_budget_exhausted".into());
             }
-            if !lanes::claim_review(&c)? {
+            if !lanes::claim(&c, lanes::REVIEW_MARKER)? {
                 return Err("agent_review_already_ran".into());
             }
             vec![runner.review(trigger, &brief, &mut context)?]

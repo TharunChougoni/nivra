@@ -146,6 +146,13 @@ enum Command {
         output: PathBuf,
         #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u32).range(1..=60))]
         max_snapshots: u32,
+        /// Write the session's quote tape (manifest.json and events.jsonl) into
+        /// the new directory OUTPUT, for strategy-lab replays.
+        #[arg(long)]
+        tape: bool,
+        /// With --tape, keep only this instrument key; repeat for more.
+        #[arg(long = "key", requires = "tape")]
+        keys: Vec<String>,
     },
     /// Summarize an explicitly selected saved timing stream, without session actions.
     ProtectionTimings { path: PathBuf },
@@ -540,7 +547,15 @@ fn main() -> ExitCode {
             config,
             output,
             max_snapshots,
-        } => runtime::paper_replay::scanner_archive_entry(&config, &output, max_snapshots as usize),
+            tape,
+            keys,
+        } => runtime::paper_replay::scanner_archive_entry(
+            &config,
+            &output,
+            max_snapshots as usize,
+            tape,
+            &keys,
+        ),
         Command::HistoryDownload {
             config,
             output,
