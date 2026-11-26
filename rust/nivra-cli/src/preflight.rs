@@ -182,6 +182,10 @@ fn inspect(config: &Path, unit: Option<&Path>) -> Result<(), &'static str> {
             // post-close review call instead of discovering a stale path later.
             crate::runtime::harness::validate_research_files(research)?;
         }
+        if let Some(env) = planner.research_env.as_ref() {
+            nivra_sandbox::env::verified_site_packages(&env.env_dir, env.env_sha256.as_deref())
+                .map_err(|_| "preflight_research_env_unavailable")?;
+        }
         if let Some(settings) = planner.agent.as_ref() {
             resolved.push(agent(settings)?);
         }

@@ -139,6 +139,10 @@ pub(crate) struct PlannerConfig {
     /// leaves the paper controller exactly as it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strategy_execution: Option<StrategyExecution>,
+    /// Optional read-only Python research environment (`nivra research-env build`).
+    /// Omitted when absent so existing policy bytes and stdlib-only behaviour are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research_env: Option<super::research_env::ResearchEnvSettings>,
 }
 /// The owner's switch for the strategy executor. Paper only.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -179,10 +183,20 @@ impl Default for PlannerConfig {
             exit_policy: None,
             strategy_acceptance: None,
             strategy_execution: None,
+            research_env: None,
         }
     }
 }
 impl PlannerConfig {
+    pub(crate) fn effective_sandbox(
+        &self,
+        base: &nivra_sandbox::SandboxConfig,
+    ) -> nivra_sandbox::SandboxConfig {
+        match &self.research_env {
+            Some(env) => env.apply_to(base),
+            None => base.clone(),
+        }
+    }
     pub(crate) fn runs_strategies(&self) -> bool {
         self.strategy_execution.as_ref().is_some_and(|s| s.enabled)
     }
@@ -297,6 +311,9 @@ impl PlannerConfig {
         }
         if let Some(thresholds) = &c.strategy_acceptance {
             thresholds.validate()?;
+        }
+        if let Some(env) = &c.research_env {
+            env.validate()?;
         }
         Ok(c)
     }

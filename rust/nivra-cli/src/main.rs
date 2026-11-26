@@ -124,6 +124,11 @@ enum Command {
         #[arg(long)]
         events: PathBuf,
     },
+    /// Build or verify the read-only Python analysis environment for the research sandbox.
+    ResearchEnv {
+        #[command(subcommand)]
+        command: runtime::research_env::Command,
+    },
     /// Exploratory archived daily-OHLC exit sensitivity; never starts trading.
     ExitBacktest {
         #[arg(long)]
@@ -583,6 +588,7 @@ fn main() -> ExitCode {
         } => alert::entry(config.as_deref(), test, event),
         Command::Preflight { config, unit_file } => preflight::entry(&config, unit_file.as_deref()),
         Command::Backtest { manifest, events } => backtest::entry(&manifest, &events),
+        Command::ResearchEnv { command } => runtime::research_env::entry(command),
         Command::Archive { command } => runtime::market_archive::entry(command),
         Command::HistoryBackfill {
             config,

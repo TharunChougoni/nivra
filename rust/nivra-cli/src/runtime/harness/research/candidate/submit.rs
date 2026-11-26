@@ -164,7 +164,7 @@ fn candidate_observation_submit(
         Ok(Some(result)) if result.observation.is_none() => {}
         _ => return Ok(not_dispatched("candidate_observation_source_unverified")),
     }
-    let sandbox = match candidate_sandbox_policy(candidate) {
+    let sandbox = match candidate_sandbox_policy(&candidate.sandbox) {
         Ok(sandbox) => sandbox,
         Err(_) => return Ok(not_dispatched("candidate_runtime_unavailable")),
     };
@@ -172,7 +172,7 @@ fn candidate_observation_submit(
         Ok(hash) => hash,
         Err(_) => return Ok(not_dispatched("candidate_runtime_unavailable")),
     };
-    let unit_policy = match candidate_unit_policy(candidate, &helper_sha256) {
+    let unit_policy = match candidate_unit_policy(candidate, &candidate.sandbox, &helper_sha256) {
         Ok(policy) => policy,
         Err(reason) => return Ok(not_dispatched(reason)),
     };
@@ -918,7 +918,7 @@ pub(crate) fn candidate_submit_preemptible(
     let source_sha256 = digest(args.source.as_bytes());
     let params_sha256 = digest(&params_bytes);
     let dataset_hash = digest(&dataset_bytes);
-    let sandbox = match candidate_sandbox_policy(candidate) {
+    let sandbox = match candidate_sandbox_policy(&candidate.sandbox) {
         Ok(sandbox) => sandbox,
         Err(_) => return Ok(not_dispatched("candidate_runtime_unavailable")),
     };
@@ -926,7 +926,7 @@ pub(crate) fn candidate_submit_preemptible(
         Ok(hash) => hash,
         Err(_) => return Ok(not_dispatched("candidate_runtime_unavailable")),
     };
-    let unit_policy = match candidate_unit_policy(candidate, &helper_sha256) {
+    let unit_policy = match candidate_unit_policy(candidate, &candidate.sandbox, &helper_sha256) {
         Ok(policy) => policy,
         Err(reason) => return Ok(not_dispatched(reason)),
     };

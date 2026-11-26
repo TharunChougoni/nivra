@@ -1195,6 +1195,8 @@ pub(crate) fn candidate_pure_contract() {
         executable_scope: "python_and_bwrap_content_only".into(),
         python_sha256: "0".repeat(64),
         bwrap_sha256: "1".repeat(64),
+        env_dir: None,
+        env_sha256: None,
     };
     let limits = jobs::ResourceCaps {
         cpu_millis: 120_000,

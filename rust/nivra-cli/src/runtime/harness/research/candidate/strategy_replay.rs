@@ -107,8 +107,9 @@ pub(super) fn strategy_backtest(
         from_ms: Some(args.selection_from_ms),
         to_ms: Some(args.selection_to_ms),
     };
+    let sandbox = cfg.effective_sandbox(&candidate.sandbox);
     let mut report = match replay::run(
-        &candidate.sandbox,
+        &sandbox,
         args.source.as_bytes(),
         &parameters,
         &tape.manifest,
@@ -164,6 +165,7 @@ pub(super) fn strategy_backtest(
         "hypothesis":args.hypothesis,
         "report_sha256":report_sha256,
         "source_sha256":report["source_sha256"],
+        "env_sha256":report["sandbox"]["env_sha256"],
         "summary":report["summary"],
         "tape":report["tape"],
         "action_outcomes":report["action_outcomes"],

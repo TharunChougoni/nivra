@@ -123,6 +123,8 @@ pub struct ScorerReplayReport {
     pub mean_spearman: Option<f64>,
     pub ticks: Vec<ScorerTickReport>,
     pub horizons: Vec<ScorerHorizonReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_sha256: Option<String>,
     pub report_hash: String,
 }
 impl ScorerReplayReport {
@@ -225,6 +227,8 @@ pub fn replay_candidate(
     sandbox
         .validate()
         .map_err(|_| "scorer_replay_sandbox_invalid".to_string())?;
+    let env_sha256 =
+        nivra_sandbox::env_sha256(sandbox).map_err(|_| "ranker_replay_env_invalid".to_string())?;
     if snapshots.is_empty() {
         return Err("scorer_replay_snapshots_unavailable".into());
     }
@@ -335,6 +339,7 @@ pub fn replay_candidate(
         mean_spearman: mean(ticks.iter().filter_map(|tick| tick.spearman)),
         ticks,
         horizons,
+        env_sha256,
         report_hash: String::new(),
     }
     .hash()?;
@@ -964,5 +969,48 @@ mod tests {
             CostEvidence::new(None, None).source,
             PAPER_COSTS_SOURCE_ABSENT
         );
+    }
+
+    #[test]
+    fn replay_records_env_sha256() {
+        let probe = nivra_sandbox::SandboxConfig::default();
+        if !probe.bwrap_path.is_file()
+            || !probe.python_path.is_file()
+            || nivra_sandbox::run_document(&probe, b"print('{}')", &serde_json::json!({})).is_err()
+        {
+            return;
+        }
+        let env_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            env_dir.path().join("numpy.py"),
+            b"def scale(v):\n    return v * 2.0\n",
+        )
+        .unwrap();
+        let expected_hash = nivra_sandbox::env::compute_dir_hash(env_dir.path()).unwrap();
+        let sandbox = nivra_sandbox::SandboxConfig {
+            env_dir: Some(env_dir.path().to_path_buf()),
+            env_sha256: Some(expected_hash.clone()),
+            memory_mb: 512,
+            cpu_seconds: 10,
+            wall_ms: 5000,
+            ..probe
+        };
+        let snaps = fixture_snapshots();
+        let src = br#"import json, sys, numpy
+with open(sys.argv[1]) as f:
+    rows = json.load(f)
+print(json.dumps({k: numpy.scale(v.get("absolute_move_bps", 1.0)) for k, v in rows.items() if k != "params"}))
+"#;
+        let (report, _) = replay_candidate(
+            &serde_json::from_str(r#"{"min_valid_snapshots":2}"#).unwrap(),
+            &sandbox,
+            src,
+            b"{}",
+            &snaps,
+        )
+        .unwrap();
+        assert_eq!(report.status, "ok");
+        assert_eq!(report.env_sha256.as_deref(), Some(expected_hash.as_str()));
+        assert!(report.verify_hash());
     }
 }

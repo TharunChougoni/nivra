@@ -212,10 +212,11 @@ impl<'a> Bridge<'a> {
             Tool::QuoteCapture(keys, from_ms, to_ms) => {
                 research_quote_capture(c, cfg, keys, from_ms, to_ms, now)?
             }
-            Tool::Workspace(op) => super::workspace::execute_scoped(
+            Tool::Workspace(op) => super::workspace::execute_scoped_with_env(
                 &c.directory,
                 cfg.workspace.as_ref().ok_or("harness_workspace_disabled")?,
                 self.grant.workspace,
+                cfg.research_env.as_ref(),
                 op,
             )?,
             Tool::Web(op) => {

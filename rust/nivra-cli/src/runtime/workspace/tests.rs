@@ -192,3 +192,136 @@ fn workspace_run_allowlist_and_install_gate() {
         .is_err()
     );
 }
+
+#[test]
+fn workspace_ranker_with_research_env_and_report_hashes() {
+    let (dir, _root, mut settings) = enabled_book();
+    let book = dir.path();
+    let probe = nivra_sandbox::SandboxConfig::default();
+    if !probe.bwrap_path.is_file()
+        || !probe.python_path.is_file()
+        || nivra_sandbox::run_document(&probe, b"print('{}')", &json!({})).is_err()
+    {
+        assert!(!nivra_sandbox::sandbox_required());
+        return;
+    }
+
+    let script = "scripts/env_ranker.py";
+    let source = r#"import json, os, resource, sys
+import numpy
+assert resource.getrlimit(resource.RLIMIT_AS)[0] >= 512 * 1024 * 1024
+assert os.environ.get("OPENBLAS_NUM_THREADS") == "1"
+with open(sys.argv[1]) as f:
+    rows = json.load(f)
+print(json.dumps({k: numpy.score(v["move_bps"]) for k, v in rows.items()}))
+"#;
+    execute_scoped(
+        book,
+        &settings,
+        WorkspaceScope::ResearchSandbox,
+        WorkspaceOp::Write {
+            path: script.into(),
+            text: source.into(),
+        },
+    )
+    .unwrap();
+    let input = json!({"NSE_EQ|A": {"move_bps": 12.0}});
+
+    // Without research_env: ranker fails cleanly (no numpy on sys.path and 256 MiB cap).
+    let no_env = execute_scoped(
+        book,
+        &settings,
+        WorkspaceScope::ResearchSandbox,
+        WorkspaceOp::Run {
+            script: script.into(),
+            input: Some(input.clone()),
+            input_path: None,
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert_eq!(no_env, "workspace_run_script_exit");
+
+    // With research_env configured: ranker succeeds, network is refused, and env_sha256 is recorded.
+    let env_dir = tempfile::tempdir().unwrap();
+    fs::write(
+        env_dir.path().join("numpy.py"),
+        b"def score(v):\n    return v * 2.0\n",
+    )
+    .unwrap();
+    let env_sha256 = nivra_sandbox::env::compute_dir_hash(env_dir.path()).unwrap();
+    let env = crate::runtime::research_env::ResearchEnvSettings {
+        env_dir: env_dir.path().to_path_buf(),
+        env_sha256: Some(env_sha256.clone()),
+        memory_mb: 512,
+        cpu_seconds: 10,
+        wall_ms: 15_000,
+        ..Default::default()
+    };
+    env.validate().unwrap();
+    // Even if workspace.network is true, ResearchSandbox keeps network disabled for rankers.
+    settings.network = true;
+    let scored = execute_scoped_with_env(
+        book,
+        &settings,
+        WorkspaceScope::ResearchSandbox,
+        Some(&env),
+        WorkspaceOp::Run {
+            script: script.into(),
+            input: Some(input),
+            input_path: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(scored["scores"], json!({"NSE_EQ|A": 24.0}));
+    assert_eq!(scored["env_sha256"], json!(env_sha256));
+
+    // Network call is refused inside ResearchSandbox even with research_env configured.
+    let net_script = "scripts/net_probe.py";
+    execute_scoped(
+        book,
+        &settings,
+        WorkspaceScope::ResearchSandbox,
+        WorkspaceOp::Write {
+            path: net_script.into(),
+            text: "import socket; s=socket.socket(); s.settimeout(.1); s.connect(('1.1.1.1', 53)); print('{}')\n".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        execute_scoped_with_env(
+            book,
+            &settings,
+            WorkspaceScope::ResearchSandbox,
+            Some(&env),
+            WorkspaceOp::Run {
+                script: net_script.into(),
+                input: Some(json!({"NSE_EQ|A": {"move_bps": 1.0}})),
+                input_path: None,
+            },
+        )
+        .unwrap_err()
+        .to_string(),
+        "workspace_run_script_exit"
+    );
+
+    // Strategy replay report records the environment hash.
+    let sandbox = env.apply_to(&nivra_sandbox::SandboxConfig::default());
+    let manifest = include_bytes!("../../../../../fixtures/strategy/manifest.json");
+    let events = include_bytes!("../../../../../fixtures/strategy/events.jsonl");
+    let params: crate::runtime::strategy::replay::Parameters = serde_json::from_slice(
+        include_bytes!("../../../../../fixtures/strategy/parameters.json"),
+    )
+    .unwrap();
+    let strategy_report = crate::runtime::strategy::replay::run(
+        &sandbox,
+        b"import numpy, json\nprint(json.dumps({'actions': []}))\n",
+        &params,
+        manifest,
+        events,
+        &|| None,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(strategy_report["sandbox"]["env_sha256"], json!(env_sha256));
+}

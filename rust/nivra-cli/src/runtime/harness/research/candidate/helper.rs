@@ -112,6 +112,8 @@ fn verified_replay(
         max_processes: launch.sandbox.max_processes,
         max_open_files: launch.sandbox.max_open_files,
         network: false,
+        env_dir: launch.sandbox.env_dir.as_ref().map(PathBuf::from),
+        env_sha256: launch.sandbox.env_sha256.clone(),
     };
     Ok((replay, sandbox))
 }

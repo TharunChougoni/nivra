@@ -49,7 +49,8 @@ The pi lanes use these workspace tools:
 | `install` | research | Install an allowlisted file into `tools/` |
 
 Defaults: `max_write_bytes` 65,536, `max_file_bytes` 1 MiB, `cpu_seconds` 30,
-`memory_mb` 512 (256 for `scripts/` rankers) and `wall_ms` 30,000.
+`memory_mb` 512 (256 for `scripts/` rankers without `research_env`, 512 when
+`research_env` or `ranker_memory_mb` is configured) and `wall_ms` 30,000.
 
 ## Rankers
 
@@ -71,13 +72,83 @@ object, not an instrument.
 
 ### Sandbox
 
-Every ranker runs as `python3 -I -S -B` under `bwrap --unshare-all` with a
-cleared environment. It sees only read-only mounts of the system Python, the
-script and the input. It has no network, home, credentials or book. A
-seccomp filter denies `fork`, `vfork`, `clone` and `clone3`. CPU, memory, open
-files, output and wall time are limited. Missing `bwrap` or Python is a
-failure, never a fallback to an unconfined process. A failure returns a typed
-error and no scores.
+Every ranker and `strategy_actions_v1` strategy runs as `python3 -I -S -B` under
+`bwrap --unshare-all` with a cleared environment. It sees only read-only mounts
+of the system Python, the script, the input and (when configured) the research
+Python environment. It has no network, home, credentials or book. A seccomp
+filter denies `fork`, `vfork`, `clone` and `clone3`. CPU, memory, open files,
+output and wall time are limited. Missing `bwrap`, Python or a configured
+environment is a failure, never a fallback to an unconfined process. A failure
+returns a typed error and no scores.
+
+Without `research_env` (or `env_dir`), the sandbox runs standard library only
+with the historical defaults (`memory_mb` 128, `cpu_seconds` 1, `wall_ms` 2,000
+in `SandboxConfig`, and 256 MiB for workspace `scripts/` rankers).
+
+#### Research Python environment
+
+Configure `research_env` in `planner.json` (or `env_dir` / `env_sha256` on
+`workspace` or `SandboxConfig`) to mount a pinned read-only analysis
+environment at `/research-env`:
+
+```json
+"research_env": {
+  "env_dir": "/opt/nivra/research-env",
+  "env_sha256": "<64-hex-sha256>",
+  "memory_mb": 512,
+  "cpu_seconds": 10,
+  "wall_ms": 15000
+}
+```
+
+To keep `-I -S -B` intact, the sandbox invokes a tiny `-c` wrapper that appends
+`/research-env` to `sys.path` after the standard library and sets
+`OPENBLAS_NUM_THREADS=1`, `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`,
+`NUMEXPR_NUM_THREADS=1`, `VECLIB_MAXIMUM_THREADS=1` and `BLIS_NUM_THREADS=1` so
+BLAS/OpenMP libraries stay single-threaded inside the seccomp policy and avoid
+multi-thread virtual memory bloat under `RLIMIT_AS`. Network remains disabled for
+all rankers and strategies.
+
+Pinned packages in
+[`packaging/research/requirements.txt`](../packaging/research/requirements.txt)
+(Python 3.14, Linux x86_64 binary wheels, ~293 MiB unpacked):
+
+| Package | Version | Notes |
+| --- | --- | --- |
+| `numpy` | `2.5.5` | Array math (`numpy.libs` OpenBLAS) |
+| `pandas` | `3.1.1` | DataFrames and rolling window statistics |
+| `scipy` | `1.18.1` | Hypothesis tests, distributions, optimization |
+| `statsmodels` | `0.15.0` | OLS, time-series and regression diagnostics |
+| `scikit-learn` | `1.9.1` | Linear models and cross-validation utilities (`joblib` serial mode) |
+
+Excluded from the candidate list: `polars` (~170 MiB unpacked; panics on import
+by spawning a background thread via `clone`/`clone3` which seccomp denies, and
+breaks `statsmodels` when co-installed), `numba` (~188 MiB unpacked with
+`llvmlite` LLVM JIT footprint) and `ta` (sdist-only on PyPI with no Linux x86_64
+wheel for `--only-binary=:all:`).
+
+Measured limits: importing `numpy` + `pandas` takes ~1.1–1.3 s CPU and ~90 MiB
+RSS; importing all five libraries and fitting models requires `RLIMIT_AS` >=
+512 MiB (~206 MiB peak RSS; 256 MiB fails mapping `scipy` shared objects and
+384 MiB fails OpenBLAS allocation in `statsmodels`) and ~4.0 s CPU / ~4.2 s wall
+time. The defaults for `research_env` are `memory_mb` 512 (`32..=2048`),
+`cpu_seconds` 10 (`1..=30`) and `wall_ms` 15,000 (`1..=30,000`).
+
+To build or rebuild the environment from the committed hash-pinned lockfile
+(`pip install --require-hashes --only-binary=:all: --no-compile`), and verify
+its content hash:
+
+```sh
+nivra research-env build --config CFG
+nivra research-env verify --config CFG
+```
+
+`CFG` can be a paper config (following `planner_config`), a planner config with
+`research_env`, or a standalone JSON containing `{"env_dir": "..."}`. Copy the
+printed `env_sha256` into `research_env.env_sha256` (or `sandbox.env_sha256`) to
+pin the exact installed bytes. Ranker replay reports (`env_sha256`), strategy
+replay reports (`sandbox.env_sha256`) and workspace `run` responses (`env_sha256`)
+record this hash on every run.
 
 ### Test a ranker
 

@@ -336,7 +336,7 @@ pub(crate) fn drive_candidate_with_unit_and_machine(
             return Ok(());
         }
     };
-    let unit_policy = match candidate_unit_policy(candidate, &helper_sha256) {
+    let unit_policy = match candidate_unit_policy(candidate, &candidate.sandbox, &helper_sha256) {
         Ok(policy) => policy,
         Err(_) => {
             jobs::refuse_unstarted_candidate(
@@ -360,7 +360,7 @@ pub(crate) fn drive_candidate_with_unit_and_machine(
         output_bytes: candidate.sandbox.max_output_bytes as u64,
         wall_millis: candidate.wall_millis,
     };
-    let current_sandbox = match candidate_sandbox_policy(candidate) {
+    let current_sandbox = match candidate_sandbox_policy(&candidate.sandbox) {
         Ok(policy) => policy,
         Err(_) => {
             jobs::refuse_unstarted_candidate(

@@ -389,29 +389,35 @@ fn helper_content_sha256(
 
 fn candidate_unit_policy(
     candidate: &CandidateComputeSettings,
+    sandbox: &nivra_sandbox::SandboxConfig,
     helper_sha256: &str,
 ) -> std::result::Result<jobs::CandidateUnitPolicy, &'static str> {
+    let min_unit_memory = sandbox
+        .memory_mb
+        .saturating_mul(1024 * 1024)
+        .saturating_add(64 * 1024 * 1024);
+    let unit_wall_millis = if candidate.unit_wall_millis == 0 {
+        candidate.wall_millis.max(sandbox.wall_ms as u32)
+    } else {
+        candidate.unit_wall_millis
+    };
     let policy = jobs::CandidateUnitPolicy {
         version: 1,
         helper_sha256: helper_sha256.to_owned(),
         helper_abi: CANDIDATE_HELPER_ABI.into(),
         unit_tasks: candidate.unit_tasks,
-        unit_memory_bytes: candidate.unit_memory_bytes,
+        unit_memory_bytes: candidate.unit_memory_bytes.max(min_unit_memory),
         unit_cpu_millis: if candidate.unit_cpu_millis == 0 {
-            candidate.wall_millis
+            unit_wall_millis
         } else {
             candidate.unit_cpu_millis
         },
-        unit_wall_millis: if candidate.unit_wall_millis == 0 {
-            candidate.wall_millis
-        } else {
-            candidate.unit_wall_millis
-        },
+        unit_wall_millis,
         unit_open_files: candidate.unit_open_files,
         max_result_bytes: candidate.max_result_bytes,
         restart: "no".into(),
-        payload_max_processes: candidate.sandbox.max_processes,
-        payload_max_open_files: candidate.sandbox.max_open_files,
+        payload_max_processes: sandbox.max_processes,
+        payload_max_open_files: sandbox.max_open_files,
         kill_mode: "control-group".into(),
         proof_abi: CANDIDATE_PROOF_ABI.into(),
     };
@@ -420,8 +426,8 @@ fn candidate_unit_policy(
         tasks: 1,
         workspace_bytes: 1_048_576,
         file_bytes: 65_536,
-        memory_bytes: candidate.sandbox.memory_mb * 1024 * 1024,
-        output_bytes: candidate.sandbox.max_output_bytes as u64,
+        memory_bytes: sandbox.memory_mb * 1024 * 1024,
+        output_bytes: sandbox.max_output_bytes as u64,
         wall_millis: candidate.wall_millis,
     };
     if worker::quota_hundredths(policy.unit_cpu_millis, policy.unit_wall_millis).is_none() {
@@ -431,17 +437,19 @@ fn candidate_unit_policy(
         &jobs::CandidateSandboxPolicy {
             abi: CANDIDATE_ABI.into(),
             engine: CANDIDATE_ENGINE.into(),
-            network: candidate.sandbox.network,
-            cpu_seconds: candidate.sandbox.cpu_seconds,
-            memory_mb: candidate.sandbox.memory_mb,
-            wall_ms: candidate.sandbox.wall_ms,
-            max_output_bytes: candidate.sandbox.max_output_bytes as u64,
-            max_keys: candidate.sandbox.max_keys as u64,
-            max_processes: candidate.sandbox.max_processes,
-            max_open_files: candidate.sandbox.max_open_files,
+            network: sandbox.network,
+            cpu_seconds: sandbox.cpu_seconds,
+            memory_mb: sandbox.memory_mb,
+            wall_ms: sandbox.wall_ms,
+            max_output_bytes: sandbox.max_output_bytes as u64,
+            max_keys: sandbox.max_keys as u64,
+            max_processes: sandbox.max_processes,
+            max_open_files: sandbox.max_open_files,
             executable_scope: "python_and_bwrap_content_only".into(),
             python_sha256: "0".repeat(64),
             bwrap_sha256: "0".repeat(64),
+            env_dir: None,
+            env_sha256: None,
         },
         &resources,
     ) {
@@ -483,22 +491,35 @@ fn executable_content_sha256(path: &std::path::Path) -> std::result::Result<Stri
 }
 
 fn candidate_sandbox_policy(
-    candidate: &CandidateComputeSettings,
+    sandbox: &nivra_sandbox::SandboxConfig,
 ) -> std::result::Result<jobs::CandidateSandboxPolicy, &'static str> {
+    let env_sha256 =
+        nivra_sandbox::env_sha256(sandbox).map_err(|_| "candidate_runtime_unavailable")?;
+    let env_dir = sandbox
+        .env_dir
+        .as_ref()
+        .map(|dir| {
+            dir.to_str()
+                .map(str::to_owned)
+                .ok_or("candidate_runtime_unavailable")
+        })
+        .transpose()?;
     Ok(jobs::CandidateSandboxPolicy {
         abi: CANDIDATE_ABI.into(),
         engine: CANDIDATE_ENGINE.into(),
-        network: candidate.sandbox.network,
-        cpu_seconds: candidate.sandbox.cpu_seconds,
-        memory_mb: candidate.sandbox.memory_mb,
-        wall_ms: candidate.sandbox.wall_ms,
-        max_output_bytes: candidate.sandbox.max_output_bytes as u64,
-        max_keys: candidate.sandbox.max_keys as u64,
-        max_processes: candidate.sandbox.max_processes,
-        max_open_files: candidate.sandbox.max_open_files,
+        network: sandbox.network,
+        cpu_seconds: sandbox.cpu_seconds,
+        memory_mb: sandbox.memory_mb,
+        wall_ms: sandbox.wall_ms,
+        max_output_bytes: sandbox.max_output_bytes as u64,
+        max_keys: sandbox.max_keys as u64,
+        max_processes: sandbox.max_processes,
+        max_open_files: sandbox.max_open_files,
         executable_scope: "python_and_bwrap_content_only".into(),
-        python_sha256: executable_content_sha256(&candidate.sandbox.python_path)?,
-        bwrap_sha256: executable_content_sha256(&candidate.sandbox.bwrap_path)?,
+        python_sha256: executable_content_sha256(&sandbox.python_path)?,
+        bwrap_sha256: executable_content_sha256(&sandbox.bwrap_path)?,
+        env_dir,
+        env_sha256,
     })
 }
 
@@ -855,8 +876,8 @@ pub(crate) fn current_candidate_runtime(
         .filter(|candidate| candidate.enabled)
         .ok_or("candidate_compute_disabled")?;
     let helper_sha256 = helper_content_sha256(candidate).map_err(|reason| reason.to_string())?;
-    let unit_policy =
-        candidate_unit_policy(candidate, &helper_sha256).map_err(|reason| reason.to_string())?;
+    let unit_policy = candidate_unit_policy(candidate, &candidate.sandbox, &helper_sha256)
+        .map_err(|reason| reason.to_string())?;
     Ok(candidate_runtime_binding(&helper_sha256, &unit_policy))
 }
 

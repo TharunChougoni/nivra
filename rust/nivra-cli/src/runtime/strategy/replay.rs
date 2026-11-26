@@ -197,6 +197,8 @@ pub(crate) fn run(
     costs
         .validate()
         .map_err(|_| "strategy_replay_costs_required")?;
+    let env_sha256 =
+        nivra_sandbox::env_sha256(sandbox).map_err(|_| "strategy_replay_env_invalid")?;
     let source_sha256 = digest(source);
     let mut portfolio = Portfolio::with_capital(capital);
     portfolio.costs = Some(costs.clone());
@@ -431,6 +433,7 @@ pub(crate) fn run(
             "memory_mb": sandbox.memory_mb,
             "wall_ms": sandbox.wall_ms,
             "max_output_bytes": sandbox.max_output_bytes,
+            "env_sha256": env_sha256,
         },
         "capital": capital,
         "costs": costs,

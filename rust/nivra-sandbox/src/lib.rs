@@ -1,4 +1,5 @@
 //! Offline Python scoring only. Never starts sessions or selects a runtime strategy.
+pub mod env;
 pub mod library;
 pub mod orchestrator_policy;
 pub mod selector;
@@ -35,6 +36,13 @@ pub struct ScorerSandboxConfig {
     /// configuration bytes and policy hashes stay unchanged.
     #[serde(default, skip_serializing_if = "is_false")]
     pub network: bool,
+    /// Optional read-only Python environment directory (`nivra research-env build`).
+    /// Omitted when None so unconfigured policy bytes and stdlib-only behaviour stay unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_dir: Option<PathBuf>,
+    /// Optional pinned SHA-256 content hash of `env_dir`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_sha256: Option<String>,
 }
 /// The containment limits for any payload: rankers and action strategies alike.
 pub type SandboxConfig = ScorerSandboxConfig;
@@ -59,6 +67,8 @@ impl Default for ScorerSandboxConfig {
             max_processes: 64,
             max_open_files: 32,
             network: false,
+            env_dir: None,
+            env_sha256: None,
         }
     }
 }
@@ -79,16 +89,37 @@ impl ScorerSandboxConfig {
         if !self.python_path.is_absolute()
             || !self.bwrap_path.is_absolute()
             || !(1..=30).contains(&self.cpu_seconds)
-            || !(32..=512).contains(&self.memory_mb)
+            || !(32..=2048).contains(&self.memory_mb)
             || !(1..=30000).contains(&self.wall_ms)
             || !(1..=262144).contains(&self.max_output_bytes)
             || !(1..=4096).contains(&self.max_keys)
             || !(8..=256).contains(&self.max_processes)
             || !(16..=128).contains(&self.max_open_files)
+            || (self.env_sha256.is_some() && self.env_dir.is_none())
+            || self
+                .env_dir
+                .as_deref()
+                .is_some_and(|dir| !env::path_ok(dir))
+            || self
+                .env_sha256
+                .as_deref()
+                .is_some_and(|hash| !env::valid_hash(hash))
         {
             return Err(Failure::Config);
         }
         Ok(())
+    }
+}
+
+/// Resolve and verify the configured Python environment (if any) and return its
+/// content SHA-256 hash. Returns `Ok(None)` when no environment is configured.
+pub fn env_sha256(c: &SandboxConfig) -> Result<Option<String>, Failure> {
+    c.validate()?;
+    match &c.env_dir {
+        None => Ok(None),
+        Some(dir) => {
+            env::verified_site_packages(dir, c.env_sha256.as_deref()).map(|(_, hash)| Some(hash))
+        }
     }
 }
 pub type Scores = BTreeMap<String, f64>;
@@ -360,12 +391,31 @@ fn prepare_program(
             "/lib64",
         ]);
     }
+    let env_mount = match &c.env_dir {
+        Some(dir) => Some(env::verified_site_packages(dir, c.env_sha256.as_deref())?.0),
+        None => None,
+    };
     cmd.arg("--ro-bind")
         .arg(&program)
         .arg("/scorer.py")
         .arg("--ro-bind")
         .arg(&data)
         .arg("/input.json");
+    if let Some(site_packages) = &env_mount {
+        cmd.arg("--ro-bind").arg(site_packages).arg("/research-env");
+        // Keep BLAS/OMP single-threaded: seccomp forbids clone/clone3, and
+        // multi-thread arena reservations quickly exhaust RLIMIT_AS.
+        for (key, value) in [
+            ("OPENBLAS_NUM_THREADS", "1"),
+            ("OMP_NUM_THREADS", "1"),
+            ("MKL_NUM_THREADS", "1"),
+            ("NUMEXPR_NUM_THREADS", "1"),
+            ("VECLIB_MAXIMUM_THREADS", "1"),
+            ("BLIS_NUM_THREADS", "1"),
+        ] {
+            cmd.args(["--setenv", key, value]);
+        }
+    }
     cmd.args([
         "--proc",
         "/proc",
@@ -380,9 +430,16 @@ fn prepare_program(
         "-I",
         "-S",
         "-B",
-        "/scorer.py",
-        "/input.json",
     ]);
+    if env_mount.is_some() {
+        // Append after stdlib so packages in /research-env cannot shadow stdlib,
+        // while keeping -I -S -B intact.
+        cmd.args([
+            "-c",
+            "import sys; sys.path.append('/research-env'); sys.argv = sys.argv[1:]; p = sys.argv[0]; exec(compile(open(p, 'rb').read(), p, 'exec'), {'__name__': '__main__', '__file__': p})",
+        ]);
+    }
+    cmd.args(["/scorer.py", "/input.json"]);
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -1023,6 +1080,151 @@ while True: pass
                 "import socket; s=socket.socket(); s.settimeout(.1); s.connect(('1.1.1.1',53)); print('{\"a\":1}')",
             ),
             Some(Failure::Exit),
+        );
+    }
+
+    #[test]
+    fn research_env_mounts_read_only_refuses_network_and_records_hash() {
+        let default = SandboxConfig::default();
+        assert!(default.env_dir.is_none());
+        assert!(default.env_sha256.is_none());
+        let serialized = serde_json::to_value(&default).unwrap();
+        assert!(serialized.get("env_dir").is_none());
+        assert!(serialized.get("env_sha256").is_none());
+        assert_eq!(env_sha256(&default), Ok(None));
+
+        // Invalid env configurations fail closed as Failure::Config.
+        assert_eq!(
+            SandboxConfig {
+                env_sha256: Some("a".repeat(64)),
+                ..default.clone()
+            }
+            .validate(),
+            Err(Failure::Config)
+        );
+        assert_eq!(
+            SandboxConfig {
+                env_dir: Some(PathBuf::from("relative/env")),
+                ..default.clone()
+            }
+            .validate(),
+            Err(Failure::Config)
+        );
+        assert_eq!(
+            SandboxConfig {
+                env_dir: Some(PathBuf::from("/tmp/../escape")),
+                ..default.clone()
+            }
+            .validate(),
+            Err(Failure::Config)
+        );
+        assert_eq!(
+            SandboxConfig {
+                env_dir: Some(PathBuf::from("/tmp/ok")),
+                env_sha256: Some("bad".into()),
+                ..default.clone()
+            }
+            .validate(),
+            Err(Failure::Config)
+        );
+
+        let base = containment_config();
+        if skip_unavailable(&base, "research env sandbox fixture") {
+            return;
+        }
+        let features = Features::from([("a".into(), serde_json::json!({"x": 2.0}))]);
+
+        // Without an environment, importing numpy fails cleanly (stdlib only, -S drops site-packages).
+        let ranker = br#"import json, sys, numpy
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+assert sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.flags.dont_write_bytecode == 1
+print(json.dumps({k: numpy.score_val(v["x"]) for k, v in data.items()}))
+"#;
+        assert_eq!(score_source(&base, ranker, &features), Err(Failure::Exit));
+
+        // Build a synthetic --target environment directory and compute its content hash.
+        let env_tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            env_tmp.path().join("numpy.py"),
+            b"def score_val(x):\n    return x * 3.0\n",
+        )
+        .unwrap();
+        let expected_hash = env::compute_dir_hash(env_tmp.path()).unwrap();
+
+        let configured = SandboxConfig {
+            env_dir: Some(env_tmp.path().to_path_buf()),
+            env_sha256: Some(expected_hash.clone()),
+            memory_mb: 512,
+            cpu_seconds: 10,
+            wall_ms: 5000,
+            ..base.clone()
+        };
+        assert_eq!(env_sha256(&configured), Ok(Some(expected_hash.clone())));
+        assert_eq!(
+            score_source(&configured, ranker, &features).unwrap()["a"],
+            6.0
+        );
+
+        // Mounted environment is read-only and network stays off.
+        assert_eq!(
+            score_source(
+                &configured,
+                b"open('/research-env/tamper.py', 'w').write('x')",
+                &features,
+            ),
+            Err(Failure::Exit)
+        );
+        assert_eq!(
+            score_source(
+                &configured,
+                b"import socket; s=socket.socket(); s.settimeout(.1); s.connect(('1.1.1.1', 53)); print('{\"a\":1}')",
+                &features,
+            ),
+            Err(Failure::Exit)
+        );
+        assert_eq!(
+            run_document(
+                &SandboxConfig {
+                    network: true,
+                    ..configured.clone()
+                },
+                b"print('{}')",
+                &serde_json::json!({}),
+            ),
+            Err(Failure::Config)
+        );
+
+        // Tampering with an environment file invalidates the pinned hash.
+        fs::write(
+            env_tmp.path().join("numpy.py"),
+            b"def score_val(x):\n    return x * 99.0\n",
+        )
+        .unwrap();
+        assert_eq!(
+            score_source(&configured, ranker, &features),
+            Err(Failure::Setup)
+        );
+
+        // Virtualenv layout (pyvenv.cfg + lib/python3.X/site-packages) also resolves.
+        let venv_tmp = tempfile::tempdir().unwrap();
+        fs::write(venv_tmp.path().join("pyvenv.cfg"), b"home = /usr/bin\n").unwrap();
+        let site = venv_tmp.path().join("lib/python3.14/site-packages");
+        fs::create_dir_all(&site).unwrap();
+        fs::write(
+            site.join("numpy.py"),
+            b"def score_val(x):\n    return x * 4.0\n",
+        )
+        .unwrap();
+        let venv_hash = env::compute_dir_hash(&site).unwrap();
+        let venv_cfg = SandboxConfig {
+            env_dir: Some(venv_tmp.path().to_path_buf()),
+            env_sha256: Some(venv_hash),
+            ..configured
+        };
+        assert_eq!(
+            score_source(&venv_cfg, ranker, &features).unwrap()["a"],
+            8.0
         );
     }
 }

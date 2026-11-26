@@ -734,7 +734,7 @@ fn candidate_result_view_body(result: &CandidateResultV1) -> Value {
             })
         })
         .collect::<Vec<_>>();
-    let report = json!({
+    let mut report = json!({
         "schema":result.report.schema,
         "status":result.report.status,
         "reason":result.report.reason,
@@ -755,6 +755,9 @@ fn candidate_result_view_body(result: &CandidateResultV1) -> Value {
         "horizons":horizons,
         "report_hash":result.report.report_hash
     });
+    if let Some(env_sha256) = &result.report.env_sha256 {
+        report["env_sha256"] = json!(env_sha256);
+    }
     let mut body = json!({
         "version":result.version,
         "task_id":result.task_id,

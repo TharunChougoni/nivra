@@ -26,6 +26,7 @@ pub mod preparation;
 pub mod readiness;
 mod redecision;
 pub mod research_dashboard;
+pub(crate) mod research_env;
 pub mod retention;
 pub mod rollover;
 pub(crate) mod setup;

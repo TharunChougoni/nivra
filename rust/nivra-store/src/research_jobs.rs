@@ -282,6 +282,10 @@ pub struct CandidateSandboxPolicy {
     pub executable_scope: String,
     pub python_sha256: String,
     pub bwrap_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_sha256: Option<String>,
 }
 impl CandidateSandboxPolicy {
     fn validate(&self) -> bool {
@@ -289,7 +293,7 @@ impl CandidateSandboxPolicy {
             && self.engine == "sadr_sandbox::score_source"
             && !self.network
             && (1..=30).contains(&self.cpu_seconds)
-            && (32..=512).contains(&self.memory_mb)
+            && (32..=2048).contains(&self.memory_mb)
             && (1..=30_000).contains(&self.wall_ms)
             && (1..=262_144).contains(&self.max_output_bytes)
             && (1..=4096).contains(&self.max_keys)
@@ -298,6 +302,12 @@ impl CandidateSandboxPolicy {
             && self.executable_scope == "python_and_bwrap_content_only"
             && valid_hash(&self.python_sha256)
             && valid_hash(&self.bwrap_sha256)
+            && !(self.env_sha256.is_some() && self.env_dir.is_none())
+            && self
+                .env_dir
+                .as_deref()
+                .is_none_or(|dir| dir.starts_with('/') && !dir.contains(".."))
+            && self.env_sha256.as_deref().is_none_or(valid_hash)
     }
 }
 pub const CANDIDATE_EXECUTION_ABI: &str = "cash_quote_action_tape_v1";
@@ -733,33 +743,38 @@ pub fn candidate_execution_runtime_hash(
     runtime: &CandidateRuntimeBinding,
     sandbox: &CandidateSandboxPolicy,
 ) -> String {
-    sha256_hex(
-        format!(
-            "candidate-execution-runtime-v1\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
-            runtime.kind,
-            runtime.abi,
-            runtime.engine,
-            runtime.scorer_compare_sha256,
-            runtime.sandbox_source_sha256,
-            runtime.helper_sha256,
-            runtime.unit_policy_sha256,
-            runtime.runtime_hash,
-            sandbox.abi,
-            sandbox.engine,
-            sandbox.network,
-            sandbox.cpu_seconds,
-            sandbox.memory_mb,
-            sandbox.wall_ms,
-            sandbox.max_output_bytes,
-            sandbox.max_keys,
-            sandbox.max_processes,
-            sandbox.max_open_files,
-            sandbox.executable_scope,
-            sandbox.python_sha256,
-            sandbox.bwrap_sha256
-        )
-        .as_bytes(),
-    )
+    let mut payload = format!(
+        "candidate-execution-runtime-v1\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
+        runtime.kind,
+        runtime.abi,
+        runtime.engine,
+        runtime.scorer_compare_sha256,
+        runtime.sandbox_source_sha256,
+        runtime.helper_sha256,
+        runtime.unit_policy_sha256,
+        runtime.runtime_hash,
+        sandbox.abi,
+        sandbox.engine,
+        sandbox.network,
+        sandbox.cpu_seconds,
+        sandbox.memory_mb,
+        sandbox.wall_ms,
+        sandbox.max_output_bytes,
+        sandbox.max_keys,
+        sandbox.max_processes,
+        sandbox.max_open_files,
+        sandbox.executable_scope,
+        sandbox.python_sha256,
+        sandbox.bwrap_sha256
+    );
+    if sandbox.env_dir.is_some() || sandbox.env_sha256.is_some() {
+        payload.push_str(&format!(
+            "\0{}\0{}",
+            sandbox.env_dir.as_deref().unwrap_or(""),
+            sandbox.env_sha256.as_deref().unwrap_or("")
+        ));
+    }
+    sha256_hex(payload.as_bytes())
 }
 /// Execution-aware job input identity. The scorer input alone is insufficient:
 /// the declared execution rules, the exact frozen manifest/events tape and the

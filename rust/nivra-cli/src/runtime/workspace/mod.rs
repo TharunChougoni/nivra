@@ -114,6 +114,16 @@ pub(crate) struct WorkspaceSettings {
     /// trigger never enables it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub network: bool,
+    /// Optional memory cap (MiB) for `scripts/` rankers. When absent, stdlib-only
+    /// rankers stay capped at 256 MiB and env-backed rankers use `memory_mb` (512 MiB default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ranker_memory_mb: Option<u64>,
+    /// Optional read-only Python environment directory; overrides `planner.research_env`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_dir: Option<PathBuf>,
+    /// Optional pinned SHA-256 content hash for `env_dir`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_sha256: Option<String>,
 }
 
 impl WorkspaceSettings {
@@ -138,6 +148,21 @@ impl WorkspaceSettings {
             {
                 return Err("workspace_install_allowlist_invalid".into());
             }
+        }
+        if self
+            .ranker_memory_mb
+            .is_some_and(|mb| !(32..=2048).contains(&mb))
+            || (self.env_sha256.is_some() && self.env_dir.is_none())
+            || self
+                .env_dir
+                .as_deref()
+                .is_some_and(|dir| !nivra_sandbox::env::path_ok(dir))
+            || self
+                .env_sha256
+                .as_deref()
+                .is_some_and(|hash| !nivra_sandbox::env::valid_hash(hash))
+        {
+            return Err("workspace_sandbox_invalid".into());
         }
         sandbox_config(self)
             .validate()
@@ -325,6 +350,16 @@ pub(crate) fn execute_scoped(
     scope: WorkspaceScope,
     op: WorkspaceOp,
 ) -> Result<Value> {
+    execute_scoped_with_env(book, settings, scope, None, op)
+}
+
+pub(crate) fn execute_scoped_with_env(
+    book: &Path,
+    settings: &WorkspaceSettings,
+    scope: WorkspaceScope,
+    env: Option<&super::research_env::ResearchEnvSettings>,
+    op: WorkspaceOp,
+) -> Result<Value> {
     settings.validate()?;
     if !settings.enabled {
         return Err("workspace_disabled".into());
@@ -347,6 +382,7 @@ pub(crate) fn execute_scoped(
             &root,
             settings,
             scope,
+            env,
             &script,
             input,
             input_path.as_deref(),
@@ -506,6 +542,7 @@ fn run_script(
     root: &Path,
     settings: &WorkspaceSettings,
     scope: WorkspaceScope,
+    env: Option<&super::research_env::ResearchEnvSettings>,
     script: &str,
     input: Option<Value>,
     input_path: Option<&str>,
@@ -514,7 +551,11 @@ fn run_script(
         return Err("workspace_run_input_ambiguous".into());
     }
     let rel = normalize_rel(script)?;
-    let mut sandbox = sandbox_config(settings);
+    let base = sandbox_config(settings);
+    let mut sandbox = match env {
+        Some(env) if base.env_dir.is_none() => env.apply_to(&base),
+        _ => base,
+    };
     if scope == WorkspaceScope::ResearchSandbox {
         sandbox.network = false;
     }
@@ -522,7 +563,11 @@ fn run_script(
         if scope != WorkspaceScope::ResearchSandbox {
             return Err("workspace_run_not_allowlisted".into());
         }
-        sandbox.memory_mb = sandbox.memory_mb.min(256);
+        sandbox.memory_mb = match settings.ranker_memory_mb {
+            Some(cap) => cap,
+            None if sandbox.env_dir.is_some() => sandbox.memory_mb,
+            None => sandbox.memory_mb.min(256),
+        };
         return run_ranker(root, settings, &sandbox, &rel, input);
     }
     let allowed = settings.run_allowlist.iter().any(|entry| {
@@ -669,8 +714,9 @@ fn score_script(
     features: &nivra_sandbox::Features,
     params_source: Value,
 ) -> Result<Value> {
+    let env_sha256 = nivra_sandbox::env_sha256(sandbox).map_err(sandbox_error)?;
     let scores = nivra_sandbox::score_source(sandbox, source, features).map_err(sandbox_error)?;
-    Ok(json!({
+    let mut out = json!({
         "script": rel_display(rel),
         "status": "ok",
         "scores": scores,
@@ -679,7 +725,11 @@ fn score_script(
         "execution_authorized": false,
         "evidence_only": true,
         "authority": "advisory_scores_not_orders"
-    }))
+    });
+    if let Some(hash) = env_sha256 {
+        out["env_sha256"] = json!(hash);
+    }
+    Ok(out)
 }
 
 fn install_tool(
@@ -722,6 +772,8 @@ fn sandbox_config(settings: &WorkspaceSettings) -> ScorerSandboxConfig {
         wall_ms: settings.wall_ms,
         max_output_bytes: settings.max_write_bytes.min(262_144) as usize,
         network: settings.network,
+        env_dir: settings.env_dir.clone(),
+        env_sha256: settings.env_sha256.clone(),
         ..ScorerSandboxConfig::default()
     }
 }
