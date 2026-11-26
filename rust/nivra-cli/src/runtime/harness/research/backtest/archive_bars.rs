@@ -20,12 +20,7 @@ fn runtime_path() -> Result<PathBuf> {
         }
         return Ok(profile.join("nivra-analysis"));
     }
-    let runtime = bin.with_file_name("nivra-analysis");
-    Ok(if runtime.is_file() {
-        runtime
-    } else {
-        bin.with_file_name("nivra-analysis-x86_64-unknown-linux-musl")
-    })
+    Ok(bin.with_file_name("nivra-analysis"))
 }
 
 fn runtime_image() -> Result<Vec<u8>> {

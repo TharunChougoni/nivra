@@ -438,7 +438,10 @@ Without `--tag` or `--sha`, the updater picks the newest stable tag. An older
 hand.
 
 The updater verifies the annotated tag, source commit, target and SHA-256. It
-runs the new binary's `self-check` and `preflight`, stops the service, swaps
+also verifies the published `nivra-analysis` research worker against its
+checksum and installs it beside `nivra`, listed in `SHA256SUMS`. A release
+staged by an older updater has no worker and still works as a rollback target.
+It runs the new binary's `self-check` and `preflight`, stops the service, swaps
 the pointer, restarts and checks `/api/v1/health`. On a failure it restores the
 previous release and writes `failed-update.json`, which stops that release from
 being retried.

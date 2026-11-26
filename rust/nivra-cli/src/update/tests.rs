@@ -22,6 +22,7 @@ struct Fake {
     now: chrono::DateTime<chrono::FixedOffset>,
     session_safe: bool,
     corrupt: bool,
+    corrupt_analysis: bool,
     smoke_fail: bool,
     after_smoke: Option<chrono::DateTime<chrono::FixedOffset>>,
     restarts: Vec<PathBuf>,
@@ -48,6 +49,7 @@ impl Fake {
             now: "2026-10-17T12:00:00+05:30".parse().unwrap(),
             session_safe: true,
             corrupt: false,
+            corrupt_analysis: false,
             smoke_fail: false,
             after_smoke: None,
             restarts: vec![],
@@ -90,6 +92,14 @@ impl Host for Fake {
             serde_json::json!({"tag":"v0.6.0","source_commit":sha,"target":TARGET,"sha256":sum})
                 .to_string()
                 .into_bytes()
+        } else if name.ends_with(&format!("{ANALYSIS_ASSET}.sha256")) {
+            format!("{}  {ANALYSIS_ASSET}\n", digest(b"analysis")).into_bytes()
+        } else if name.ends_with(ANALYSIS_ASSET) {
+            if self.corrupt_analysis {
+                b"bad".to_vec()
+            } else {
+                b"analysis".to_vec()
+            }
         } else if name.ends_with(".sha256") {
             format!("{sum}  {ASSET}\n").into_bytes()
         } else if self.corrupt {
@@ -903,6 +913,73 @@ fn update_decision_verifies_and_defers_then_activates_or_rolls_back() {
         }
     }
     rollback_preflight_refusal_leaves_running_update_untouched();
+}
+#[test]
+fn update_installs_verified_analysis_beside_nivra_and_keeps_rollback_without_it() {
+    let home = fixture();
+    let h = home.path();
+    let stage = h.join(format!("nivra-releases/v0.6.0-{}", "a".repeat(40)));
+    let mut host = Fake::new(h);
+    // A corrupt analysis asset refuses before any release directory exists.
+    host.corrupt_analysis = true;
+    assert_eq!(
+        apply(h, &mut host, false, false),
+        Err("release_checksum_mismatch")
+    );
+    unchanged(h, &host);
+    assert!(!stage.exists());
+    host.corrupt_analysis = false;
+    // Activation fails after the flip; the previous release has no analysis
+    // binary and must still be restored and restarted.
+    host.fail_post_stop_preflight = true;
+    assert_eq!(apply(h, &mut host, false, false), Err("update_rolled_back"));
+    assert_eq!(
+        fs::read_link(h.join("nivra-current")).unwrap(),
+        h.join("nivra-releases/old")
+    );
+    assert!(!h.join("nivra-releases/old/nivra-analysis").exists());
+    host.fail_post_stop_preflight = false;
+    fs::remove_file(stage.join("failed-update.json")).unwrap();
+    // Verified install: both binaries executable, both listed in SHA256SUMS.
+    assert_eq!(apply(h, &mut host, false, false), Ok("updated"));
+    assert_eq!(fs::canonicalize(h.join("nivra-current")).unwrap(), stage);
+    assert_eq!(fs::read(stage.join("nivra-analysis")).unwrap(), b"analysis");
+    assert_eq!(
+        fs::metadata(stage.join("nivra-analysis"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o755
+    );
+    assert_eq!(
+        fs::read_to_string(stage.join("SHA256SUMS")).unwrap(),
+        format!(
+            "{}  nivra\n{}  nivra-analysis\n",
+            digest(b"candidate"),
+            digest(b"analysis")
+        )
+    );
+    // A staged release whose analysis binary changed is never reactivated.
+    swap(&h.join("nivra-current"), &h.join("nivra-releases/old")).unwrap();
+    fs::write(stage.join("nivra-analysis"), b"tampered").unwrap();
+    assert_eq!(
+        apply(h, &mut host, false, false),
+        Err("installed_artifact_mismatch")
+    );
+    assert_eq!(
+        fs::canonicalize(h.join("nivra-current")).unwrap(),
+        h.join("nivra-releases/old")
+    );
+    // A release staged before the updater shipped the worker reactivates as is.
+    fs::remove_file(stage.join("nivra-analysis")).unwrap();
+    fs::write(
+        stage.join("SHA256SUMS"),
+        format!("{}  nivra\n", digest(b"candidate")),
+    )
+    .unwrap();
+    assert_eq!(apply(h, &mut host, false, false), Ok("updated"));
+    assert!(!stage.join("nivra-analysis").exists());
 }
 fn rollback_preflight_refusal_leaves_running_update_untouched() {
     let home = fixture();

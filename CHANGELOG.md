@@ -1,5 +1,16 @@
 # Source snapshot
 
+## Unreleased
+
+**`nivra update` installs `nivra-analysis`.** The updater fetches the
+published `nivra-analysis-x86_64-unknown-linux-musl` asset with its checksum,
+checks it, and installs it as `nivra-analysis` beside `nivra` in the release
+directory, listed in `SHA256SUMS`. Archive bar jobs on an updater-managed host
+no longer fail with `archive_bars_worker_unavailable`. The controller now
+looks only for `nivra-analysis`; the long asset name is no longer a fallback.
+Releases installed by an older updater have no worker. Update to the next
+release to get one. An older release can still be reactivated as a rollback.
+
 ## 0.14.0 — 2026-11-27
 
 A cleanup release. Market data lives only in the TimescaleDB archive, the

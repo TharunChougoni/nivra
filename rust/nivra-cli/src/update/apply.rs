@@ -72,6 +72,12 @@ pub(crate) fn secure_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The release directory's two executables; `nivra-analysis` is the research
+/// bar-job worker the controller finds beside `nivra`.
+fn is_executable(name: &std::ffi::OsStr) -> bool {
+    name == "nivra" || name == ANALYSIS_NAME
+}
+const ANALYSIS_NAME: &str = "nivra-analysis";
 pub(crate) fn release_metadata(dir: &Path, m: &Manifest) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
     let owner = fs::metadata("/proc/self")
@@ -118,7 +124,7 @@ pub(crate) fn release_metadata(dir: &Path, m: &Manifest) -> Result<()> {
         }
         fs::set_permissions(
             entry.path(),
-            fs::Permissions::from_mode(if entry.file_name() == "nivra" {
+            fs::Permissions::from_mode(if is_executable(&entry.file_name()) {
                 0o755
             } else {
                 0o600
@@ -130,7 +136,14 @@ pub(crate) fn release_metadata(dir: &Path, m: &Manifest) -> Result<()> {
         .map_err(|_| "update_permissions_failed")?;
     sync(dir)
 }
-fn release_complete(dir: &Path, m: &Manifest, manifest_bytes: &[u8]) -> Result<()> {
+/// `analysis` is the verified worker a new release must hold. `None` accepts a
+/// legacy directory staged before the updater installed the worker.
+fn release_complete(
+    dir: &Path,
+    m: &Manifest,
+    manifest_bytes: &[u8],
+    analysis: Option<&[u8]>,
+) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
     let owner = fs::metadata("/proc/self")
         .map_err(|_| "update_owner_unavailable")?
@@ -150,13 +163,18 @@ fn release_complete(dir: &Path, m: &Manifest, manifest_bytes: &[u8]) -> Result<(
         if !meta.is_file()
             || meta.uid() != owner
             || meta.nlink() != 1
-            || (entry.file_name() == "nivra" && meta.mode() & 0o100 == 0)
+            || (is_executable(&entry.file_name()) && meta.mode() & 0o100 == 0)
         {
             return Err("release_regular_owned_files_required");
         }
     }
     if read(&dir.join("release.json"), 16384)? != manifest_bytes
         || digest(&read(&dir.join("nivra"), 64 * 1024 * 1024)?) != m.sha256
+    {
+        return Err("installed_artifact_mismatch");
+    }
+    if let Some(expected) = analysis
+        && read(&dir.join(ANALYSIS_NAME), 64 * 1024 * 1024)? != expected
     {
         return Err("installed_artifact_mismatch");
     }
@@ -178,7 +196,18 @@ fn release_complete(dir: &Path, m: &Manifest, manifest_bytes: &[u8]) -> Result<(
     {
         return Err("installed_metadata_mismatch");
     }
+    if let Some(analysis) = analysis
+        && !checksums_list(
+            &checksums,
+            &format!("{}  {ANALYSIS_NAME}", digest(analysis)),
+        )
+    {
+        return Err("installed_metadata_mismatch");
+    }
     Ok(())
+}
+fn checksums_list(checksums: &[u8], line: &str) -> bool {
+    std::str::from_utf8(checksums).is_ok_and(|text| text.lines().any(|l| l == line))
 }
 /// Write a verified release into its immutable `RELEASES/<tag>-<commit>`
 /// directory, or prove an existing one holds exactly these bytes.
@@ -187,10 +216,11 @@ pub(crate) fn stage_release(
     m: &Manifest,
     manifest_bytes: &[u8],
     binary: &[u8],
+    analysis: Option<&[u8]>,
 ) -> Result<PathBuf> {
     let stage = releases.join(format!("{}-{}", m.tag, m.source_commit));
     if exists(&stage) {
-        release_complete(&stage, m, manifest_bytes)?;
+        release_complete(&stage, m, manifest_bytes, analysis)?;
         sync(releases)?;
         return Ok(stage);
     }
@@ -226,19 +256,20 @@ pub(crate) fn stage_release(
     ] {
         write_new(&pending.join(name), data, exec)?;
     }
-    write_new(
-        &pending.join("SHA256SUMS"),
-        format!("{}  nivra\n", m.sha256).as_bytes(),
-        false,
-    )?;
-    release_complete(&pending, m, manifest_bytes)?;
+    let mut sums = format!("{}  nivra\n", m.sha256);
+    if let Some(analysis) = analysis {
+        write_new(&pending.join(ANALYSIS_NAME), analysis, true)?;
+        sums.push_str(&format!("{}  {ANALYSIS_NAME}\n", digest(analysis)));
+    }
+    write_new(&pending.join("SHA256SUMS"), sums.as_bytes(), false)?;
+    release_complete(&pending, m, manifest_bytes, analysis)?;
     sync(&pending)?;
     sync(releases)?;
     if let Err(error) = publish_noreplace(&pending, &stage) {
         if !exists(&pending) || !exists(&stage) {
             return Err(error);
         }
-        release_complete(&stage, m, manifest_bytes)?;
+        release_complete(&stage, m, manifest_bytes, analysis)?;
         sync(releases)?;
     }
     Ok(stage)
@@ -758,6 +789,19 @@ pub(crate) fn apply_selected(
         }
         return Ok("already_current");
     }
+    // A directory staged before the updater shipped the worker is a legacy
+    // release; reactivating it is a rollback and needs no worker asset.
+    let staged = releases.join(format!("{}-{}", m.tag, m.source_commit));
+    let analysis = if exists(&staged) && !exists(&staged.join(ANALYSIS_NAME)) {
+        None
+    } else {
+        let checksum = host.fetch(&format!("{tag}/{ANALYSIS_ASSET}.sha256"), 256)?;
+        let worker = host.fetch(&format!("{tag}/{ANALYSIS_ASSET}"), 64 * 1024 * 1024)?;
+        if checksum != format!("{}  {ANALYSIS_ASSET}\n", digest(&worker)).as_bytes() {
+            return Err("release_checksum_mismatch");
+        }
+        Some(worker)
+    };
     if dry {
         return Ok(match host.guard(force)? {
             Admission::Safe => "would_update",
@@ -765,7 +809,7 @@ pub(crate) fn apply_selected(
             Admission::Deferred(reason) => reason,
         });
     }
-    let stage = stage_release(&releases, &m, &manifest_bytes, &binary)?;
+    let stage = stage_release(&releases, &m, &manifest_bytes, &binary, analysis.as_deref())?;
     release_metadata(&stage, &m)?;
     if exists(&stage.join("failed-update.json")) {
         return Err("failed_release_requires_review");

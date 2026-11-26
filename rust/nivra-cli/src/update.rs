@@ -3,7 +3,8 @@ use chrono::{Datelike, Timelike, Utc};
 use fs2::FileExt;
 use nivra_cli::lock::AdvisoryLock;
 use nivra_core::release::{
-    MUSL_BINARY_ASSET as ASSET, MUSL_TARGET as TARGET, ReleaseManifest as Manifest,
+    MUSL_ANALYSIS_ASSET as ANALYSIS_ASSET, MUSL_BINARY_ASSET as ASSET, MUSL_TARGET as TARGET,
+    ReleaseManifest as Manifest,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};

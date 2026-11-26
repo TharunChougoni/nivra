@@ -317,9 +317,8 @@ already contain the bars. The request reads the dates you choose, within the
 research job's CPU, wall time, and memory limits.
 
 Enable `candidate_compute.strategy` and configure `market_archive` and
-`paper_costs`. The controller finds `nivra-analysis` beside `nivra`. The
-release asset name `nivra-analysis-x86_64-unknown-linux-musl` also works.
-Install the runtime from the same build as the controller.
+`paper_costs`. The controller finds `nivra-analysis` beside `nivra`; the updater
+installs it there. Install the runtime from the same build as the controller.
 
 Call `backtest` with `dataset_id: "archive_bars"` and a caller-selected
 `archive_bars` window. Dates are inclusive IST dates before today. Pass
