@@ -256,8 +256,7 @@ pub struct Portfolio {
     #[serde(default)]
     pub model_led: bool,
     pub cash: Amount,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub initial_allocation: Option<Amount>,
+    pub initial_allocation: Amount,
     pub high_water: Amount,
     pub halted: bool,
     pub stopped: bool,
@@ -290,7 +289,7 @@ impl Portfolio {
             costs: None,
             model_led: false,
             cash: capital,
-            initial_allocation: Some(capital),
+            initial_allocation: capital,
             high_water: capital,
             halted: false,
             stopped: false,
@@ -365,24 +364,10 @@ impl Portfolio {
             .collect()
     }
     pub fn allocation(&self) -> Result<Amount> {
-        if let Some(capital) = self.initial_allocation {
-            if capital <= Amount::ZERO {
-                return Err("invalid_initial_allocation".into());
-            }
-            return Ok(capital);
+        if self.initial_allocation <= Amount::ZERO {
+            return Err("invalid_initial_allocation".into());
         }
-        // Legacy books did not store allocation. Reverse the recorded cash movements.
-        self.fills.iter().try_fold(self.cash, |cash, f| {
-            let n = f
-                .price
-                .amount()
-                .checked_mul(Amount::from_unsigned(f.units))?;
-            Ok(if f.buy {
-                cash.checked_add(n.checked_add(f.fee)?)?
-            } else {
-                cash.checked_sub(n.checked_sub(f.fee)?)?
-            })
-        })
+        Ok(self.initial_allocation)
     }
     /// Exact fee policy for one instrument key. A runtime per-segment schedule
     /// selects `paper_costs` for `NSE_EQ` and the configured `NSE_FO` entry for
