@@ -106,7 +106,7 @@ fn quote_batch(raw: &str, allow_partial: bool) -> Result<QuoteBatch<'_>> {
         if !keys.insert(key) {
             return Err("duplicate_quote".into());
         }
-        match quote_observation(key, row) {
+        match quote_observation(key, row, archive.received_ms) {
             Ok(observation) => observations.push(observation),
             Err(_) if allow_partial => {}
             Err(error) => return Err(error),
@@ -119,11 +119,13 @@ fn quote_batch(raw: &str, allow_partial: bool) -> Result<QuoteBatch<'_>> {
     })
 }
 
-fn quote_observation(key: &str, row: &Value) -> Result<QuoteObservation> {
+fn quote_observation(key: &str, row: &Value, received_ms: i64) -> Result<QuoteObservation> {
     let source_ms = data::quote_source(row)?;
     let best_bid = data::quote_depth(row, "buy")?;
     let best_ask = data::quote_depth(row, "sell")?;
-    if source_ms < 0 || best_bid.zip(best_ask).is_some_and(|(b, a)| b.0 > a.0) {
+    if !(0..=received_ms).contains(&source_ms)
+        || best_bid.zip(best_ask).is_some_and(|(b, a)| b.0 > a.0)
+    {
         return Err("archive_quote_values_invalid".into());
     }
     let (bid, bid_qty) = depth_columns(best_bid)?;
@@ -235,6 +237,26 @@ mod tests {
         assert_eq!(partial.receipt.body, invalid.as_bytes());
         archive["received_ms"] = json!(0);
         assert!(quotes(&archive.to_string()).is_err());
+    }
+
+    #[test]
+    fn capture_keeps_future_dated_provider_bytes_without_normalizing_the_observation() {
+        let mut body: Value = serde_json::from_str(include_str!(
+            "../../../../../fixtures/upstox_full_quote_doc_example.json"
+        ))
+        .unwrap();
+        body["data"]["NSE_EQ:NHPC"]["timestamp"] = json!(1697673120011_i64);
+        let raw = json!({
+            "source": "upstox-readonly-v1",
+            "purpose": "scanner_metadata",
+            "requested_ms": 1697673120000_i64,
+            "received_ms": 1697673120010_i64,
+            "body": body.to_string(),
+        })
+        .to_string();
+        let batch = capture_quotes(&raw).unwrap();
+        assert_eq!(batch.receipt.body, raw.as_bytes());
+        assert_eq!(batch.observations, []);
     }
 
     #[test]
