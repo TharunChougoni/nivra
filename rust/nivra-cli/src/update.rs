@@ -17,8 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 type Result<T> = std::result::Result<T, &'static str>;
-/// The only SSH host alias accepted as release transport. The host migration
-/// (`nivra host-migrate`) is the one path that rebinds a retired remote.
+/// The only SSH host alias accepted as release transport.
 const REMOTE_ALIAS: &str = "github-nivra:";
 #[derive(Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
@@ -242,17 +241,49 @@ fn with_update_locks(
     result
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn entry(
-    path: &Path,
+/// Verify and install an annotated stable paper release; explicit selection also permits rollback.
+#[derive(clap::Args)]
+pub struct Args {
+    /// Exact stable release, with or without v; an explicit older tag is rollback.
+    #[arg(long, conflicts_with = "sha")]
+    tag: Option<String>,
+    /// Released source commit or unique prefix (at least seven hex characters).
+    #[arg(long, conflicts_with = "tag")]
+    sha: Option<String>,
+    #[arg(long)]
     check: bool,
-    dry: bool,
+    #[arg(long)]
+    dry_run: bool,
+    #[arg(long)]
     now: Option<chrono::DateTime<chrono::FixedOffset>>,
-    tag: Option<&str>,
-    sha: Option<&str>,
+    #[arg(long)]
+    config: PathBuf,
+    /// Deploy a selected release to an operator-stopped or closed flat book,
+    /// even with carried holdings, a planner halt, or inside the blackout. The
+    /// controller is left stopped; clear a closed halt only after the install.
+    #[arg(long, requires = "confirm_paper_review")]
     operator_stopped: bool,
-    force: bool,
-) -> ExitCode {
+    /// Accept a bounded unwatched controller window while the reviewed paper book
+    /// is open inside or outside the session. Never bypasses halt, hold or integrity.
+    #[arg(long, conflicts_with = "operator_stopped")]
+    force_unwatched_window: bool,
+    #[arg(long, requires = "operator_stopped")]
+    confirm_paper_review: bool,
+}
+
+pub fn entry(args: Args) -> ExitCode {
+    let Args {
+        tag,
+        sha,
+        check,
+        dry_run: dry,
+        now,
+        config: path,
+        operator_stopped,
+        force_unwatched_window: force,
+        confirm_paper_review: _,
+    } = args;
+    let (tag, sha, path) = (tag.as_deref(), sha.as_deref(), path.as_path());
     let alert_path = read(path, 16384)
         .ok()
         .and_then(|b| serde_json::from_slice::<Config>(&b).ok())

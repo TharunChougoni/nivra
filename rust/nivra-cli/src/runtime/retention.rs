@@ -40,7 +40,10 @@ pub fn entry(config: &Path, apply: bool) -> ExitCode {
     })();
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(_) => crate::fixed_error("retention_failed"),
+        Err(_) => {
+            eprintln!("retention_failed");
+            ExitCode::from(2)
+        }
     }
 }
 fn is_dir(path: &Path) -> bool {

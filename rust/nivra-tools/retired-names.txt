@@ -17,7 +17,7 @@
 1	fact_digest	rust/nivra-cli/src/runtime/harness/research/tests.rs
 2	fact_digest	rust/nivra-cli/src/runtime/planner.rs
 1	fact_digest	rust/nivra-cli/src/runtime/planner/turn.rs
-3	fact_digest	rust/nivra-cli/src/runtime/redecision.rs
+1	fact_digest	rust/nivra-cli/src/runtime/redecision.rs
 25	fact_digest	rust/nivra-cli/src/runtime/strategy_results.rs
 4	fact_digest	rust/nivra-cli/src/strategy_lab.rs
 3	fact_digest	rust/nivra-cli/src/strategy_scorer.rs
@@ -40,17 +40,13 @@
 1	luna	rust/nivra-core/src/strategy.rs
 5	luna	rust/nivra-tools/src/retired.rs
 1	orchestrator	rust/nivra-cli/src/lib.rs
-36	orchestrator	rust/nivra-cli/src/main.rs
 49	orchestrator	rust/nivra-cli/src/orchestrator.rs
-2	orchestrator	rust/nivra-cli/src/runtime/agent/shadow_report.rs
 1	orchestrator	rust/nivra-cli/src/runtime/decision.rs
 1	orchestrator	rust/nivra-cli/src/runtime/discovery/settings.rs
 1	orchestrator	rust/nivra-cli/src/runtime/harness.rs
 1	orchestrator	rust/nivra-cli/src/runtime/harness/call_time_tool_tests.rs
 2	orchestrator	rust/nivra-cli/src/runtime/options/mod.rs
-10	orchestrator	rust/nivra-cli/src/runtime/redecision.rs
-1	orchestrator	rust/nivra-cli/src/runtime/web/router.rs
-1	orchestrator	rust/nivra-cli/src/runtime/web/v1/ops.rs
+9	orchestrator	rust/nivra-cli/src/runtime/redecision.rs
 2	orchestrator	rust/nivra-cli/src/runtime/web_tools/mod.rs
 2	orchestrator	rust/nivra-cli/src/runtime/workspace/mod.rs
 1	orchestrator	rust/nivra-cli/src/strategy_approval.rs
@@ -61,7 +57,6 @@
 11	orchestrator	rust/nivra-store/src/strategy_results.rs
 2	orchestrator	rust/nivra-tools/src/retired.rs
 1	owner_lane	rust/nivra-cli/src/runtime/agent/paper.rs
-2	owner_lane	rust/nivra-cli/src/runtime/agent/shadow_report.rs
 1	owner_lane	rust/nivra-cli/src/runtime/experiment_ledger/research.rs
 1	owner_lane	rust/nivra-cli/src/runtime/harness.rs
 3	owner_lane	rust/nivra-cli/src/runtime/harness/bridge.rs
@@ -124,7 +119,6 @@
 28	scorer	rust/nivra-store/src/strategy_results.rs
 2	scorer	rust/nivra-tools/src/retired.rs
 4	supervisor	rust/nivra-cli/src/alert.rs
-2	supervisor	rust/nivra-cli/src/runtime/agent/shadow_report.rs
 1	supervisor	rust/nivra-cli/src/runtime/harness/call_time_tool_tests.rs
 1	supervisor	rust/nivra-cli/src/runtime/harness/lane_tool_tests.rs
 1	supervisor	rust/nivra-cli/src/runtime/harness/research/runtime.rs

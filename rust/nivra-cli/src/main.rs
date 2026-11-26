@@ -6,10 +6,6 @@ mod research;
 mod runtime;
 mod update;
 use clap::{Parser, Subcommand};
-use nivra_core::protection_gap::protection_gap_cause;
-use nivra_core::research_acceptance::{EvidenceRef, Review, evaluate_novel};
-use nivra_core::resources::{MemoryConclusion, MemoryEvidence, assess_memory};
-use nivra_core::service_review::{render_loopback_tunnel, review_unit};
 use std::{
     fs::OpenOptions,
     io::Read,
@@ -17,8 +13,6 @@ use std::{
     path::{Path, PathBuf},
     process::ExitCode,
 };
-
-const MAX_EVIDENCE_BYTES: u64 = 16 * 1024;
 
 #[derive(Parser)]
 #[command(version, about = "Nivra Rust paper-only runner")]
@@ -51,21 +45,6 @@ enum StrategyLabCommand {
 enum Command {
     /// Prepare a fresh current-policy paper installation; never starts trading.
     Setup(runtime::setup::Args),
-    /// Offline pipeline inspection, replay and policy-gated notes.
-    Orchestrator {
-        #[arg(long)]
-        workspace: PathBuf,
-        /// Offline OrchestratorConfig JSON, independent of runtime configuration.
-        #[arg(long)]
-        config: Option<PathBuf>,
-        #[command(subcommand)]
-        command: OrchestratorCommand,
-    },
-    /// Offline scores-only Python/WASM strategy sandbox; disabled by default.
-    StrategyScorer {
-        #[command(subcommand)]
-        command: nivra_cli::strategy_scorer::Commands,
-    },
     /// Offline strategy proposals, recorded-data evaluation and read-only evidence.
     StrategyLab {
         #[command(subcommand)]
@@ -186,45 +165,12 @@ enum Command {
         #[arg(long = "key", requires = "tape")]
         keys: Vec<String>,
     },
-    /// Summarize an explicitly selected saved timing stream, without session actions.
-    ProtectionTimings { path: PathBuf },
-    /// Inspect original timing streams without claiming financial or process health.
-    ProtectionDiagnostics {
-        protection: PathBuf,
-        #[arg(long, alias = "supervision-timings")]
-        supervision: Option<PathBuf>,
-    },
-    /// Verify and install an annotated stable paper release; explicit selection also permits rollback.
-    Update {
-        /// Exact stable release, with or without v; an explicit older tag is rollback.
-        #[arg(long, conflicts_with = "sha")]
-        tag: Option<String>,
-        /// Released source commit or unique prefix (at least seven hex characters).
-        #[arg(long, conflicts_with = "tag")]
-        sha: Option<String>,
-        #[arg(long)]
-        check: bool,
-        #[arg(long)]
-        dry_run: bool,
-        #[arg(long)]
-        now: Option<chrono::DateTime<chrono::FixedOffset>>,
-        #[arg(long)]
-        config: PathBuf,
-        /// Deploy a selected release to an operator-stopped or closed flat book,
-        /// even with carried holdings, a planner halt, or inside the blackout. The
-        /// controller is left stopped; clear a closed halt only after the install.
-        #[arg(long, requires = "confirm_paper_review")]
-        operator_stopped: bool,
-        /// Accept a bounded unwatched controller window while the reviewed paper book
-        /// is open inside or outside the session. Never bypasses halt, hold or integrity.
-        #[arg(long, conflicts_with = "operator_stopped")]
-        force_unwatched_window: bool,
-        #[arg(long, requires = "operator_stopped")]
-        confirm_paper_review: bool,
-    },
+    Update(update::Args),
     /// Hidden fixed candidate helper. Runs only inside an owned systemd unit.
     #[command(hide = true)]
-    CandidateSupervise { launch: PathBuf },
+    CandidateSupervise {
+        launch: PathBuf,
+    },
     /// Offline pi agent check: one decision turn, its research request and the
     /// next decision turn against the scripted fake provider; never trades.
     AgentCheck(runtime::agent::check::Args),
@@ -237,8 +183,6 @@ enum Command {
         #[arg(long)]
         expected_version: Option<String>,
     },
-    /// Calculate budget fit from explicit non-secret JSON evidence. Does not measure a host.
-    MemoryCheck { evidence: PathBuf },
     /// Paper-only daily controller and authenticated loopback dashboard.
     Paper {
         #[arg(long)]
@@ -295,26 +239,6 @@ enum Command {
     Probe {
         #[arg(long)]
         config: PathBuf,
-    },
-    /// Record supplied measurements. The cause stays UNKNOWN and the gate stays at two seconds.
-    ProtectionGap {
-        #[arg(long, allow_hyphen_values = true)]
-        receipt_age: Option<f64>,
-        #[arg(long, allow_hyphen_values = true)]
-        scheduler_wait: Option<f64>,
-        #[arg(long, allow_hyphen_values = true)]
-        dropped: Option<i64>,
-    },
-    /// Review one unit file. Credentials are not printed and nothing is installed.
-    ServiceReview { unit: PathBuf },
-    /// Print review-only forwarder text. It is not installed or started.
-    LoopbackTunnelText { port: i64, hostname: String },
-    /// Check novel-strategy evidence. This does not certify or execute code.
-    NovelEvaluate {
-        strategy: String,
-        evidence: PathBuf,
-        #[arg(long, default_value = "UNREVIEWED")]
-        review: String,
     },
     /// Queue one reviewed analysis from a model tool call. Does not execute it.
     ResearchEnqueue {
@@ -404,136 +328,10 @@ enum DashboardTokenCommand {
     },
 }
 
-#[derive(Subcommand)]
-enum OrchestratorCommand {
-    /// Print pipeline JSON including proposals.
-    View,
-    /// Replay recorded feature snapshots; optionally append library results.
-    Replay {
-        #[arg(long)]
-        spec: PathBuf,
-        #[arg(long)]
-        snapshots: PathBuf,
-        /// JSON array of regime inputs in snapshot order.
-        #[arg(long, requires = "library")]
-        regime_inputs: Option<PathBuf>,
-        #[arg(long)]
-        out: PathBuf,
-        #[arg(long, requires_all = ["strategy_id", "version"])]
-        library: Option<PathBuf>,
-        #[arg(long, requires = "library", value_parser = clap::value_parser!(i64).range(1..))]
-        strategy_id: Option<i64>,
-        #[arg(long, requires = "library", value_parser = clap::value_parser!(i64).range(1..))]
-        version: Option<i64>,
-    },
-    /// Write an own-run note under the configured policy roots.
-    Note {
-        #[arg(long)]
-        path: PathBuf,
-        #[arg(long)]
-        text: String,
-    },
-}
-
-fn orchestrator_handle(
-    workspace: &Path,
-    config: Option<&Path>,
-    command: OrchestratorCommand,
-) -> Result<serde_json::Value, ()> {
-    use nivra_cli::orchestrator::{Orchestrator, OrchestratorConfig, ReplayRecording};
-    let config: OrchestratorConfig = match config {
-        Some(path) => serde_json::from_slice(&read_bounded(path, 1_048_576)?).map_err(|_| ())?,
-        None => OrchestratorConfig::default(),
-    };
-    let orchestrator = Orchestrator::new(workspace, config).map_err(|_| ())?;
-    match command {
-        OrchestratorCommand::View => {
-            serde_json::to_value(orchestrator.pipeline_view().map_err(|_| ())?).map_err(|_| ())
-        }
-        OrchestratorCommand::Replay {
-            spec,
-            snapshots,
-            regime_inputs,
-            out,
-            library,
-            strategy_id,
-            version,
-        } => {
-            let report = if let Some(library) = library {
-                let snapshots_data: Vec<nivra_core::strategy::FeatureSnapshot> =
-                    serde_json::from_slice(
-                        &std::fs::read(workspace.join(&snapshots)).map_err(|_| ())?,
-                    )
-                    .map_err(|_| ())?;
-                let inputs = if let Some(path) = regime_inputs {
-                    serde_json::from_slice(&std::fs::read(workspace.join(path)).map_err(|_| ())?)
-                        .map_err(|_| ())?
-                } else {
-                    // Legacy snapshots contain no aligned market-regime evidence.
-                    snapshots_data
-                        .iter()
-                        .map(|_| nivra_core::regime::RegimeInputs {
-                            session_return: 0.0,
-                            opening_gap: 0.0,
-                            realised_volatility: 0.0,
-                            breadth: 0.0,
-                            instrument_count: 0,
-                            minute_count: 0,
-                        })
-                        .collect::<Vec<_>>()
-                };
-                orchestrator.run_replay_recorded(
-                    spec,
-                    snapshots,
-                    out,
-                    ReplayRecording {
-                        library_path: &library,
-                        strategy_id: strategy_id.ok_or(())?,
-                        version: version.ok_or(())?,
-                        inputs: &inputs,
-                        recorded_at_ms: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map_err(|_| ())?
-                            .as_millis()
-                            .try_into()
-                            .map_err(|_| ())?,
-                    },
-                )
-            } else {
-                if strategy_id.is_some() || version.is_some() || regime_inputs.is_some() {
-                    return Err(());
-                }
-                orchestrator.run_replay(spec, snapshots, out)
-            }
-            .map_err(|_| ())?;
-            serde_json::to_value(report).map_err(|_| ())
-        }
-        OrchestratorCommand::Note { path, text } => {
-            orchestrator.write_note(path, &text).map_err(|_| ())?;
-            Ok(serde_json::json!({"note_written": true}))
-        }
-    }
-}
-
 fn main() -> ExitCode {
     let Args { command } = Args::parse();
     match command {
         Command::Setup(args) => runtime::setup::entry(args),
-        Command::Orchestrator {
-            workspace,
-            config,
-            command,
-        } => diagnostic_output(
-            orchestrator_handle(&workspace, config.as_deref(), command),
-            "orchestrator_failed: check offline configuration, policy and recorded evidence",
-        ),
-        Command::StrategyScorer { command } => match nivra_cli::strategy_scorer::run(command) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(_) => {
-                eprintln!("strategy_scorer_failed: check configuration and recorded evidence");
-                ExitCode::FAILURE
-            }
-        },
         Command::StrategyLab {
             command:
                 StrategyLabCommand::ReplayStrategy {
@@ -621,38 +419,7 @@ fn main() -> ExitCode {
             println!("{}", nivra_core::replay::engine_fingerprint());
             ExitCode::SUCCESS
         }
-        Command::ProtectionTimings { path } => diagnostic_output(
-            nivra_store::timing_journal::summarize_timings(&path).map_err(|_| ()),
-            "Protection timing summary unavailable",
-        ),
-        Command::ProtectionDiagnostics {
-            protection,
-            supervision,
-        } => diagnostic_output(
-            nivra_store::protection_diagnostics::build(&protection, supervision.as_deref())
-                .map_err(|_| ()),
-            "Protection diagnostics unavailable",
-        ),
-        Command::Update {
-            config,
-            check,
-            dry_run,
-            now,
-            tag,
-            sha,
-            operator_stopped,
-            force_unwatched_window,
-            confirm_paper_review: _,
-        } => update::entry(
-            &config,
-            check,
-            dry_run,
-            now,
-            tag.as_deref(),
-            sha.as_deref(),
-            operator_stopped,
-            force_unwatched_window,
-        ),
+        Command::Update(args) => update::entry(args),
         Command::CandidateSupervise { launch } => {
             match runtime::harness::research_candidate_helper(&launch) {
                 Ok(()) => ExitCode::SUCCESS,
@@ -666,7 +433,6 @@ fn main() -> ExitCode {
         Command::AgentTurn(args) => runtime::agent::turn_cli::run(args),
         Command::AgentShadowReport(args) => runtime::agent::shadow_report::run(args),
         Command::SelfCheck { expected_version } => self_check(expected_version.as_deref()),
-        Command::MemoryCheck { evidence } => memory_check(&evidence),
         Command::Retention {
             config,
             dry_run: _,
@@ -702,18 +468,6 @@ fn main() -> ExitCode {
         }
         Command::Paper { config } => runtime::entry(&config, false),
         Command::Probe { config } => runtime::entry(&config, true),
-        Command::ProtectionGap {
-            receipt_age,
-            scheduler_wait,
-            dropped,
-        } => protection_gap(receipt_age, scheduler_wait, dropped),
-        Command::ServiceReview { unit } => service_review(&unit),
-        Command::LoopbackTunnelText { port, hostname } => loopback_tunnel(port, &hostname),
-        Command::NovelEvaluate {
-            strategy,
-            evidence,
-            review,
-        } => novel_evaluate(&strategy, &evidence, &review),
         Command::ResearchEnqueue {
             queue,
             catalog,
@@ -781,157 +535,6 @@ pub(crate) fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, ()> {
     Ok(bytes)
 }
 
-fn fixed_error(message: &str) -> ExitCode {
-    eprintln!("{message}");
-    ExitCode::from(2)
-}
-
-fn protection_gap(
-    receipt_age: Option<f64>,
-    scheduler_wait: Option<f64>,
-    dropped: Option<i64>,
-) -> ExitCode {
-    let dropped = match dropped {
-        Some(value) if (0..=1_000_000).contains(&value) => Some(value as u32),
-        Some(_) => return fixed_error("Protection gap cause unavailable"),
-        None => None,
-    };
-    match protection_gap_cause(receipt_age, scheduler_wait, dropped) {
-        Ok(cause) => match serde_json::to_string(&cause) {
-            Ok(json) => {
-                println!("{json}");
-                ExitCode::SUCCESS
-            }
-            Err(_) => fixed_error("Protection gap cause unavailable"),
-        },
-        Err(_) => fixed_error("Protection gap cause unavailable"),
-    }
-}
-
-fn service_review(path: &Path) -> ExitCode {
-    let review = (|| {
-        let bytes = read_bounded(path, 80_000)?;
-        let text = std::str::from_utf8(&bytes).map_err(|_| ())?;
-        review_unit(text).map_err(|_| ())
-    })();
-    match review {
-        Ok(review) => match serde_json::to_string(&review) {
-            Ok(json) => {
-                println!("{json}");
-                ExitCode::SUCCESS
-            }
-            Err(_) => fixed_error("Service review unavailable"),
-        },
-        Err(()) => fixed_error("Service review unavailable"),
-    }
-}
-
-fn loopback_tunnel(port: i64, hostname: &str) -> ExitCode {
-    match render_loopback_tunnel(port, hostname) {
-        Ok(text) => {
-            println!("{text}");
-            ExitCode::SUCCESS
-        }
-        Err(_) => fixed_error("Service review unavailable"),
-    }
-}
-
-fn novel_evaluate(strategy: &str, path: &Path, review: &str) -> ExitCode {
-    let review = match review {
-        "UNREVIEWED" => Review::Unreviewed,
-        "ACCEPTED" => Review::Accepted,
-        "REJECTED" => Review::Rejected,
-        _ => return fixed_error("Novel evaluation unavailable"),
-    };
-    let result = (|| {
-        let bytes = read_bounded(path, 65_536)?;
-        let rows: Vec<Box<serde_json::value::RawValue>> =
-            serde_json::from_slice(&bytes).map_err(|_| ())?;
-        let mut evidence = Vec::new();
-        for row in rows {
-            evidence.push(EvidenceRef::parse(row.get().as_bytes()).map_err(|_| ())?);
-        }
-        evaluate_novel(strategy, &evidence, review).map_err(|_| ())
-    })();
-    match result {
-        Ok(evaluation) => match std::str::from_utf8(evaluation.canonical_json()) {
-            Ok(json) => {
-                println!("{json}");
-                ExitCode::SUCCESS
-            }
-            Err(_) => fixed_error("Novel evaluation unavailable"),
-        },
-        Err(()) => fixed_error("Novel evaluation unavailable"),
-    }
-}
-
-fn diagnostic_output(result: Result<serde_json::Value, ()>, error: &'static str) -> ExitCode {
-    match result {
-        Ok(report) => {
-            println!("{report}");
-            ExitCode::SUCCESS
-        }
-        Err(()) => {
-            eprintln!("{error}");
-            ExitCode::from(2)
-        }
-    }
-}
-
-fn memory_check(path: &std::path::Path) -> ExitCode {
-    let report = (|| {
-        // Read only an explicitly supplied public fixture/evidence file; never discover stores.
-        // Bound allocation even if a file grows after opening. Do not echo paths or file contents.
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)
-            .map_err(|_| "memory_evidence_unreadable")?;
-        if !file
-            .metadata()
-            .map_err(|_| "memory_evidence_unreadable")?
-            .is_file()
-        {
-            return Err("memory_evidence_not_regular_file");
-        }
-        let mut bytes = Vec::new();
-        file.take(MAX_EVIDENCE_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| "memory_evidence_unreadable")?;
-        if bytes.len() as u64 > MAX_EVIDENCE_BYTES {
-            return Err("memory_evidence_too_large");
-        }
-        let input: MemoryEvidence =
-            serde_json::from_slice(&bytes).map_err(|_| "invalid_memory_evidence")?;
-        assess_memory(&input).map_err(|error| match error {
-            nivra_core::resources::MemoryError::UnsupportedSchema => "unsupported_memory_schema",
-            nivra_core::resources::MemoryError::InvalidCapacity => "invalid_memory_capacity",
-            nivra_core::resources::MemoryError::ArithmeticOverflow => "memory_arithmetic_overflow",
-        })
-    })();
-    match report {
-        Ok(report) => {
-            let exit = if report.conclusion == MemoryConclusion::FitsDeclaredBudget {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(2)
-            };
-            match serde_json::to_string(&report) {
-                Ok(json) => println!("{json}"),
-                Err(_) => {
-                    eprintln!("memory_report_unavailable");
-                    return ExitCode::FAILURE;
-                }
-            }
-            exit
-        }
-        Err(code) => {
-            eprintln!("{code}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
 fn self_check(expected: Option<&str>) -> ExitCode {
     let version = env!("CARGO_PKG_VERSION");
     if expected.is_some_and(|v| v.strip_prefix('v').unwrap_or(v) != version) {
@@ -968,244 +571,6 @@ fn self_check(expected: Option<&str>) -> ExitCode {
         serde_json::json!({"self_check":"ok","version":version,"live_enabled":false})
     );
     ExitCode::SUCCESS
-}
-
-#[cfg(test)]
-mod orchestrator_tests {
-    use super::*;
-
-    fn parse(args: &[&str]) -> Result<Args, clap::Error> {
-        Args::try_parse_from(
-            ["nivra", "orchestrator"]
-                .into_iter()
-                .chain(args.iter().copied()),
-        )
-    }
-
-    #[test]
-    fn orchestrator_cli_parse() {
-        for args in [
-            vec!["--workspace", "root", "view"],
-            vec![
-                "--workspace",
-                "root",
-                "--config",
-                "offline.json",
-                "note",
-                "--path",
-                "orchestrator_notes/n.txt",
-                "--text",
-                "review",
-            ],
-            vec![
-                "--workspace",
-                "root",
-                "replay",
-                "--spec",
-                "s.json",
-                "--snapshots",
-                "f.json",
-                "--out",
-                "proposals/r.json",
-            ],
-        ] {
-            assert!(parse(&args).is_ok());
-        }
-        assert!(parse(&["view"]).is_err());
-        assert!(parse(&["--workspace", "root", "note", "--path", "n"]).is_err());
-        let base = [
-            "--workspace",
-            "root",
-            "replay",
-            "--spec",
-            "s",
-            "--snapshots",
-            "f",
-            "--out",
-            "o",
-        ];
-        for extra in [
-            vec!["--regime-inputs", "r.json"],
-            vec!["--library", "l"],
-            vec!["--strategy-id", "1"],
-            vec!["--version", "1"],
-            vec!["--library", "l", "--strategy-id", "0", "--version", "1"],
-        ] {
-            assert!(parse(&[base.as_slice(), &extra].concat()).is_err());
-        }
-        assert!(
-            parse(
-                &[
-                    base.as_slice(),
-                    &[
-                        "--library",
-                        "l",
-                        "--strategy-id",
-                        "1",
-                        "--version",
-                        "2",
-                        "--regime-inputs",
-                        "r.json"
-                    ]
-                ]
-                .concat()
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn orchestrator_handlers_offline_end_to_end() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::write(
-            root.join("spec.json"),
-            serde_json::to_vec(&nivra_core::strategy::StrategySpec::default()).unwrap(),
-        )
-        .unwrap();
-        std::fs::write(
-            root.join("snapshots.json"),
-            br#"[{"observed_ms":1000,"lookback_samples":20,"rows":[]}]"#,
-        )
-        .unwrap();
-        let config = root.join("offline.json");
-        std::fs::write(
-            &config,
-            br#"{"policy":{"proposals_dir":"ideas","notes_dir":"notes"},"max_proposals":1}"#,
-        )
-        .unwrap();
-        let run = |command| orchestrator_handle(root, Some(&config), command);
-        let replay = |library| OrchestratorCommand::Replay {
-            spec: "spec.json".into(),
-            snapshots: "snapshots.json".into(),
-            regime_inputs: None,
-            out: "ideas/report.json".into(),
-            library,
-            strategy_id: Some(1),
-            version: Some(1),
-        };
-        let mut plain = replay(None);
-        if let OrchestratorCommand::Replay {
-            strategy_id,
-            version,
-            ..
-        } = &mut plain
-        {
-            *strategy_id = None;
-            *version = None;
-        }
-        let report = run(plain).unwrap();
-        assert_eq!(report["ticks"], 1);
-        let stored: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(root.join("ideas/report.json")).unwrap())
-                .unwrap();
-        assert_eq!(stored, report);
-        assert_eq!(
-            run(OrchestratorCommand::View).unwrap()["proposals"][0]["path"],
-            "ideas/report.json"
-        );
-        run(OrchestratorCommand::Note {
-            path: "notes/review.txt".into(),
-            text: "offline review".into(),
-        })
-        .unwrap();
-        assert_eq!(
-            std::fs::read_to_string(root.join("notes/review.txt")).unwrap(),
-            "offline review"
-        );
-        run(replay(Some("ideas/library.sqlite".into()))).unwrap();
-        assert!(root.join("ideas/library.sqlite").is_file());
-        // A measured mark is attributed using the selection snapshot's evidence.
-        std::fs::write(
-            root.join("spec.json"),
-            br#"{
-            "id":"fixture", "version":1, "cooldown_ms":0,
-            "filters":[], "weights":[{"feature":"move_bps","weight":1.0}],
-            "normalization":"none", "shortlist_size":1, "trigger_score":0.0
-        }"#,
-        )
-        .unwrap();
-        std::fs::write(root.join("snapshots.json"), br#"[
-            {"observed_ms":1000,"lookback_samples":20,"rows":[{"key":"fixture","features":{"price":100.0,"move_bps":10.0}}]},
-            {"observed_ms":2000,"lookback_samples":20,"rows":[{"key":"fixture","features":{"price":101.0,"move_bps":10.0}}]}
-        ]"#).unwrap();
-        std::fs::write(
-            &config,
-            br#"{"policy":{"proposals_dir":"ideas","notes_dir":"notes"},
-            "replay":{"horizon_ms":1000,"max_mark_delay_ms":0,
-            "costs":{"notional":"5000","round_trip_spread_bps":10,"fees":{"per_order":"0.01","buy_bps":"5","sell_bps":"7","rounding_increment":"0.01"}}}}"#,
-        )
-        .unwrap();
-        let mut library =
-            nivra_sandbox::library::Library::open(root.join("ideas/library.sqlite")).unwrap();
-        library
-            .add_version(nivra_sandbox::library::NewVersion {
-                name: "fixture",
-                file_body: "{}",
-                author_model: "fixture",
-                intent: "offline",
-                inputs: &serde_json::json!({}),
-                created_at_ms: 1,
-            })
-            .unwrap();
-        drop(library);
-        let recorded = || {
-            let mut command = replay(Some("ideas/library.sqlite".into()));
-            if let OrchestratorCommand::Replay {
-                regime_inputs, out, ..
-            } = &mut command
-            {
-                *regime_inputs = Some("regimes.json".into());
-                *out = "ideas/classified/report.json".into();
-            }
-            command
-        };
-        let before = std::fs::read(root.join("ideas/library.sqlite")).unwrap();
-        std::fs::write(root.join("regimes.json"), b"[]").unwrap();
-        assert!(run(recorded()).is_err());
-        assert!(!root.join("ideas/classified").exists());
-        assert_eq!(
-            std::fs::read(root.join("ideas/library.sqlite")).unwrap(),
-            before
-        );
-        let inputs = vec![
-            nivra_core::regime::RegimeInputs {
-                session_return: 0.01,
-                opening_gap: 0.0,
-                realised_volatility: 0.001,
-                breadth: 0.7,
-                instrument_count: 200,
-                minute_count: 15,
-            };
-            2
-        ];
-        std::fs::write(
-            root.join("regimes.json"),
-            serde_json::to_vec(&inputs).unwrap(),
-        )
-        .unwrap();
-        run(recorded()).unwrap();
-        let rows =
-            nivra_sandbox::library::Library::open_read_only(root.join("ideas/library.sqlite"))
-                .unwrap()
-                .regime_performance()
-                .unwrap();
-        assert_eq!(rows.len(), 1);
-        assert!(rows[0].regime.starts_with("up_trend"));
-        assert!(!rows[0].regime.contains("unknown"));
-        assert_eq!(rows[0].sample_count, 1);
-
-        assert!(
-            run(OrchestratorCommand::Note {
-                path: "denied/n.txt".into(),
-                text: "rejected".into()
-            })
-            .is_err()
-        );
-        assert!(!root.join("denied").exists());
-        std::fs::write(&config, br#"{"runtime":true}"#).unwrap();
-        assert!(run(OrchestratorCommand::View).is_err());
-    }
 }
 
 #[cfg(test)]

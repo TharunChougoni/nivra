@@ -262,7 +262,7 @@ fn update_decision_verifies_and_defers_then_activates_or_rolls_back() {
         .unwrap();
         assert!(matches!(
             args.command,
-            crate::Command::Update { tag: Some(_), .. }
+            crate::Command::Update(Args { tag: Some(_), .. })
         ));
         let home = fixture();
         let h = home.path();
@@ -289,10 +289,10 @@ fn update_decision_verifies_and_defers_then_activates_or_rolls_back() {
     .unwrap();
     assert!(matches!(
         force.command,
-        crate::Command::Update {
+        crate::Command::Update(Args {
             force_unwatched_window: true,
             ..
-        }
+        })
     ));
     assert!(
         crate::Args::try_parse_from([
