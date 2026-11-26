@@ -147,24 +147,7 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
         serde_json::from_slice(&send(&request("")).body).unwrap();
     assert!(invalid_alias["account"].is_null());
 
-    // Verify positions endpoint
-    view.lock().unwrap()["portfolio"] = serde_json::json!({
-        "cash": "5000",
-        "positions": {
-            "NSE_EQ|INE002A01018": {
-                "instrument": "NSE_EQ|INE002A01018",
-                "quantity": 10,
-                "average_price": "2500.50"
-            }
-        }
-    });
-    let pos_reply = send(&request("").replace("/api/v1/meta", "/api/v1/positions"));
-    assert_eq!(pos_reply.code, "200 OK");
-    let pos_body: serde_json::Value = serde_json::from_slice(&pos_reply.body).unwrap();
-    assert_eq!(pos_body["total"], 1);
-    assert_eq!(pos_body["positions"].as_array().unwrap().len(), 1);
-
-    // Verify orders endpoint
+    // Verify plans endpoint
     view.lock().unwrap()["authorized_session"] = serde_json::json!("2026-10-28");
     view.lock().unwrap()["planner"] = serde_json::json!({
         "actions": [
@@ -188,20 +171,6 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
         ],
         "execution": [{"status": "paper_simulated"}]
     });
-    let ord_reply = send(&request("").replace("/api/v1/meta", "/api/v1/orders?date=2026-10-28"));
-    assert_eq!(ord_reply.code, "200 OK");
-    let ord_body: serde_json::Value = serde_json::from_slice(&ord_reply.body).unwrap();
-    assert_eq!(ord_body["total"], 2);
-    assert_eq!(ord_body["items"].as_array().unwrap().len(), 2);
-    assert_eq!(
-        ord_body["items"][0]["action"]["instrument_key"],
-        "NSE_EQ|INE002A01018"
-    );
-    assert!(ord_body["items"][1]["action"].is_null());
-    assert!(ord_body["items"][0].get("fill").is_none());
-    assert!(ord_body["items"][1].get("fill").is_none());
-    assert!(ord_body.get("orders").is_none());
-    assert!(ord_body["note"].as_str().unwrap().contains("not fills"));
     let plans_body: serde_json::Value =
         serde_json::from_slice(&send(&request("").replace("/api/v1/meta", "/api/v1/plans")).body)
             .unwrap();
@@ -209,14 +178,6 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
     assert_eq!(plans_body["execution"][0]["status"], "paper_simulated");
     assert!(plans_body["planner"].get("actions").is_none());
     assert!(plans_body["planner"].get("execution").is_none());
-    let date_mismatch =
-        send(&request("").replace("/api/v1/meta", "/api/v1/orders?date=2026-10-29"));
-    assert_eq!(date_mismatch.code, "200 OK");
-    let date_mismatch_body: serde_json::Value =
-        serde_json::from_slice(&date_mismatch.body).unwrap();
-    assert_eq!(date_mismatch_body["unavailable"], true);
-    assert_eq!(date_mismatch_body["reason"], "requested_session_not_loaded");
-
     // Verify precomputed summary caching
     view.lock().unwrap()["operational_health"] = operational.clone();
     reset_prepared_summary();

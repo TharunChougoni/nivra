@@ -53,8 +53,6 @@ pub(crate) fn dispatch(
         Ok(Route::Meta) => meta(head, view, settings, archive),
         Ok(Route::Summary) => summary(head, view, session_root),
         Ok(Route::Portfolio) => portfolio(head, view),
-        Ok(Route::Positions(query)) => positions(head, query, view),
-        Ok(Route::Orders(query)) => orders(head, query, view),
         Ok(Route::Fills(query)) => fills(head, query, view),
         Ok(Route::Plans(query)) => plans(head, query, view),
         Ok(Route::Scanner(query)) => scanner(head, query, view, settings),
@@ -65,7 +63,6 @@ pub(crate) fn dispatch(
         Ok(Route::Sessions(query)) => sessions(head, query, view),
         Ok(Route::Health) => health(head, view),
         Ok(Route::Alerts(query)) => alerts(head, query, view),
-        Ok(Route::Tools(query)) => tool_calls(head, query, view, session_root),
         Ok(Route::Agent(query)) => agent_turns(head, query, session_root),
         Ok(Route::AgentTranscript(query)) => {
             transcript::agent_transcript(head, query, session_root, settings)

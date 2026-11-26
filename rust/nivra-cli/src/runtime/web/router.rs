@@ -5,8 +5,6 @@ pub(super) enum Route {
     Meta,
     Summary,
     Portfolio,
-    Positions(Query),
-    Orders(Query),
     Fills(Query),
     Plans(Query),
     Scanner(Query),
@@ -15,8 +13,6 @@ pub(super) enum Route {
     Sessions(Query),
     Health,
     Alerts(Query),
-    /// Bounded orchestrator web-tool call record (#222).
-    Tools(Query),
     /// The pi lane turns, tool calls, gate verdicts and lane spend.
     Agent(Query),
     /// One pi lane as a chat: its session files grouped into exchanges.
@@ -122,11 +118,6 @@ pub(super) fn parse(line: &str) -> Result<Route, &'static str> {
                 Query::parse(raw, &[])?;
                 Ok(Route::Portfolio)
             }
-            "/api/v1/positions" => Ok(Route::Positions(Query::parse(raw, &["cursor", "limit"])?)),
-            "/api/v1/orders" => Ok(Route::Orders(Query::parse(
-                raw,
-                &["cursor", "limit", "date"],
-            )?)),
             "/api/v1/fills" => Ok(Route::Fills(Query::parse(raw, &["cursor", "limit"])?)),
             "/api/v1/plans" => Ok(Route::Plans(Query::parse(raw, &["date"])?)),
             "/api/v1/scanner" => Ok(Route::Scanner(Query::parse(
@@ -153,15 +144,6 @@ pub(super) fn parse(line: &str) -> Result<Route, &'static str> {
                 Ok(Route::Health)
             }
             "/api/v1/alerts" => Ok(Route::Alerts(Query::parse(raw, &["cursor", "limit"])?)),
-            "/api/v1/tools" => {
-                if method != "GET" {
-                    return Err("method_not_allowed");
-                }
-                Ok(Route::Tools(Query::parse(
-                    raw,
-                    &["date", "cursor", "limit"],
-                )?))
-            }
             "/api/v1/agent" => Ok(Route::Agent(Query::parse(raw, &["cursor", "limit"])?)),
             "/api/v1/agent/transcript" => Ok(Route::AgentTranscript(Query::parse(
                 raw,

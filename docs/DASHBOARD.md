@@ -134,15 +134,12 @@ All routes live in `rust/nivra-cli/src/runtime/web/` and return JSON with
 | `GET /api/v1/meta` | Version, paper or live mode, account alias, broker roles, dashboard limits and capability names. |
 | `GET /api/v1/summary` | Session phase, identities, readiness, equity, cash, counts, feed and alerts, plus `revisions`. Built once per trading loop. |
 | `GET /api/v1/portfolio` | Cash, capital, marks, positions, fees and book state. |
-| `GET /api/v1/positions` | Position records from the current portfolio. |
-| `GET /api/v1/orders?date=` | Validation verdicts for the loaded session, each with its validated action or `null`, and the execution records. |
 | `GET /api/v1/fills` | Simulated fills, newest first. |
 | `GET /api/v1/plans?date=` | Recorded plan actions, execution verdicts and planner status for the loaded session. |
 | `GET /api/v1/scanner?segment=prospects\|missing\|screens` | Scanner rows, coverage and reasons for missing instruments. |
 | `GET /api/v1/instruments` | The verified NSE cash catalog. Add `scope=all` for captured metadata, filtered by `market_segment`, `kind` and `q`. |
 | `GET /api/v1/instruments/chain?underlying_key=&expiry_ms=` | The call, strike and put chain and matching futures for one underlying and expiry. Optional `market_segment`. |
 | `GET /api/v1/sessions` | Current and archived session checkpoints. |
-| `GET /api/v1/tools?date=` | Web tool calls made by the pi lanes: query or URL, provider, latency, size and outcome. |
 | `GET /api/v1/health` | Readiness, feed and history state, controller liveness, retention, model budgets, alerts and updater status. |
 | `GET /api/v1/alerts` | Alerts with their original evidence. |
 | `GET /api/v1/series?kind=receipt-minute-bar&instrument=&from=&to=` | Minute bars from quote receipts, with classified gaps and `watermark_ms`. |

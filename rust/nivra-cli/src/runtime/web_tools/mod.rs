@@ -4,8 +4,7 @@
 //! the persistent paper decision owner. Results are untrusted evidence: never
 //! quotes, fills, broker credentials or execution authority. Default
 //! configuration enables nothing and makes no outbound call. Every call is
-//! appended to the session's bounded `model/web-tools.ndjson` record, which the
-//! authenticated dashboard projects read-only.
+//! appended to the session's bounded `model/web-tools.ndjson` record.
 //!
 //! Provider, endpoints, key path, rate limits and timeouts are configuration;
 //! no provider URL or key is compiled in. The API key is read from an
@@ -24,10 +23,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Session-relative bounded tool-call record. The dashboard reads this file.
-pub(crate) const LOG_FILE: &str = "model/web-tools.ndjson";
+/// Size bound of the session's tool-call record.
 pub(crate) const LOG_MAX_BYTES: u64 = 1_048_576;
-pub(crate) const LOG_READ_MAX_BYTES: u64 = 2_097_152;
 const LOG_LINE_MAX_BYTES: usize = 4_096;
 const LOG_TEXT_MAX_CHARS: usize = 512;
 const MAX_QUERY_BYTES: usize = 2_048;
@@ -1073,46 +1070,6 @@ fn append_log(dir: &Path, entry: &LogEntry<'_>) {
         return;
     };
     let _ = file.write_all(&line);
-}
-
-/// Read the bounded session record newest-first. A torn final append is
-/// ignored; a corrupt complete row makes the record unavailable.
-pub(crate) fn read_log(
-    root: &Path,
-    session: Option<&str>,
-    offset: usize,
-    limit: usize,
-) -> Result<(Vec<Value>, usize)> {
-    let path = root.join(LOG_FILE);
-    let bytes = match fs::symlink_metadata(&path) {
-        Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
-            return Err("web_tools_log_unavailable".into());
-        }
-        Ok(_) => crate::read_bounded(&path, LOG_READ_MAX_BYTES)
-            .map_err(|_| "web_tools_log_unavailable")?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok((Vec::new(), 0));
-        }
-        Err(_) => return Err("web_tools_log_unavailable".into()),
-    };
-    let mut rows = Vec::new();
-    for line in bytes.split_inclusive(|byte| *byte == b'\n') {
-        if !line.ends_with(b"\n") {
-            break;
-        }
-        let value: Value = serde_json::from_slice(line).map_err(|_| "web_tools_log_invalid")?;
-        if value["v"] != 1 || value["tool"].as_str().is_none() || value["status"].as_str().is_none()
-        {
-            return Err("web_tools_log_invalid".into());
-        }
-        let value = transcript::redact(&value);
-        if session.is_none_or(|session| value["session"] == session) {
-            rows.push(value);
-        }
-    }
-    rows.reverse();
-    let total = rows.len();
-    Ok((rows.into_iter().skip(offset).take(limit).collect(), total))
 }
 
 #[cfg(test)]

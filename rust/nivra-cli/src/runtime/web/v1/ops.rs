@@ -14,7 +14,7 @@ pub(crate) fn meta(
         "v":1,"version":env!("CARGO_PKG_VERSION"),"mode":if live {"live"} else {"paper"},
         "paper_only":view["paper_only"].as_bool().unwrap_or(!live),"live_enabled":live,
         "broker":{"data":"upstox","orders":order_authority(live)},"account":view["account"].as_str().map(|alias| super::super::super::transcript::redact(&serde_json::json!(alias))),
-        "capabilities":["summary","portfolio","positions","orders","fills","plans","scanner","instruments","sessions","health","alerts","series","agent","agent_transcript","events","tools","backtest"],
+        "capabilities":["summary","portfolio","fills","plans","scanner","instruments","sessions","health","alerts","series","agent","agent_transcript","events","backtest"],
         "archive_configured":archive.is_some(),
         "limits":{"sse_max_streams":settings.sse_max_streams,"sse_heartbeat_ms":settings.sse_heartbeat_ms,"longpoll_hold_ms":settings.longpoll_hold_ms,"blob_slice_max_bytes":settings.blob_slice_max_bytes,"transcript_max_bytes":settings.transcript_max_bytes,"transcript_text_max_bytes":settings.transcript_text_max_bytes,"transcript_args_max_bytes":settings.transcript_args_max_bytes,"series_max_points":settings.series_max_points,"series_max_range_ms":settings.series_max_range_ms,"archive_minute_max_range_ms":series::ARCHIVE_MINUTE_MAX_RANGE_MS,"archive_daily_max_range_ms":series::ARCHIVE_DAILY_MAX_RANGE_MS,"equity_max_points":settings.equity_max_points,"equity_sample_interval_ms":settings.equity_sample_interval_ms,"price_batch_instruments":settings.price_batch_instruments,"price_batch_interval_ms":settings.price_batch_interval_ms}
     });
@@ -190,79 +190,6 @@ pub(crate) fn alerts(
     };
     drop(view);
     json_reply(head, body)
-}
-
-pub(crate) fn request_session(
-    value: &serde_json::Value,
-    view: &Arc<Mutex<serde_json::Value>>,
-) -> std::result::Result<String, &'static str> {
-    if let Some(session) = value["session"].as_str() {
-        let parsed =
-            NaiveDate::parse_from_str(session, "%Y-%m-%d").map_err(|_| "session_date_invalid")?;
-        if parsed.to_string() != session {
-            return Err("session_date_invalid");
-        }
-        return Ok(session.to_owned());
-    }
-    let view = view.lock().map_err(|_| "status_unavailable")?;
-    if let Some(session) = view["session"].as_str().filter(|value| !value.is_empty()) {
-        return Ok(session.to_owned());
-    }
-    Ok(local(millis()).date_naive().to_string())
-}
-
-/// Bounded read-only projection of the orchestrator web-tool call record
-/// (#222). Every row is the session's original query/URL, latency, bytes and
-/// outcome; the endpoint never calls a provider or changes a book.
-pub(crate) fn tool_calls(
-    head: &str,
-    query: router::Query,
-    view: &Arc<Mutex<serde_json::Value>>,
-    root: Option<&Path>,
-) -> Response {
-    let Some(root) = root else {
-        return error("503 Service Unavailable", "session_unavailable");
-    };
-    let session = match query.get("date") {
-        Some(value) => {
-            let parsed = match NaiveDate::parse_from_str(value, "%Y-%m-%d") {
-                Ok(parsed) if parsed.to_string() == value => parsed,
-                _ => return error("400 Bad Request", "session_date_invalid"),
-            };
-            parsed.to_string()
-        }
-        None => match request_session(&serde_json::Value::Null, view) {
-            Ok(session) => session,
-            Err(reason) => return error("503 Service Unavailable", reason),
-        },
-    };
-    let limit = match query.get("limit") {
-        Some(value) => match value.parse::<usize>() {
-            Ok(limit) if (1..=100).contains(&limit) => limit,
-            _ => return error("400 Bad Request", "tools_limit_invalid"),
-        },
-        None => 50,
-    };
-    let offset = match query.get("cursor") {
-        Some(value) => match value.parse::<usize>() {
-            Ok(offset) if offset <= 10_000 => offset,
-            _ => return error("400 Bad Request", "tools_cursor_invalid"),
-        },
-        None => 0,
-    };
-    match super::super::super::web_tools::read_log(root, Some(&session), offset, limit) {
-        Ok((calls, total)) => {
-            let next = (offset + calls.len() < total).then(|| (offset + calls.len()).to_string());
-            json_reply(
-                head,
-                serde_json::json!({
-                    "v":1,"session":session,"calls":calls,"total":total,"next":next,
-                    "execution_authorized":false
-                }),
-            )
-        }
-        Err(reason) => error("503 Service Unavailable", &reason.to_string()),
-    }
 }
 
 /// Files under `model/agent` that `/api/v1/agent` reads.

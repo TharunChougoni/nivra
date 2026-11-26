@@ -439,35 +439,21 @@ fn web_tools_are_config_gated_bounded_and_never_leak_credentials() {
         "web_tool_timeout"
     );
 
-    // The session record is bounded, redacted and newest-first. A torn final
-    // append is ignored; a corrupt complete row is unavailable.
-    let (rows, total) = read_log(dir.path(), Some("2026-11-14"), 0, 50).unwrap();
-    assert_eq!(total, 5);
+    // Each call appends one redacted row to the session record.
+    let record = fs::read_to_string(model.join("web-tools.ndjson")).unwrap();
+    assert!(!record.contains("fixture-provider-key"));
+    assert!(record.contains("\"query\":\"nifty\""));
+    let rows: Vec<Value> = record
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 5);
     assert_eq!(rows[0]["tool"], "web_search");
+    assert_eq!(rows[0]["session"], "2026-11-14");
     assert_eq!(rows[0]["status"], "ok");
     assert_eq!(rows[0]["execution_authorized"], false);
     assert!(rows[0]["latency_ms"].as_u64().is_some());
     assert!(rows[0]["bytes"].as_u64().is_some());
-    let record = fs::read_to_string(model.join("web-tools.ndjson")).unwrap();
-    assert!(!record.contains("fixture-provider-key"));
-    assert!(record.contains("\"query\":\"nifty\""));
-    assert_eq!(
-        read_log(dir.path(), Some("2026-01-01"), 0, 50).unwrap().1,
-        0
-    );
-    let (page, total) = read_log(dir.path(), None, 1, 2).unwrap();
-    assert_eq!(total, 5);
-    assert_eq!(page.len(), 2);
-    fs::write(
-        model.join("web-tools.ndjson"),
-        format!("{record}{{\"v\":1,\"tool\":\"web_fetch\"}}"),
-    )
-    .unwrap();
-    assert_eq!(read_log(dir.path(), None, 0, 50).unwrap().1, 5);
-    fs::write(model.join("web-tools.ndjson"), "{not-json}\n").unwrap();
-    assert!(read_log(dir.path(), None, 0, 50).is_err());
-    fs::remove_file(model.join("web-tools.ndjson")).unwrap();
-    assert_eq!(read_log(dir.path(), None, 0, 50).unwrap().1, 0);
 
     // A disabled policy refuses every call and exposes no tool definitions.
     let mut disabled = settings.clone();
