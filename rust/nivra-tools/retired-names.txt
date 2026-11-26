@@ -5,7 +5,7 @@
 1	decide	rust/nivra-cli/src/runtime/planner.rs
 1	decide	rust/nivra-cli/src/runtime/planner/plan.rs
 23	decide	rust/nivra-cli/src/runtime/strategy_results.rs
-1	decide	rust/nivra-cli/src/runtime/wide/controller.rs
+1	decide	rust/nivra-cli/src/runtime/wide/controller/trading.rs
 1	decide	rust/nivra-cli/src/runtime/wide/shutdown.rs
 1	decide	rust/nivra-cli/src/runtime/wide/tests.rs
 1	decide	rust/nivra-cli/src/strategy_archive.rs
@@ -64,7 +64,8 @@
 10	owner_lane	rust/nivra-cli/src/runtime/redecision.rs
 2	owner_lane	rust/nivra-cli/src/runtime/redecision/events.rs
 1	owner_lane	rust/nivra-cli/src/runtime/web_tools/mod.rs
-2	owner_lane	rust/nivra-cli/src/runtime/wide/controller.rs
+1	owner_lane	rust/nivra-cli/src/runtime/wide/controller.rs
+1	owner_lane	rust/nivra-cli/src/runtime/wide/controller/close.rs
 1	owner_lane	rust/nivra-cli/src/runtime/wide/tests.rs
 2	owner_lane	rust/nivra-cli/src/runtime/workspace/mod.rs
 1	owner_lane	rust/nivra-store/src/research_jobs/scoped.rs
@@ -99,7 +100,10 @@
 2	scorer	rust/nivra-cli/src/runtime/web/v2/src/research-panels.test.tsx
 2	scorer	rust/nivra-cli/src/runtime/web/v2/src/research.ts
 1	scorer	rust/nivra-cli/src/runtime/wide.rs
-9	scorer	rust/nivra-cli/src/runtime/wide/controller.rs
+5	scorer	rust/nivra-cli/src/runtime/wide/controller.rs
+2	scorer	rust/nivra-cli/src/runtime/wide/controller/close.rs
+1	scorer	rust/nivra-cli/src/runtime/wide/controller/trading.rs
+1	scorer	rust/nivra-cli/src/runtime/wide/controller/view.rs
 25	scorer	rust/nivra-cli/src/runtime/wide/shadow.rs
 34	scorer	rust/nivra-cli/src/runtime/wide/tests.rs
 7	scorer	rust/nivra-cli/src/runtime/workspace/mod.rs
