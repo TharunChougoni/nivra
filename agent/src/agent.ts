@@ -9,9 +9,11 @@ import {
   createAgentSession,
   createExtensionRuntime,
   type ModelRuntime,
+  type ResourceDiagnostic,
   type ResourceLoader,
   SessionManager,
   SettingsManager,
+  type Skill,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { fallbackReason } from "./fallback.js";
@@ -29,10 +31,13 @@ import {
   type TurnStatus,
   type Usage,
 } from "./protocol.js";
+import { inferWorkspaceSkillsDir, type LoadedLaneSkills, loadLaneSkills, resolveSkillRead } from "./skills.js";
 
 export interface AgentOptions {
   runtime: ModelRuntime;
   promptsDir: string;
+  skillsDir?: string;
+  workspaceSkillsDir?: string;
   send: (message: Outbound) => void;
   /** Test and fake-provider hook, called before a turn prompts the model. */
   beforeTurn?: (turn: TurnRequest) => void;
@@ -43,6 +48,8 @@ interface LaneSession {
   dir: string;
   toolsKey: string;
   session: AgentSession;
+  skillsState: { current: LoadedLaneSkills };
+  loadSkills: () => LoadedLaneSkills;
 }
 
 interface PendingCall {
@@ -127,10 +134,14 @@ function usageFields(usage: { input: number; output: number; cacheRead: number; 
   return { input: usage.input, output: usage.output, cache_read: usage.cacheRead, cache_write: usage.cacheWrite, cost_usd: usage.cost.total };
 }
 
-function resourceLoader(systemPrompt: string): ResourceLoader {
+function resourceLoader(
+  systemPrompt: string,
+  skillsState: { current: LoadedLaneSkills },
+  reloadSkills: () => LoadedLaneSkills,
+): ResourceLoader {
   return {
     getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
-    getSkills: () => ({ skills: [], diagnostics: [] }),
+    getSkills: () => ({ skills: skillsState.current.skills, diagnostics: skillsState.current.diagnostics }),
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
     getAgentsFiles: () => ({ agentsFiles: [] }),
@@ -139,7 +150,9 @@ function resourceLoader(systemPrompt: string): ResourceLoader {
     getAppendSystemPrompt: () => [],
     getAppendSystemPromptSources: () => [],
     extendResources: () => {},
-    reload: async () => {},
+    reload: async () => {
+      skillsState.current = reloadSkills();
+    },
   };
 }
 
@@ -203,6 +216,21 @@ export class LaneAgent {
     return this.sessions.get(lane)?.session.messages ?? [];
   }
 
+  /** Loaded skills for a lane, for tests and diagnostics. */
+  loadedSkills(lane: Lane): Skill[] {
+    return this.sessions.get(lane)?.skillsState.current.skills ?? [];
+  }
+
+  /** Skill validation diagnostics for a lane, for tests and diagnostics. */
+  skillDiagnostics(lane: Lane): ResourceDiagnostic[] {
+    return this.sessions.get(lane)?.skillsState.current.diagnostics ?? [];
+  }
+
+  /** Effective system prompt of a lane's active session, for tests. */
+  systemPrompt(lane: Lane): string | undefined {
+    return this.sessions.get(lane)?.session.systemPrompt;
+  }
+
   private send(message: Outbound): void {
     this.options.send(message);
   }
@@ -228,6 +256,19 @@ export class LaneAgent {
       execute: async (toolCallId, params) => {
         const turn = this.active;
         if (!turn) throw new Error("agent_turn_missing");
+        let args = (params ?? {}) as JsonValue;
+        if (spec.name === "read" && params && typeof params === "object" && "path" in params && typeof (params as { path?: unknown }).path === "string") {
+          const laneState = this.sessions.get(turn.request.lane);
+          if (laneState) {
+            const resolved = resolveSkillRead((params as { path: string }).path, laneState.skillsState.current);
+            if (resolved?.kind === "local") {
+              return { content: [{ type: "text", text: JSON.stringify(resolved.output) }], details: undefined };
+            }
+            if (resolved?.kind === "rewrite") {
+              args = { ...(params as JsonObject), path: resolved.path };
+            }
+          }
+        }
         const callId = bridgeCallId(toolCallId, turn.callIds);
         const output = await new Promise<JsonValue>((resolve, reject) => {
           turn.pending.set(callId, { resolve, reject });
@@ -237,7 +278,7 @@ export class LaneAgent {
             turn_id: turn.request.id,
             call_id: callId,
             name: spec.name,
-            args: (params ?? {}) as JsonValue,
+            args,
           });
         });
         return { content: [{ type: "text", text: JSON.stringify(output) }], details: undefined };
@@ -245,13 +286,19 @@ export class LaneAgent {
     };
   }
 
-  private async laneSession(turn: TurnRequest, model: Model<string>, fallback: Model<string> | undefined): Promise<AgentSession> {
+  private async laneSession(turn: TurnRequest, model: Model<string>, fallback: Model<string> | undefined): Promise<LaneSession> {
     const key = toolsKey(turn.tools);
     const current = this.sessions.get(turn.lane);
     // A lane's slot is its session date and directory. Rust passes a date-scoped
     // directory, so a restarted agent resumes this slot's session below.
     const slot = current !== undefined && current.date === turn.session.date && current.dir === turn.session.dir;
-    if (slot && current.toolsKey === key) return current.session;
+    if (slot && current.toolsKey === key) {
+      const nextSkills = current.loadSkills();
+      const changed = nextSkills.signature !== current.skillsState.current.signature;
+      current.skillsState.current = nextSkills;
+      if (changed) await current.session.reload();
+      return current;
+    }
     // A changed tool set reopens the slot's file; a new slot starts a new session.
     const file = slot ? current.session.sessionFile : undefined;
     current?.session.dispose();
@@ -262,6 +309,13 @@ export class LaneAgent {
       : current
         ? SessionManager.create(turn.session.dir, turn.session.dir)
         : SessionManager.continueRecent(turn.session.dir, turn.session.dir);
+    const workspaceSkillsDir = this.options.workspaceSkillsDir ?? inferWorkspaceSkillsDir(turn.session.dir);
+    const reloadSkills = () =>
+      loadLaneSkills({
+        ...(this.options.skillsDir ? { defaultSkillsDir: this.options.skillsDir } : {}),
+        ...(workspaceSkillsDir ? { workspaceSkillsDir } : {}),
+      });
+    const skillsState = { current: reloadSkills() };
     // The enable list and the definitions come from the turn's one tool list.
     const customTools = turn.tools.map((tool) => this.bridgeTool(tool));
     const { session } = await createAgentSession({
@@ -270,7 +324,7 @@ export class LaneAgent {
       model,
       thinkingLevel: turn.model.thinking ?? "medium",
       modelRuntime: this.options.runtime,
-      resourceLoader: resourceLoader(this.prompt(turn.lane).text),
+      resourceLoader: resourceLoader(this.prompt(turn.lane).text, skillsState, reloadSkills),
       tools: customTools.map((tool) => tool.name),
       customTools,
       sessionManager,
@@ -279,8 +333,16 @@ export class LaneAgent {
         retry: { enabled: true, maxRetries: 2 },
       }),
     });
-    this.sessions.set(turn.lane, { date: turn.session.date, dir: turn.session.dir, toolsKey: key, session });
-    return session;
+    const laneSession: LaneSession = {
+      date: turn.session.date,
+      dir: turn.session.dir,
+      toolsKey: key,
+      session,
+      skillsState,
+      loadSkills: reloadSkills,
+    };
+    this.sessions.set(turn.lane, laneSession);
+    return laneSession;
   }
 
   private event(turn: ActiveTurn, event: AgentSessionEvent): void {
@@ -413,7 +475,8 @@ export class LaneAgent {
     let session: AgentSession | undefined;
     let unsubscribe = () => {};
     try {
-      session = await this.laneSession(request, model, fallbackModel || undefined);
+      const laneState = await this.laneSession(request, model, fallbackModel || undefined);
+      session = laneState.session;
       await useModel(session, model, request.model.thinking);
       // An abort that arrived while the session was being opened has no
       // running prompt to cancel; honour it before any model call.
@@ -423,6 +486,20 @@ export class LaneAgent {
       }
       const active = session;
       unsubscribe = active.subscribe((event) => this.event(turn, event));
+      for (const diagnostic of laneState.skillsState.current.diagnostics) {
+        console.error(`[skills] ${diagnostic.type}: ${diagnostic.message}${diagnostic.path ? ` (${diagnostic.path})` : ""}`);
+        this.send({
+          v: PROTOCOL_VERSION,
+          type: "event",
+          turn_id: request.id,
+          event: {
+            kind: "skill_diagnostic",
+            level: diagnostic.type,
+            message: diagnostic.message,
+            path: diagnostic.path ?? null,
+          },
+        });
+      }
       this.options.beforeTurn?.(request);
       const leaf = active.sessionManager.getLeafId();
       let failure = await this.attempt(active, request);

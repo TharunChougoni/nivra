@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
@@ -14,6 +14,7 @@ import { type JsonObject, type Outbound, PROTOCOL_VERSION, parseInbound, type To
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const prompts = join(root, "prompts");
+const defaultSkills = join(root, "skills");
 
 const tool = (name: string, properties: JsonObject = {}): ToolSpec => ({
   name,
@@ -42,7 +43,11 @@ function turn(id: string, lane: TurnRequest["lane"], dir: string, date = "2026-1
 }
 
 /** A scripted Rust peer: answers every tool call and collects the rest. */
-async function harness(script: FakeScript, answer: (name: string, args: unknown) => { ok: boolean; output?: unknown; error?: string }) {
+async function harness(
+  script: FakeScript,
+  answer: (name: string, args: unknown) => { ok: boolean; output?: unknown; error?: string },
+  options: { skillsDir?: string; workspaceSkillsDir?: string } = {},
+) {
   const dir = mkdtempSync(join(tmpdir(), "nivra-agent-test-"));
   const runtime = await ModelRuntime.create({ authPath: join(dir, "auth.json"), modelsPath: null, allowModelNetwork: false, refreshOnCreate: false });
   const beforeTurn = installFake(runtime, script);
@@ -59,7 +64,7 @@ async function harness(script: FakeScript, answer: (name: string, args: unknown)
     }
     if (message.type === "turn_result") done.get(message.id)?.(message);
   };
-  agent = new LaneAgent({ runtime, promptsDir: prompts, send, beforeTurn });
+  agent = new LaneAgent({ runtime, promptsDir: prompts, send, beforeTurn, ...options });
   const run = (request: TurnRequest) =>
     new Promise<Extract<Outbound, { type: "turn_result" }>>((resolve) => {
       done.set(request.id, (message) => resolve(message as Extract<Outbound, { type: "turn_result" }>));
@@ -327,4 +332,107 @@ test("a lane compaction threshold becomes a per-model reserve for the primary an
     // A window smaller than the threshold keeps pi's own reserve.
     "mistral/small": { reserveTokens: 16_384, keepRecentTokens: 60_000 },
   });
+});
+
+test("skills load from default repo skills and the book workspace, and read resolves both", async () => {
+  const defaultAbiPath = join(defaultSkills, "strategy-abi", "SKILL.md");
+  const bookDir = mkdtempSync(join(tmpdir(), "nivra-agent-skills-book-"));
+  const workspaceSkills = join(bookDir, "workspace", "skills");
+  mkdirSync(join(workspaceSkills, "custom-gap-fade"), { recursive: true });
+  const workspaceSkillPath = join(workspaceSkills, "custom-gap-fade", "SKILL.md");
+  writeFileSync(workspaceSkillPath, "---\nname: custom-gap-fade\ndescription: Procedure for testing gap-fade setups.\n---\n\n# Gap Fade\nTest on 3+ dates.\n");
+
+  const script: FakeScript = {
+    turns: [
+      {
+        lane: "research",
+        steps: [
+          {
+            tool_calls: [
+              { name: "read", args: { path: defaultAbiPath } },
+              { name: "read", args: { path: workspaceSkillPath } },
+            ],
+          },
+          { text: "loaded both skills" },
+        ],
+      },
+      {
+        lane: "research",
+        steps: [{ text: "reloaded after workspace write" }],
+      },
+    ],
+  };
+  const rustReadPaths: string[] = [];
+  const { agent, sent, run } = await harness(
+    script,
+    (name, args) => {
+      if (name === "read") rustReadPaths.push((args as { path: string }).path);
+      return { ok: true, output: { path: (args as { path: string }).path, text: "workspace skill text" } };
+    },
+    { skillsDir: defaultSkills },
+  );
+
+  const sessionDir = join(bookDir, "model", "agent", "pi", "research");
+  const researchTools = [tool("read", { path: { type: "string" } }), tool("portfolio")];
+  const r1 = await run({ ...turn("s1", "research", bookDir, "2026-11-26", researchTools), session: { date: "2026-11-26", dir: sessionDir } });
+  assert.equal(r1.status, "ok", r1.error);
+  assert.deepEqual(agent.skillDiagnostics("research"), []);
+  const names = agent.loadedSkills("research").map((s) => s.name).sort();
+  assert.deepEqual(names, ["backtest-methodology", "custom-gap-fade", "regime-check", "strategy-abi", "strategy-review"]);
+
+  const sysPrompt = agent.systemPrompt("research") ?? "";
+  assert.ok(sysPrompt.includes("<available_skills>"));
+  assert.ok(sysPrompt.includes("strategy-abi"));
+  assert.ok(sysPrompt.includes("custom-gap-fade"));
+
+  // Default skill read is handled locally without hitting Rust workspace_read;
+  // workspace skill absolute location is rewritten to workspace-relative skills/... for Rust.
+  assert.deepEqual(rustReadPaths, ["skills/custom-gap-fade/SKILL.md"]);
+  assert.ok(!sent.some((m) => m.type === "event" && m.event.kind === "skill_diagnostic"));
+
+  // Adding a new workspace skill mid-session reloads on the next turn.
+  mkdirSync(join(workspaceSkills, "post-close-sweep"), { recursive: true });
+  writeFileSync(join(workspaceSkills, "post-close-sweep", "SKILL.md"), "---\nname: post-close-sweep\ndescription: Sweep discipline.\n---\n");
+  const r2 = await run({ ...turn("s2", "research", bookDir, "2026-11-26", researchTools), session: { date: "2026-11-26", dir: sessionDir } });
+  assert.equal(r2.status, "ok", r2.error);
+  assert.ok(agent.loadedSkills("research").some((s) => s.name === "post-close-sweep"));
+  assert.ok((agent.systemPrompt("research") ?? "").includes("post-close-sweep"));
+  agent.dispose();
+});
+
+test("malformed and colliding skills produce diagnostics without failing the turn", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nivra-agent-bad-skills-"));
+  const workspaceSkills = join(dir, "workspace", "skills");
+  // Malformed YAML frontmatter + missing description
+  mkdirSync(join(workspaceSkills, "broken-yaml"), { recursive: true });
+  writeFileSync(join(workspaceSkills, "broken-yaml", "SKILL.md"), "---\nname: [unterminated\n---\n");
+  mkdirSync(join(workspaceSkills, "missing-desc"), { recursive: true });
+  writeFileSync(join(workspaceSkills, "missing-desc", "SKILL.md"), "---\nname: missing-desc\n---\nNo description.\n");
+  // Collides with committed default skill name
+  mkdirSync(join(workspaceSkills, "strategy-abi"), { recursive: true });
+  writeFileSync(join(workspaceSkills, "strategy-abi", "SKILL.md"), "---\nname: strategy-abi\ndescription: Shadowed workspace copy.\n---\n");
+
+  const script: FakeScript = {
+    turns: [{ lane: "review", steps: [{ text: "review completed despite broken skills" }] }],
+  };
+  const { agent, sent, run } = await harness(script, () => ({ ok: true, output: {} }), {
+    skillsDir: defaultSkills,
+    workspaceSkillsDir: workspaceSkills,
+  });
+
+  const result = await run(turn("d1", "review", dir, "2026-11-26", [tool("read", { path: { type: "string" } })]));
+  assert.equal(result.status, "ok", result.error);
+  assert.equal(result.output.text, "review completed despite broken skills");
+
+  const diagnostics = agent.skillDiagnostics("review");
+  assert.ok(diagnostics.length >= 3, `expected diagnostics for broken/missing/colliding skills, got ${diagnostics.length}`);
+  assert.ok(diagnostics.some((d) => d.path?.includes("broken-yaml") && d.type === "warning"));
+  assert.ok(diagnostics.some((d) => d.path?.includes("missing-desc") && d.message.includes("description is required")));
+  assert.ok(diagnostics.some((d) => d.type === "collision" && d.collision?.name === "strategy-abi"));
+
+  const emitted = sent.filter((m): m is Extract<Outbound, { type: "event" }> => m.type === "event" && m.event.kind === "skill_diagnostic");
+  assert.equal(emitted.length, diagnostics.length);
+  // Default skills still loaded cleanly.
+  assert.equal(agent.loadedSkills("review").length, 4);
+  agent.dispose();
 });

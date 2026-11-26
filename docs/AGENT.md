@@ -132,6 +132,22 @@ Per-tool row limits live under `planner.tools`. A `plan` action is `buy`,
 `sell` or `revise_exit`. A buy's time exit is a future Unix epoch millisecond.
 Research results are advisory and never place, size or promote a trade.
 
+### Skills
+
+The agent loads pi `SKILL.md` procedures from two locations: committed defaults
+under `agent/skills/` and learned procedures in the paper book's workspace
+`skills/` directory (`<book>/workspace/skills/`). Each skill uses YAML
+frontmatter with a lowercase-hyphen `name` and a non-empty `description`.
+
+- Lanes that have the `read` tool (`decision`, `research`, `review`) receive
+  `<available_skills>` in their system prompt and load matching skills with
+  `read` when needed. Default skills cover `strategy-abi`,
+  `backtest-methodology`, `regime-check`, and `strategy-review`.
+- The research lane can write new standing procedures to `skills/<name>/SKILL.md`
+  in the workspace; the agent reloads skills at the start of each turn.
+- Invalid or colliding skill files emit `skill_diagnostic` turn events and
+  stderr warnings and never abort or block a turn.
+
 ### Research requests
 
 Requests sit in `model/agent/requests.sqlite`. At most `max_open_requests` (4)

@@ -18,6 +18,8 @@ const { values } = parseArgs({
   options: {
     "agent-dir": { type: "string" },
     prompts: { type: "string" },
+    skills: { type: "string" },
+    "workspace-skills": { type: "string" },
     fake: { type: "string" },
     check: { type: "string" },
   },
@@ -61,9 +63,12 @@ if (values.check !== undefined) {
 }
 
 const beforeTurn = values.fake ? installFake(runtime, JSON.parse(readFileSync(values.fake, "utf8")) as FakeScript) : undefined;
+const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const agent = new LaneAgent({
   runtime,
-  promptsDir: values.prompts ?? join(dirname(fileURLToPath(import.meta.url)), "..", "..", "prompts"),
+  promptsDir: values.prompts ?? join(packageRoot, "prompts"),
+  skillsDir: values.skills ?? join(packageRoot, "skills"),
+  ...(values["workspace-skills"] ? { workspaceSkillsDir: values["workspace-skills"] } : {}),
   send,
   ...(beforeTurn ? { beforeTurn } : {}),
 });
