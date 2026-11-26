@@ -1,0 +1,22 @@
+{
+ "params": {
+  "avoid_open_minutes": 30,
+  "edge_margin": "1.5",
+  "flat_minute": 915,
+  "headroom_bps": "10",
+  "hold_ms": 2700000,
+  "hold_samples": 20,
+  "last_entry_minute": 885,
+  "max_positions": 2,
+  "max_range_position": "0.15",
+  "max_spread_bps": 15,
+  "min_drop_bps": 200,
+  "min_rel_volume": "2",
+  "min_relative_drop_bps": 150,
+  "min_stop_bps": "60",
+  "order_rupees": "1000",
+  "stop_vol_multiple": "1",
+  "target_retrace": "0.5"
+ },
+ "version": 1
+}

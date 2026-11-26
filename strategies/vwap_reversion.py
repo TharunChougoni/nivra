@@ -117,7 +117,7 @@ def run(select):
                 if action is not None:
                     actions.append(action)
                     slots -= 1
-    except (OSError, ValueError, KeyError, TypeError, ArithmeticError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, ArithmeticError):
         actions = []
     print(json.dumps({'actions': actions}))
 

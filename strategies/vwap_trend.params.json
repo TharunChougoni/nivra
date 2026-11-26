@@ -1,0 +1,21 @@
+{
+ "params": {
+  "avoid_open_minutes": 30,
+  "edge_margin": "1.5",
+  "flat_minute": 915,
+  "headroom_bps": "10",
+  "hold_ms": 3600000,
+  "hold_samples": 30,
+  "last_entry_minute": 840,
+  "max_above_bps": 80,
+  "max_positions": 2,
+  "max_spread_bps": 15,
+  "min_above_bps": 10,
+  "min_range_position": "0.5",
+  "min_target_bps": "60",
+  "order_rupees": "1000",
+  "stop_below_vwap_bps": "10",
+  "target_vol_multiple": "1.5"
+ },
+ "version": 1
+}
