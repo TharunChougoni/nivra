@@ -7,8 +7,9 @@ description: "Backtest discipline for Nivra research: quote tape vs bar backtest
 
 ## Quote Tape vs Bar Backtests
 
-- **Action strategies (`strategy_actions_v1`)**: Use `backtest` with `strategy: true` over an `archive_window` dataset. This replays real recorded depth quotes (`quotes`), enforces the 2 s freshness gate, whole shares, ticks, depth consumption, and `paper_costs`, and returns net P&L and acceptance verdicts. Use `quotes` when you need to inspect raw archived receipt coverage for specific keys.
-- **Ranker scripts (`scripts/<name>.py`)**: Use `run` on small inline feature JSON to verify finite outputs, and `backtest` (`strategy` false/omitted) for ranking diagnostics. Ranker forward marks are hypothetical returns, not executable fills.
+- **Action strategies (`strategy_actions_v1`)**: Use `backtest` over an `archive_window` dataset. This replays real recorded depth quotes (`quotes`), enforces the 2 s freshness gate, whole shares, ticks, depth consumption, and `paper_costs`, and returns net P&L and acceptance verdicts. Use `quotes` when you need to inspect raw archived receipt coverage for specific keys.
+- **Bar strategies (`archive_bars_v1`)**: Submit an `archive_bars` job with `backtest`. Poll with `backtest_status` and fetch the verified report with `backtest_result`.
+- **Ranker scripts (`scripts/<name>.py`)**: Use `run` on small inline feature JSON to verify finite scores.
 - If a strategy replay hits `strategy_replay_wall_budget` or tape caps, narrow `archive_daily_window` (IST minutes, e.g., `{"from_minute": 570, "to_minute": 630}`). Pin `tape.archive_window.as_of_receipt_id` when reproducing comparisons.
 
 ## Splits, Walk-Forward, and Tape Dates

@@ -17,8 +17,7 @@ A strategy is one of two kinds of Python script:
 | --- | --- | --- |
 | Write | The research lane writes `scripts/<name>.py` in the workspace | [Workspace](#workspace) |
 | Test | The sandbox runs the ranker on inline feature rows | [Rankers](#rankers) |
-| Evaluate | Recorded replay with forward marks and declared costs | [Replay and evaluation](#replay-and-evaluation) |
-| Replay actions | An action strategy trades a recorded quote tape after costs | [Action strategies](#action-strategies) |
+| Backtest | An action strategy trades a recorded quote tape, or archived bars, after costs | [Action strategies](#action-strategies) |
 | Accept | An accepted replay registers the action strategy with no operator step | [Acceptance and the library](#acceptance-and-the-library) |
 | Register | An operator copies a reviewed script into the strategy library | [Registering a ranker](#registering-a-ranker) |
 | Select | The scanner ranks with a library version, or falls back to the built-in ranking | [Live ranking selection](#live-ranking-selection) |
@@ -33,7 +32,6 @@ its journal are outside the workspace.
 
 | Directory | Contents |
 | --- | --- |
-| `scanner/` | Seeded `cost_aware_momentum.py` and its params file |
 | `scripts/` | Python rankers written by the research lane |
 | `notes/`, `skills/` | Notes and standing procedures the lanes keep across turns |
 | `data/`, `reports/`, `journal/` | Inputs and kept output |
@@ -47,6 +45,10 @@ The pi lanes use these workspace tools:
 | `write` | research | Write under `notes/`, `skills/` or `scripts/<name>.py` |
 | `run` | research | Run a ranker in the sandbox |
 | `install` | research | Install an allowlisted file into `tools/` |
+
+The research lane can run its own rankers under `scripts/`. To run other
+workspace scripts, list their paths in `workspace.run_allowlist`. The list
+starts empty.
 
 Defaults: `max_write_bytes` 65,536, `max_file_bytes` 1 MiB, `cpu_seconds` 30,
 `memory_mb` 512 (256 for `scripts/` rankers without `research_env`, 512 when
@@ -146,9 +148,8 @@ nivra research-env verify --config CFG
 `CFG` can be a paper config (following `planner_config`), a planner config with
 `research_env`, or a standalone JSON containing `{"env_dir": "..."}`. Copy the
 printed `env_sha256` into `research_env.env_sha256` (or `sandbox.env_sha256`) to
-pin the exact installed bytes. Ranker replay reports (`env_sha256`), strategy
-replay reports (`sandbox.env_sha256`) and workspace `run` responses (`env_sha256`)
-record this hash on every run.
+pin the exact installed bytes. Strategy replay reports (`sandbox.env_sha256`)
+and workspace `run` responses (`env_sha256`) record this hash on every run.
 
 ### Test a ranker
 
@@ -281,7 +282,7 @@ The paper config must set `market_archive`. Keep each dated book's `wide-univers
 frozen cash instrument metadata. The replay uses original receipt times and
 refuses a key whose instrument metadata changes within the tape.
 
-Call `backtest` with `strategy: true` and the archive dataset ID. Set
+Call `backtest` with the archive dataset ID. Set
 `selection_from_ms` and `selection_to_ms` to cover at least three trading
 sessions. Use an optional `archive_daily_window` to replay the same slice on
 each date. For 09:30 to 10:30 IST, pass
@@ -320,9 +321,9 @@ Enable `candidate_compute.strategy` and configure `market_archive` and
 release asset name `nivra-analysis-x86_64-unknown-linux-musl` also works.
 Install the runtime from the same build as the controller.
 
-Call `backtest` with `strategy: true`, `dataset_id: "archive_bars"`, and a
-caller-selected window. Dates are inclusive IST dates before today. Omit
-`instruments` to read all archived NSE cash equities in the window.
+Call `backtest` with `dataset_id: "archive_bars"` and a caller-selected
+`archive_bars` window. Dates are inclusive IST dates before today. Pass
+`instruments: null` to read all archived NSE cash equities in the window.
 
 ```json
 {"unit":"day","from":"2020-01-01","to":"2024-12-31","instruments":["NSE_EQ|INE000000001"]}
@@ -330,14 +331,13 @@ caller-selected window. Dates are inclusive IST dates before today. Omit
 
 You can also register a named dataset with
 `"kind":{"archive_bars":{"unit":"day","from":"2020-01-01","to":"2024-12-31"}}`.
-Pass that dataset ID and omit the inline window.
+Pass that dataset ID and `archive_bars: null`.
 
 Set the inclusive `training_from_ms` and `training_to_ms` to the training
 range. Set `selection_from_ms` and `selection_to_ms` to the later test range.
 Each split needs data. For daily bars, the timestamp is midnight IST on the
-bar's date. For minute bars, it is the archived minute start. Use
-`horizon_minutes: 1` if the tool requires it. For bars, exits come from the
-strategy's signals. Pass `params` as a JSON-object string.
+bar's date. For minute bars, it is the archived minute start. Exits come
+from the strategy's signals. Pass `params` as a JSON-object string.
 
 The worker keeps one sandboxed Python process for the job. Implement
 `on_bars(at_ms, split, bars, params, state)`. Each call receives the complete
@@ -502,28 +502,30 @@ to the book's `ticks` and one `failure` line with stage `strategy` to
 
 ## Replay and evaluation
 
-Replay measures what a ranking would have earned on recorded quotes. Every
+Replay measures what a strategy would have earned on recorded quotes. Every
 replay uses original quote receipts. It never interpolates a missing price or
 fills a gap with a later quote.
 
 ### In the research lane
 
-With `research_tools.candidate_compute.enabled`, the research lane has
-`backtest`, `backtest_status`, `backtest_result` and `backtest_cancel`.
-`backtest` queues an immutable ranker version: source, params, a hypothesis,
-training and selection windows, and a horizon in minutes. It runs over a
-registered `current_session_features` dataset in
-`candidate_compute.datasets`: the features of the current and previous
-session.
+With `research_tools.candidate_compute.enabled` and
+`candidate_compute.strategy.enabled`, the research lane has `backtest`,
+`backtest_status`, `backtest_result` and `backtest_cancel`. `backtest` takes a
+strategy source, params, a hypothesis, training and selection windows, and a
+`dataset_id`. Pass `null` for unused fields that the tool schema allows to be
+null.
 
-When `candidate_compute.execution.enabled` is also set, `backtest` accepts an
-`execution` argument. It requests an after-cost cash replay over the frozen
-session quote tape. The model declares research capital, sizes, holding period
-and costs. The replay uses the shared fill engine, so it enforces the
-two-second quote gate, cash with fees, depth, ticks and whole shares.
+- A `current_session_features` or `archive_window` dataset runs a
+  [strategy replay](#strategy-replay) inside the call and returns the report.
+- `archive_bars` queues a [bar job](#backtest-years-of-archived-bars). Poll
+  it with `backtest_status` and read it with `backtest_result`.
 
-`backtest` returns when the job is queued, not when it finishes. Poll with
-`backtest_status` and read with `backtest_result`.
+When upgrading the planner config, remove the retired keys from
+`research_tools.candidate_compute`. Remove `abi`, `replay`, `max_result_bytes`,
+`limits`, `helper_path`, `unit_open_files`, `execution`, and `observation`.
+Keep `candidate_compute.strategy.abi` for strategy replays. Existing paper
+strategy entries carry the previous build's adapter hash. Run a new replay
+with this build and use the accepted entry for paper execution.
 
 ### Offline commands
 
@@ -772,10 +774,3 @@ running:
 4. Run `nivra preflight --config PAPER_CONFIG` and check for `preflight_ok`.
 5. Run `nivra readiness --config PAPER_CONFIG` and check that
    `research.status` is `ready`.
-
-## Experiment records
-
-`nivra experiment-lifecycle --book BOOK --request request.json --output new-receipt.json`
-records a strategy specification and its transitions, from `admit` through
-`evaluate`, `select_paper` and `retire`. The training window must end before
-selection begins. A record never activates a strategy.

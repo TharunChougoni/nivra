@@ -37,7 +37,7 @@ Write self-contained Python 3 scripts (no network, no state across calls; run as
 - `sell`: set `units` (<= held `units`), `rupees: null`, `max_price` (at or below `bid` with slippage headroom), and `exit_intent: {"target": null, "stop": null, "time": null}`.
 - `revise_exit`: on a held key only; set `units: null`, `rupees: null`, `max_price: null`, and a non-empty `exit_intent`.
 
-## Acceptance Bars (`backtest` with `strategy: true`)
+## Acceptance thresholds for quote-tape backtests
 
 Defaults (overridable by planner `strategy_acceptance`):
 - `min_trades`: >= 10 closed trades (`too_few_trades`)

@@ -241,7 +241,7 @@ fn candidate_execution_book(c: &Config) {
     drop(db);
 }
 
-/// `backtest` with `strategy: true` replays a strategy_actions_v1 strategy
+/// `backtest` on a quote dataset replays a strategy_actions_v1 strategy
 /// over the session tape now and keeps the report by its content hash.
 fn candidate_strategy_contract(
     root: &Path,
