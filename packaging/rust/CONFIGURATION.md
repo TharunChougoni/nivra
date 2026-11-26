@@ -94,6 +94,23 @@ legacy history with `nivra archive import-history --config PAPER_JSON HISTORY_DI
 If removing custom retention settings changes a sealed book's config binding,
 keep that book for history and prepare a fresh paper config and book.
 
+Every paper fill now requires its original executable quote price
+(`expected_price`) and the fee policy used at execution (`costs`). Check a
+stopped book with a read-only query. A nonzero result identifies a book
+that cannot load with the new format.
+
+```sh
+sqlite3 -readonly PAPER_BOOK "SELECT count(*) FROM state,
+    json_each(state.body, '$.fills') AS fill
+    WHERE json_type(fill.value, '$.costs') IS NOT 'object'
+       OR json_type(fill.value, '$.expected_price') IS NOT 'text';"
+```
+
+Close the old book flat with the prior binary before replacing it. Keep its
+config and state directory for history. With the owner's approval for a fresh
+paper account, follow [fresh paper setup](#install-a-fresh-paper-account) with new config
+and state directories.
+
 A planner key outside the pi policy shape refuses with `planner_config_invalid`.
 Optional keys at their defaults are not serialized, so they leave a sealed
 policy hash unchanged. Without a `workspace` or `web_tools` block, those lane
