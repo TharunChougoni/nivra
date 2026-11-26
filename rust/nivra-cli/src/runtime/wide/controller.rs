@@ -2104,7 +2104,7 @@ impl<'a> Controller<'a> {
         let initialization = serde_json::json!({"stage":if self.p.halted {"halted_requires_review"} else if !history_admitted {"waiting_for_history"} else if self.planner_status["pending_attempt"].is_string() {"pi_decision_in_progress"} else if entry_status=="model_plan_ready" {"model_initialized"} else {"waiting_for_initial_or_next_model_plan"},"paper_only":true,"financial_execution_requires_accepted_plan":true});
         let updater_status = crate::update::dashboard_status();
         let owner_activity = if self.event_config.is_some() {
-            super::super::decision::activity_analytics(&self.db, c, &self.p).ok()
+            super::super::decision::activity_analytics(c, &self.p).ok()
         } else {
             None
         };

@@ -17,9 +17,6 @@ pub(crate) fn status(db: &Connection, c: &Config) -> Result<Option<Value>> {
         let reviewed: Value = serde_json::from_str(&body)?;
         view["last_review"] = json!({"model_id":reviewed["model_id"],"decision_id":reviewed["decision_id"],"handoff_requested":reviewed["luna_handoff_requested"],"stance":reviewed["parsed_plan"]["stance"],"notes":reviewed["parsed_plan"]["notes"]});
     }
-    if let Some(reason) = state.digest_failed.as_deref() {
-        view["last_digest_failure"] = json!(reason);
-    }
     if let Some(plan) = active_plan_in(db, c, &state)? {
         let plan = planner::status(&plan);
         for key in ["decision_id", "model_id", "provider", "actions", "budgets"] {

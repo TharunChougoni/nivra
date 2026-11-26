@@ -82,66 +82,6 @@ pub struct AbstentionTaxonomy {
     pub total_abstentions: u64,
 }
 
-impl AbstentionTaxonomy {
-    pub fn classify(reason: &str) -> &'static str {
-        let r = reason.to_ascii_lowercase();
-        if r.contains("wait")
-            || r.contains("hold")
-            || r.contains("abstain")
-            || r.contains("no_trade")
-            || r.contains("no_opportunity")
-        {
-            "model_abstained"
-        } else if r.contains("paper_cash_scope")
-            || r.contains("insufficient_cash")
-            || r.contains("risk")
-            || r.contains("drawdown")
-            || r.contains("capital")
-        {
-            "risk_preflight_blocked"
-        } else if r.contains("stale")
-            || r.contains("freshness")
-            || r.contains("age")
-            || r.contains("expired")
-            || r.contains("deadline")
-        {
-            "freshness_expired"
-        } else if r.contains("spread") || r.contains("cost") || r.contains("slippage") {
-            "spread_cost_excessive"
-        } else if r.contains("halt") || r.contains("closed") || r.contains("session") {
-            "market_closed_or_halted"
-        } else if r.contains("universe") || r.contains("exclusion") || r.contains("filter") {
-            "universe_filter_excluded"
-        } else if r.contains("confidence") || r.contains("score") || r.contains("rank") {
-            "candidate_confidence_low"
-        } else if r.contains("duplicate")
-            || r.contains("pending")
-            || r.contains("in_flight")
-            || r.contains("superseded")
-        {
-            "duplicate_or_in_flight"
-        } else {
-            "other"
-        }
-    }
-
-    pub fn record(&mut self, reason: &str) {
-        self.total_abstentions += 1;
-        *self.reasons.entry(reason.to_string()).or_insert(0) += 1;
-        match Self::classify(reason) {
-            "model_abstained" => self.model_abstained += 1,
-            "risk_preflight_blocked" => self.risk_preflight_blocked += 1,
-            "freshness_expired" => self.freshness_expired += 1,
-            "spread_cost_excessive" => self.spread_cost_excessive += 1,
-            "market_closed_or_halted" => self.market_closed_or_halted += 1,
-            "universe_filter_excluded" => self.universe_filter_excluded += 1,
-            "candidate_confidence_low" => self.candidate_confidence_low += 1,
-            "duplicate_or_in_flight" => self.duplicate_or_in_flight += 1,
-            _ => self.other += 1,
-        }
-    }
-}
-
 /// Realized and marked P&L after explicit fees, with benchmark slippage reported
 /// separately as a diagnostic cost drag. Fill prices already include adverse
 /// slippage, so subtracting it from P&L again would count that impact twice.
@@ -393,54 +333,6 @@ impl DecisionLatencyStats {
     }
 }
 
-/// Financial outcome attribution to a specific candidate version and its provenance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ExperimentAttribution {
-    pub source_hash: String,
-    pub spec_id: Option<String>,
-    pub selection_reason: Option<String>,
-    pub decisions_count: u64,
-    pub fills_count: u64,
-    pub notional_volume: Amount,
-    pub realized_pnl: Amount,
-    pub marked_pnl: Amount,
-    pub fees_incurred: Amount,
-    pub net_after_cost_pnl: Amount,
-    pub trial_status: Option<String>,
-}
-
-impl ExperimentAttribution {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        source_hash: String,
-        spec_id: Option<String>,
-        selection_reason: Option<String>,
-        decisions_count: u64,
-        fills_count: u64,
-        notional_volume: Amount,
-        realized_pnl: Amount,
-        marked_pnl: Amount,
-        fees_incurred: Amount,
-        trial_status: Option<String>,
-    ) -> Result<Self, FinancialError> {
-        let gross_profit = realized_pnl.checked_add(marked_pnl)?;
-        let net_after_cost_pnl = gross_profit.checked_sub(fees_incurred)?;
-        Ok(Self {
-            source_hash,
-            spec_id,
-            selection_reason,
-            decisions_count,
-            fills_count,
-            notional_volume,
-            realized_pnl,
-            marked_pnl,
-            fees_incurred,
-            net_after_cost_pnl,
-            trial_status,
-        })
-    }
-}
-
 /// Comprehensive Activity and Attribution Report.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActivityReport {
@@ -451,7 +343,6 @@ pub struct ActivityReport {
     pub turnover: TurnoverCostDrag,
     pub drawdown: DrawdownTracker,
     pub latency: DecisionLatencyStats,
-    pub experiment_attributions: Vec<ExperimentAttribution>,
 }
 
 impl ActivityReport {
@@ -469,7 +360,6 @@ impl ActivityReport {
                 "reason": "historical position marks are not durably retained with this report",
             },
             "latency": self.latency,
-            "experiment_attributions": self.experiment_attributions,
         })
     }
 }

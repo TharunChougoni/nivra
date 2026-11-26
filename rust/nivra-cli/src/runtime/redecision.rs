@@ -39,16 +39,7 @@ struct Control {
     pending: Option<Claim>,
     active: Option<String>,
     blocked: Option<String>,
-    /// Owner policy only: the last recoverable digest-pipeline failure. It is
-    /// recorded for diagnosis and never refuses an owner decision built from an
-    /// earlier valid digest (#221). Absent in older journals.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    digest_failed: Option<String>,
     initial_available: bool,
-    /// Owner-policy cadence facts already delivered to the orchestrator. A
-    /// repeated cadence digest with the same host signature is coalesced.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    last_cadence_facts_sha256: Option<String>,
     market_observations: u64,
     missing_volume: u64,
     missing_prior_close: u64,
@@ -317,15 +308,6 @@ pub(crate) fn recoverable_block(reason: &str) -> bool {
             | "planner_invalid_plan_no_entries"
     )
 }
-/// Blocks that must refuse an owner decision. Only a sticky block is
-/// authoritative for the owner; a recoverable failure of the factual digest
-/// pipeline is not (#221). The transient read block suspends execution in
-/// `active_plan` instead, so a decision committed while it is set stays
-/// suspended until a validated fresh quote clears it.
-fn refuses_owner_decision(reason: &str) -> bool {
-    !recoverable_block(reason) && reason != READ_TRANSIENT_BLOCK
-}
-
 /// A block that records an integrity or authority fact which startup must not
 /// replace with a weaker pending/config signal.
 fn preserves_through_startup(reason: &str) -> bool {
@@ -405,9 +387,7 @@ pub(crate) fn initialize(
                 pending: None,
                 blocked: None,
                 initial_available: true,
-                digest_failed: None,
                 active: None,
-                last_cadence_facts_sha256: None,
                 market_observations: 0,
                 missing_volume: 0,
                 missing_prior_close: 0,
@@ -873,7 +853,6 @@ pub(crate) fn fail_pending(db: &mut Connection, c: &Config, reason: &str) -> Res
     }
     state.active = None;
     state.blocked = None;
-    state.digest_failed = None;
     save(&tx, &state)?;
     tx.commit()?;
     Ok(())
@@ -915,12 +894,10 @@ pub(crate) fn apply_config(
             super::decision::supersede_plan_actions(db, c, id, "superseded_by_pi_config")?;
         }
         if prior_owner != Some(current_owner) {
-            super::decision::retire_for_pi_cutover(db, c)?;
             db.execute(
                 "UPDATE planner_event_log SET state='superseded' WHERE state='pending'",
                 [],
             )?;
-            state.digest_failed = None;
         }
     }
     db.execute("INSERT INTO ticks(at,receipt,body,event) VALUES(?,NULL,?,'operator_planner_config_applied')",
@@ -1058,15 +1035,7 @@ pub(crate) fn activate_plan(
     if state.config_hash != config_hash(cfg)? {
         return Err("planner_event_configuration_changed".into());
     }
-    // Factual digest work may overlap a decision. A transient read block still
-    // prevents execution; completing the owned receipt must not erase it. A
-    // recoverable digest failure only invalidates that one digest, so an owner
-    // decision built from an earlier valid digest still commits (#221).
-    if state
-        .blocked
-        .as_deref()
-        .is_some_and(|reason| owner == AuthorityOwner::Pi || refuses_owner_decision(reason))
-    {
+    if state.blocked.is_some() {
         return Err("planner_decision_owner_not_ready".into());
     }
     if p.stopped || p.halted || p.closed || !super::decision::in_window(c, now) {

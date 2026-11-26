@@ -2,7 +2,6 @@
 //! evidence only; this ledger never records that as an edge.
 use super::*;
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 pub(crate) mod lifecycle;
@@ -46,106 +45,6 @@ CREATE TABLE IF NOT EXISTS experiment_continuations(
   recorded_at_ms INTEGER NOT NULL
 );";
 
-/// Append-only trial phase. Historic unknown strings stay readable so a later
-/// catalog change cannot make the sqlite body unparseable.
-#[derive(Clone, Debug, Eq)]
-pub(crate) enum TrialState {
-    ExecutionFailed,
-    ExecutionSucceeded,
-    InsufficientEvidence,
-    Unknown(String),
-}
-
-impl TrialState {
-    pub(crate) fn parse(raw: &str) -> Self {
-        match raw {
-            "execution_failed" => Self::ExecutionFailed,
-            "execution_succeeded" => Self::ExecutionSucceeded,
-            "insufficient_evidence" => Self::InsufficientEvidence,
-            other => Self::Unknown(other.to_owned()),
-        }
-    }
-
-    pub(crate) fn as_str(&self) -> &str {
-        match self {
-            Self::ExecutionFailed => "execution_failed",
-            Self::ExecutionSucceeded => "execution_succeeded",
-            Self::InsufficientEvidence => "insufficient_evidence",
-            Self::Unknown(raw) => raw,
-        }
-    }
-}
-
-impl From<&str> for TrialState {
-    fn from(raw: &str) -> Self {
-        Self::parse(raw)
-    }
-}
-
-impl From<String> for TrialState {
-    fn from(raw: String) -> Self {
-        Self::parse(&raw)
-    }
-}
-
-impl PartialEq for TrialState {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_str() == other.as_str()
-    }
-}
-
-impl PartialEq<str> for TrialState {
-    fn eq(&self, other: &str) -> bool {
-        self.as_str() == other
-    }
-}
-
-impl PartialEq<&str> for TrialState {
-    fn eq(&self, other: &&str) -> bool {
-        self.as_str() == *other
-    }
-}
-
-impl Serialize for TrialState {
-    fn serialize<S: serde::Serializer>(
-        &self,
-        serializer: S,
-    ) -> std::result::Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for TrialState {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
-        Ok(Self::parse(&String::deserialize(deserializer)?))
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Trial {
-    pub version: u32,
-    pub trial_id: String,
-    pub session: String,
-    pub parent_trial_id: Option<String>,
-    pub source_sha256: String,
-    pub params_sha256: String,
-    pub dataset_hash: String,
-    pub abi: String,
-    pub hypothesis: String,
-    pub training_window: String,
-    pub horizon: String,
-    /// `execution_failed`, `execution_succeeded`, or `insufficient_evidence`.
-    pub state: TrialState,
-    pub execution_ok: bool,
-    /// Always false. Execution success is not an edge.
-    pub edge_qualified: bool,
-    pub reason: String,
-    pub recorded_at_ms: i64,
-}
-
 pub(super) fn file_path(directory: &std::path::Path) -> std::path::PathBuf {
     directory.join("model").join("experiment-trials.sqlite")
 }
@@ -186,22 +85,6 @@ pub(super) fn open_file(file: &std::path::Path) -> Result<Connection> {
 
 pub(super) fn valid_hash(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-pub(crate) fn list(c: &Config) -> Result<Vec<Trial>> {
-    if !path(c).is_file() {
-        return Ok(Vec::new());
-    }
-    let db = open(c)?;
-    let mut statement =
-        db.prepare("SELECT body FROM experiment_trials ORDER BY recorded_at_ms,trial_id")?;
-    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-    let mut trials = Vec::new();
-    for row in rows {
-        trials
-            .push(serde_json::from_str(&row?).map_err(|_| Fail::new("experiment_trial_invalid"))?);
-    }
-    Ok(trials)
 }
 
 pub(crate) fn trial_id(parts: &[&str]) -> String {

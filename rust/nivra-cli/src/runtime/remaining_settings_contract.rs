@@ -414,27 +414,6 @@ fn dashboard_phase1_settings_defaults_bounds_and_roundtrip() {
     assert_eq!(conv.action_to_fill_rate, 0.5);
     assert_eq!(conv.overall_conversion_rate, 0.1);
 
-    let mut abs = AbstentionTaxonomy::default();
-    abs.record("model_abstain_wait");
-    abs.record("insufficient_cash_paper_cash_scope");
-    abs.record("stale_feed_freshness_expired");
-    abs.record("spread_too_wide_cost");
-    abs.record("market_halted_session");
-    abs.record("universe_exclusion_filter");
-    abs.record("low_confidence_score");
-    abs.record("duplicate_order_pending");
-    abs.record("unknown_custom_reason");
-    assert_eq!(abs.total_abstentions, 9);
-    assert_eq!(abs.model_abstained, 1);
-    assert_eq!(abs.risk_preflight_blocked, 1);
-    assert_eq!(abs.freshness_expired, 1);
-    assert_eq!(abs.spread_cost_excessive, 1);
-    assert_eq!(abs.market_closed_or_halted, 1);
-    assert_eq!(abs.universe_filter_excluded, 1);
-    assert_eq!(abs.candidate_confidence_low, 1);
-    assert_eq!(abs.duplicate_or_in_flight, 1);
-    assert_eq!(abs.other, 1);
-
     let fin = FinancialAfterCost::calculate(
         nivra_core::finance::Amount::parse("150.50").unwrap(),
         nivra_core::finance::Amount::parse("50.25").unwrap(),
@@ -494,31 +473,13 @@ fn dashboard_phase1_settings_defaults_bounds_and_roundtrip() {
     let report = ActivityReport {
         session: "2026-10-28".into(),
         conversion: conv,
-        abstentions: abs,
+        abstentions: AbstentionTaxonomy::default(),
         financials: fin,
         turnover,
         drawdown: dd,
         latency,
-        experiment_attributions: vec![
-            ExperimentAttribution::new(
-                "hash123".into(),
-                Some("spec1".into()),
-                Some("top_score".into()),
-                5,
-                2,
-                nivra_core::finance::Amount::parse("10000").unwrap(),
-                nivra_core::finance::Amount::parse("100").unwrap(),
-                nivra_core::finance::Amount::ZERO,
-                nivra_core::finance::Amount::parse("10").unwrap(),
-                Some("promoted".into()),
-            )
-            .unwrap(),
-        ],
     };
     let rep_json = report.to_json();
     assert_eq!(rep_json["session"], "2026-10-28");
-    assert_eq!(
-        rep_json["experiment_attributions"][0]["source_hash"],
-        "hash123"
-    );
+    assert_eq!(rep_json["abstentions"]["total_abstentions"], 0);
 }

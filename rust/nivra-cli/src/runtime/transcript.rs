@@ -1,32 +1,9 @@
 //! Bounded display evidence; original run artifacts remain authoritative.
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 
 #[cfg(test)]
 thread_local! { static BLOCK_NEXT_START: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct RunIndexLine {
-    pub v: u8,
-    pub run: String,
-    pub role: String,
-    pub model: String,
-    pub trigger_kind: Option<String>,
-    pub started_ms: i64,
-    pub duration_ms: i64,
-    pub outcome: String,
-    pub tokens_in: Option<u64>,
-    pub tokens_out: Option<u64>,
-    pub cost_estimate_inr: Option<String>,
-    pub tool_calls: usize,
-    pub tool_failures: usize,
-    pub instruments: Vec<String>,
-    pub bytes: u64,
-    pub mode: String,
-    #[serde(default)]
-    pub profile_sha256: Option<String>,
-}
 
 // Unlike the legacy history projection, transcripts retain non-secret account
 // and input fields. Credential keys share the same denylist at write/read time.

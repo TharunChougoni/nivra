@@ -2,10 +2,8 @@
 use super::protocol::Usage;
 use super::triggers::{Trigger, TriggerKind};
 use super::{AgentMode, Lane, lanes};
-use crate::runtime::{Config, Result, book_binding, digest, open_book_immutable, rollover};
+use crate::runtime::{Config, Result, digest, rollover};
 use chrono::{DateTime, NaiveDate};
-use nivra_core::finance::Amount;
-use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -347,106 +345,6 @@ fn sealed_report(c: &Config) -> Option<(Value, Value)> {
     .then_some((report, seal))
 }
 
-fn owner_plans(c: &Config, report: &Value, seal: &Value) -> Result<Value> {
-    let db = open_book_immutable(&c.directory.join("paper.sqlite"))?;
-    let binding = book_binding(c)?;
-    let state: String = db.query_row(
-        "SELECT body FROM state WHERE id=1 AND binding=? AND length(CAST(body AS BLOB))<=?",
-        rusqlite::params![binding, MAX_JOURNAL_BYTES as i64],
-        |row| row.get(0),
-    )?;
-    if seal["state_hash"] != digest(state.as_bytes())
-        || report["portfolio"] != serde_json::from_str::<Value>(&state)?
-    {
-        return Err("agent_shadow_report_state_mismatch".into());
-    }
-    let mut stmt = db.prepare(
-        "SELECT state, CASE WHEN length(result)<=65536 THEN result END
-        FROM owner_digest_work WHERE binding=? LIMIT ?",
-    )?;
-    let mut rows = stmt.query(rusqlite::params![binding, MAX_ROWS as i64 + 1])?;
-    let mut states = BTreeMap::<&str, usize>::new();
-    let mut actions = Actions::default();
-    let mut missing = 0;
-    let mut decisions = 0;
-    while let Some(row) = rows.next()? {
-        decisions += 1;
-        if decisions > MAX_ROWS {
-            return Err("agent_shadow_report_owner_limit".into());
-        }
-        let state: String = row.get(0)?;
-        let state = match state.as_str() {
-            "committed" => "committed",
-            "refused" => "refused",
-            "superseded" => "superseded",
-            "pending" => "pending",
-            "running" => "running",
-            _ => "unknown",
-        };
-        *states.entry(state).or_default() += 1;
-        if state == "committed" {
-            let receipt: Option<String> = row.get(1)?;
-            let receipt = receipt.and_then(|value| serde_json::from_str::<Value>(&value).ok());
-            let mut counts = None;
-            if let Some(id) = receipt
-                .as_ref()
-                .and_then(|value| value["decision_id"].as_str())
-            {
-                let raw: Option<String> = db.query_row(
-                    "SELECT body FROM planner_plan WHERE id=? AND length(CAST(body AS BLOB))<=?",
-                    rusqlite::params![id, MAX_JOURNAL_BYTES as i64],
-                    |row| row.get(0),
-                ).optional()?;
-                if let Some(plan) = raw
-                    .and_then(|value| serde_json::from_str::<Value>(&value).ok())
-                    .filter(|plan| {
-                        plan["decision_id"] == id && plan["decision_owner"] == "orchestrator"
-                    })
-                {
-                    counts = actions.count(&plan["parsed_plan"], &plan["verdicts"]);
-                }
-            }
-            missing += usize::from(counts.is_none());
-        }
-    }
-    Ok(
-        json!({"work_items": decisions, "states": states, "actions": actions,
-        "committed_plans_unavailable": missing}),
-    )
-}
-
-fn owner_runs(c: &Config) -> Option<Value> {
-    use crate::runtime::transcript::RunIndexLine;
-    let runs = journal::<RunIndexLine>(&c.directory.join("model/runs.ndjson"))?;
-    let mut ids = BTreeSet::new();
-    let (mut failures, mut estimated) = (0, 0);
-    let mut cost = Amount::ZERO;
-    for run in runs.iter().filter(|run| {
-        run.role == "supervisor"
-            && run.mode == "paper"
-            && run.trigger_kind.as_deref() == Some("decision")
-            && in_session(run.started_ms, c.session)
-    }) {
-        if run.v != 1 || !ids.insert(&run.run) {
-            return None;
-        }
-        failures += usize::from(run.outcome == "failure");
-        if let Some(amount) = run
-            .cost_estimate_inr
-            .as_deref()
-            .and_then(|value| Amount::parse(value).ok())
-            .filter(|amount| *amount >= Amount::ZERO)
-        {
-            estimated += 1;
-            cost = cost.checked_add(amount).ok()?;
-        }
-    }
-    Some(
-        json!({"indexed_runs": ids.len(), "indexed_failures": failures,
-        "runs_with_estimated_cost": estimated, "configured_estimate_inr": (estimated > 0).then_some(cost)}),
-    )
-}
-
 fn report(c: &Config) -> Value {
     let root = lanes::root(c);
     let triggers = journal::<TriggerRow>(&root.join("triggers.ndjson"));
@@ -457,9 +355,6 @@ fn report(c: &Config) -> Value {
         "closed": true, "halted": seal["halted"].as_bool(), "stopped": seal["stopped"].as_bool(),
         "unresolved_positions": seal["open_unresolved"].as_u64(),
     }));
-    let owner = sealed
-        .as_ref()
-        .and_then(|(report, seal)| owner_plans(c, report, seal).ok());
     json!({
         "session": c.session,
         "coverage_basis": "observed controller dispatch and settlement journals",
@@ -470,7 +365,6 @@ fn report(c: &Config) -> Value {
             .map(|(triggers, turns)| decisions(c.session, triggers, turns, plans.as_deref())),
         "decision_usage_ledger": ledger(&root.join("usage.json"), c.session),
         "paper_close": close,
-        "legacy_owner": {"sealed_book_plans": owner, "decision_run_index": owner_runs(c)},
     })
 }
 
@@ -572,50 +466,14 @@ mod tests {
         assert!(partial["paper_close"].is_null());
 
         let portfolio = json!({"closed":true,"halted":false,"stopped":false});
-        let body = portfolio.to_string();
         let closed =
             json!({"session":c.session,"account":c.account,"broker":"upstox","paper_only":true,
             "live_enabled":false,"as_of_ms":at_close,"portfolio":portfolio})
             .to_string();
         let seal = json!({"session":c.session,"closed":true,"halted":false,"stopped":false,
-            "open_unresolved":0,"report_hash":digest(closed.as_bytes()),"state_hash":digest(body.as_bytes())});
+            "open_unresolved":0,"report_hash":digest(closed.as_bytes())});
         fs::write(c.directory.join("report.json"), closed).unwrap();
         fs::write(c.directory.join("review.json"), seal.to_string()).unwrap();
-        let db_path = c.directory.join("paper.sqlite");
-        let db = rusqlite::Connection::open(&db_path).unwrap();
-        db.execute_batch(
-            "CREATE TABLE state(id INTEGER, binding TEXT, body TEXT);
-            CREATE TABLE owner_digest_work(binding TEXT, state TEXT, result TEXT);
-            CREATE TABLE planner_plan(id TEXT, body TEXT);",
-        )
-        .unwrap();
-        let binding = book_binding(&c).unwrap();
-        db.execute(
-            "INSERT INTO state VALUES(1,?,?)",
-            rusqlite::params![binding, body],
-        )
-        .unwrap();
-        let owner_receipt = json!({"decision_id":"owner-one"}).to_string();
-        db.execute(
-            "INSERT INTO owner_digest_work VALUES(?, 'committed', ?)",
-            rusqlite::params![binding, owner_receipt],
-        )
-        .unwrap();
-        let owner_plan = json!({"decision_id":"owner-one","decision_owner":"orchestrator","parsed_plan":wait,"verdicts":[]}).to_string();
-        db.execute(
-            "INSERT INTO planner_plan VALUES('owner-one', ?)",
-            [&owner_plan],
-        )
-        .unwrap();
-        drop(db);
-        write_journal(
-            &c.directory.join("model"),
-            "runs.ndjson",
-            &[json!({"v":1,"run":"owner-run",
-            "role":"supervisor","model":"legacy-fixture","trigger_kind":"decision","started_ms":at_open,
-            "duration_ms":10,"outcome":"wait","tokens_in":1,"tokens_out":1,"cost_estimate_inr":null,
-            "tool_calls":0,"tool_failures":0,"instruments":[],"bytes":0,"mode":"paper"})],
-        );
         write_journal(
             &root,
             "turns.ndjson",
@@ -631,7 +489,6 @@ mod tests {
         }}});
         fs::write(root.join("usage.json"), shared.to_string()).unwrap();
 
-        let unchanged_db = fs::read(&db_path).unwrap();
         let complete = report(&c);
         assert_eq!(complete["paper_close"]["closed"], true);
         assert_eq!(complete["decision"]["open"]["validated_turns"], 1);
@@ -639,21 +496,7 @@ mod tests {
         assert_eq!(complete["decision"]["plans"]["actions"]["waits"], 2);
         assert_eq!(complete["decision"]["journaled_usage"]["calls"], 4);
         assert_eq!(complete["decision_usage_ledger"]["settled"]["calls"], 6);
-        assert_eq!(
-            complete["legacy_owner"]["sealed_book_plans"]["actions"]["waits"],
-            1
-        );
-        assert_eq!(
-            complete["legacy_owner"]["decision_run_index"]["indexed_runs"],
-            1
-        );
-        assert!(
-            complete["legacy_owner"]["decision_run_index"]["configured_estimate_inr"].is_null()
-        );
         assert_eq!(complete["continuous_session_proven"], false);
-        assert_eq!(fs::read(db_path).unwrap(), unchanged_db);
-        assert!(!c.directory.join("paper.sqlite-wal").exists());
-        assert!(!c.directory.join("paper.sqlite-shm").exists());
 
         let mut turn = near_close;
         let mut receipt = close_receipt;
