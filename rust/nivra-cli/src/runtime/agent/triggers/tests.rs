@@ -33,6 +33,10 @@ fn triggers_count_distinct_scans_and_prioritize_decision_over_research() {
         rankers: &[],
         after_close_due: false,
         review_running: false,
+        strategy_active: false,
+        strategy_supervision: false,
+        strategy_fills: 0,
+        regime: None,
     };
     assert_eq!(
         kinds(&engine.observe(&observation)),
@@ -103,6 +107,10 @@ fn returning_candidate_waits_out_cooldown_without_repeating() {
         rankers: &[],
         after_close_due: false,
         review_running: false,
+        strategy_active: false,
+        strategy_supervision: false,
+        strategy_fills: 0,
+        regime: None,
     };
     for (step, rows, expected) in [
         (1_000, ranking.as_slice(), false),
@@ -149,6 +157,10 @@ fn drift_seal_and_after_close_research_fire_once_after_the_review() {
         rankers: &rankers,
         after_close_due: true,
         review_running: false,
+        strategy_active: false,
+        strategy_supervision: false,
+        strategy_fills: 0,
+        regime: None,
     };
     // The after-close research turn waits while the review is queued or runs.
     let fired = engine.observe(&observation);
@@ -193,4 +205,152 @@ fn drift_seal_and_after_close_research_fire_once_after_the_review() {
         kinds(&engine.observe(&observation)),
         [TriggerKind::AfterClose]
     );
+}
+
+#[test]
+fn active_strategy_suppresses_cash_entries_and_triggers_only_for_supervision() {
+    let mut engine = TriggerEngine::new(TriggerSettings::default());
+    let ranking = [
+        Ranked {
+            instrument_key: "NSE_EQ|A".into(),
+            score: 25.0,
+        },
+        Ranked {
+            instrument_key: "NSE_EQ|B".into(),
+            score: 22.0,
+        },
+        Ranked {
+            instrument_key: "NSE_EQ|C".into(),
+            score: 20.0,
+        },
+    ];
+    let mut o = Observation {
+        now: 1_000,
+        minute: 555,
+        open_minute: 555,
+        phase: Phase::Open,
+        held: &[],
+        fills: 0,
+        ranking: &ranking,
+        ranked_at: 1_000,
+        decision_spent: 0.0,
+        research_budget_left: false,
+        requests_queued: 0,
+        rankers: &[],
+        after_close_due: false,
+        review_running: false,
+        strategy_active: true,
+        strategy_supervision: true,
+        strategy_fills: 0,
+        regime: Some("unknown"),
+    };
+    // Open fires once; top-K cash candidates and strategy fills do not trigger decision/gate.
+    assert_eq!(
+        engine
+            .observe(&o)
+            .iter()
+            .map(|t| (t.kind, t.reason.as_str()))
+            .collect::<Vec<_>>(),
+        [(TriggerKind::Schedule, "open")]
+    );
+    for step in 1..=3 {
+        o.now += 5_000;
+        o.ranked_at = o.now;
+        o.fills = step;
+        o.strategy_fills = step;
+        assert!(engine.observe(&o).is_empty(), "step {step} stays quiet");
+    }
+    // Crossing the hour with new top-K names does not trigger while strategy is active.
+    let new_ranking = [
+        Ranked {
+            instrument_key: "NSE_EQ|D".into(),
+            score: 30.0,
+        },
+        Ranked {
+            instrument_key: "NSE_EQ|E".into(),
+            score: 28.0,
+        },
+    ];
+    o.minute = 600;
+    o.now += 5_000;
+    o.ranked_at = o.now;
+    o.ranking = &new_ranking;
+    assert!(engine.observe(&o).is_empty());
+
+    // First known regime after an unknown open fires `regime_changed`.
+    o.now += 5_000;
+    o.regime = Some("up_trend/normal_vol/strong/no_gap");
+    assert_eq!(
+        engine
+            .observe(&o)
+            .iter()
+            .map(|t| (t.kind, t.reason.as_str()))
+            .collect::<Vec<_>>(),
+        [(TriggerKind::Schedule, "regime_changed")]
+    );
+    // Transient unknown does not re-fire when the same regime returns.
+    o.now += 400_000;
+    o.regime = Some("unknown");
+    assert!(engine.observe(&o).is_empty());
+    o.now += 5_000;
+    o.regime = Some("up_trend/normal_vol/strong/no_gap");
+    assert!(engine.observe(&o).is_empty());
+
+    // A real regime shift after cooldown fires `regime_changed`.
+    o.now += 400_000;
+    o.regime = Some("down_trend/high_vol/weak/gap");
+    assert_eq!(
+        engine
+            .observe(&o)
+            .iter()
+            .map(|t| (t.kind, t.reason.as_str()))
+            .collect::<Vec<_>>(),
+        [(TriggerKind::Schedule, "regime_changed")]
+    );
+
+    // Position risk, non-strategy fills (e.g. options) and pre-close still fire.
+    let held = [Held {
+        instrument_key: "NSE_EQ|A".into(),
+        entry: 100.0,
+        mark: 95.0,
+        stop: Some(95.0),
+        target: None,
+    }];
+    o.held = &held;
+    o.fills += 1;
+    o.phase = Phase::PreClose;
+    o.now += 5_000;
+    assert_eq!(
+        kinds(&engine.observe(&o)),
+        [
+            TriggerKind::PositionRisk,
+            TriggerKind::PositionRisk,
+            TriggerKind::Fill,
+            TriggerKind::Schedule,
+        ]
+    );
+
+    // Without an active strategy, the existing entry-candidate and hourly flow is unchanged.
+    let mut baseline = TriggerEngine::new(TriggerSettings::default());
+    o.strategy_active = false;
+    o.strategy_supervision = false;
+    o.phase = Phase::Open;
+    o.minute = 555;
+    o.held = &[];
+    o.fills = 0;
+    o.strategy_fills = 0;
+    o.now = 1_000;
+    o.ranked_at = 1_000;
+    assert_eq!(kinds(&baseline.observe(&o)), [TriggerKind::Schedule]);
+    o.now = 2_000;
+    o.ranked_at = 2_000;
+    assert_eq!(
+        kinds(&baseline.observe(&o)),
+        [TriggerKind::EntryCandidate, TriggerKind::EntryCandidate]
+    );
+    o.minute = 600;
+    o.now = 3_000;
+    o.ranked_at = 3_000;
+    o.ranking = &ranking;
+    assert_eq!(kinds(&baseline.observe(&o)), [TriggerKind::Schedule]);
 }

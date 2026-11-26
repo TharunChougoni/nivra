@@ -176,7 +176,21 @@ pub(super) fn commit(
         return Err("agent_paper_output_secret_refused".into());
     }
     let raw = completed.proposal.to_string();
-    let verdicts = planner::validate(&raw, context.portfolio, &allowlist, now)?;
+    let strategy_owns_cash =
+        crate::runtime::wide::strategy_run::supervision_state(c, cfg).strategy_active();
+    let verdicts = planner::validate_for_decision(
+        &raw,
+        context.portfolio,
+        &allowlist,
+        now,
+        strategy_owns_cash,
+    )?;
+    if verdicts
+        .iter()
+        .any(|v| v.reason == "action_strategy_owns_cash_entries")
+    {
+        return Err("agent_paper_strategy_owns_cash_entries".into());
+    }
     let plan = json!({
         "decision_id":format!("owner-{}",completed.turn_id),
         "decision_turn_id":completed.turn_id,

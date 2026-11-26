@@ -52,6 +52,11 @@ pub(crate) const TOOLS: &[BridgeTool] = &[
         lanes: &[D],
     },
     BridgeTool {
+        name: "strategy_select",
+        rust: None,
+        lanes: &[D],
+    },
+    BridgeTool {
         name: "verdict",
         rust: None,
         lanes: &[G],
@@ -74,6 +79,31 @@ pub(crate) const TOOLS: &[BridgeTool] = &[
     tool("fetch", "web_fetch", &[D, R]),
     tool("news", "news_lookup", &[D, R]),
 ];
+
+fn strategy_select_definition() -> Value {
+    json!({
+        "name":"strategy_select",
+        "description":"Select the active action strategy from the library, or pass strategy_id: null to run no strategy. Appends a lane selection with your reason to the library control log; an owner pin or disable always overrides it. Choosing a strategy never places an order.",
+        "parameters":{
+            "type":"object",
+            "properties":{
+                "strategy_id":{
+                    "type":["string","null"],
+                    "maxLength":64,
+                    "description":"Strategy ID (or unique 8+ char prefix) from strategies.eligible, or null to stand down."
+                },
+                "reason":{
+                    "type":"string",
+                    "minLength":1,
+                    "maxLength":400,
+                    "description":"Why this strategy (or none) fits the current session and regime."
+                }
+            },
+            "required":["strategy_id","reason"],
+            "additionalProperties":false
+        }
+    })
+}
 
 fn verdict_definition() -> Value {
     json!({
@@ -147,6 +177,9 @@ pub(crate) fn lane_definitions(
         .filter(|tool| tool.lanes.contains(&lane))
         .filter_map(|tool| match tool.rust {
             None if tool.name == "verdict" => Some(verdict_definition()),
+            None if tool.name == "strategy_select" => {
+                cfg.runs_strategies().then(strategy_select_definition)
+            }
             None => Some(plan_definition()),
             Some(name) => rust.iter().find(|definition| definition["name"] == name).map(
                 |definition| {
@@ -213,10 +246,82 @@ impl LaneHost<'_> {
         Ok(json!({"status":"recorded","escalate":verdict.escalate}))
     }
 
+    fn strategy_select(&mut self, args: &Value) -> std::result::Result<Value, String> {
+        if !self.bridge.cfg.runs_strategies() {
+            return Err("strategy_execution_disabled".into());
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Args {
+            strategy_id: Option<String>,
+            reason: String,
+        }
+        let parsed: Args =
+            serde_json::from_value(args.clone()).map_err(|_| "agent_strategy_select_invalid")?;
+        let reason = parsed.reason.trim();
+        if reason.is_empty() || reason.chars().count() > 400 {
+            return Err("agent_strategy_select_invalid".into());
+        }
+        let (redacted, findings) = crate::runtime::transcript::redact_with_findings(&json!(reason));
+        if !findings.matches.is_empty() || redacted.as_str() != Some(reason) {
+            crate::runtime::diagnostics::secret_guard(
+                &self.bridge.c.directory,
+                (self.clock)(),
+                "strategy_select",
+                "blocked",
+                Some(self.bridge.run_id),
+                &findings,
+            );
+            return Err("agent_strategy_select_secret_refused".into());
+        }
+        let target = match parsed.strategy_id.as_deref().map(str::trim) {
+            Some("") => return Err("agent_strategy_select_invalid".into()),
+            Some(s) if s.eq_ignore_ascii_case("none") => None,
+            other => other,
+        };
+        let root = crate::runtime::strategy_library::root(self.bridge.c)
+            .map_err(|_| "strategy_library_unavailable".to_owned())?;
+        let resolved = crate::runtime::strategy_library::Library::at(root)
+            .select_by_lane(target, reason, Some(self.bridge.run_id), (self.clock)())
+            .map_err(|e| failure_reason(e.as_ref()))?;
+        let selected_id = resolved
+            .lane_selection
+            .as_ref()
+            .and_then(|s| s.strategy_id.as_deref());
+        let overridden = resolved.pinned.is_some() && resolved.active.as_deref() != selected_id;
+        Ok(json!({
+            "status": "recorded",
+            "selected": resolved.lane_selection,
+            "active": resolved.active,
+            "owner_pinned": resolved.pinned,
+            "overridden_by_owner_pin": overridden,
+        }))
+    }
+
     fn plan(&mut self, args: &Value) -> std::result::Result<Value, String> {
         let (portfolio, instruments) = self.plan_inputs.ok_or("agent_plan_unavailable")?;
-        match planner::validate(&args.to_string(), portfolio, instruments, (self.clock)()) {
+        let strategy_owns_cash =
+            crate::runtime::wide::strategy_run::supervision_state(self.bridge.c, self.bridge.cfg)
+                .strategy_active();
+        match planner::validate_for_decision(
+            &args.to_string(),
+            portfolio,
+            instruments,
+            (self.clock)(),
+            strategy_owns_cash,
+        ) {
             Ok(verdicts) => {
+                if verdicts
+                    .iter()
+                    .any(|v| v.reason == "action_strategy_owns_cash_entries")
+                {
+                    let error = "agent_paper_strategy_owns_cash_entries".to_owned();
+                    self.plan = Some(PlanAttempt::Refused {
+                        plan: args.clone(),
+                        error: error.clone(),
+                    });
+                    return Err(error);
+                }
                 let verdicts = json!(verdicts);
                 self.plan = Some(PlanAttempt::Validated {
                     plan: args.clone(),
@@ -255,6 +360,7 @@ impl ToolHost for LaneHost<'_> {
         match tool.rust {
             Some(rust) => self.bridge.call(call_id, rust, args),
             None if tool.name == "verdict" => self.verdict(args),
+            None if tool.name == "strategy_select" => self.strategy_select(args),
             None => self.plan(args),
         }
     }

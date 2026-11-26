@@ -99,11 +99,24 @@ pub(crate) fn plan_document(raw: &str) -> Result<Value> {
     found.ok_or_else(|| "planner_json_invalid".into())
 }
 /// Reserve sequential cash/units so individually valid actions cannot overspend together.
+#[cfg(test)]
 pub(crate) fn validate(
     raw: &str,
     p: &Portfolio,
     instruments: &[Instrument],
     now: i64,
+) -> Result<Vec<Verdict>> {
+    validate_for_decision(raw, p, instruments, now, false)
+}
+/// Validate a decision-lane plan, optionally refusing cash-equity buys when an
+/// active strategy owns cash entries. Risk-reducing sells, exit revisions and
+/// Nifty options remain allowed.
+pub(crate) fn validate_for_decision(
+    raw: &str,
+    p: &Portfolio,
+    instruments: &[Instrument],
+    now: i64,
+    strategy_owns_cash_entries: bool,
 ) -> Result<Vec<Verdict>> {
     let decoded = plan_document(raw)?;
     let plan: TradePlan = serde_json::from_value(decoded).map_err(|_| "planner_schema_invalid")?;
@@ -120,7 +133,13 @@ pub(crate) fn validate(
     {
         return Err("planner_plan_bounds".into());
     }
-    validate_actions(plan.actions, p, instruments, now)
+    validate_actions_with_ownership(
+        plan.actions,
+        p,
+        instruments,
+        now,
+        strategy_owns_cash_entries,
+    )
 }
 /// The per-action half of [`validate`]: the same schema, allowlist, size, cash
 /// and held-unit checks for a model plan's actions or a strategy's actions.
@@ -129,6 +148,15 @@ pub(crate) fn validate_actions(
     p: &Portfolio,
     instruments: &[Instrument],
     now: i64,
+) -> Result<Vec<Verdict>> {
+    validate_actions_with_ownership(actions, p, instruments, now, false)
+}
+fn validate_actions_with_ownership(
+    actions: Vec<Value>,
+    p: &Portfolio,
+    instruments: &[Instrument],
+    now: i64,
+    strategy_owns_cash_entries: bool,
 ) -> Result<Vec<Verdict>> {
     if actions.is_empty() {
         return Ok(Vec::new());
@@ -186,9 +214,12 @@ pub(crate) fn validate_actions(
                 if segment == Some(Segment::NseIndex) {
                     return Err("action_index_untradeable".into());
                 }
+                let is_fo = segment == Some(Segment::NseFo);
+                if strategy_owns_cash_entries && !is_fo && matches!(a.side, PlanSide::Buy) {
+                    return Err("action_strategy_owns_cash_entries".into());
+                }
                 let fees = p.fee_policy(&i.key).map_err(|_| "action_fee_schedule")?;
                 let option = p.option_contract(&i.key);
-                let is_fo = segment == Some(Segment::NseFo);
                 if is_fo && option.is_none() {
                     return Err("action_option_scope".into());
                 }
@@ -283,6 +314,7 @@ pub(crate) fn validate_actions(
                         | "action_sell_unheld"
                         | "action_sell_units"
                         | "action_index_untradeable"
+                        | "action_strategy_owns_cash_entries"
                         | "action_fee_schedule"
                         | "action_option_scope"
                         | "action_option_underlying"

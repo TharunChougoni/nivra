@@ -239,6 +239,59 @@ fn registration_is_immutable_and_controls_change_the_active_strategy() {
     assert!(resolved.disabled.contains(&b));
     assert_eq!(resolved.pinned, Some(a.clone()));
     assert!(run(&library, Command::Rollback { to: None }, 5_000).is_err());
+
+    // Decision-lane selections respect owner pin/disable precedence.
+    assert_eq!(
+        active(Command::Enable {
+            strategy_id: b.clone()
+        }),
+        Some(a.clone())
+    );
+    // While owner pin `a` holds, lane selection records its reason without overriding `a`.
+    let resolved = library
+        .select_by_lane(Some(&b[..12]), "regime favors b", Some("decision-1"), 6_000)
+        .unwrap();
+    assert_eq!(resolved.active, Some(a.clone()));
+    assert_eq!(
+        resolved
+            .lane_selection
+            .as_ref()
+            .and_then(|s| s.strategy_id.as_deref()),
+        Some(b.as_str())
+    );
+    // Once owner unpins, lane selection takes effect.
+    assert_eq!(active(Command::Unpin), Some(b.clone()));
+    // Lane cannot select a disabled strategy.
+    assert_eq!(
+        active(Command::Disable {
+            strategy_id: b.clone()
+        }),
+        Some(a.clone())
+    );
+    assert!(
+        library
+            .select_by_lane(Some(&b), "try disabled", None, 6_500)
+            .is_err()
+    );
+    // Lane can stand down (`None`) when unpinned, and owner pin still overrides `None`.
+    assert_eq!(
+        active(Command::Enable {
+            strategy_id: b.clone()
+        }),
+        Some(b.clone())
+    );
+    let stood_down = library
+        .select_by_lane(None, "unknown regime", Some("decision-2"), 7_000)
+        .unwrap();
+    assert_eq!(stood_down.active, None);
+    assert_eq!(
+        active(Command::Pin {
+            strategy_id: a.clone()
+        }),
+        Some(a.clone())
+    );
+    assert_eq!(active(Command::Unpin), None);
+
     // Controls never touch an entry, and a changed source fails its hash.
     assert_eq!(fs::read(&path).unwrap(), written);
     fs::write(

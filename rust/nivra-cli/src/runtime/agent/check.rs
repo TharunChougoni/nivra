@@ -100,6 +100,7 @@ pub(crate) fn fixture_brief(
         ranking: &[],
         memory: None,
         execution: "shadow_never_executed",
+        regime: None,
     };
     Brief::build(
         &facts,

@@ -42,6 +42,19 @@ pub(crate) struct DecisionTriggers {
     pub material_change: usize,
     /// Exchange-local minute of the pre-close turn.
     pub pre_close_minute: u32,
+    /// Minimum time between `regime_changed` supervision triggers, in ms.
+    #[serde(
+        default = "default_regime_cooldown_ms",
+        skip_serializing_if = "is_default_regime_cooldown_ms"
+    )]
+    pub regime_cooldown_ms: i64,
+}
+
+fn default_regime_cooldown_ms() -> i64 {
+    5 * 60_000
+}
+fn is_default_regime_cooldown_ms(v: &i64) -> bool {
+    *v == default_regime_cooldown_ms()
 }
 
 impl Default for DecisionTriggers {
@@ -57,6 +70,7 @@ impl Default for DecisionTriggers {
             exit_score: None,
             material_change: 2,
             pre_close_minute: 15 * 60,
+            regime_cooldown_ms: default_regime_cooldown_ms(),
         }
     }
 }
@@ -118,6 +132,7 @@ impl TriggerSettings {
             && d.adverse_move_bps > 0.0
             && (1..=20).contains(&d.material_change)
             && d.pre_close_minute < 24 * 60
+            && (0..=86_400_000).contains(&d.regime_cooldown_ms)
             && (60_000..=86_400_000).contains(&r.quiet_ms)
             && (60_000..=86_400_000).contains(&r.request_ttl_ms)
             && (1..=32).contains(&r.max_open_requests)
@@ -277,6 +292,17 @@ pub(crate) struct Observation<'a> {
     pub after_close_due: bool,
     /// A review turn is running; the after-close turn waits for it.
     pub review_running: bool,
+    /// An active runnable strategy owns cash entries: suppress cash
+    /// `entry_candidate`, `hourly_top_k_changed` and strategy-fill triggers.
+    pub strategy_active: bool,
+    /// Strategy execution is enabled with eligible strategies: enable
+    /// deterministic `regime_changed` triggers for supervision.
+    pub strategy_supervision: bool,
+    /// Fills belonging to an active strategy (excluded from `Fill` triggers
+    /// while `strategy_active` is true).
+    pub strategy_fills: usize,
+    /// Current deterministic intraday regime label, when available.
+    pub regime: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -289,6 +315,7 @@ struct EntryStreak {
 pub(crate) struct TriggerEngine {
     settings: TriggerSettings,
     fills_seen: Option<usize>,
+    non_strategy_fills_seen: Option<usize>,
     /// Risk conditions now true, by instrument and reason. A condition fires
     /// when it becomes true and again only after it has cleared.
     risk: BTreeSet<(String, &'static str)>,
@@ -304,6 +331,8 @@ pub(crate) struct TriggerEngine {
     last_decision_ms: Option<i64>,
     open_seen_ms: Option<i64>,
     quiet_at: Option<i64>,
+    regime_seen: Option<String>,
+    regime_cooldown_until: Option<i64>,
     drifted: BTreeSet<String>,
     sealed: bool,
     after_close: bool,
@@ -343,14 +372,18 @@ impl TriggerEngine {
             self.open_seen_ms.get_or_insert(o.now);
             self.position_risk(o, &mut fired);
             self.fills(o, &mut fired);
-            if o.phase == Phase::Open && self.last_entry_scan != Some(o.ranked_at) {
+            if o.phase == Phase::Open && o.strategy_active {
+                self.streak.clear();
+            } else if o.phase == Phase::Open && self.last_entry_scan != Some(o.ranked_at) {
                 self.last_entry_scan = Some(o.ranked_at);
                 self.entry_candidates(o, &mut fired);
             }
             self.schedule(o, &mut fired);
+            self.regime_change(o, &mut fired);
             self.quiet(o, &mut fired);
         } else {
             self.fills_seen = Some(o.fills);
+            self.non_strategy_fills_seen = Some(o.fills.saturating_sub(o.strategy_fills));
         }
         if o.requests_queued > 0 && !self.queued(TriggerKind::Request) {
             fired.push(Trigger::new(
@@ -501,12 +534,20 @@ impl TriggerEngine {
 
     fn fills(&mut self, o: &Observation<'_>, fired: &mut Vec<Trigger>) {
         let seen = *self.fills_seen.get_or_insert(o.fills);
-        if o.fills > seen {
+        let non_strategy = o.fills.saturating_sub(o.strategy_fills);
+        let seen_non_strategy = *self.non_strategy_fills_seen.get_or_insert(non_strategy);
+        let delta = if o.strategy_active {
+            non_strategy.saturating_sub(seen_non_strategy)
+        } else {
+            o.fills.saturating_sub(seen)
+        };
+        if delta > 0 {
             let mut trigger = Trigger::new(TriggerKind::Fill, "fill_batch", o.now);
-            trigger.score = Some((o.fills - seen) as f64);
+            trigger.score = Some(delta as f64);
             fired.push(trigger);
         }
         self.fills_seen = Some(o.fills);
+        self.non_strategy_fills_seen = Some(non_strategy);
     }
 
     fn entry_candidates(&mut self, o: &Observation<'_>, fired: &mut Vec<Trigger>) {
@@ -555,7 +596,10 @@ impl TriggerEngine {
             fired.push(Trigger::new(TriggerKind::Schedule, "pre_close", o.now));
         }
         let hour = o.minute / 60;
-        if o.phase == Phase::Open && self.hour.is_some_and(|last| last != hour) {
+        if o.phase == Phase::Open
+            && !o.strategy_active
+            && self.hour.is_some_and(|last| last != hour)
+        {
             let changed = o
                 .ranking
                 .iter()
@@ -570,6 +614,37 @@ impl TriggerEngine {
             }
         }
         self.hour = Some(hour);
+    }
+
+    fn regime_change(&mut self, o: &Observation<'_>, fired: &mut Vec<Trigger>) {
+        if !o.strategy_supervision {
+            return;
+        }
+        let current = o.regime.filter(|label| !label.is_empty());
+        if fired
+            .iter()
+            .any(|t| t.kind == TriggerKind::Schedule && t.reason == "open")
+        {
+            self.regime_seen = Some(current.unwrap_or("unknown").to_owned());
+            return;
+        }
+        let Some(label) = current else {
+            return;
+        };
+        let Some(previous) = self.regime_seen.as_deref() else {
+            self.regime_seen = Some(label.to_owned());
+            return;
+        };
+        if label != "unknown"
+            && previous != label
+            && self
+                .regime_cooldown_until
+                .is_none_or(|until| o.now >= until)
+        {
+            fired.push(Trigger::new(TriggerKind::Schedule, "regime_changed", o.now));
+            self.regime_seen = Some(label.to_owned());
+            self.regime_cooldown_until = Some(o.now + self.settings.decision.regime_cooldown_ms);
+        }
     }
 
     fn quiet(&mut self, o: &Observation<'_>, fired: &mut Vec<Trigger>) {

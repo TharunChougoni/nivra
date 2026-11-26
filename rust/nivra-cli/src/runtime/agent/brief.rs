@@ -15,11 +15,52 @@ use std::collections::BTreeMap;
 const MAX_FILLS: usize = 10;
 const MAX_POSITIONS: usize = 20;
 const MAX_RANKING: usize = 20;
+const MAX_STRATEGIES: usize = 20;
 const MAX_TRIGGERS: usize = 32;
 /// Gate refusals a decision brief restates.
 pub(crate) const MAX_REFUSALS: usize = 5;
 /// A brief over this size is refused rather than cut silently.
 pub(crate) const MAX_BRIEF_BYTES: usize = 96_000;
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(crate) struct RegimeFacts {
+    pub source: &'static str,
+    pub label: String,
+    pub session_return: f64,
+    pub opening_gap: f64,
+    pub realised_volatility: f64,
+    pub breadth: f64,
+    pub instrument_count: usize,
+    pub minute_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(crate) struct EligibleStrategyFacts {
+    pub strategy_id: String,
+    pub active: bool,
+    pub pinned: bool,
+    pub registered_at_ms: i64,
+    pub author: crate::runtime::strategy_library::Author,
+    pub trades: Value,
+    pub net_pnl: Value,
+    pub worst_drawdown: Value,
+    pub tape_dates: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<&'static str>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(crate) struct StrategyLibraryFacts {
+    pub execution_enabled: bool,
+    pub active_strategy_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_blocked_reason: Option<&'static str>,
+    pub owner_pinned: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lane_selection: Option<crate::runtime::strategy_library::LaneSelection>,
+    pub active_live_outcomes: BTreeMap<String, u64>,
+    pub eligible: Vec<EligibleStrategyFacts>,
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct Brief {
@@ -31,6 +72,13 @@ pub(crate) struct Brief {
     pub positions: Vec<PositionFacts>,
     pub ranking: Vec<RankFacts>,
     pub fills: Vec<FillFacts>,
+    /// Current deterministic intraday regime summary, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regime: Option<RegimeFacts>,
+    /// Eligible action strategies and active strategy live outcomes, for
+    /// decision turns when `strategy_execution` is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strategies: Option<StrategyLibraryFacts>,
     /// The latest actions the execution gate refused, newest first: who
     /// proposed each, the action, the reason in plain words and the numbers
     /// the check used. Decision turns only.
@@ -155,6 +203,7 @@ pub(crate) struct Facts<'a> {
     pub ranking: &'a [Ranked],
     pub memory: Option<&'a ReviewMemory>,
     pub execution: &'static str,
+    pub regime: Option<&'a RegimeFacts>,
 }
 
 impl Brief {
@@ -257,6 +306,8 @@ impl Brief {
             positions,
             ranking,
             fills,
+            regime: facts.regime.cloned(),
+            strategies: None,
             execution_refusals: Vec::new(),
             research_updates: Vec::new(),
             task,
@@ -272,6 +323,77 @@ impl Brief {
         }
         Ok(text)
     }
+}
+
+/// Factual library summary and today's live outcome counts for decision turns.
+pub(crate) fn strategy_facts(
+    db: &crate::runtime::Connection,
+    c: &crate::runtime::Config,
+    cfg: &crate::runtime::planner::PlannerConfig,
+) -> Option<StrategyLibraryFacts> {
+    if !cfg.runs_strategies() {
+        return None;
+    }
+    let root = crate::runtime::strategy_library::root(c).ok()?;
+    let library = crate::runtime::strategy_library::Library::at(root);
+    let resolved = match library.resolve() {
+        Ok(resolved) => resolved,
+        Err(_) => {
+            return Some(StrategyLibraryFacts {
+                execution_enabled: true,
+                active_strategy_id: None,
+                active_blocked_reason: Some("strategy_library_unavailable"),
+                owner_pinned: None,
+                lane_selection: None,
+                active_live_outcomes: BTreeMap::new(),
+                eligible: Vec::new(),
+            });
+        }
+    };
+    let mut active_blocked_reason = None;
+    let eligible: Vec<EligibleStrategyFacts> = resolved
+        .entries
+        .iter()
+        .rev()
+        .filter(|e| !resolved.disabled.contains(&e.strategy_id))
+        .take(MAX_STRATEGIES)
+        .map(|entry| {
+            let active = resolved.active.as_deref() == Some(entry.strategy_id.as_str());
+            let blocked_reason = match library.report(entry) {
+                Ok(report) => crate::runtime::wide::strategy_run::build_mismatch(&report),
+                Err(_) => Some("strategy_library_report_unreadable"),
+            };
+            if active {
+                active_blocked_reason = blocked_reason;
+            }
+            EligibleStrategyFacts {
+                strategy_id: entry.strategy_id.clone(),
+                active,
+                pinned: resolved.pinned.as_deref() == Some(entry.strategy_id.as_str()),
+                registered_at_ms: entry.registered_at_ms,
+                author: entry.author.clone(),
+                trades: entry.summary["trades"].clone(),
+                net_pnl: entry.summary["net_pnl"].clone(),
+                worst_drawdown: entry.summary["worst_drawdown"].clone(),
+                tape_dates: entry.tape_dates.clone(),
+                blocked_reason,
+            }
+        })
+        .collect();
+    let active_live_outcomes = resolved
+        .active
+        .as_deref()
+        .map(|id| crate::runtime::wide::strategy_run::outcome_counts(db, id))
+        .unwrap_or_default();
+    Some(StrategyLibraryFacts {
+        execution_enabled: true,
+        active_strategy_id: resolved.active,
+        active_blocked_reason,
+        owner_pinned: resolved.pinned,
+        lane_selection: resolved.lane_selection,
+        active_live_outcomes,
+        eligible,
+    })
 }
 
 pub(crate) fn budget(

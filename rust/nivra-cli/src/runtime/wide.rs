@@ -17,7 +17,7 @@ use operator::{planner_recover_checked, resume_preflight};
 mod projection;
 mod shadow;
 mod shutdown;
-mod strategy_run;
+pub(in crate::runtime) mod strategy_run;
 mod tape;
 use projection::execution_projection;
 use shadow::{ShadowScorer, ShadowSelection};
@@ -136,6 +136,26 @@ impl IndexContext {
         self.observations
             .get(key)
             .map(|o| (o.price, o.source, o.receipt))
+    }
+
+    /// Intraday regime facts when all inputs are finite.
+    pub(in crate::runtime) fn regime_facts(&self) -> Option<crate::runtime::agent::RegimeFacts> {
+        let r = self.regime.as_ref()?;
+        let i = &r.inputs;
+        (i.session_return.is_finite()
+            && i.opening_gap.is_finite()
+            && i.realised_volatility.is_finite()
+            && i.breadth.is_finite())
+        .then(|| crate::runtime::agent::RegimeFacts {
+            source: "index",
+            label: r.label.clone(),
+            session_return: i.session_return,
+            opening_gap: i.opening_gap,
+            realised_volatility: i.realised_volatility,
+            breadth: i.breadth,
+            instrument_count: i.instrument_count,
+            minute_count: i.minute_count,
+        })
     }
 
     /// Additive digest/status projection. `tradeable: false` is explicit.
@@ -509,18 +529,10 @@ fn commit_quotes_screened(
             let stale_portfolio = plan["portfolio_revision"].as_str().is_some_and(|expected| {
                 redecision::portfolio_hash(&next).map_or(true, |current| current != expected)
             });
-            let current_cfg = if plan.get("policy_sha256").and_then(|v| v.as_str()).is_some()
-                || plan
-                    .get("profile_sha256")
-                    .and_then(|v| v.as_str())
-                    .is_some()
-            {
-                c.planner_config
-                    .as_deref()
-                    .and_then(|path| planner::PlannerConfig::load_for_session(path, c.session).ok())
-            } else {
-                None
-            };
+            let current_cfg = c
+                .planner_config
+                .as_deref()
+                .and_then(|path| planner::PlannerConfig::load_for_session(path, c.session).ok());
             let policy_changed = plan["policy_sha256"].as_str().is_some_and(|expected| {
                 current_cfg
                     .as_ref()
@@ -529,6 +541,9 @@ fn commit_quotes_screened(
                     .as_deref()
                     != Some(expected)
             });
+            let strategy_owns_cash = current_cfg
+                .as_ref()
+                .is_some_and(|cfg| strategy_run::supervision_state(c, cfg).strategy_active());
             let binding_refusal = if stale_portfolio {
                 Some("portfolio_changed")
             } else if policy_changed {
@@ -604,6 +619,15 @@ fn commit_quotes_screened(
                     continue;
                 }
                 let buy = matches!(action.side, planner::PlanSide::Buy);
+                let is_fo = nivra_core::market::Segment::from_key(&instrument.key)
+                    == Some(nivra_core::market::Segment::NseFo);
+                if buy && !is_fo && strategy_owns_cash {
+                    tx.execute(
+                        "INSERT INTO planner_action VALUES(?,?,'strategy_owns_cash_entries')",
+                        rusqlite::params![decision, verdict.index as i64],
+                    )?;
+                    continue;
+                }
                 let max_price = action.max_price.ok_or("planner_action_max_price_missing")?;
                 let outcome = next.execute_plan(
                     now,

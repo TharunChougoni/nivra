@@ -22,7 +22,7 @@ const ACTION_TABLE: &str = "CREATE TABLE IF NOT EXISTS strategy_action(id INTEGE
 
 /// The build-specific reason an accepted entry cannot run here: its report
 /// was produced by a different engine or a different action adapter.
-pub(super) fn build_mismatch(report: &Value) -> Option<&'static str> {
+pub(crate) fn build_mismatch(report: &Value) -> Option<&'static str> {
     if report["engine_sha256"].as_str() != Some(&nivra_core::replay::engine_fingerprint()) {
         Some("strategy_engine_changed")
     } else if report["adapter_sha256"].as_str() != Some(&strategy::replay::adapter_sha256()) {
@@ -30,6 +30,69 @@ pub(super) fn build_mismatch(report: &Value) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// Active strategy supervision state for the agent lanes and execution gate.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SupervisionState {
+    pub active_id: Option<String>,
+    pub any_eligible: bool,
+}
+
+impl SupervisionState {
+    pub(crate) fn strategy_active(&self) -> bool {
+        self.active_id.is_some()
+    }
+}
+
+/// Inspect the library when `strategy_execution` is enabled: returns the
+/// runnable active strategy id (matching this build's engine and adapter) and
+/// whether any eligible strategies exist for supervision.
+pub(crate) fn supervision_state(c: &Config, cfg: &planner::PlannerConfig) -> SupervisionState {
+    if !cfg.runs_strategies() {
+        return SupervisionState::default();
+    }
+    let Ok(root) = crate::runtime::strategy_library::root(c) else {
+        return SupervisionState::default();
+    };
+    let library = Library::at(root);
+    let Ok(resolved) = library.resolve() else {
+        return SupervisionState::default();
+    };
+    let any_eligible = resolved.eligible().next().is_some();
+    let active_id = resolved.active.as_deref().and_then(|id| {
+        let entry = resolved.entries.iter().find(|e| e.strategy_id == id)?;
+        let report = library.report(entry).ok()?;
+        build_mismatch(&report).is_none().then(|| id.to_owned())
+    });
+    SupervisionState {
+        active_id,
+        any_eligible,
+    }
+}
+
+/// Today's live `strategy_action` outcome counts for `strategy_id`.
+pub(crate) fn outcome_counts(db: &Connection, strategy_id: &str) -> BTreeMap<String, u64> {
+    let Ok(true) = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='strategy_action')",
+        [],
+        |r| r.get::<_, bool>(0),
+    ) else {
+        return BTreeMap::new();
+    };
+    let Ok(mut stmt) = db.prepare(
+        "SELECT outcome, COUNT(*) FROM strategy_action WHERE strategy_id=? GROUP BY outcome",
+    ) else {
+        return BTreeMap::new();
+    };
+    let Ok(rows) = stmt.query_map([strategy_id], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+    }) else {
+        return BTreeMap::new();
+    };
+    rows.flatten()
+        .filter_map(|(outcome, count)| u64::try_from(count).ok().map(|n| (outcome, n)))
+        .collect()
 }
 
 struct Active {

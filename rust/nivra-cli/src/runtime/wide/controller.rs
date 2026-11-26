@@ -596,6 +596,42 @@ impl<'a> Controller<'a> {
         } else {
             &[]
         };
+        let regime = self.index_context.regime_facts().or_else(|| {
+            let regime_cfg = cfg
+                .discovery
+                .as_ref()
+                .and_then(|d| d.strategy_selection.as_ref())
+                .map(|s| s.regime.clone())
+                .unwrap_or_default();
+            let max_age = cfg
+                .discovery
+                .as_ref()
+                .map_or(super::super::discovery::MAX_QUOTE_FRESHNESS_MS, |d| {
+                    d.max_scan_age_ms
+                });
+            let minute_returns = store.market_minute_returns(regime_cfg.min_instruments);
+            let inputs = shadow::shadow_regime_inputs(&self.scan, t.now, max_age, &minute_returns);
+            if inputs.instrument_count == 0
+                || inputs.minute_count == 0
+                || !inputs.session_return.is_finite()
+                || !inputs.opening_gap.is_finite()
+                || !inputs.realised_volatility.is_finite()
+                || !inputs.breadth.is_finite()
+            {
+                return None;
+            }
+            let label = nivra_core::regime::classify(&inputs, &regime_cfg).label();
+            Some(super::super::agent::RegimeFacts {
+                source: "market",
+                label,
+                session_return: inputs.session_return,
+                opening_gap: inputs.opening_gap,
+                realised_volatility: inputs.realised_volatility,
+                breadth: inputs.breadth,
+                instrument_count: inputs.instrument_count,
+                minute_count: inputs.minute_count,
+            })
+        });
         let cycle = super::super::agent::service::Cycle {
             c: &self.config,
             cfg,
@@ -614,6 +650,7 @@ impl<'a> Controller<'a> {
                 .index_feeds
                 .enabled
                 .then(|| self.index_context.json()),
+            regime,
         };
         match agent.tick(&cycle, &mut self.db) {
             Ok(()) => self.agent_failure = None,

@@ -219,6 +219,7 @@ fn all_tools(dir: &std::path::Path) -> (Config, planner::PlannerConfig) {
         }),
         registrations: Vec::new(),
     });
+    cfg.strategy_execution = Some(planner::StrategyExecution { enabled: true });
     // The turn guard refuses a policy that differs from the reviewed file.
     std::fs::write(
         c.planner_config.as_ref().unwrap(),
@@ -277,6 +278,7 @@ fn fixture_brief(context: &TurnContext, now_ms: i64) -> Brief {
             ranking: &[],
             memory: None,
             execution: "shadow_never_executed",
+            regime: None,
         },
         brief::budget(Lane::Decision, &Default::default(), 100, 10.0, (0.0, 5)),
         Value::Null,
@@ -301,6 +303,7 @@ fn args(name: &str) -> Value {
             json!({"task_key":"gap-fade","goal":"Does the gap fade?","analysis_id":"none","dataset_id":"none"})
         }
         "plan" => json!({"actions":[],"stance":"hold","notes":"no edge"}),
+        "strategy_select" => json!({"strategy_id":null,"reason":"stand down in fixture"}),
         "verdict" => json!({"escalate":false,"reason":"one tick, no depth"}),
         "research" => {
             json!({"question":"Does the gap fade survive costs?","refs":["2026-11-20","NSE_EQ|INE0ECP01024"]})
@@ -425,16 +428,17 @@ fn every_lane_tool_round_trips_through_the_bridge() {
         assert_eq!(turn.verdict.is_some(), lane == Lane::Gate);
     }
     assert!(mismatches.is_empty(), "{mismatches:#?}");
-    // Without the decision-evidence policy every intraday call would fail, so
-    // no lane is offered the tool.
+    // Without the decision-evidence policy every intraday call would fail, and
+    // without `strategy_execution` no `strategy_select` tool is offered.
     let mut bare = cfg.clone();
     bare.decision_evidence = None;
+    bare.strategy_execution = None;
     for lane in Lane::ALL {
         assert!(
             lane_definitions(&bare, lane, true)
                 .unwrap()
                 .iter()
-                .all(|tool| tool["name"] != "intraday")
+                .all(|tool| tool["name"] != "intraday" && tool["name"] != "strategy_select")
         );
     }
 }
@@ -1126,4 +1130,212 @@ fn pi_paper_config_refuses_retired_model_keys() {
         parse(&cfg).err().unwrap().to_string(),
         "planner_config_invalid"
     );
+}
+
+#[test]
+fn decision_lane_supervises_strategies_and_refuses_cash_buys_while_active() {
+    use crate::runtime::strategy_library::{Author, Library, acceptance};
+    use nivra_cli::candidate_execution::artifact_bytes;
+    use nivra_core::execution::{ExitIntent, Instrument, Position};
+    use nivra_core::finance::{FeeSchedule, Price};
+    use nivra_core::market::{InstrumentKind, OptionCatalog, OptionContract, Segment};
+    use nivra_core::time::ExchangeDate;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (c, mut cfg) = all_tools(dir.path());
+    cfg.strategy_execution = Some(planner::StrategyExecution { enabled: true });
+    std::fs::write(
+        c.planner_config.as_ref().unwrap(),
+        serde_json::to_vec(&cfg).unwrap(),
+    )
+    .unwrap();
+    let library = Library::at(crate::runtime::strategy_library::root(&c).unwrap());
+    let register = |n: u64, at: i64| {
+        let source = b"print('{\"actions\":[]}')\n";
+        let params = json!({"n": n});
+        let report = artifact_bytes(&json!({
+            "engine_sha256": nivra_core::replay::engine_fingerprint(),
+            "adapter_sha256": crate::runtime::strategy::replay::adapter_sha256(),
+            "parameters": {"version": 1, "top_n": 20, "params": params},
+        }))
+        .unwrap();
+        let accepted = acceptance::Accepted {
+            report: &report,
+            report_sha256: crate::runtime::digest(&report),
+            source,
+            source_sha256: crate::runtime::digest(source),
+            params,
+            summary: json!({"trades": 14, "net_pnl": "62.50", "worst_drawdown": "35.00"}),
+            tape_dates: vec!["2026-10-15".into()],
+            thresholds: acceptance::Thresholds::default(),
+        };
+        let author = Author {
+            lane: "research".into(),
+            model: Some("deepseek-v4-pro".into()),
+            model_revision: None,
+            turn_id: Some("research-1".into()),
+            session: Some(c.session),
+        };
+        library
+            .register(&accepted, author, at)
+            .unwrap()
+            .entry
+            .strategy_id
+    };
+    let s1 = register(1, 1_000);
+    let s2 = register(2, 2_000);
+
+    let db = crate::runtime::open_book(&c).unwrap();
+    db.execute_batch(
+        "CREATE TABLE strategy_action(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,observed_at INTEGER NOT NULL,strategy_id TEXT NOT NULL,idx INTEGER NOT NULL,instrument_key TEXT,side TEXT,units INTEGER NOT NULL,outcome TEXT NOT NULL);",
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO strategy_action(at,observed_at,strategy_id,idx,instrument_key,side,units,outcome) VALUES(100,100,?,0,'NSE_EQ|A','buy',1,'filled'),(200,200,?,1,'NSE_EQ|B','buy',1,'price_above_max')",
+        rusqlite::params![&s2, &s2],
+    )
+    .unwrap();
+
+    let mut context = context("10000");
+    // Hold NSE_EQ|A so risk-reducing sell/revise_exit can be tested, and add one
+    // Nifty option contract so option buys remain allowed while cash buys fail.
+    let held_inst = Instrument {
+        key: "NSE_EQ|A".into(),
+        symbol: "A".into(),
+        tick: Price::parse("0.05").unwrap(),
+        series: "EQ".into(),
+    };
+    context.portfolio.positions.insert(
+        held_inst.key.clone(),
+        Position {
+            instrument: held_inst.clone(),
+            units: 5,
+            entry: Price::parse("100").unwrap(),
+            mark: Price::parse("99").unwrap(),
+            marked_at: 1_760_600_000_000,
+            exit_intent: Some(ExitIntent {
+                stop: Some(Price::parse("95").unwrap()),
+                target: Some(Price::parse("110").unwrap()),
+                time: None,
+            }),
+            decision_id: Some(s2.clone()),
+        },
+    );
+    let contract = OptionContract {
+        key: "NSE_FO|26000CE".into(),
+        symbol: "NIFTY 26000 CE 20 OCT 26".into(),
+        underlying_key: "NSE_INDEX|Nifty 50".into(),
+        underlying_symbol: "NIFTY".into(),
+        expiry: ExchangeDate::parse("2026-10-20").unwrap(),
+        strike: Price::parse("26000").unwrap(),
+        option: InstrumentKind::Call,
+        lot_size: 65,
+        tick: Price::parse("0.05").unwrap(),
+        freeze_quantity: Some(1800),
+        weekly: true,
+    };
+    let costs = crate::runtime::tests::test_costs();
+    context.portfolio.fee_schedule =
+        Some(FeeSchedule::new(costs.clone()).with_segment(Segment::NseFo, costs));
+    context.portfolio.options = Some(
+        OptionCatalog::try_new(
+            ExchangeDate::parse("2026-10-16").unwrap(),
+            "NSE_INDEX|Nifty 50",
+            "NIFTY",
+            contract.expiry,
+            Price::parse("26000").unwrap(),
+            [contract.clone()],
+        )
+        .unwrap(),
+    );
+    context.instruments.push(Instrument {
+        key: contract.key.clone(),
+        symbol: contract.symbol.clone(),
+        tick: contract.tick,
+        series: "FO".into(),
+    });
+
+    let mut brief = fixture_brief(&context, 1_760_600_000_000);
+    brief.strategies = brief::strategy_facts(&db, &c, &cfg);
+    let facts = brief.strategies.as_ref().unwrap();
+    assert_eq!(facts.active_strategy_id.as_deref(), Some(s2.as_str()));
+    assert_eq!(facts.eligible.len(), 2);
+    assert_eq!(facts.active_live_outcomes.get("filled"), Some(&1));
+    assert_eq!(facts.active_live_outcomes.get("price_above_max"), Some(&1));
+
+    let s1_turn = s1.clone();
+    let (client, peer) = connect(move |peer| {
+        let (id, _) = peer.turn();
+        // Pick s1 for the current regime.
+        let selected = peer.call(
+            &id,
+            "strategy_select",
+            json!({"strategy_id": s1_turn, "reason": "up_trend fits s1"}),
+        );
+        // Cash equity buy must be refused while a strategy is active.
+        let cash_buy = peer.call(
+            &id,
+            "plan",
+            json!({"actions":[{"instrument_key":"NSE_EQ|B","side":"buy","rupees":"1000","units":null,"max_price":"100","rationale":"cash entry","exit_intent":{"target":"105","stop":"95","time":null}}],"stance":"active","notes":"cash buy"}),
+        );
+        // Risk-reducing cash sell + exit revision + Nifty option buy are allowed.
+        let allowed = peer.call(
+            &id,
+            "plan",
+            json!({"actions":[
+                {"instrument_key":"NSE_EQ|A","side":"sell","rupees":null,"units":2,"max_price":"98","rationale":"trim risk","exit_intent":{"target":null,"stop":null,"time":null}},
+                {"instrument_key":"NSE_EQ|A","side":"revise_exit","rupees":null,"units":null,"max_price":null,"rationale":"tighten stop","exit_intent":{"target":"108","stop":"97","time":null}},
+                {"instrument_key":"NSE_FO|26000CE","side":"buy","rupees":null,"units":65,"max_price":"50","rationale":"hedge/option","exit_intent":{"target":"70","stop":"35","time":null}}
+            ],"stance":"supervise","notes":"risk and option"}),
+        );
+        peer.finish(&id, "ok", "supervised", 3, 0.01);
+
+        // Stand down (`null`) in a second turn -> cash equity buy is allowed again.
+        let (id2, _) = peer.turn();
+        let stood_down = peer.call(
+            &id2,
+            "strategy_select",
+            json!({"strategy_id": null, "reason": "no strategy fits"}),
+        );
+        let cash_after = peer.call(
+            &id2,
+            "plan",
+            json!({"actions":[{"instrument_key":"NSE_EQ|B","side":"buy","rupees":"1000","units":null,"max_price":"100","rationale":"manual entry","exit_intent":{"target":"105","stop":"95","time":null}}],"stance":"selective","notes":"no active strategy"}),
+        );
+        peer.finish(&id2, "ok", "manual", 2, 0.01);
+        (selected, cash_buy, allowed, stood_down, cash_after)
+    });
+    let settings = settings(100, 10.0);
+    let clock = || 1_760_600_000_000_i64;
+    let mut agent = fixture_agent(client);
+    let mut runner = LaneRunner::new(&mut agent, &settings, &c, &cfg, &clock);
+    let turn1 = runner
+        .decision(
+            json!({"kind":"schedule","reason":"open"}),
+            brief.clone(),
+            &mut context,
+        )
+        .unwrap();
+    let turn2 = runner
+        .decision(
+            json!({"kind":"schedule","reason":"regime_changed"}),
+            brief,
+            &mut context,
+        )
+        .unwrap();
+    let (selected, cash_buy, allowed, stood_down, cash_after) = peer.join().unwrap();
+
+    assert_eq!(selected["output"]["active"], s1);
+    assert_eq!(cash_buy["ok"], false);
+    assert_eq!(cash_buy["error"], "agent_paper_strategy_owns_cash_entries");
+    assert_eq!(allowed["ok"], true, "{allowed}");
+    assert_eq!(turn1.outcome.status, TurnStatus::Ok);
+    assert!(matches!(
+        turn1.plan,
+        Some(tools::PlanAttempt::Validated { .. })
+    ));
+    assert_eq!(stood_down["output"]["active"], Value::Null);
+    assert_eq!(cash_after["ok"], true, "{cash_after}");
+    assert_eq!(turn2.outcome.status, TurnStatus::Ok);
+    assert_eq!(library.resolve().unwrap().active, None);
 }

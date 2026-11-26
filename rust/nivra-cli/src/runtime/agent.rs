@@ -19,6 +19,7 @@ mod tools;
 mod triggers;
 pub(crate) mod turn_cli;
 
+pub(crate) use brief::RegimeFacts;
 pub(crate) use client::{Agent, AgentClient, command};
 pub(crate) use lanes::{JournaledTurn, latest_turns, read_spend};
 pub(crate) use triggers::{Ranked, TriggerSettings};

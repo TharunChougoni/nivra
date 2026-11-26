@@ -1,7 +1,7 @@
 //! The controller's side of the pi lanes. Each scan cycle feeds the trigger
 //! engine; a due lane turn runs on one worker thread that owns the agent
 //! process. The controller settles its claim before a paper plan can execute.
-use super::brief::{self, Brief, Facts, SessionFacts};
+use super::brief::{self, Brief, Facts, RegimeFacts, SessionFacts};
 use super::client::{Agent, AgentClient};
 use super::lanes::{self, LaneRunner, TurnContext};
 use super::paper;
@@ -13,6 +13,7 @@ use super::triggers::{
 };
 use super::{AgentMode, AgentSettings, Lane};
 use crate::runtime::planner::{self, Backend, PlannerConfig};
+use crate::runtime::wide::strategy_run::{self, SupervisionState};
 use crate::runtime::{Config, Connection, Result, decision, decision_evidence, redecision};
 use nivra_core::execution::{Instrument, Portfolio, Scanner};
 use nivra_core::feature_store::FeatureStore;
@@ -75,6 +76,7 @@ pub(crate) struct Cycle<'a> {
     pub scanner: &'a Scanner,
     pub store: &'a FeatureStore,
     pub index: Option<Value>,
+    pub regime: Option<RegimeFacts>,
 }
 
 struct Job {
@@ -386,6 +388,17 @@ impl LaneService {
         } else {
             0
         };
+        let supervision = strategy_run::supervision_state(c, cycle.cfg);
+        let strategy_fills = cycle
+            .portfolio
+            .fills
+            .iter()
+            .filter(|f| {
+                f.decision_id
+                    .as_deref()
+                    .is_some_and(|id| id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+            })
+            .count();
         let rankers = ranker_registry();
         let fired = self.engine.observe(&Observation {
             now: cycle.now,
@@ -404,6 +417,10 @@ impl LaneService {
                 && phase == Phase::Sealed
                 && !lanes::root(c).join(lanes::AFTER_CLOSE_MARKER).exists(),
             review_running: self.busy == Some(Lane::Review),
+            strategy_active: supervision.strategy_active(),
+            strategy_supervision: supervision.any_eligible,
+            strategy_fills,
+            regime: cycle.regime.as_ref().map(|r| r.label.as_str()),
         });
         for trigger in &fired {
             append(
@@ -420,12 +437,13 @@ impl LaneService {
             && self.engine.decision_waiting()
             && (!cycle.ranking.is_empty()
                 || !held.is_empty()
-                || fired.iter().any(|t| t.kind == TriggerKind::Fill))
+                || fired.iter().any(|t| t.kind == TriggerKind::Fill)
+                || supervision.any_eligible)
         {
             self.preempt.store(true, Ordering::Release);
         }
         if self.busy.is_none() && cycle.now >= self.hold_until_ms {
-            self.dispatch(cycle, db, &held, phase, &spent)?;
+            self.dispatch(cycle, db, &held, phase, &spent, &supervision)?;
         }
         Ok(())
     }
@@ -445,17 +463,34 @@ impl LaneService {
         held: &[super::triggers::Held],
         phase: Phase,
         spent: &BTreeMap<Lane, Usage>,
+        supervision: &SupervisionState,
     ) -> Result<()> {
         let c = cycle.c;
+        let strategy_active = supervision.strategy_active();
         let (lane, mut triggers) = match self.escalated.take() {
             Some(triggers) => (Lane::Decision, triggers),
             None => {
                 let Some((lane, triggers)) = self.engine.next() else {
                     return Ok(());
                 };
-                (self.screen(c, lane, &triggers, spent)?, triggers)
+                (
+                    self.screen(c, lane, &triggers, spent, strategy_active)?,
+                    triggers,
+                )
             }
         };
+        if strategy_active && matches!(lane, Lane::Decision | Lane::Gate) {
+            let (entry, rest): (Vec<_>, Vec<_>) = triggers
+                .into_iter()
+                .partition(|t| t.kind == TriggerKind::EntryCandidate);
+            if !entry.is_empty() {
+                self.skip(c, lane, &entry, "strategy_owns_cash_entries")?;
+            }
+            if rest.is_empty() {
+                return Ok(());
+            }
+            triggers = rest;
+        }
         let Ok(settings) = self.settings.lane(lane) else {
             return self.skip(c, lane, &triggers, "agent_lane_not_configured");
         };
@@ -469,6 +504,10 @@ impl LaneService {
                 && !triggers
                     .iter()
                     .any(|trigger| trigger.kind == TriggerKind::Fill)
+                && !(supervision.any_eligible
+                    && triggers
+                        .iter()
+                        .any(|trigger| trigger.kind == TriggerKind::Schedule))
             {
                 return self.skip(c, lane, &triggers, "agent_no_eligible_evidence");
             }
@@ -524,6 +563,7 @@ impl LaneService {
             } else {
                 "shadow_never_executed"
             },
+            regime: cycle.regime.as_ref(),
         };
         let used = spent.get(&lane).cloned().unwrap_or_default();
         let budget = brief::budget(
@@ -553,6 +593,7 @@ impl LaneService {
         };
         let mut brief = Brief::build(&facts, budget, task, &triggers);
         if lane == Lane::Decision {
+            brief.strategies = brief::strategy_facts(db, c, cycle.cfg);
             brief.execution_refusals =
                 crate::runtime::wide::recent_refusals(db, brief::MAX_REFUSALS)?;
         }
@@ -620,17 +661,20 @@ impl LaneService {
     }
 
     /// The lane a decision batch runs on first: the gate when one is
-    /// configured with budget left and every trigger is an entry candidate.
-    /// Fills, position risk and the scheduled turns always reach the decision
-    /// lane directly. An exhausted gate passes its batches through.
+    /// configured with budget left and every trigger is an entry candidate,
+    /// unless an active strategy owns cash entries. Fills, position risk and
+    /// scheduled turns always reach the decision lane directly. An exhausted
+    /// gate passes its batches through.
     fn screen(
         &self,
         c: &Config,
         lane: Lane,
         triggers: &[Trigger],
         spent: &BTreeMap<Lane, Usage>,
+        strategy_active: bool,
     ) -> Result<Lane> {
-        if lane != Lane::Decision
+        if strategy_active
+            || lane != Lane::Decision
             || !self.settings.lanes.contains_key(&Lane::Gate)
             || !triggers
                 .iter()
@@ -831,6 +875,7 @@ mod tests {
             scanner: &scanner,
             store: &store,
             index: None,
+            regime: None,
         };
 
         let mut db = Connection::open_in_memory().unwrap();
@@ -866,14 +911,22 @@ mod tests {
 
         assert_eq!(
             service
-                .screen(&c, Lane::Decision, &entry(), &spent)
+                .screen(&c, Lane::Decision, &entry(), &spent, false)
                 .unwrap(),
             Lane::Gate
+        );
+        assert_eq!(
+            service
+                .screen(&c, Lane::Decision, &entry(), &spent, true)
+                .unwrap(),
+            Lane::Decision
         );
         let mut mixed = entry();
         mixed.push(Trigger::new(TriggerKind::Fill, "fill_batch", 1));
         assert_eq!(
-            service.screen(&c, Lane::Decision, &mixed, &spent).unwrap(),
+            service
+                .screen(&c, Lane::Decision, &mixed, &spent, false)
+                .unwrap(),
             Lane::Decision
         );
         spent.insert(
@@ -885,7 +938,7 @@ mod tests {
         );
         assert_eq!(
             service
-                .screen(&c, Lane::Decision, &entry(), &spent)
+                .screen(&c, Lane::Decision, &entry(), &spent, false)
                 .unwrap(),
             Lane::Decision
         );
@@ -907,6 +960,7 @@ mod tests {
             scanner: &scanner,
             store: &store,
             index: None,
+            regime: None,
         };
         let mut db = Connection::open_in_memory().unwrap();
         let done = |verdict: Option<Verdict>, error: Option<&str>| Done {

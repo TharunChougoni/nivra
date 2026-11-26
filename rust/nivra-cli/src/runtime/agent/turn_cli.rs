@@ -109,6 +109,7 @@ fn turn(args: &Args) -> Result<(bool, Value)> {
         ranking: &live,
         memory: memory.as_ref(),
         execution: "shadow_never_executed",
+        regime: None,
     };
     let lane_settings = settings.lane(lane)?;
     let spent = lanes::spend(&c).remove(&lane).unwrap_or_default();
@@ -130,6 +131,7 @@ fn turn(args: &Args) -> Result<(bool, Value)> {
     };
     let mut brief = Brief::build(&facts, budget, task, &triggers);
     if lane == Lane::Decision {
+        brief.strategies = brief::strategy_facts(&db, &c, &cfg);
         brief.execution_refusals = wide::recent_refusals(&db, brief::MAX_REFUSALS)?;
     }
     if args.dry {

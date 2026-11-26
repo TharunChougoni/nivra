@@ -47,7 +47,7 @@ Tracked in [#44](https://github.com/TharunChougoni/nivra/issues/44):
    replay (#40).
 4. Done: the deterministic acceptance check and automatic registration (#41).
 5. Done: the strategy executor in the paper controller (#42).
-6. Move the decision lane to supervision, and remove the gate from cash entries (#43).
+6. Done: decision lane supervision and gate removal on cash entries (#43).
 
 Capital stays at ₹5,000 for paper trading. Costs are proportional (brokerage
 percentages are below a ₹20 cap at this order size), so the bar is to beat

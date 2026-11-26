@@ -236,13 +236,15 @@ The library sits beside the dated session books, at
 | `entries/<strategy_id>.json` | Source and report hashes, `params`, author lane, model and turn, summary, tape dates, verdict and thresholds |
 | `sources/<source_sha256>.py` | The exact source bytes |
 | `reports/<report_sha256>.json` | The accepted replay report |
-| `controls.json` | The owner's pin, disable, enable and rollback log |
+| `controls.json` | The owner's pin, disable, enable and rollback log, plus decision-lane `lane_select` entries |
 
 `strategy_id` is the SHA-256 of the canonical `{abi, source_sha256, params}`.
 Entries are never rewritten: registering the same source and `params` again
 returns the first entry unchanged. Each read verifies every hash. The active
-version is the pinned one when it is eligible, else the newest eligible one.
-To pin, disable or roll back a version, see
+version is the pinned one when it is eligible, else the decision lane's last
+`lane_select` choice (which may be `null` to stand down), else the newest
+eligible one. Owner pins, rollbacks and disables always override lane
+selections. To pin, disable or roll back a version, see
 [operations](OPERATIONS.md#manage-action-strategies).
 
 This library is separate from the ranker library below. The ranker selector

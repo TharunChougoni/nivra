@@ -44,6 +44,7 @@ export const TOOL_LABELS: Record<string, string> = {
   decisions: "Past decisions",
   propose_plan: "Propose plan",
   plan: "Plan",
+  strategy_select: "Select strategy",
   web_search: "Web search",
   web_fetch: "Read page",
   news_lookup: "News",
@@ -62,6 +63,7 @@ export const TRIGGER_LABELS: Record<string, string> = {
   open: "market open",
   pre_close: "before close",
   hourly_top_k_changed: "top picks changed",
+  regime_changed: "regime changed",
   fill: "Fill",
   fill_batch: "fills arrived",
   position_risk: "Position risk",
@@ -121,6 +123,11 @@ export const STRATEGY_LABELS: Record<string, string> = {
   action_zero_units: "Refused: the size came to zero units",
   action_time_exit_expired: "Refused: the exit time had passed",
   action_revise_unheld: "Refused: nothing held to update",
+  action_strategy_owns_cash_entries:
+    "Refused: active strategy owns cash entries",
+  agent_paper_strategy_owns_cash_entries:
+    "Refused: active strategy owns cash entries",
+  strategy_owns_cash_entries: "Skipped: active strategy owns cash entries",
 };
 
 /** An action outcome in plain words; other gate refusals read "Refused: …". */

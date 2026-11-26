@@ -79,21 +79,46 @@ pub(crate) fn strategy_id(source_sha256: &str, params: &Value) -> Result<String>
     )?)
 }
 
-/// An owner control. `rollback` disables `from` and pins `to`.
+/// A control record. `rollback` disables `from` and pins `to`; `lane_select`
+/// is the decision lane's strategy choice (`strategy_id: None` stands down)
+/// and is always overridden by an owner pin, rollback or disable.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Control {
-    Pin { strategy_id: String },
+    Pin {
+        strategy_id: String,
+    },
     Unpin,
-    Disable { strategy_id: String },
-    Enable { strategy_id: String },
-    Rollback { from: String, to: String },
+    Disable {
+        strategy_id: String,
+    },
+    Enable {
+        strategy_id: String,
+    },
+    Rollback {
+        from: String,
+        to: String,
+    },
+    LaneSelect {
+        strategy_id: Option<String>,
+        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ControlRecord {
     pub at_ms: i64,
     pub control: Control,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct LaneSelection {
+    pub strategy_id: Option<String>,
+    pub reason: String,
+    pub at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
 }
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -109,7 +134,9 @@ pub(crate) struct Resolved {
     pub entries: Vec<Entry>,
     pub disabled: BTreeSet<String>,
     pub pinned: Option<String>,
-    /// The pinned entry when it is eligible, else the newest eligible one.
+    pub lane_selection: Option<LaneSelection>,
+    /// The pinned entry when eligible, else the lane's selection when present
+    /// (with `None` standing down), else the newest eligible one.
     pub active: Option<String>,
 }
 impl Resolved {
@@ -141,7 +168,7 @@ pub(crate) fn resolve(mut entries: Vec<Entry>, controls: &[ControlRecord]) -> Re
     entries.sort_by(|a, b| {
         (a.registered_at_ms, &a.strategy_id).cmp(&(b.registered_at_ms, &b.strategy_id))
     });
-    let (mut disabled, mut pinned) = (BTreeSet::new(), None);
+    let (mut disabled, mut pinned, mut lane_selection) = (BTreeSet::new(), None, None);
     for record in controls {
         match &record.control {
             Control::Pin { strategy_id } => pinned = Some(strategy_id.clone()),
@@ -156,21 +183,45 @@ pub(crate) fn resolve(mut entries: Vec<Entry>, controls: &[ControlRecord]) -> Re
                 disabled.insert(from.clone());
                 pinned = Some(to.clone());
             }
+            Control::LaneSelect {
+                strategy_id,
+                reason,
+                turn_id,
+            } => {
+                lane_selection = Some(LaneSelection {
+                    strategy_id: strategy_id.clone(),
+                    reason: reason.clone(),
+                    at_ms: record.at_ms,
+                    turn_id: turn_id.clone(),
+                });
+            }
         }
     }
     let eligible =
         |id: &String| !disabled.contains(id) && entries.iter().any(|e| &e.strategy_id == id);
-    let active = pinned.clone().filter(eligible).or_else(|| {
+    let newest_eligible = || {
         entries
             .iter()
             .rev()
             .find(|e| !disabled.contains(&e.strategy_id))
             .map(|e| e.strategy_id.clone())
-    });
+    };
+    let active = if let Some(pin) = pinned.clone().filter(eligible) {
+        Some(pin)
+    } else if let Some(selection) = &lane_selection {
+        match &selection.strategy_id {
+            Some(id) if eligible(id) => Some(id.clone()),
+            Some(_) => newest_eligible(),
+            None => None,
+        }
+    } else {
+        newest_eligible()
+    };
     Resolved {
         entries,
         disabled,
         pinned,
+        lane_selection,
         active,
     }
 }
@@ -374,6 +425,36 @@ impl Library {
         self.resolve()
     }
 
+    /// Record the decision lane's strategy choice (`None` to run no strategy).
+    /// Disabled or unknown ids are refused; owner pins and disables still win.
+    pub(crate) fn select_by_lane(
+        &self,
+        strategy_id: Option<&str>,
+        reason: &str,
+        turn_id: Option<&str>,
+        now: i64,
+    ) -> Result<Resolved> {
+        let resolved = self.resolve()?;
+        let strategy_id = match strategy_id {
+            Some(id) => {
+                let full = find(&resolved, id)?;
+                if resolved.disabled.contains(&full) {
+                    return Err("strategy_disabled".into());
+                }
+                Some(full)
+            }
+            None => None,
+        };
+        self.append(ControlRecord {
+            at_ms: now,
+            control: Control::LaneSelect {
+                strategy_id,
+                reason: reason.to_owned(),
+                turn_id: turn_id.map(str::to_owned),
+            },
+        })
+    }
+
     fn dir(&self, name: &str) -> Result<PathBuf> {
         let dir = self.root.join(name);
         fs::DirBuilder::new()
@@ -480,6 +561,7 @@ pub(crate) fn run(library: &Library, command: Command, now: i64) -> Result<Value
                 "status": "strategy_library",
                 "active": resolved.active,
                 "pinned": resolved.pinned,
+                "lane_selection": resolved.lane_selection,
                 "strategies": resolved.entries.iter().rev()
                     .map(|e| listing(&resolved, e)).collect::<Vec<_>>(),
                 "paper_only": true,
