@@ -165,7 +165,7 @@ pub(super) fn owner_candidate_tool_definitions(
             let (properties, required) = result_task();
             function(
                 "candidate_result",
-                "Read the verified ranking-diagnostic result for one candidate revision. The result is partial current-session evidence, not out-of-sample proof, executable fills, P&L or promotion.",
+                "Read the verified result for one candidate revision. Archive bar jobs report after-cost training and test summaries and a report hash. Ranker jobs report ranking diagnostics.",
                 properties,
                 required,
             )
@@ -667,18 +667,38 @@ pub(crate) fn bridge_definitions(cfg: &PlannerConfig, lane_requests: bool) -> Re
             .iter_mut()
             .find(|tool| tool["name"] == "candidate_submit")
     {
-        submit["parameters"]["properties"]["dataset_id"]["enum"] = json!(
-            candidate
-                .datasets
-                .iter()
-                .map(|dataset| &dataset.dataset_id)
-                .collect::<Vec<_>>()
-        );
+        let bars_available = candidate.strategy.as_ref().is_some_and(|s| s.enabled);
+        let mut dataset_ids: Vec<_> = candidate
+            .datasets
+            .iter()
+            .map(|dataset| dataset.dataset_id.as_str())
+            .collect();
+        if bars_available && !dataset_ids.contains(&research::ARCHIVE_BARS_DATASET_ID) {
+            dataset_ids.push(research::ARCHIVE_BARS_DATASET_ID);
+        }
+        submit["parameters"]["properties"]["dataset_id"]["enum"] = json!(dataset_ids);
+        if bars_available {
+            submit["description"] = json!(format!(
+                "{} Use archive_bars for years of regime coverage. Poll backtest_status and read backtest_result. Use archive_window for recent intraday fill realism.",
+                submit["description"].as_str().unwrap_or_default()
+            ));
+            submit["parameters"]["properties"]["archive_bars"] = json!({
+                "type":["object","null"],"additionalProperties":false,
+                "description":"With strategy=true and dataset_id=archive_bars, choose a closed historical date range. Use day bars for years or minute bars for intraday patterns across many sessions. Returns a job. Implement on_bars(at_ms, split, bars, params, state); each row is [key, open_paise, high_paise, low_paise, close_paise, volume]. Return [row_index, units] pairs (positive units enter long, zero exits). Fills use the next observed open plus costs. Train/test boundaries use the training and selection timestamps. horizon_minutes is unused for bars.",
+                "properties":{
+                    "unit":{"type":"string","enum":["day","minute"]},
+                    "from":{"type":"string","description":"First IST session date, YYYY-MM-DD, inclusive."},
+                    "to":{"type":"string","description":"Last IST session date, YYYY-MM-DD, inclusive."},
+                    "instruments":{"type":["array","null"],"items":{"type":"string"},"description":"Optional NSE_EQ instrument keys. Omit for the archived cash universe."}
+                },
+                "required":["unit","from","to"]
+            });
+        }
         if candidate.strategy.as_ref().is_some_and(|s| s.enabled) {
             let properties = &mut submit["parameters"]["properties"];
             properties["strategy"] = json!({
                 "type":["boolean","null"],
-                "description":"true replays a strategy_actions_v1 source after costs with the book's capital and exit policy, and returns a report immediately. Pick an archive_window dataset and set selection_from_ms and selection_to_ms to cover at least three NSE sessions for acceptance. Use archive_daily_window to fit the tape and wall limits. params goes to the strategy. Use the configured horizon_minutes value. A stopped replay keeps no report. The acceptance verdict says whether the library registered the strategy."
+                "description":"true selects a strategy backtest. With archive_window, strategy_actions_v1 replays recent quote receipts after costs and returns immediately. Cover at least three sessions for strategy acceptance and use archive_daily_window to fit the tape budget. With archive_bars, an archive_bars_v1 Python strategy runs as a research job and yields bar-level evidence for training and test. Use the configured horizon_minutes for quote replay."
             });
             let windows: Vec<_> = candidate
                 .datasets

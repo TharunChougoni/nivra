@@ -30,7 +30,7 @@ const CONTEXT_RETRY_MS: i64 = 5_000;
 
 /// What the after-close research turn is for. The review, when it left text,
 /// rides along in the same task.
-const AFTER_CLOSE_TASK: &str = "The session is closed and speed does not matter. Read today's review when present. From today's recorded quote tape, write or revise strategies in the workspace, backtest each one after costs on an archive_window dataset spanning at least three NSE sessions, and keep a short note per strategy under notes/ with its source hash, the costs assumed and the net result.";
+const AFTER_CLOSE_TASK: &str = "The session is closed and speed does not matter. Read today's review when present. Use archive_window over at least three recent NSE sessions to check intraday fills and strategy acceptance. Use archive_bars over a longer training and test period to study performance across regimes. Queue bar jobs with backtest and read the verified reports when they finish. Keep a short note per strategy under notes/ with its source hash, costs, and net result.";
 
 /// Serves intraday context from the controller's frozen evidence snapshot.
 /// It never calls a model: pi owns every model call.

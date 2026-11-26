@@ -155,8 +155,24 @@ pub(crate) fn command_plan(launch: &Launch, root: &Path) -> Result<CommandPlan, 
         "TimeoutStopSec=2s".into(),
         "--".into(),
     ];
-    argv.extend(bwrap.into_iter().map(str::to_owned));
     let stage = stage.as_os_str().to_str().ok_or(RunnerError::Unavailable)?;
+    if launch.spec.capability == nivra_store::research_jobs::SpecCapability::ArchiveBars {
+        // Only the fixed Rust worker runs with archive access. It launches
+        // Python inside the separate no-network strategy sandbox.
+        argv.pop(); // Insert the properties before the command separator.
+        argv.extend([
+            "--property".into(),
+            "UMask=0077".into(),
+            "--".into(),
+            "/usr/bin/env".into(),
+            "-i".into(),
+            format!("{stage}/runtime"),
+            "--archive-bars".into(),
+            stage.into(),
+        ]);
+        return Ok(CommandPlan { unit, argv });
+    }
+    argv.extend(bwrap.into_iter().map(str::to_owned));
     for (name, dest) in [
         ("runtime", "/runtime"),
         ("code", "/inputs/code"),

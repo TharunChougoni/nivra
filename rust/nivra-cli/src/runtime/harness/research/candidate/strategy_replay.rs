@@ -43,6 +43,7 @@ pub(super) fn strategy_backtest(
                 return Ok(not_dispatched("candidate_archive_window_in_future"));
             }
             Some(ArchiveWindow {
+                max_days: settings.max_archive_window_days,
                 from_session: *from_session,
                 to_session: *to_session,
                 from_ms: args.selection_from_ms,
@@ -158,6 +159,7 @@ pub(super) fn strategy_backtest(
     Ok(json!({
         "status":"completed",
         "abi":strategy::ABI,
+        "evidence":"quote_tape",
         "task_key":args.task_key,
         "hypothesis":args.hypothesis,
         "report_sha256":report_sha256,

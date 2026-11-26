@@ -198,8 +198,15 @@ five trading sessions in the reviewed NSE calendar.
 }}}
 ```
 
-An archive window spans up to 14 calendar days, inclusive. The paper config
-must set `market_archive`. Keep each dated book's `wide-universe.json` for its
+Use an archive window for recent intraday fill realism. Set
+`candidate_compute.strategy.max_archive_window_days` to change the maximum
+inclusive span. The default is 14 calendar days and the allowed range is 1
+through 60. In the local TimescaleDB fixture, tape construction took 1.22 s
+across five one-hour slices with 720 receipts per session, or 0.24 s per
+session. A 60-calendar-day cap leaves room for sparse selections across more
+sessions. Receipt, observation, byte, and wall limits still apply.
+
+The paper config must set `market_archive`. Keep each dated book's `wide-universe.json` for its
 frozen cash instrument metadata. The replay uses original receipt times and
 refuses a key whose instrument metadata changes within the tape.
 
@@ -230,6 +237,96 @@ stop returns `strategy_replay_wall_budget`. A waiting decision turn returns
 `strategy_replay_preempted`. Both return progress without a report. If the
 request exceeds the quote-event, observation or byte cap, narrow the daily
 slice or selection window and retry.
+
+### Backtest years of archived bars
+
+Use `archive_bars` to compare a strategy across years and market regimes. Pick
+`day` for long ranges or `minute` for intraday patterns. The archive must
+already contain the bars. The request reads the dates you choose, within the
+research job's CPU, wall time, and memory limits.
+
+Enable `candidate_compute.strategy` and configure `market_archive` and
+`paper_costs`. The controller finds `nivra-analysis` beside `nivra`. The
+release asset name `nivra-analysis-x86_64-unknown-linux-musl` also works.
+Install the runtime from the same build as the controller.
+
+Call `backtest` with `strategy: true`, `dataset_id: "archive_bars"`, and a
+caller-selected window. Dates are inclusive IST dates before today. Omit
+`instruments` to read all archived NSE cash equities in the window.
+
+```json
+{"unit":"day","from":"2020-01-01","to":"2024-12-31","instruments":["NSE_EQ|INE000000001"]}
+```
+
+You can also register a named dataset with
+`"kind":{"archive_bars":{"unit":"day","from":"2020-01-01","to":"2024-12-31"}}`.
+Pass that dataset ID and omit the inline window.
+
+Set the inclusive `training_from_ms` and `training_to_ms` to the training
+range. Set `selection_from_ms` and `selection_to_ms` to the later test range.
+Each split needs data. For daily bars, the timestamp is midnight IST on the
+bar's date. For minute bars, it is the archived minute start. Use
+`horizon_minutes: 1` if the tool requires it. For bars, exits come from the
+strategy's signals. Pass `params` as a JSON-object string.
+
+The worker keeps one sandboxed Python process for the job. Implement
+`on_bars(at_ms, split, bars, params, state)`. Each call receives the complete
+batch of observed instruments at that timestamp in key order. Each row is
+`[instrument_key, open_paise, high_paise, low_paise, close_paise, volume]`.
+The `split` is `"training"` or `"test"`. Use `state` to carry fitted
+parameters or rolling features forward. Return an empty list to hold.
+
+```python
+def on_bars(at_ms, split, bars, params, state):
+    for i, bar in enumerate(bars):
+        if bar[0] != params["instrument"]:
+            continue
+        if split == "training":
+            state["prior_close"] = bar[4]
+            return []
+        if "prior_close" in state:
+            return [[i, int(bar[4] > state["prior_close"])]]
+    return []
+```
+
+Each action is `[row_index, units]`. Positive whole shares enter a long
+position when flat. Zero closes the held position. Rust validates the actions,
+checks available cash, and fills at the instrument's next observed open
+within the same split. The worker releases the next batch after it collects
+the previous actions. Each split starts with the book's capital and an empty
+portfolio. The test can reuse Python state fitted during training.
+
+The fill model applies the paper schedule's adverse slippage, rounded away
+from the open to whole paise with a minimum allowance of one paise. It charges
+paper fees on every fill. Trades at the same timestamp compete for cash in
+instrument key order. A gap can delay a fill until a later observed bar. Open
+positions at the end are marked to their last observed close and reported
+separately from realized P&L. The report gives bar and fill counts, fees, and
+P&L for each split. It records the source, parameters, and input bar hashes.
+Use deterministic source to reproduce the report hash on the same archive
+data. The worker reads one archive snapshot per job.
+
+`backtest` returns a task ID and revision. Poll `backtest_status` and read
+the verified report with `backtest_result`. Its evidence is `bar_level` and
+its acceptance verdict is `research_only`. The report assumes the modeled
+fill at open. Spread, queue priority, liquidity, historical universe
+membership, and corporate actions are outside the model. Use quote-tape replay to qualify a strategy for the
+library. Keep the test split fixed when comparing strategies. If you tune
+using the test result, choose a later untouched split for a new assessment.
+
+To exercise the worker with a small synthetic archive, build all targets,
+set `NIVRA_ARCHIVE_TEST_URL` to a local TimescaleDB, and run:
+
+```sh
+cargo test -p nivra-cli --bin nivra --locked archive_bar_job_replays_closed_splits -- --ignored --test-threads=1
+```
+
+The fixture needs Bubblewrap and a systemd user bus. To time the large
+fixtures, build `nivra-analysis` with `cargo build --release --locked -p
+nivra-cli --bin nivra-analysis`. Set `NIVRA_ARCHIVE_BAR_PERF=day` or
+`NIVRA_ARCHIVE_BAR_PERF=minute` on the test command and add `--nocapture`.
+The timer starts after the synthetic rows are committed and covers submission
+through verified report retrieval.
 
 ### Acceptance and the library
 
@@ -545,7 +642,12 @@ imported only after the unit's cgroup is empty, and only for the exact job and
 input hashes. Failed jobs keep their artifacts. Missing containment makes the
 worker unavailable, never a plain subprocess.
 
-`nivra-analysis` supports two analyses. `shared_core_backtest_v1` replays an
+Archive bar jobs use the same queue, lease, and systemd limits. The trusted
+`nivra-analysis` worker reads the archive outside Bubblewrap. Only the Python
+strategy runs inside Bubblewrap. It receives bar batches over a pipe and has
+no archive connection or credentials.
+
+The `nivra-analysis` runtime supports two registered analyses. `shared_core_backtest_v1` replays an
 exact manifest and quote events. `daily_history_summary_v1` gives descriptive,
 unadjusted statistics from daily closes exported by
 `nivra archive export-daily-history`. See [market data](MARKET_DATA.md#research-from-archived-daily-bars).

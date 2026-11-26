@@ -5,7 +5,7 @@ fn private_mode(meta: &fs::Metadata) -> u32 {
     meta.permissions().mode() & 0o777
 }
 
-fn ensure_private_dir(path: &Path) -> std::result::Result<(), &'static str> {
+pub(super) fn ensure_private_dir(path: &Path) -> std::result::Result<(), &'static str> {
     match fs::create_dir(path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}

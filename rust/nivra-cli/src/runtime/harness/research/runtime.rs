@@ -305,7 +305,11 @@ pub(crate) fn drive_task(
                 return Ok(());
             }
         }
-        let registered = match registered_run(&settings, &task) {
+        let registered = match if task.spec.capability == jobs::Capability::ArchiveBars {
+            bar_worker_run(&authority, &task)
+        } else {
+            registered_run(&settings, &task)
+        } {
             Ok(registered) => registered,
             Err(_) if task.status == jobs::TaskState::Pending && task.job.attempts == 0 => {
                 jobs::refuse_unstarted(

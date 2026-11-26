@@ -7,6 +7,9 @@ publish.workspace = true
 
 [dependencies]
 libc.workspace = true
+chrono.workspace = true
+nivra-core = { path = "../nivra-core" }
+nivra-sandbox = { path = "../nivra-sandbox" }
 rig-core = { version = "=0.44.0", default-features = false }
 nivra-store = { path = "../nivra-store" }
 rusqlite.workspace = true

@@ -266,6 +266,7 @@ fn candidate_submit_args(
         strategy: None,
         archive_daily_window: None,
         as_of_receipt_id: None,
+        archive_bars: None,
     }
 }
 
@@ -635,6 +636,7 @@ print(json.dumps({"actions":a}))"#;
     };
     assert_eq!(submit(&cfg)["reason"], "candidate_strategy_disabled");
     settings.candidate_compute.as_mut().unwrap().strategy = Some(CandidateStrategySettings {
+        max_archive_window_days: default_archive_window_days(),
         enabled: true,
         abi: "strategy_actions_v1".into(),
         max_quote_events: 100,
@@ -3322,6 +3324,7 @@ fn archive_strategy_replay_pins_quotes_across_sessions() -> Result<()> {
     };
     let max_wall_ms = 20_000;
     candidate.strategy = Some(CandidateStrategySettings {
+        max_archive_window_days: default_archive_window_days(),
         enabled: true,
         abi: "strategy_actions_v1".into(),
         max_wall_ms,
@@ -3461,6 +3464,7 @@ fn archive_strategy_replay_pins_quotes_across_sessions() -> Result<()> {
             }
         }
         let window = ArchiveWindow {
+            max_days: default_archive_window_days(),
             from_session: days[0].parse()?,
             to_session: days[4].parse()?,
             from_ms: candidate_at_on(days[0], 9, 30),
@@ -3491,4 +3495,216 @@ fn archive_strategy_replay_pins_quotes_across_sessions() -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[test]
+#[ignore = "requires NIVRA_ARCHIVE_TEST_URL, bubblewrap, a systemd user bus and a built nivra-analysis"]
+fn archive_bar_job_replays_closed_splits() -> Result<()> {
+    use nivra_core::finance::Amount;
+    use nivra_store::market_archive::{BarUnit, BarWindow, init, ist_midnight};
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::time::Instant;
+
+    let url = std::env::var("NIVRA_ARCHIVE_TEST_URL")?;
+    let (scheme, auth_host) = url.split_once("://").ok_or("fixture_url")?;
+    let (auth, host) = auth_host.rsplit_once('@').ok_or("fixture_url")?;
+    let (user, password) = auth.split_once(':').ok_or("fixture_url")?;
+    let tmp = tempfile::tempdir()?;
+    let dir = tmp.path();
+    let password_file = dir.join("archive-password");
+    fs::OpenOptions::new()
+        .create_new(true)
+        .mode(0o600)
+        .write(true)
+        .open(&password_file)?
+        .write_all(password.as_bytes())?;
+    let archive = crate::runtime::MarketArchiveSettings {
+        url: format!("{scheme}://{user}@{host}"),
+        password_file,
+    };
+    let perf = std::env::var_os("NIVRA_ARCHIVE_BAR_PERF");
+    let (unit, counts, from, to, split) = match perf.as_deref().and_then(|v| v.to_str()) {
+        Some("day") => (BarUnit::Day, 2760, "2020-01-01", "2024-12-31", "2024-01-01"),
+        Some("minute") => (
+            BarUnit::Minute,
+            50,
+            "2024-01-01",
+            "2024-12-31",
+            "2024-10-01",
+        ),
+        _ => (BarUnit::Day, 12, "2024-01-01", "2024-02-29", "2024-02-01"),
+    };
+    let window = BarWindow {
+        unit,
+        from: from.parse()?,
+        to: to.parse()?,
+        instruments: None,
+    };
+    let split = ist_midnight(split.parse()?);
+    let now = millis();
+    let prefix = format!("NSE_EQ|BAR-FIXTURE-{now}-");
+    let keys: Vec<_> = (0..counts).map(|i| format!("{prefix}{i:04}")).collect();
+    let mut db = crate::runtime::market_archive::connect(&archive)?;
+    init(&mut db)?;
+    {
+        let mut tx = db.transaction()?;
+        tx.batch_execute("SET LOCAL statement_timeout = '120s'")?;
+        let receipt: i64 = tx
+            .query_one(
+                "INSERT INTO receipts(kind, requested_ms, received_ms, sha256, body)
+             VALUES (2, $1, $1, $2, $2) RETURNING id",
+                &[&now, &Sha256::digest(prefix.as_bytes()).as_slice()],
+            )?
+            .get(0);
+        let ids: Vec<i32> = tx
+            .query(
+                "INSERT INTO instruments(key) SELECT unnest($1::text[]) RETURNING id",
+                &[&keys],
+            )?
+            .into_iter()
+            .map(|row| row.get(0))
+            .collect();
+        let span = "SELECT $1::date + n AS day, (10000 + (n % 20) * 25)::bigint AS o
+             FROM generate_series(0, $2::date - $1::date) n
+             WHERE extract(isodow FROM $1::date + n) < 6";
+        let insert = match unit {
+            BarUnit::Day => format!(
+                "INSERT INTO daily_bars(instrument_id, day, o, h, l, c, volume, oi, receipt_id)
+                 SELECT i, day, o, o+50, o-10, o+25, 500000, 0, $4
+                 FROM ({span}) dates CROSS JOIN unnest($3::int[]) i"
+            ),
+            BarUnit::Minute => format!(
+                "INSERT INTO minute_bars(instrument_id, day, bar_ms, o, h, l, c, volume, oi, receipt_id)
+                 SELECT i, day, (extract(epoch FROM day::timestamp AT TIME ZONE 'Asia/Kolkata')::bigint
+                     + 33300 + m * 60) * 1000, o+m, o+m+50, o+m-10, o+m+25, 10000, 0, $4
+                 FROM ({span}) dates CROSS JOIN generate_series(0, 374) m CROSS JOIN unnest($3::int[]) i"
+            ),
+        };
+        let inserted = tx.execute(&insert, &[&window.from, &window.to, &ids, &receipt])?;
+        tx.commit()?;
+        assert_eq!(inserted, expected_bar_fixture_rows(&window, counts));
+    }
+    let mut window = window;
+    window.instruments = Some(keys);
+    let base = settings(dir, &dir.join("unused-runtime"));
+    let research = candidate_settings(dir, &base);
+    let (mut c, mut cfg) = owner_fixture(dir, &research);
+    c.market_archive = Some(archive);
+    let research = cfg.research_tools.as_mut().unwrap();
+    let candidate = research.candidate_compute.as_mut().unwrap();
+    candidate.strategy = Some(CandidateStrategySettings {
+        enabled: true,
+        abi: crate::runtime::strategy::ABI.into(),
+        max_quote_events: 10_000,
+        max_observations: 100_000,
+        max_tape_bytes: 16 * 1024 * 1024,
+        max_wall_ms: 20_000,
+        max_archive_window_days: default_archive_window_days(),
+    });
+    candidate.wall_millis = 360_000;
+    candidate.limits.cpu_millis = 360_000;
+    if perf.is_none() {
+        candidate.datasets.push(serde_json::from_value(json!({
+            "dataset_id":"named-bars", "kind":{"archive_bars":&window},
+        }))?);
+    }
+    // One small round trip per split after the strategy has inspected a full batch.
+    let source = r#"from statistics import mean
+def on_bars(at, split, bars, params, state):
+    n = state.get(split, 0)
+    state[split] = n + 1
+    average_close = mean(row[4] for row in bars)
+    if n == 0 and average_close > params["minimum"]:
+        return [[0, 1]]
+    if n == 1:
+        return [[0, 0]]
+    return []
+"#;
+    let mut args = candidate_submit_args("archive-bars-integration", source, None);
+    args.params = json!({"minimum":0});
+    args.strategy = Some(true);
+    args.dataset_id = ARCHIVE_BARS_DATASET_ID.into();
+    args.archive_bars = Some(Box::new(window.clone()));
+    args.training_from_ms = ist_midnight(window.from);
+    args.training_to_ms = split - 1;
+    args.selection_from_ms = split;
+    args.selection_to_ms = ist_midnight(window.to.succ_opt().unwrap()) - 1;
+    let run = |args: CandidateSubmitArgs| -> Result<Value> {
+        let start = Instant::now();
+        let queued = candidate_submit(
+            &c,
+            &cfg,
+            "fixture-model",
+            3,
+            "bar-test-turn",
+            args,
+            millis(),
+            None,
+        )?;
+        assert_eq!(queued["status"], "pending", "{queued}");
+        let task = queued["task_id"].as_str().unwrap();
+        let revision = queued["revision"].as_u64().unwrap() as u32;
+        assert_eq!(
+            candidate_status(&c, &cfg, task, revision, millis())?["status"],
+            "pending"
+        );
+        drive_task(
+            cfg.research_tools.clone().unwrap(),
+            c.directory.join("model"),
+            task.into(),
+            revision,
+        )?;
+        let result = candidate_result(&c, &cfg, task, revision, millis())?;
+        assert_eq!(result["result_status"], "verified", "{result}");
+        assert_eq!(result["report"]["evidence"], "bar_level");
+        assert_eq!(result["acceptance"]["verdict"], "research_only");
+        let report = &result["report"];
+        let total =
+            report["training"]["bars"].as_u64().unwrap() + report["test"]["bars"].as_u64().unwrap();
+        assert_eq!(total, expected_bar_fixture_rows(&window, counts));
+        for part in ["training", "test"] {
+            assert_eq!(report[part]["closed_trades"], 1, "{report}");
+            let fills = report[part]["fill_sample"].as_array().unwrap();
+            assert_eq!(fills.len(), 2);
+            for fill in fills {
+                assert!(
+                    fill["fill_bar_ms"].as_i64().unwrap() > fill["signal_bar_ms"].as_i64().unwrap()
+                );
+                assert!(Amount::parse(fill["fee"].as_str().unwrap())? > Amount::ZERO);
+            }
+        }
+        eprintln!(
+            "archive_bar_job unit={unit:?} instruments={counts} rows={total} elapsed_s={:.3}",
+            start.elapsed().as_secs_f64()
+        );
+        Ok(result)
+    };
+    let first = run(args.clone())?;
+    if perf.is_none() {
+        args.dataset_id = "named-bars".into();
+        args.archive_bars = None;
+        let second = run(args)?;
+        assert_eq!(first["report_sha256"], second["report_sha256"]);
+        assert_eq!(first["report"], second["report"]);
+    }
+    Ok(())
+}
+
+fn expected_bar_fixture_rows(
+    window: &nivra_store::market_archive::BarWindow,
+    instruments: u64,
+) -> u64 {
+    use chrono::Datelike;
+    let sessions = window
+        .from
+        .iter_days()
+        .take_while(|date| *date <= window.to)
+        .filter(|date| date.weekday().number_from_monday() <= 5)
+        .count() as u64;
+    let bars_per_session = match window.unit {
+        nivra_store::market_archive::BarUnit::Day => 1,
+        nivra_store::market_archive::BarUnit::Minute => 375,
+    };
+    sessions * instruments * bars_per_session
 }

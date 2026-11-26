@@ -2,6 +2,7 @@
 pub mod library;
 pub mod orchestrator_policy;
 pub mod selector;
+pub mod stream;
 use nivra_core::strategy::{FeatureSnapshot, ScanSnapshot, StrategySpec, evaluate};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -278,6 +279,15 @@ fn prepare(
     )
 }
 fn prepare_input(c: &SandboxConfig, source: &[u8], input: &[u8]) -> Result<Prepared, Failure> {
+    prepare_program(c, source, input, c.cpu_seconds)
+}
+
+fn prepare_program(
+    c: &SandboxConfig,
+    source: &[u8],
+    input: &[u8],
+    cpu_seconds: u64,
+) -> Result<Prepared, Failure> {
     c.validate()?;
     if source.len() > 262144 || input.len() > 4 * 1024 * 1024 {
         return Err(Failure::Input);
@@ -377,7 +387,7 @@ fn prepare_input(c: &SandboxConfig, source: &[u8], input: &[u8]) -> Result<Prepa
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     let limits = [
-        (libc::RLIMIT_CPU, c.cpu_seconds),
+        (libc::RLIMIT_CPU, cpu_seconds),
         (libc::RLIMIT_AS, c.memory_mb * 1024 * 1024),
         (libc::RLIMIT_FSIZE, 0),
         (libc::RLIMIT_NOFILE, c.max_open_files),

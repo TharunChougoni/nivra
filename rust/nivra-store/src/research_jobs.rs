@@ -20,6 +20,7 @@ pub enum SpecCapability {
     #[default]
     RegisteredAnalysis,
     CandidateSource,
+    ArchiveBars,
 }
 impl SpecCapability {
     fn is_registered(&self) -> bool {
@@ -55,6 +56,7 @@ pub struct RegisteredAnalysis {
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     RegisteredAnalysis,
+    ArchiveBars,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1070,7 +1072,13 @@ impl ScopedTaskSpec {
             || self.task_id != scoped_task_id(&self.book_binding, &self.session, &self.task_key)
             || self.job_id != scoped_job_id(&self.task_id, self.revision)
             || self.job_id != job.id
-            || job.capability != SpecCapability::RegisteredAnalysis
+            || !matches!(
+                (self.capability, job.capability),
+                (
+                    Capability::RegisteredAnalysis,
+                    SpecCapability::RegisteredAnalysis
+                ) | (Capability::ArchiveBars, SpecCapability::ArchiveBars)
+            )
             || self.revision == 0
             || !valid_slug(&self.task_key, 48)
             || !valid_text(&self.parent_turn_id, 256)
@@ -1079,7 +1087,6 @@ impl ScopedTaskSpec {
             || !valid_hash(&self.policy_sha256)
             || !valid_text(&self.model_id, 128)
             || !valid_text(&self.goal, 1024)
-            || self.capability != Capability::RegisteredAnalysis
             || !valid_slug(&registration.analysis_id, 64)
             || !valid_slug(&registration.dataset_id, 64)
             || !valid_hash(&registration.code_sha256)

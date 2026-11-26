@@ -397,13 +397,17 @@ fn alias(s: &str) -> bool {
 }
 impl RegisteredRun {
     fn validate(&self) -> Result<String> {
-        if self.spec.capability != jobs::SpecCapability::RegisteredAnalysis {
+        if self.spec.capability == jobs::SpecCapability::CandidateSource {
             return Err(Error::Registration);
         }
         if self.code.is_empty()
             || self.code.len() > 262144
             || self.runtime.is_empty()
-            || self.runtime.len() > 32 * 1024 * 1024
+            || self.runtime.len()
+                > match self.spec.capability {
+                    jobs::SpecCapability::ArchiveBars => 128 * 1024 * 1024,
+                    _ => 32 * 1024 * 1024,
+                }
             || self.input.is_empty()
             || self.input.len() > 16 * 1024 * 1024
             || self.spec.output_bytes > 65536
@@ -726,7 +730,7 @@ pub fn start_one(
     runner: &mut impl SandboxRunner,
     clock: impl Fn() -> i64,
 ) -> Result<Worker> {
-    if !is_hash(lease) || registered.spec.capability != jobs::SpecCapability::RegisteredAnalysis {
+    if !is_hash(lease) || registered.spec.capability == jobs::SpecCapability::CandidateSource {
         return Err(Error::Registration);
     }
     let prior = jobs::load(db, &registered.spec.id).map_err(|_| Error::Queue)?;
@@ -739,6 +743,9 @@ pub fn start_one(
         return Err(Error::Clock);
     }
     let scoped = jobs::scoped_for_job(db, &registered.spec.id).map_err(|_| Error::Queue)?;
+    if scoped.is_none() && registered.spec.capability == jobs::SpecCapability::ArchiveBars {
+        return Err(Error::Registration);
+    }
     if let Some(task) = &scoped {
         if task.status != jobs::TaskState::Pending {
             return Err(Error::State);

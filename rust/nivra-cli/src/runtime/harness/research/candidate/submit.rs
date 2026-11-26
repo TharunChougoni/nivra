@@ -650,6 +650,9 @@ pub(crate) fn candidate_submit_preemptible(
     preempted: &dyn Fn() -> bool,
 ) -> Result<Value> {
     if args.observation.is_some() {
+        if args.archive_bars.is_some() {
+            return Ok(not_dispatched("candidate_strategy_args_conflict"));
+        }
         return candidate_observation_submit(
             c,
             cfg,
@@ -735,13 +738,10 @@ pub(crate) fn candidate_submit_preemptible(
     if params_bytes.len() > candidate.max_params_bytes as usize {
         return Ok(not_dispatched("candidate_params_invalid"));
     }
-    let Some(dataset) = candidate
+    let dataset = candidate
         .datasets
         .iter()
-        .find(|dataset| dataset.dataset_id == args.dataset_id)
-    else {
-        return Ok(not_dispatched("candidate_dataset_unknown"));
-    };
+        .find(|dataset| dataset.dataset_id == args.dataset_id);
     let windows = jobs::CandidateWindows {
         training_from_ms: args.training_from_ms,
         training_to_ms: args.training_to_ms,
@@ -755,6 +755,31 @@ pub(crate) fn candidate_submit_preemptible(
     {
         return Ok(not_dispatched("candidate_windows_invalid"));
     }
+    let bar_window = match (args.archive_bars.as_deref(), dataset.map(|d| &d.kind)) {
+        (Some(window), _) if args.dataset_id == ARCHIVE_BARS_DATASET_ID => Some(window),
+        (Some(_), _) => return Ok(not_dispatched("candidate_archive_bars_dataset_conflict")),
+        (None, Some(CandidateDatasetKind::ArchiveBars(window))) => Some(window),
+        _ => None,
+    };
+    if let Some(window) = bar_window {
+        return archive_bars::enqueue(
+            c,
+            cfg,
+            settings,
+            candidate,
+            model_id,
+            model_revision,
+            parent_turn_id,
+            &args,
+            windows,
+            window.clone(),
+            now,
+            owner_evidence,
+        );
+    }
+    let Some(dataset) = dataset else {
+        return Ok(not_dispatched("candidate_dataset_unknown"));
+    };
     if !(1..=1440).contains(&args.horizon_minutes) {
         return Ok(not_dispatched("candidate_horizon_invalid"));
     }
@@ -1304,6 +1329,9 @@ pub(crate) fn candidate_status(
     revision: u32,
     _now: i64,
 ) -> Result<Value> {
+    if let Some((_, record)) = archive_bars::load(c, cfg, task_id, revision)? {
+        return Ok(archive_bars::status(&record));
+    }
     let (mut db, record) = candidate_task(c, cfg, task_id, revision)?;
     let lifecycle = reconcile_candidate(c, cfg, &mut db, &record)
         .map_err(|_| "candidate_lifecycle_unavailable")?;

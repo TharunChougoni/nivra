@@ -1,5 +1,6 @@
 //! Rig research tools with no provider transport, model grant or trading authority.
 //! The trusted host supplies a frozen catalog and the original reviewed job queue.
+pub mod archive_bars;
 pub mod bubblewrap;
 pub mod drill;
 pub mod strategy_sandbox;

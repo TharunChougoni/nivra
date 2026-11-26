@@ -1,6 +1,8 @@
 //! TimescaleDB archive for original market receipts and normalized observations.
 
+mod backtest;
 mod history;
+pub use backtest::{Bar, BarUnit, BarWindow, ist_midnight, read_bar_batches};
 mod reader;
 mod writer;
 

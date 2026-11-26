@@ -273,6 +273,9 @@ pub(crate) fn candidate_result(
     revision: u32,
     now: i64,
 ) -> Result<Value> {
+    if let Some((mut db, record)) = archive_bars::load(c, cfg, task_id, revision)? {
+        return archive_bars::result(&mut db, &record);
+    }
     let (mut db, record) = candidate_task(c, cfg, task_id, revision)?;
     // Verify the recorded result before any lifecycle transition. A corrupt
     // binding is reported as an unverified result, never as a lifecycle fault.
@@ -667,6 +670,11 @@ pub(crate) fn candidate_cancel(
     revision: u32,
     now: i64,
 ) -> Result<Value> {
+    if let Some((mut db, _)) = archive_bars::load(c, cfg, task_id, revision)? {
+        let record = jobs::cancel_scoped(&mut db, task_id, revision, revision, now)
+            .map_err(|_| "research_task_cancel_refused")?;
+        return Ok(archive_bars::status(&record));
+    }
     let (mut db, _) = candidate_task(c, cfg, task_id, revision)?;
     let record = jobs::cancel_candidate(&mut db, task_id, revision, revision, now)
         .map_err(|_| "candidate_task_cancel_refused")?;

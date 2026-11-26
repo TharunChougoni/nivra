@@ -147,7 +147,18 @@ fn run() -> Result<(), ()> {
     Ok(())
 }
 fn main() -> ExitCode {
-    if run().is_ok() {
+    let mut args = std::env::args_os().skip(1);
+    let ok = if args.next().as_deref() == Some(std::ffi::OsStr::new("--archive-bars")) {
+        match (args.next(), args.next()) {
+            (Some(stage), None) => {
+                nivra_research::archive_bars::worker_entry(Path::new(&stage)).is_ok()
+            }
+            _ => false,
+        }
+    } else {
+        run().is_ok()
+    };
+    if ok {
         ExitCode::SUCCESS
     } else {
         eprintln!("registered_analysis_failed");

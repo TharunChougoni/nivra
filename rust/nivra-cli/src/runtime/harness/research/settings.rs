@@ -74,6 +74,7 @@ pub(crate) enum CandidateDatasetKind {
         from_session: chrono::NaiveDate,
         to_session: chrono::NaiveDate,
     },
+    ArchiveBars(nivra_store::market_archive::BarWindow),
     ArchivedFeatureSnapshots {
         path: PathBuf,
         sha256: String,
@@ -110,8 +111,7 @@ impl CandidateExecutionSettings {
         Ok(())
     }
 }
-/// Opt-in after-cost replay of a `strategy_actions_v1` strategy over the
-/// a frozen quote tape, with the book's capital and costs.
+/// Opt-in after-cost strategy backtests with the book's capital and costs.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CandidateStrategySettings {
@@ -124,6 +124,17 @@ pub(crate) struct CandidateStrategySettings {
     /// so a longer replay stops with `strategy_replay_wall_budget`.
     #[serde(default = "default_strategy_wall_ms")]
     pub max_wall_ms: u64,
+    #[serde(
+        default = "default_archive_window_days",
+        skip_serializing_if = "is_default_archive_window_days"
+    )]
+    pub max_archive_window_days: i64,
+}
+pub(crate) const fn default_archive_window_days() -> i64 {
+    14
+}
+fn is_default_archive_window_days(days: &i64) -> bool {
+    *days == default_archive_window_days()
 }
 fn default_strategy_wall_ms() -> u64 {
     20_000
@@ -132,6 +143,7 @@ impl CandidateStrategySettings {
     pub(crate) fn validate(&self) -> std::result::Result<(), &'static str> {
         if self.abi != crate::runtime::strategy::ABI
             || !(1..=120_000).contains(&self.max_wall_ms)
+            || !(1..=60).contains(&self.max_archive_window_days)
             || !(1..=10_000).contains(&self.max_quote_events)
             || !(1..=100_000).contains(&self.max_observations)
             || !(1..=16 * 1024 * 1024).contains(&self.max_tape_bytes)
@@ -331,6 +343,12 @@ impl CandidateComputeSettings {
         {
             return Err("candidate_compute_invalid");
         }
+        let max_archive_days = self
+            .strategy
+            .as_ref()
+            .map_or_else(default_archive_window_days, |settings| {
+                settings.max_archive_window_days
+            });
         let mut aliases = BTreeSet::new();
         for dataset in &self.datasets {
             if dataset.dataset_id.is_empty()
@@ -347,8 +365,12 @@ impl CandidateComputeSettings {
                 from_session,
                 to_session,
             } = dataset.kind
-                && !(0..crate::runtime::paper_replay::MAX_ARCHIVE_WINDOW_DAYS)
-                    .contains(&(to_session - from_session).num_days())
+                && !(0..max_archive_days).contains(&(to_session - from_session).num_days())
+            {
+                return Err("candidate_dataset_invalid");
+            }
+            if let CandidateDatasetKind::ArchiveBars(window) = &dataset.kind
+                && !window.validate()
             {
                 return Err("candidate_dataset_invalid");
             }

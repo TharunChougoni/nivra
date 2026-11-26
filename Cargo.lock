@@ -1058,7 +1058,10 @@ dependencies = [
 name = "nivra-research"
 version = "0.13.1"
 dependencies = [
+ "chrono",
  "libc",
+ "nivra-core",
+ "nivra-sandbox",
  "nivra-store",
  "rig-core",
  "rusqlite",

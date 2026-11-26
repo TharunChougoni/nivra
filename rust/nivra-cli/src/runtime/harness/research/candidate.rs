@@ -28,7 +28,9 @@ mod library;
 pub(crate) use library::*;
 mod status;
 pub(crate) use status::*;
+mod archive_bars;
 mod strategy_replay;
+pub(crate) use archive_bars::{ARCHIVE_BARS_DATASET_ID, bar_worker_run};
 
 const CANDIDATE_ABI: &str = "scorer_replay_v1";
 const CANDIDATE_ENGINE: &str = "sadr_sandbox::score_source";
@@ -233,14 +235,15 @@ pub(crate) struct CandidateSubmitArgs {
     /// supplies those bytes.
     #[serde(default, deserialize_with = "deserialize_optional_observation")]
     pub observation: Option<Box<CandidateObservationArgsV1>>,
-    /// Advertised only with `candidate_compute.strategy`. `true` replays the
-    /// source as a `strategy_actions_v1` strategy now instead of queueing it.
+    /// Select the strategy ABI for the requested quote-tape or bar dataset.
     #[serde(default)]
     pub strategy: Option<bool>,
     #[serde(default)]
     pub archive_daily_window: Option<crate::runtime::paper_replay::DailyWindow>,
     #[serde(default)]
     pub as_of_receipt_id: Option<i64>,
+    #[serde(default)]
+    pub archive_bars: Option<Box<nivra_store::market_archive::BarWindow>>,
 }
 
 /// The fixed helper's only result. It is advisory input to the controller: the

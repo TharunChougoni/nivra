@@ -3,8 +3,6 @@ use nivra_core::time::ExchangeDate;
 use nivra_store::market_archive::{quote_receipt_bodies, quote_receipt_ids, quote_watermark};
 use serde::{Deserialize, Serialize};
 
-pub(crate) const MAX_ARCHIVE_WINDOW_DAYS: i64 = 14;
-
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DailyWindow {
@@ -19,6 +17,7 @@ impl DailyWindow {
 }
 
 pub(crate) struct ArchiveWindow {
+    pub max_days: i64,
     pub from_session: NaiveDate,
     pub to_session: NaiveDate,
     pub from_ms: i64,
@@ -36,7 +35,7 @@ pub(crate) struct ArchiveWindowReport {
 
 impl ArchiveWindow {
     fn sessions(&self, c: &Config) -> std::result::Result<Vec<(NaiveDate, i64, i64)>, String> {
-        if !(0..MAX_ARCHIVE_WINDOW_DAYS).contains(&(self.to_session - self.from_session).num_days())
+        if !(0..self.max_days).contains(&(self.to_session - self.from_session).num_days())
             || self.from_ms < 0
             || self.from_ms > self.to_ms
             || self.daily.is_some_and(|daily| !daily.validate())
