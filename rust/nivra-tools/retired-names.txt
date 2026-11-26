@@ -21,7 +21,8 @@
 25	fact_digest	rust/nivra-cli/src/runtime/strategy_results.rs
 4	fact_digest	rust/nivra-cli/src/strategy_lab.rs
 3	fact_digest	rust/nivra-cli/src/strategy_scorer.rs
-3	fact_digest	rust/nivra-store/src/research_jobs.rs
+2	fact_digest	rust/nivra-store/src/research_jobs.rs
+1	fact_digest	rust/nivra-store/src/research_jobs/candidate.rs
 12	fact_digest	rust/nivra-store/src/strategy_results.rs
 9	fact_digest	rust/nivra-tools/src/retired.rs
 1	harness_run	rust/nivra-cli/src/runtime/web_tools/mod.rs
@@ -71,7 +72,7 @@
 2	owner_lane	rust/nivra-cli/src/runtime/wide/controller.rs
 1	owner_lane	rust/nivra-cli/src/runtime/wide/tests.rs
 2	owner_lane	rust/nivra-cli/src/runtime/workspace/mod.rs
-1	owner_lane	rust/nivra-store/src/research_jobs.rs
+1	owner_lane	rust/nivra-store/src/research_jobs/scoped.rs
 15	owner_lane	rust/nivra-tools/src/retired.rs
 1	scorer	docs/DEVELOPMENT.md
 2	scorer	packaging/rust/scanner-discovery.fragment.json
@@ -90,7 +91,7 @@
 5	scorer	rust/nivra-cli/src/runtime/harness/research/candidate/reconcile.rs
 2	scorer	rust/nivra-cli/src/runtime/harness/research/candidate/result.rs
 1	scorer	rust/nivra-cli/src/runtime/harness/research/candidate/status.rs
-5	scorer	rust/nivra-cli/src/runtime/harness/research/candidate/submit.rs
+4	scorer	rust/nivra-cli/src/runtime/harness/research/candidate/submit.rs
 6	scorer	rust/nivra-cli/src/runtime/harness/research/carry.rs
 7	scorer	rust/nivra-cli/src/runtime/harness/research/continuation.rs
 11	scorer	rust/nivra-cli/src/runtime/harness/research/continuation/episode.rs
@@ -117,7 +118,9 @@
 2	scorer	rust/nivra-research/src/worker.rs
 43	scorer	rust/nivra-sandbox/src/lib.rs
 19	scorer	rust/nivra-sandbox/src/selector.rs
-24	scorer	rust/nivra-store/src/research_jobs.rs
+11	scorer	rust/nivra-store/src/research_jobs.rs
+3	scorer	rust/nivra-store/src/research_jobs/candidate.rs
+10	scorer	rust/nivra-store/src/research_jobs/keys.rs
 28	scorer	rust/nivra-store/src/strategy_results.rs
 2	scorer	rust/nivra-tools/src/retired.rs
 4	supervisor	rust/nivra-cli/src/alert.rs
