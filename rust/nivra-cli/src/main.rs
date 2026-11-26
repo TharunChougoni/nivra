@@ -124,12 +124,10 @@ enum Command {
         #[arg(long)]
         events: PathBuf,
     },
-    /// Exploratory offline daily-OHLC exit sensitivity; never starts trading.
+    /// Exploratory archived daily-OHLC exit sensitivity; never starts trading.
     ExitBacktest {
         #[arg(long)]
-        config: Option<PathBuf>,
-        #[arg(long)]
-        history: PathBuf,
+        config: PathBuf,
         #[arg(long)]
         output: PathBuf,
         #[arg(long)]
@@ -149,16 +147,11 @@ enum Command {
         #[arg(long)]
         config: PathBuf,
         #[arg(long)]
-        output: PathBuf,
-        #[arg(long)]
         start: Option<chrono::NaiveDate>,
         #[arg(long)]
         end: Option<chrono::NaiveDate>,
         #[arg(long, value_enum, default_value = "both")]
         interval: runtime::history_download::Interval,
-        /// Acquire validated provider receipts without rebuilding replay shards.
-        #[arg(long)]
-        receipts_only: bool,
     },
     /// Manually catch up required daily sessions using original quota/receipts.
     HistoryBackfill {
@@ -614,21 +607,16 @@ fn main() -> ExitCode {
         ),
         Command::HistoryDownload {
             config,
-            output,
             start,
             end,
             interval,
-            receipts_only,
-        } => {
-            runtime::history_download::entry(&config, &output, start, end, interval, receipts_only)
-        }
+        } => runtime::history_download::entry(&config, start, end, interval),
         Command::ExitBacktest {
             config,
-            history,
             output,
             start,
             end,
-        } => runtime::exit_backtest::entry(&history, &output, start, end, config.as_deref()),
+        } => runtime::exit_backtest::entry(&config, &output, start, end),
         Command::BacktestFingerprint => {
             println!("{}", nivra_core::replay::engine_fingerprint());
             ExitCode::SUCCESS

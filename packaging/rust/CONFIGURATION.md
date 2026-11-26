@@ -23,7 +23,8 @@ starting capital. Keep the original account and its evidence as an archive.
    lane. Confirm that each lane's provider account can use its model.
 2. Prepare a private paper base config with an exchange-verified session and
    previous session, the account, fee, market and dashboard credential paths,
-   the history directory, and the read quota journal with its device and inode.
+   the market archive for pre-open preparation, and the read quota journal
+   with its device and inode.
 3. Choose two new absolute paths whose parent directories exist, outside the
    original config and session directories.
 4. Run setup:
@@ -62,7 +63,7 @@ Authentication, quota and malformed-response failures stop a pass at once.
 
 ## Market archive
 
-Add this optional block to the paper configuration to use the archive commands.
+Add this block to use history commands, pre-open preparation, or daily research.
 Use a dedicated PostgreSQL database with TimescaleDB available.
 
 ```json

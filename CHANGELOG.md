@@ -1,5 +1,21 @@
 # Source snapshot
 
+## Unreleased
+
+**Breaking history change.** TimescaleDB now stores daily and minute candles,
+coverage, and receipts. Set `market_archive`, run
+`nivra archive init --config PAPER_CONFIG`, then run
+`nivra archive import-history --config PAPER_CONFIG HISTORY_DIR` against your
+former history folder. Check the result with
+`nivra history-backfill --config PAPER_CONFIG --check-only`. The import
+preserves the source files. Paper configs that do not use history can still omit
+`market_archive`.
+
+Remove `--output` and `--receipts-only` from `history-download` and
+`--history` from `exit-backtest`. Exit reports now count archived daily bars.
+Use `nivra archive export-daily-history`
+to build daily research datasets. See [operations](docs/OPERATIONS.md#move-an-existing-history-folder-to-timescaledb).
+
 ## 0.12.8 — 2026-11-26
 
 A pre-open history pass no longer parks a session it cannot start (#27). A

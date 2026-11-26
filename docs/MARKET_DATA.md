@@ -13,28 +13,30 @@ Nivra reads all market data from Upstox with the application's own token.
 
 ## Shared market archive
 
-The optional TimescaleDB archive stores full-quote and candle receipts across
-sessions. It preserves the original receipt envelopes, including the provider
-bodies, as zstd-compressed bytes. It stores prices rounded to the nearest paise
+TimescaleDB stores full-quote and candle receipts across sessions. Candle
+acquisition, preparation, and research queries require the archive. It preserves
+the original receipt envelopes, including provider bodies, as zstd-compressed
+bytes. It stores prices rounded to the nearest paise
 and leaves missing quote depth null. A candle attempt records coverage for each
 date in its request window.
 
 Set [`market_archive`](../packaging/rust/CONFIGURATION.md#market-archive) in
 the paper configuration. Run `nivra archive init --config PAPER_JSON` to
-create the schema. Run `nivra archive check --config PAPER_JSON` to see its
-version and row counts as JSON. You can repeat either command.
+create or upgrade the schema. Run `nivra archive check --config PAPER_JSON`
+to see its version and row counts as JSON. You can repeat either command.
 
 TimescaleDB partitions quote observations by receipt time and minute bars by
 bar time. The compression policies group rows by instrument and compress
-chunks older than one day. Controller capture, history backfill, and backtest
-reads still use their existing storage in this release.
+chunks older than one day. Backfill commits each successful receipt, its bars,
+and its coverage in one transaction.
 
-To run the archive integration test, use a dedicated TimescaleDB test database.
-The test writes synthetic rows.
+Use a disposable TimescaleDB database to run the archive integration tests.
+They write synthetic rows.
 
 ```sh
-NIVRA_ARCHIVE_TEST_URL=postgresql://postgres:test@127.0.0.1:55432/postgres \
-	cargo test --locked -p nivra-store --test market_archive -- --ignored --nocapture
+export NIVRA_ARCHIVE_TEST_URL=postgresql://postgres:test@127.0.0.1:55434/postgres
+cargo test --locked -p nivra-store --test market_archive -- --ignored --nocapture
+cargo test --locked -p nivra-cli --bin nivra import_history_twice_and_measure_coverage -- --ignored --nocapture
 ```
 
 ## Read quota and quote batches
@@ -177,21 +179,16 @@ optional `index_feeds.regime` adds a regime label to that context.
 uses the shared read journal and never starts a session.
 
 ```sh
-nivra history-download --config PAPER_CONFIG --output HISTORY_DIR \
+nivra history-download --config PAPER_CONFIG \
 	--start 2025-10-17 --end 2026-10-16 --interval days
 ```
 
 `--interval` is `minutes`, `days` or `both` (default `both`). Without dates,
 the range ends yesterday in IST and covers the twelve months before it.
-`--receipts-only` saves provider receipts without building replay shards.
-
-Each request range has an immutable receipt. A rerun in the same directory
-reuses valid receipts and requests only missing ranges. A corrupt receipt
-stops the run. Never overwrite receipts or reset the journal to force a rerun.
-New and reused validated receipts are also saved in the output directory's
-`candles.sqlite`. Each row keeps the original response body, range, hash
-and receipt clocks, including successful empty responses. Older receipts
-are added when a download revisits their ranges.
+Dates with observed bars or covered empty responses are reused on the next
+pass. A daily answer that ends early leaves the tail eligible for retry.
+Minute downloads reuse the full range of a successful response. A conflicting
+bar stops the write and rolls back the request.
 
 History reads leave headroom for other readers:
 `history_download.reserve_second_reads` (default 2),
@@ -207,14 +204,14 @@ instrument. To fetch the missing sessions for a config, run:
 nivra history-backfill --config PAPER_CONFIG
 ```
 
-Backfill uses receipts-only mode and the reviewed NSE calendar. It requests
+Backfill uses archive coverage and the reviewed NSE calendar. It requests
 only missing trading-session spans. Add `--check-only` to verify every
 required bar without a provider call. For a new config whose universe is
 not frozen yet, add `--prepare-universe`.
 
 After midnight IST, `history-backfill --config PAPER_CONFIG --upcoming`
 can prepare the upcoming reviewed session from the current frozen universe,
-even before the session pointer advances. It takes the same history directory
+even before the session pointer advances. It takes the same archive download
 lock as pre-open preparation. Start it early enough to finish before that
 window. A 2,760-instrument pass takes at least 57 minutes at the default pace.
 
@@ -242,11 +239,11 @@ whose fetch fails. A manual download fails on the first error.
 
 - A successful or empty provider response does not prove that every bar
   exists. Check coverage with `history-backfill --check-only`.
-- With `history_skip_unavailable`, a range that returns HTTP 400 is recorded
-  as unavailable and not requested again. The bars stay missing.
-- The preparation pass stops with `history_receipt_inventory_limit` or
-  `history_receipt_decode_limit` if the receipt store is too large. Do not
-  prune receipts to clear it.
+- An HTTP 400 marks the affected dates unavailable. With
+  `history_skip_unavailable`, the planner skips those dates. Unavailable dates
+  still count as missing in the coverage report.
+- Transient provider errors leave retryable coverage. A failure cannot remove
+  an observed bar or erase an earlier successful empty answer.
 - Candles have no bid, ask, depth or circuit data. A candle backtest cannot
   prove intrabar fills.
 - LTPC has no volume or circuit bands. Nivra never estimates volume from
@@ -254,6 +251,19 @@ whose fetch fails. A manual download fails on the first error.
 - [Dashboard](DASHBOARD.md) minute bars mark minutes with no feed as
   `unobserved`.
 
-To build research shards from downloaded history without changing it, run
-`nivra-analysis --prepare-daily-history SOURCE_HISTORY NEW_DIRECTORY`.
-[Research](RESEARCH.md) describes how the research lane uses them.
+## Research from archived daily bars
+
+Run `nivra exit-backtest --config PAPER_CONFIG --output REPORT.json` to
+simulate exploratory daily exits. It uses instrument ticks from the frozen
+universe and accepts optional `--start` and `--end` dates.
+
+Build bounded research datasets for the offline analysis runtime with this
+command.
+
+```sh
+nivra archive export-daily-history --config PAPER_CONFIG NEW_DIRECTORY \
+	--start 2025-10-17 --end 2026-10-16
+```
+
+The export writes dated closes and an inventory of shard hashes. See
+[research](RESEARCH.md) for how the offline analysis runtime uses them.

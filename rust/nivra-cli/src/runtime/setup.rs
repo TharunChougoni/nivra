@@ -132,7 +132,6 @@ fn prepare(args: &Args) -> Result<()> {
         "read_journal_device",
         "read_journal_inode",
         "paper_costs",
-        "history_directory",
         "market_archive",
         "dashboard_public_host",
         "alert_webhook_file",

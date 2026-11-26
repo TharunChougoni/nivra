@@ -1,21 +1,11 @@
 //! Read-only candle acquisition. Candles are evidence, never executable quotes.
 use super::*;
 use chrono::{Days, Months};
-use nivra_cli::lock::AdvisoryLock;
 use nivra_core::{execution::Instrument, finance::Amount};
-use nivra_store::market_data;
+use nivra_store::{market_archive as archive, market_data};
 use serde_json::Value;
-// Workspace feature unification can enable serde_json/preserve_order. History
-// bytes must retain the sorted object layout used by existing archives.
-macro_rules! json {
-    ($($tokens:tt)*) => {{
-        let mut value = serde_json::json!($($tokens)*);
-        value.sort_all_objects();
-        value
-    }};
-}
-use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
+use serde_json::json;
+use std::collections::BTreeSet;
 use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -25,20 +15,23 @@ pub enum Interval {
     Both,
 }
 impl Interval {
-    fn units(self) -> &'static [&'static str] {
+    fn units(self) -> &'static [archive::CandleUnit] {
+        use archive::CandleUnit::{Daily, Minute};
         match self {
-            Self::Minutes => &["minutes"],
-            Self::Days => &["days"],
-            Self::Both => &["minutes", "days"],
+            Self::Minutes => &[Minute],
+            Self::Days => &[Daily],
+            Self::Both => &[Minute, Daily],
         }
     }
 }
-const LIMITATION: &str = "Candle evidence only: no executable quotes, liquidity, historical calendar or point-in-time universe acceptance; empty-observation replay is not strategy performance.";
+pub(super) fn unit_name(unit: archive::CandleUnit) -> &'static str {
+    match unit {
+        archive::CandleUnit::Daily => "days",
+        archive::CandleUnit::Minute => "minutes",
+    }
+}
 pub(crate) const MAX_RECEIPT_BYTES: u64 = data::HISTORY_RESPONSE_BYTES * 2 + 16_384;
 pub(crate) trait Transport {
-    fn receipts_only(&self) -> bool {
-        false
-    }
     fn skip_unavailable(&self) -> bool {
         false
     }
@@ -67,17 +60,12 @@ struct Provider<'a> {
     client: data::Client,
     config: &'a Config,
     control: Option<PreparationControl>,
-    receipts_only: bool,
     pacing: Connection,
 }
 const READ_INTERVAL_MS: i64 = 1250;
 pub(super) const RATE_LIMIT_RETRY_MS: i64 = 10 * 60_000;
 impl<'a> Provider<'a> {
-    fn new(
-        config: &'a Config,
-        control: Option<PreparationControl>,
-        receipts_only: bool,
-    ) -> Result<Self> {
+    fn new(config: &'a Config, control: Option<PreparationControl>) -> Result<Self> {
         let mut path = config.read_journal.as_os_str().to_owned();
         path.push(format!(
             ".history-{}-{}.sqlite",
@@ -90,7 +78,6 @@ impl<'a> Provider<'a> {
             client: data::Client::new(&config.market_data_transport)?,
             config,
             control,
-            receipts_only,
             pacing,
         })
     }
@@ -134,9 +121,6 @@ impl<'a> Provider<'a> {
     }
 }
 impl Transport for Provider<'_> {
-    fn receipts_only(&self) -> bool {
-        self.receipts_only
-    }
     fn skip_unavailable(&self) -> bool {
         self.config.history_skip_unavailable
     }
@@ -223,104 +207,6 @@ pub(crate) struct Receipt {
     body: String,
     body_sha256: String,
 }
-/// Read one immutable receipt under a bound derived from the provider response
-/// ceiling and the maximum JSON escaping/metadata overhead.
-pub(crate) fn read_receipt(path: &Path) -> std::result::Result<Receipt, &'static str> {
-    let bytes =
-        crate::read_bounded(path, MAX_RECEIPT_BYTES).map_err(|_| "history_receipt_unreadable")?;
-    serde_json::from_slice(&bytes).map_err(|_| "history_receipt_decode")
-}
-// Archived empty-observation shards from v0.5.2–v0.5.6 retain their original
-// engine provenance. This does not authorize replay under a different engine.
-#[cfg(test)]
-const LEGACY_ENGINE: &str = "2ff64f81981d7710a7978b6944de7a364bd81076fab12b5cfb3ffabd22a6e525";
-// v0.5.58 source before configured scanner screens. Retain descriptive shards
-// exactly; this never permits replay under the new execution fingerprint.
-#[cfg(test)]
-const PRE_SCANNER_ENGINE: &str = "7f254509db3b95e40aaa5972fca0ed37bb83c190f0088dac4be6b7cd8a8bbc2d";
-fn is_engine_fingerprint(engine: &str) -> bool {
-    engine.len() == 64
-        && engine
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-fn reusable_manifest(prior: &[u8], rebuilt: &[u8]) -> bool {
-    let (Ok(mut prior_value), Ok(mut rebuilt_value)) = (
-        serde_json::from_slice::<Value>(prior),
-        serde_json::from_slice::<Value>(rebuilt),
-    ) else {
-        return false;
-    };
-    // Exact canonical bytes only: no reformatted or hand-edited predecessor.
-    if serde_json::to_vec(&prior_value).ok().as_deref() != Some(prior) {
-        return false;
-    }
-    let engine = prior_value["bindings"]["engine"].clone();
-    if !engine.as_str().is_some_and(is_engine_fingerprint) {
-        return false;
-    }
-    rebuilt_value["bindings"]["engine"] = engine;
-    for value in [&mut prior_value, &mut rebuilt_value] {
-        match value["universe"].as_array_mut().map(Vec::as_mut_slice) {
-            Some([instrument]) if instrument["symbol"].is_string() => {
-                instrument["symbol"] = Value::Null
-            }
-            _ => return false,
-        }
-    }
-    prior_value == rebuilt_value
-}
-fn immutable(path: &Path, bytes: &[u8]) -> Result<()> {
-    let kind = match path.extension().and_then(|s| s.to_str()) {
-        Some("jsonl") => "events",
-        _ => path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .and_then(|s| s.rsplit('.').nth(1))
-            .unwrap_or("artifact"),
-    };
-    immutable_bytes(path, bytes).map_err(|error| {
-        let reason = if error.to_string() == "history_artifact_changed" {
-            "artifact_changed"
-        } else {
-            "artifact_io"
-        };
-        Box::new(Fail::new(format!("history_{kind}_{reason}"))) as Box<dyn std::error::Error>
-    })
-}
-fn immutable_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
-    if path.symlink_metadata().is_ok() {
-        if !path.symlink_metadata()?.is_file() || fs::read(path)? != bytes {
-            return Err("history_artifact_changed".into());
-        }
-        return Ok(());
-    }
-    let parent = path.parent().ok_or("history_parent")?;
-    let mut attempt = 0u64;
-    let (stage, mut f) = loop {
-        let stage = parent.join(format!(".history-stage-{}-{attempt}", std::process::id()));
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&stage)
-        {
-            Ok(f) => break (stage, f),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                attempt = attempt.checked_add(1).ok_or("history_stage_limit")?
-            }
-            Err(e) => return Err(e.into()),
-        }
-    };
-    f.write_all(bytes)?;
-    f.sync_all()?;
-    // Link is atomic and refuses overwrite. Interrupted staging files remain as evidence.
-    fs::hard_link(&stage, path)?;
-    fs::File::open(parent)?.sync_all()?;
-    fs::remove_file(stage)?;
-    fs::File::open(parent)?.sync_all()?;
-    Ok(())
-}
 pub(crate) fn candles(r: &Receipt) -> Result<Vec<(NaiveDate, Value)>> {
     if r.requested_ms > r.received_ms || digest(r.body.as_bytes()) != r.body_sha256 {
         return Err("history_receipt_invalid".into());
@@ -393,7 +279,8 @@ pub(super) fn window_end(from: NaiveDate, end: NaiveDate, unit: &str) -> Result<
 }
 
 mod download;
-pub(crate) use download::*;
+pub(super) use download::prepare_daily;
+use download::{DownloadWindow, download};
 
 /// Explicit manual acquisition is separate from the automatic pre-open window.
 /// Use the same reviewed-session gap coalescing and original quota, without
@@ -431,7 +318,7 @@ pub fn backfill_entry(
         )?;
         if check_only {
             let report = super::preparation::coverage_report(
-                &request.history_root,
+                &request.config,
                 &instruments,
                 &request.required_sessions,
                 request.target_session,
@@ -448,39 +335,36 @@ pub fn backfill_entry(
                     "required_bars": report.required_bars,
                     "observed_bars": report.observed_bars,
                     "missing_bars": report.missing_bars,
+                    "covered_empty_bars": report.covered_empty_bars,
+                    "retryable_missing_bars": report.retryable_missing_bars,
                     "failure": report.failure,
                 })
             );
             return Ok(report.status == super::preparation::CoverageStatus::Ready);
         }
         data::verify_journal(&c)?;
-        let start = *request
-            .required_sessions
-            .first()
-            .ok_or("history_required_sessions_missing")?;
-        let mut provider = Provider::new(&c, None, true)?;
-        download_controlled(
+        let db = super::market_archive::open(&c)?;
+        let mut provider = Provider::new(&c, None)?;
+        download(
+            db,
             &mut provider,
-            millis,
             &instruments,
-            &request.history_root,
-            Some(start),
-            Some(request.previous_session),
-            Interval::Days,
+            DownloadWindow {
+                start: request.required_sessions.first().copied(),
+                end: Some(request.previous_session),
+                interval: Interval::Days,
+                sessions: Some(&request.required_sessions),
+            },
             None,
-            Some(&c),
         )?;
-        println!("history_backfill_complete; original receipts preserved");
+        println!("history_backfill_complete");
         Ok(true)
     })();
     match result {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(2),
         Err(error) => {
-            eprintln!(
-                "history_backfill_failed: {}; original receipts preserved",
-                failure_code(error.as_ref())
-            );
+            eprintln!("history_backfill_failed: {}", failure_code(error.as_ref()));
             ExitCode::from(2)
         }
     }
@@ -488,11 +372,9 @@ pub fn backfill_entry(
 
 pub fn entry(
     config: &Path,
-    output: &Path,
     start: Option<NaiveDate>,
     end: Option<NaiveDate>,
     interval: Interval,
-    receipts_only: bool,
 ) -> ExitCode {
     let result = (|| {
         let c: Config = serde_json::from_slice(
@@ -502,27 +384,28 @@ pub fn entry(
         c.validate()?;
         data::verify_journal(&c)?;
         let instruments = wide::history_instruments(&c)?;
-        let mut provider = Provider::new(&c, None, receipts_only)?;
+        let db = super::market_archive::open(&c)?;
+        let mut provider = Provider::new(&c, None)?;
         download(
+            db,
             &mut provider,
-            millis,
             &instruments,
-            output,
-            start,
-            end,
-            interval,
+            DownloadWindow {
+                start,
+                end,
+                interval,
+                sessions: None,
+            },
+            None,
         )
     })();
     match result {
-        Ok(()) => {
-            println!("history_download_complete; {LIMITATION}");
+        Ok(_) => {
+            println!("history_download_complete");
             ExitCode::SUCCESS
         }
         Err(error) => {
-            eprintln!(
-                "history_download_failed: {}; original receipts preserved",
-                failure_code(error.as_ref())
-            );
+            eprintln!("history_download_failed: {}", failure_code(error.as_ref()));
             ExitCode::from(2)
         }
     }

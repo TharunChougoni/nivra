@@ -117,11 +117,64 @@ pub fn evaluate_with_settings(
             }
         }
     }
+    let series = series
+        .into_iter()
+        .map(|(key, bars)| {
+            let closes = bars
+                .into_iter()
+                .map(|(day, fields)| (day, fields[4].as_f64().expect("validated close")))
+                .collect();
+            (key, closes)
+        })
+        .collect();
+    summarize(&series, settings)
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchiveDataset {
+    pub schema: u8,
+    pub bars: Vec<ArchiveBar>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchiveBar {
+    pub key: String,
+    pub day: NaiveDate,
+    pub close_paise: i64,
+}
+
+pub fn evaluate_archive(dataset: &ArchiveDataset) -> Result<Summary, &'static str> {
+    if dataset.schema != 2 || dataset.bars.is_empty() {
+        return Err("daily_dataset_invalid");
+    }
+    let mut series = BTreeMap::<String, BTreeMap<NaiveDate, f64>>::new();
+    for bar in &dataset.bars {
+        if bar.key.is_empty() || bar.key.len() > 128 || bar.close_paise <= 0 {
+            return Err("daily_row");
+        }
+        if series
+            .entry(bar.key.clone())
+            .or_default()
+            .insert(bar.day, bar.close_paise as f64)
+            .is_some()
+        {
+            return Err("daily_conflict");
+        }
+    }
+    summarize(&series, &Settings::default())
+}
+
+fn summarize(
+    series: &BTreeMap<String, BTreeMap<NaiveDate, f64>>,
+    settings: &Settings,
+) -> Result<Summary, &'static str> {
     let mut ranked = vec![];
     let mut first = None;
     let mut last = None;
     let mut count = 0;
-    for (key, bars) in &series {
+    for (key, bars) in series {
         let (Some((start, a)), Some((end, b))) = (bars.first_key_value(), bars.last_key_value())
         else {
             continue;
@@ -129,7 +182,7 @@ pub fn evaluate_with_settings(
         first = Some(first.map_or(*start, |d: NaiveDate| d.min(*start)));
         last = Some(last.map_or(*end, |d: NaiveDate| d.max(*end)));
         count += bars.len();
-        let ret = b[4].as_f64().ok_or("daily_close")? / a[4].as_f64().ok_or("daily_close")? - 1.0;
+        let ret = b / a - 1.0;
         if !ret.is_finite() {
             return Err("daily_return");
         }

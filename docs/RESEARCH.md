@@ -518,7 +518,8 @@ worker unavailable, never a plain subprocess.
 
 `nivra-analysis` supports two analyses. `shared_core_backtest_v1` replays an
 exact manifest and quote events. `daily_history_summary_v1` gives descriptive,
-unadjusted statistics from receipt-bound daily bars, not fills.
+unadjusted statistics from daily closes exported by
+`nivra archive export-daily-history`. See [market data](MARKET_DATA.md#research-from-archived-daily-bars).
 
 ### Commands
 

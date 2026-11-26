@@ -231,7 +231,7 @@ pub fn entry(path: &Path, now_ms: i64) -> ExitCode {
                 preparation::PreparationWindow::PreOpen,
             )?;
             let coverage = preparation::coverage_report(
-                &request.history_root,
+                &request.config,
                 &instruments,
                 &request.required_sessions,
                 target,

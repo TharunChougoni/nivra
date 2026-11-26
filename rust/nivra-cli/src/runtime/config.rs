@@ -722,7 +722,7 @@ pub struct Config {
     #[serde(skip)]
     pub legacy_directory: Option<PathBuf>,
     #[serde(default, skip_serializing)]
-    #[allow(dead_code)] // Archived reviewer setting, retained for config compatibility.
+    #[allow(dead_code)] // Accept paper configs from before the history migration.
     pub history_directory: Option<PathBuf>,
     /// Opt-in bounded previous-session acquisition before the market opens.
     #[serde(default, skip_serializing)]

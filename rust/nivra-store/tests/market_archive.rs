@@ -83,7 +83,7 @@ fn timescale_archive_round_trip() -> Result<(), Box<dyn std::error::Error>> {
     assert!(write_quotes(&mut db, &batch)?);
     let elapsed = start.elapsed();
     let after = check(&mut db)?;
-    assert_eq!(after.schema_version, 1);
+    assert_eq!(after.schema_version, 2);
     assert_eq!(after.receipts - before.receipts, 2);
     assert_eq!(after.instruments - before.instruments, 200);
     assert_eq!(after.quote_obs - before.quote_obs, 201);
@@ -153,16 +153,24 @@ fn timescale_archive_round_trip() -> Result<(), Box<dyn std::error::Error>> {
         FailedAttempt::Unavailable,
     )?;
 
-    let coverage: Vec<String> = db
+    let coverage: Vec<(String, Option<i64>)> = db
         .query(
-            "SELECT status FROM coverage c JOIN instruments i ON i.id = c.instrument_id
+            "SELECT status, unavailable_ms FROM coverage c JOIN instruments i ON i.id = c.instrument_id
          WHERE i.key = $1 ORDER BY unit, day",
             &[&instrument],
         )?
         .iter()
-        .map(|row| row.get(0))
+        .map(|row| (row.get(0), row.get(1)))
         .collect();
-    assert_eq!(coverage, ["observed", "empty", "observed", "unavailable"]);
+    assert_eq!(
+        coverage,
+        [
+            ("observed".into(), None),
+            ("empty".into(), None),
+            ("observed".into(), None),
+            ("empty".into(), Some(now + 10)),
+        ]
+    );
 
     let final_counts = check(&mut db)?;
     assert_eq!(final_counts.receipts - after.receipts, 3);

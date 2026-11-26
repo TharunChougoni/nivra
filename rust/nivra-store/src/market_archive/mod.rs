@@ -1,19 +1,27 @@
 //! TimescaleDB archive for original market receipts and normalized observations.
 
+mod history;
 mod writer;
+
+pub use history::{
+    CoverageWindow, CoveredDays, DailyBar, DailyCoverage, covered_days, daily_bars, daily_coverage,
+    daily_instrument_keys, latest_daily_bars, lock_history_download,
+};
 
 pub use writer::{
     CandleBar, CandleBatch, CandleUnit, FailedAttempt, QuoteBatch, QuoteObservation, QuotePurpose,
-    Receipt, write_candles, write_failed_attempt, write_quotes,
+    Receipt, import_candles, import_unavailable, write_candles, write_failed_attempt,
+    write_failed_range, write_quotes,
 };
 
-use postgres::{Client, Config, NoTls, error::SqlState};
+pub use postgres::Client;
+use postgres::{Config, NoTls, error::SqlState};
 use serde::Serialize;
 use std::time::Duration;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 fn connection_config(url: &str) -> Result<Config> {
     let invalid = "archive_url_invalid";
@@ -57,16 +65,19 @@ pub fn init(db: &mut Client) -> Result<()> {
         )",
     )?;
     let version = tx.query_opt("SELECT version FROM schema_version WHERE singleton", &[])?;
-    match version.as_ref().map(|row| row.get::<_, i32>(0)) {
-        Some(SCHEMA_VERSION) => {}
+    let version = version.map(|row| row.get::<_, i32>(0));
+    match version {
+        Some(SCHEMA_VERSION | 1) => {}
         Some(_) => return Err("archive_schema_version_unsupported".into()),
-        None => {
-            tx.batch_execute(include_str!("schema.sql"))?;
-            tx.execute(
-                "INSERT INTO schema_version (version) VALUES ($1)",
-                &[&SCHEMA_VERSION],
-            )?;
-        }
+        None => tx.batch_execute(include_str!("schema.sql"))?,
+    }
+    if version != Some(SCHEMA_VERSION) {
+        tx.batch_execute(include_str!("history.sql"))?;
+        tx.execute(
+            "INSERT INTO schema_version (version) VALUES ($1)
+             ON CONFLICT (singleton) DO UPDATE SET version = EXCLUDED.version",
+            &[&SCHEMA_VERSION],
+        )?;
     }
     tx.commit()?;
     Ok(())

@@ -1931,7 +1931,10 @@ fn failed_history_attempt_retries_with_delay_and_session_bound() {
         window.deadline_ms(&cfg, cfg.session, near_close).unwrap(),
         close
     );
-    cfg.history_directory = Some(fixture.path().join("history"));
+    cfg.market_archive = Some(super::super::config::MarketArchiveSettings {
+        url: "postgresql://test@localhost/archive".into(),
+        password_file: fixture.path().join("archive-password"),
+    });
     let request = preparation_request(&cfg, &[instrument(1)], at, window).unwrap();
     assert_eq!(request.target_session, cfg.session);
     assert_eq!(request.deadline_ms, at + length);
@@ -2316,126 +2319,7 @@ fn history_recovery_refuses_unsafe_or_malformed_state() {
 }
 
 #[test]
-fn prepared_daily_volume_requires_minimum_genuine_sessions() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut c = super::super::tests::config(dir.path());
-    c.history_directory = Some(dir.path().join("history"));
-    fs::create_dir(c.history_directory.as_ref().unwrap()).unwrap();
-    let instruments = vec![instrument(1), instrument(2), instrument(3)];
-    let request = preparation_request(
-        &c,
-        &instruments,
-        start(),
-        preparation::PreparationWindow::PreOpen,
-    )
-    .unwrap();
-    assert_eq!(c.history_avg_daily_volume_min_sessions, 10);
-    for (instrument, count) in instruments.iter().zip([21, 9]) {
-        let rows: Vec<_> = request
-            .required_sessions
-            .iter()
-            .take(count)
-            .enumerate()
-            .map(|(n, day)| {
-                serde_json::json!([
-                    format!("{day}T00:00:00+05:30"),
-                    100,
-                    102,
-                    99,
-                    101,
-                    (n + 1) * 100,
-                    0
-                ])
-            })
-            .collect();
-        let body = serde_json::json!({"status":"success","data":{"candles":rows}}).to_string();
-        let receipt = serde_json::json!({"key":instrument.key,"unit":"days",
-                "start":request.required_sessions[0],"end":c.previous_session,
-                "requested_ms":start(),"received_ms":start(),"body":body,
-                "body_sha256":digest(body.as_bytes())});
-        let path = request.history_root.join(format!(
-            "{}.receipt.json",
-            history_download::range_id(
-                &instrument.key,
-                "days",
-                request.required_sessions[0],
-                c.previous_session
-            )
-        ));
-        fs::write(path, serde_json::to_vec(&receipt).unwrap()).unwrap();
-    }
-    let mut scan = Scanner::default();
-    for instrument in &instruments {
-        let sample = scan.samples.entry(instrument.key.clone()).or_default();
-        sample.avg_daily_volume = Some(999.0);
-        sample.avg_daily_volume_sessions = Some(21);
-    }
-    load_daily_volumes(&c, &instruments, start(), &mut scan);
-    let full = &scan.samples[&instruments[0].key];
-    assert_eq!(full.avg_daily_volume, Some(1100.0));
-    assert_eq!(full.avg_daily_volume_sessions, Some(21));
-    for instrument in &instruments[1..] {
-        let sample = &scan.samples[&instrument.key];
-        assert_eq!(sample.avg_daily_volume, None);
-        assert_eq!(sample.avg_daily_volume_sessions, None);
-        let value = serde_json::to_value(sample).unwrap();
-        assert!(value.get("avg_daily_volume").is_none());
-        assert!(value.get("avg_daily_volume_sessions").is_none());
-    }
-    c.history_avg_daily_volume_min_sessions = 9;
-    load_daily_volumes(&c, &instruments, start(), &mut scan);
-    assert_eq!(
-        scan.samples[&instruments[1].key].avg_daily_volume,
-        Some(500.0)
-    );
-    assert_eq!(
-        scan.samples[&instruments[1].key].avg_daily_volume_sessions,
-        Some(9)
-    );
-}
-
-#[test]
 fn resume_preflight_requires_flat_paper_operator_stop() {
-    // A market-open restart needs no preparation worker or provider request.
-    let dir = tempfile::tempdir().unwrap();
-    let mut c = super::super::tests::config(dir.path());
-    c.history_directory = Some(dir.path().join("history"));
-    fs::create_dir(c.history_directory.as_ref().unwrap()).unwrap();
-    let instruments = vec![instrument(1)];
-    let request = preparation_request(
-        &c,
-        &instruments,
-        start(),
-        preparation::PreparationWindow::PreOpen,
-    )
-    .unwrap();
-    let rows: Vec<_> = request
-        .required_sessions
-        .iter()
-        .map(|day| serde_json::json!([format!("{day}T00:00:00+05:30"), 100, 102, 99, 101, 1000, 0]))
-        .collect();
-    let body = serde_json::json!({"status":"success","data":{"candles":rows}}).to_string();
-    let receipt = serde_json::json!({"key":instruments[0].key,"unit":"days","start":request.required_sessions[0],"end":c.previous_session,"requested_ms":start(),"received_ms":start(),"body":body,"body_sha256":digest(body.as_bytes())});
-    let path = request.history_root.join(format!(
-        "{}.receipt.json",
-        history_download::range_id(
-            &instruments[0].key,
-            "days",
-            request.required_sessions[0],
-            c.previous_session
-        )
-    ));
-    fs::write(&path, serde_json::to_vec(&receipt).unwrap()).unwrap();
-    let before = fs::read(&path).unwrap();
-    let restored = recovered_history_status(&c, &instruments, start());
-    assert_eq!(restored["status"], "READY", "{restored}");
-    assert_eq!(restored["ready_instruments"], 1);
-    assert_eq!(fs::read(&path).unwrap(), before);
-    fs::write(&path, b"invalid").unwrap();
-    assert_eq!(
-        recovered_history_status(&c, &instruments, start())["status"],
-        "UNKNOWN"
-    );
     let mut p = crate::runtime::tests::test_portfolio();
     assert_eq!(resume_preflight(&p), Err("resume_not_operator_stopped"));
     p.stopped = true;

@@ -315,54 +315,6 @@ pub(crate) trait Backend {
 /// No prospect and no managed position: the planner has nothing to decide. This
 /// is a normal no-op, not a failed attempt, a block or an alert (#221).
 pub(crate) const NO_DECISION_WORK: &str = "model_plan_no_prospects_no_positions";
-fn load_daily(c: &Config) -> Result<BTreeMap<String, BTreeMap<NaiveDate, Value>>> {
-    let mut daily = BTreeMap::<String, BTreeMap<NaiveDate, Value>>::new();
-    let Some(dir) = &c.history_directory else {
-        return Ok(daily);
-    };
-    for item in fs::read_dir(dir)? {
-        let item = item?;
-        if !item
-            .file_name()
-            .to_string_lossy()
-            .ends_with(".receipt.json")
-        {
-            continue;
-        }
-        let r = history_download::read_receipt(&item.path()).map_err(|error| match error {
-            "history_receipt_unreadable" => "planner_history_unreadable",
-            _ => "planner_history_invalid",
-        })?;
-        if r.unit != "days" {
-            continue;
-        }
-        if item.file_name().to_string_lossy()
-            != format!(
-                "{}.receipt.json",
-                history_download::range_id(&r.key, &r.unit, r.start, r.end)
-            )
-        {
-            return Err("planner_history_binding".into());
-        }
-        for (day, row) in history_download::candles(&r)? {
-            if day >= c.session {
-                continue;
-            }
-            let retained = daily.entry(r.key.clone()).or_default();
-            if let Some(old) = retained.insert(day, row.clone())
-                && old != row
-            {
-                return Err("planner_history_conflict".into());
-            }
-            // Retain the configured warmup window; feature lookbacks keep their schema. Bound resident memory
-            // even when the research archive contains an entire broad-universe year.
-            while retained.len() > c.daily_history_sessions {
-                retained.pop_first();
-            }
-        }
-    }
-    Ok(daily)
-}
 fn reference_document(c: &Config, closes: &BTreeMap<String, (NaiveDate, Price)>) -> Value {
     let prices = closes
         .iter()
@@ -386,7 +338,18 @@ fn bundle_with_references(
     instruments: &[Instrument],
     n: usize,
 ) -> Result<(Value, Value)> {
-    let daily = load_daily(c)?;
+    use nivra_store::market_archive::{DailyBar, latest_daily_bars};
+    let mut daily = BTreeMap::<String, Vec<DailyBar>>::new();
+    if c.market_archive.is_some() {
+        let keys: Vec<_> = instruments
+            .iter()
+            .map(|instrument| instrument.key.as_str())
+            .collect();
+        let mut db = market_archive::open(c)?;
+        for row in latest_daily_bars(&mut db, &keys, c.session, c.daily_history_sessions as i64)? {
+            daily.entry(row.key.clone()).or_default().push(row);
+        }
+    }
     let mut features = Vec::new();
     let mut historical_features = Vec::new();
     let mut reference_closes = BTreeMap::<String, (NaiveDate, Price)>::new();
@@ -394,34 +357,26 @@ fn bundle_with_references(
         let Some(rows) = daily.get(&i.key) else {
             continue;
         };
-        if let Some((day, row)) = rows.iter().next_back() {
-            reference_closes.insert(i.key.clone(), (*day, Price::parse(&row[4].to_string())?));
+        if let Some(row) = rows.last() {
+            reference_closes.insert(
+                i.key.clone(),
+                (
+                    row.day,
+                    Price::try_from(market_archive::from_paise(row.close_paise)?)?,
+                ),
+            );
         }
-        let bars = rows.iter().collect::<Vec<_>>();
-        if bars.len() < c.daily_history_sessions.max(21) {
+        if rows.len() < c.daily_history_sessions.max(21) {
             continue;
         }
-        let as_of = *bars.last().unwrap().0;
-
-        let bars = &bars[bars.len() - 21..];
-        let num = |v: &Value| -> Result<f64> {
-            let n = v.as_f64().ok_or("planner_history_number")?;
-            if !n.is_finite() || n < 0.0 {
-                return Err("planner_history_number".into());
-            }
-            Ok(n)
-        };
-        let closes = bars
+        let bars = &rows[rows.len() - 21..];
+        let last = &bars[20];
+        let as_of = last.day;
+        let closes: Vec<_> = bars
             .iter()
-            .map(|(_, v)| num(&v[4]))
-            .collect::<Result<Vec<_>>>()?;
-        if closes.iter().any(|v| *v <= 0.0) {
-            return Err("planner_history_close".into());
-        }
-        let volumes = bars
-            .iter()
-            .map(|(_, v)| num(&v[5]))
-            .collect::<Result<Vec<_>>>()?;
+            .map(|row| row.close_paise as f64 / 100.0)
+            .collect();
+        let volumes: Vec<_> = bars.iter().map(|row| row.volume as f64).collect();
         let returns = closes
             .windows(2)
             .map(|w| w[1] / w[0] - 1.0)
@@ -433,8 +388,8 @@ fn bundle_with_references(
             continue;
         }
         let vs = (volumes[..20].iter().map(|v| (v - vm).powi(2)).sum::<f64>() / 20.0).sqrt();
-        let prior_close = Price::parse(&bars[20].1[4].to_string())?;
-        let row = json!({"instrument":i,"last_close":closes[20],"prior_close":prior_close,"as_of":as_of,"return_1d":closes[20]/closes[19]-1.0,"return_5d":closes[20]/closes[15]-1.0,"return_20d":closes[20]/closes[0]-1.0,"volatility_20d":volatility,"volume_z_score":if vs>0.0 {Some((volumes[20]-vm)/vs)}else{None},"gap":num(&bars[20].1[1])?/closes[19]-1.0,"gap_as_of":bars[20].0,"liquidity":vm*closes[20],"history_as_of":as_of,"history_current":as_of==c.previous_session});
+        let prior_close = Price::try_from(market_archive::from_paise(last.close_paise)?)?;
+        let row = json!({"instrument":i,"last_close":closes[20],"prior_close":prior_close,"as_of":as_of,"return_1d":closes[20]/closes[19]-1.0,"return_5d":closes[20]/closes[15]-1.0,"return_20d":closes[20]/closes[0]-1.0,"volatility_20d":volatility,"volume_z_score":if vs>0.0 {Some((volumes[20]-vm)/vs)}else{None},"gap":(last.open_paise as f64 / 100.0)/closes[19]-1.0,"gap_as_of":as_of,"liquidity":vm*closes[20],"history_as_of":as_of,"history_current":as_of==c.previous_session});
         historical_features.push(row.clone());
         if as_of == c.previous_session {
             features.push(row);

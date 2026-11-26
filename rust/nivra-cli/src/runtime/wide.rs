@@ -1003,7 +1003,7 @@ fn load_daily_volumes(c: &Config, instruments: &[Instrument], now: i64, scan: &m
         return;
     };
     let report = preparation::coverage_report(
-        &request.history_root,
+        &request.config,
         instruments,
         &request.required_sessions,
         request.target_session,
@@ -1021,7 +1021,7 @@ fn load_daily_volumes(c: &Config, instruments: &[Instrument], now: i64, scan: &m
 fn recovered_history_status(c: &Config, instruments: &[Instrument], now: i64) -> serde_json::Value {
     match preparation_request(c, instruments, now, preparation::PreparationWindow::PreOpen) {
         Ok(request) => serde_json::to_value(preparation::coverage_report(
-            &request.history_root,
+            &request.config,
             instruments,
             &request.required_sessions,
             request.target_session,
@@ -1040,6 +1040,9 @@ pub(super) fn preparation_request(
     now: i64,
     window: preparation::PreparationWindow,
 ) -> Result<preparation::PreparationRequest> {
+    if c.market_archive.is_none() {
+        return Err("archive_config_missing".into());
+    }
     let (session, previous) = c.next_sessions(local(now).date_naive())?;
     if session != c.session {
         return Err("history_preparation_session_mismatch".into());
@@ -1066,10 +1069,6 @@ pub(super) fn preparation_request(
         target_session: session,
         previous_session: previous,
         required_sessions: dates,
-        history_root: c
-            .history_directory
-            .clone()
-            .ok_or("history_directory_required")?,
         window,
         deadline_ms: deadline,
     })

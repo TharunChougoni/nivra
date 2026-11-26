@@ -231,6 +231,13 @@ fn insert_bars(
 
 /// Insert a candle receipt, its bars, and coverage for the inclusive request window.
 pub fn write_candles(db: &mut Client, batch: &CandleBatch<'_>) -> Result<bool> {
+    let mut tx = db.transaction()?;
+    let inserted = insert_candles(&mut tx, batch)?;
+    tx.commit()?;
+    Ok(inserted)
+}
+
+fn insert_candles(tx: &mut Transaction<'_>, batch: &CandleBatch<'_>) -> Result<bool> {
     let days = batch.end.signed_duration_since(batch.start).num_days();
     if !(0..3660).contains(&days)
         || batch
@@ -241,21 +248,18 @@ pub fn write_candles(db: &mut Client, batch: &CandleBatch<'_>) -> Result<bool> {
         return Err("archive_candle_range_invalid".into());
     }
     let compressed = batch.receipt.compress()?;
-    let mut tx = db.transaction()?;
-    let Some(receipt_id) =
-        insert_or_verify(&mut tx, batch.unit as i16, &batch.receipt, &compressed)?
+    let Some(receipt_id) = insert_or_verify(tx, batch.unit as i16, &batch.receipt, &compressed)?
     else {
-        tx.commit()?;
         return Ok(false);
     };
-    insert_instruments(&mut tx, &[&batch.instrument_key])?;
+    insert_instruments(tx, &[&batch.instrument_key])?;
     let instrument_id = tx
         .query_one(
             "SELECT id FROM instruments WHERE key = $1",
             &[&batch.instrument_key],
         )?
         .get(0);
-    insert_bars(&mut tx, batch, instrument_id, receipt_id)?;
+    insert_bars(tx, batch, instrument_id, receipt_id)?;
     let mut observed: Vec<NaiveDate> = batch.bars.iter().map(|bar| bar.day).collect();
     observed.sort_unstable();
     observed.dedup();
@@ -266,13 +270,15 @@ pub fn write_candles(db: &mut Client, batch: &CandleBatch<'_>) -> Result<bool> {
                 $6, $7
          FROM generate_series(0, $4::date - $3::date) AS offset_days
          ON CONFLICT (instrument_id, unit, day) DO UPDATE
-         SET status = EXCLUDED.status, attempted_ms = EXCLUDED.attempted_ms, receipt_id = EXCLUDED.receipt_id
-         WHERE (EXCLUDED.status = 'observed', EXCLUDED.attempted_ms)
+         SET status = EXCLUDED.status, attempted_ms = EXCLUDED.attempted_ms,
+             receipt_id = EXCLUDED.receipt_id,
+             unavailable_ms = CASE WHEN EXCLUDED.status <> 'observed' THEN coverage.unavailable_ms END
+         WHERE coverage.receipt_id IS NULL
+            OR (EXCLUDED.status = 'observed', EXCLUDED.attempted_ms)
              > (coverage.status = 'observed', coverage.attempted_ms)",
         &[&instrument_id, &(batch.unit as i16), &batch.start, &batch.end,
           &observed, &batch.receipt.requested_ms, &receipt_id],
     )?;
-    tx.commit()?;
     Ok(true)
 }
 
@@ -285,20 +291,102 @@ pub fn write_failed_attempt(
     attempted_ms: i64,
     failure: FailedAttempt,
 ) -> Result<()> {
+    write_failed_range(db, (key, unit, day, day), attempted_ms, failure)
+}
+
+pub fn write_failed_range(
+    db: &mut Client,
+    range: (&str, CandleUnit, NaiveDate, NaiveDate),
+    attempted_ms: i64,
+    failure: FailedAttempt,
+) -> Result<()> {
+    let mut tx = db.transaction()?;
+    insert_failed_range(&mut tx, range, attempted_ms, failure)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn insert_failed_range(
+    tx: &mut Transaction<'_>,
+    (key, unit, start, end): (&str, CandleUnit, NaiveDate, NaiveDate),
+    attempted_ms: i64,
+    failure: FailedAttempt,
+) -> Result<()> {
+    if !(0..3660).contains(&end.signed_duration_since(start).num_days()) {
+        return Err("archive_candle_range_invalid".into());
+    }
     let status = match failure {
         FailedAttempt::Unavailable => "unavailable",
         FailedAttempt::Retryable => "failed_retryable",
     };
-    let mut tx = db.transaction()?;
-    insert_instruments(&mut tx, &[key])?;
+    insert_instruments(tx, &[key])?;
     tx.execute(
-        "INSERT INTO coverage (instrument_id, unit, day, status, attempted_ms)
-         SELECT id, $2, $3, $4, $5 FROM instruments WHERE key = $1
+        "INSERT INTO coverage (instrument_id, unit, day, status, attempted_ms, unavailable_ms)
+         SELECT id, $2, $3::date + offset_days, $5::text, $6::bigint,
+                CASE WHEN $5 = 'unavailable' THEN $6 END
+         FROM instruments CROSS JOIN generate_series(0, $4::date - $3::date) AS offset_days
+         WHERE key = $1
          ON CONFLICT (instrument_id, unit, day) DO UPDATE
-         SET status = EXCLUDED.status, attempted_ms = EXCLUDED.attempted_ms, receipt_id = NULL
-         WHERE coverage.status <> 'observed' AND EXCLUDED.attempted_ms > coverage.attempted_ms",
-        &[&key, &(unit as i16), &day, &status, &attempted_ms],
+         SET status = CASE WHEN coverage.receipt_id IS NULL
+                           AND (EXCLUDED.attempted_ms, EXCLUDED.status = 'unavailable')
+                             >= (coverage.attempted_ms, coverage.status = 'unavailable')
+                           THEN EXCLUDED.status ELSE coverage.status END,
+             attempted_ms = CASE WHEN coverage.receipt_id IS NULL
+                                 THEN greatest(EXCLUDED.attempted_ms, coverage.attempted_ms)
+                                 ELSE coverage.attempted_ms END,
+             unavailable_ms = greatest(coverage.unavailable_ms, EXCLUDED.unavailable_ms)
+         WHERE coverage.status <> 'observed'",
+        &[&key, &(unit as i16), &start, &end, &status, &attempted_ms],
     )?;
-    tx.commit()?;
     Ok(())
+}
+
+/// Bind immutable import bytes to the source range and write the evidence atomically.
+fn import(
+    db: &mut Client,
+    range_id: &str,
+    kind: &str,
+    hash: &[u8],
+    write: impl FnOnce(&mut Transaction<'_>) -> Result<bool>,
+) -> Result<bool> {
+    let mut tx = db.transaction()?;
+    let inserted = tx.execute(
+        "INSERT INTO history_imports VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+        &[&range_id, &kind, &hash],
+    )?;
+    let result = if inserted == 0 {
+        let prior: Vec<u8> = tx
+            .query_one(
+                "SELECT sha256 FROM history_imports WHERE range_id = $1 AND kind = $2",
+                &[&range_id, &kind],
+            )?
+            .get(0);
+        if prior != hash {
+            return Err("archive_history_import_conflict".into());
+        }
+        false
+    } else {
+        write(&mut tx)?
+    };
+    tx.commit()?;
+    Ok(result)
+}
+
+pub fn import_candles(db: &mut Client, range_id: &str, batch: &CandleBatch<'_>) -> Result<bool> {
+    import(db, range_id, "receipt", &batch.receipt.sha256, |tx| {
+        insert_candles(tx, batch)
+    })
+}
+
+pub fn import_unavailable(
+    db: &mut Client,
+    range_id: &str,
+    range: (&str, CandleUnit, NaiveDate, NaiveDate),
+    attempted_ms: i64,
+    bytes: &[u8],
+) -> Result<bool> {
+    import(db, range_id, "unavailable", &Sha256::digest(bytes), |tx| {
+        insert_failed_range(tx, range, attempted_ms, FailedAttempt::Unavailable)?;
+        Ok(true)
+    })
 }

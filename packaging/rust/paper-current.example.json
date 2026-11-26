@@ -5,7 +5,6 @@
   "calendar_source": "NSE/CMTR/71775",
   "directory": "${ORIGINAL_BOOK_DIRECTORY}",
   "sessions_root": "${ORIGINAL_SESSIONS_ROOT}",
-  "history_directory": "${ORIGINAL_HISTORY_DIRECTORY}",
   "planner_config": "${CONFIG_DIR}/planner.json",
   "token_file": "/REVIEWED/APP_MARKET_GRANT",
   "dashboard_token_file": "/REVIEWED/APP_DASHBOARD_GRANT",

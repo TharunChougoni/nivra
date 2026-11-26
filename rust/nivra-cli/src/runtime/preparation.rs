@@ -1,12 +1,11 @@
 //! Bounded pre-open daily history acquisition and pure coverage assessment.
-use super::{Config, Result, data, history_download};
+use super::{Config, Result, data, history_download, market_archive};
 use chrono::{NaiveDate, Timelike};
 use nivra_core::execution::Instrument;
+use nivra_store::market_archive::{DailyCoverage, daily_coverage};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
-    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -22,7 +21,6 @@ pub struct PreparationRequest {
     pub previous_session: NaiveDate,
     /// Exactly the reviewed trading sessions whose daily bars qualify readiness.
     pub required_sessions: Vec<NaiveDate>,
-    pub history_root: PathBuf,
     pub window: PreparationWindow,
     /// Absolute Unix milliseconds, bounded by `window`.
     pub deadline_ms: i64,
@@ -91,7 +89,7 @@ pub enum CoverageStatus {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CoverageReport {
-    /// Derived only after the complete receipt inventory passes validation.
+    /// Derived from genuine daily bars in the reviewed sessions.
     #[serde(skip)]
     pub daily_volumes: BTreeMap<String, (f64, u32)>,
     pub target_session: NaiveDate,
@@ -119,7 +117,7 @@ pub struct CoverageReport {
     pub retry_at_ms: Option<i64>,
 }
 
-fn base_report(
+pub(super) fn base_report(
     target_session: NaiveDate,
     previous_session: NaiveDate,
     instruments: usize,
@@ -143,64 +141,18 @@ fn base_report(
     }
 }
 
-/// Inspect only immutable daily receipts. A provider's valid empty response is
-/// valid evidence but contributes no dated bars. Any malformed or conflicting
-/// receipt makes the result UNKNOWN and therefore ineligible for planning.
 pub fn coverage_report(
-    root: &Path,
+    config: &Config,
     instruments: &[Instrument],
     required_sessions: &[NaiveDate],
     target_session: NaiveDate,
     previous_session: NaiveDate,
 ) -> CoverageReport {
-    coverage_report_control(
-        root,
-        instruments,
-        required_sessions,
-        target_session,
-        previous_session,
-        None,
-    )
-}
-
-/// Hard bound on receipt-directory entries examined per coverage pass. The
-/// directory accumulates receipts over a configured range, so the bound grows
-/// with the corpus instead of failing at a fixed size.
-#[cfg(not(test))]
-const MAX_RECEIPT_ENTRIES: usize = 1_000_000;
-#[cfg(test)]
-const MAX_RECEIPT_ENTRIES: usize = 28;
-/// Hard bound on decoded receipts per coverage pass. Write-once receipts that
-/// predate the required window cannot cover it and are skipped by mtime first.
-#[cfg(not(test))]
-const MAX_DECODED_RECEIPTS: usize = 250_000;
-#[cfg(test)]
-const MAX_DECODED_RECEIPTS: usize = 24;
-/// Clock/timezone margin applied to the required-window start. A receipt's
-/// provider rows can never postdate its own immutable write.
-const RECEIPT_RECENCY_MARGIN_MS: i64 = 2 * 86_400_000;
-/// IST midnight of a reviewed session, in Unix milliseconds.
-fn session_start_millis(day: NaiveDate) -> Option<i64> {
-    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)?;
-    day.signed_duration_since(epoch)
-        .num_days()
-        .checked_mul(86_400_000)?
-        .checked_sub(19_800_000)
-}
-fn coverage_report_control(
-    root: &Path,
-    instruments: &[Instrument],
-    required_sessions: &[NaiveDate],
-    target_session: NaiveDate,
-    previous_session: NaiveDate,
-    control: Option<&history_download::PreparationControl>,
-) -> CoverageReport {
-    let required_bars = instruments.len().saturating_mul(required_sessions.len());
     let mut report = base_report(
         target_session,
         previous_session,
         instruments.len(),
-        required_bars,
+        instruments.len().saturating_mul(required_sessions.len()),
     );
     if instruments.is_empty()
         || required_sessions.is_empty()
@@ -216,177 +168,45 @@ fn coverage_report_control(
         report.failure = Some("history_universe_duplicate".into());
         return report;
     }
-    let dates: BTreeSet<_> = required_sessions.iter().copied().collect();
-    let mut bars = BTreeMap::<(String, NaiveDate), serde_json::Value>::new();
-    let mut covered = BTreeMap::<String, Vec<(NaiveDate, NaiveDate)>>::new();
-    let entries = match fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(_) => {
-            report.failure = Some("history_coverage_unreadable".into());
-            return report;
-        }
-    };
-    let mut receipt_count = 0usize;
-    let mut examined = 0usize;
-    // Receipts are write-once artifacts: a row for a required session can only
-    // exist in a receipt written at or after that session, so older files cannot
-    // contribute coverage. Two days absorb clock and timezone differences.
-    let cutoff = required_sessions
-        .first()
-        .and_then(|day| session_start_millis(*day))
-        .map(|start| {
-            std::time::UNIX_EPOCH
-                + std::time::Duration::from_millis(
-                    start.saturating_sub(RECEIPT_RECENCY_MARGIN_MS).max(0) as u64,
-                )
-        });
-    for entry in entries {
-        if control.is_some_and(|control| control.check().is_err()) {
-            report.failure = Some("history_preparation_cancelled_or_expired".into());
-            return report;
-        }
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => {
-                report.failure = Some("history_coverage_unreadable".into());
-                return report;
-            }
-        };
-        let name = entry.file_name();
-        if !name.to_string_lossy().ends_with(".receipt.json") {
-            continue;
-        }
-        examined += 1;
-        if examined > MAX_RECEIPT_ENTRIES {
-            report.failure = Some("history_receipt_inventory_limit".into());
-            return report;
-        }
-        if !matches!(entry.file_type(), Ok(t) if t.is_file()) {
-            report.failure = Some("history_receipt_not_regular".into());
-            return report;
-        }
-        let recent = cutoff.is_none_or(|cutoff| {
-            entry
-                .metadata()
-                .ok()
-                .and_then(|meta| meta.modified().ok())
-                .is_none_or(|modified| modified >= cutoff)
-        });
-        if !recent {
-            continue;
-        }
-        receipt_count += 1;
-        if receipt_count > MAX_DECODED_RECEIPTS {
-            report.failure = Some("history_receipt_decode_limit".into());
-            return report;
-        }
-        let receipt: history_download::Receipt = match history_download::read_receipt(&entry.path())
-        {
-            Ok(receipt) => receipt,
-            Err(_) => {
-                report.failure = Some("history_receipt_decode".into());
-                return report;
-            }
-        };
-        if receipt.unit != "days" || !keys.contains(receipt.key.as_str()) {
-            continue;
-        }
-        if receipt.start > receipt.end
-            || name.to_string_lossy()
-                != format!(
-                    "{}.receipt.json",
-                    history_download::range_id(
-                        &receipt.key,
-                        &receipt.unit,
-                        receipt.start,
-                        receipt.end
-                    )
-                )
-        {
-            report.failure = Some("history_receipt_binding".into());
-            return report;
-        }
-        let rows = match history_download::candles(&receipt) {
-            Ok(rows) => rows,
-            Err(_) => {
-                report.failure = Some("history_receipt_invalid".into());
-                return report;
-            }
-        };
-        covered
-            .entry(receipt.key.clone())
-            .or_default()
-            .push((receipt.start, receipt.end));
-        for (day, row) in rows {
-            if !dates.contains(&day) {
-                continue;
-            }
-            let key = (receipt.key.clone(), day);
-            if let Some(old) = bars.insert(key, row.clone())
-                && old != row
-            {
-                report.failure = Some("history_receipt_conflict".into());
-                return report;
-            }
+    let keys: Vec<_> = keys.into_iter().collect();
+    match market_archive::open(config)
+        .and_then(|mut db| daily_coverage(&mut db, &keys, required_sessions))
+    {
+        Ok(rows) => apply_coverage(report, rows),
+        Err(error) => {
+            report.failure = Some(
+                match super::failure_code(error.as_ref()).as_str() {
+                    "archive_config_missing" => "archive_config_missing",
+                    _ => "history_coverage_unreadable",
+                }
+                .into(),
+            );
+            report
         }
     }
-    report.retryable_missing_bars = 0;
-    for instrument in instruments {
-        let count = required_sessions
-            .iter()
-            .filter(|day| bars.contains_key(&(instrument.key.clone(), **day)))
-            .count();
-        if count > 0 {
-            let total: f64 = required_sessions
-                .iter()
-                .filter_map(|day| bars.get(&(instrument.key.clone(), *day)))
-                .filter_map(|row| row[5].as_u64())
-                .map(|volume| volume as f64)
-                .sum();
+}
+
+pub(super) fn apply_coverage(
+    mut report: CoverageReport,
+    rows: Vec<DailyCoverage>,
+) -> CoverageReport {
+    for row in rows {
+        report.observed_bars += row.observed as usize;
+        report.covered_empty_bars += row.covered_empty;
+        if let Some(average) = row.average_volume {
             report
                 .daily_volumes
-                .insert(instrument.key.clone(), (total / count as f64, count as u32));
+                .insert(row.key.clone(), (average, row.observed));
         }
-        report.observed_bars += count;
-        if count < required_sessions.len() {
-            let ranges = covered.get(&instrument.key);
-            // A receipt proves a day holds no bar only when the provider answered
-            // past it: an older empty day sits behind a returned bar, while the
-            // days after the last returned bar may simply not be published yet.
-            // An instrument the provider answered no bar for in the whole window
-            // is listing or suspension evidence, so the range stands as empty.
-            let last_observed = required_sessions
-                .iter()
-                .rev()
-                .find(|day| bars.contains_key(&(instrument.key.clone(), **day)))
-                .copied();
-            let mut missing = Vec::new();
-            for day in required_sessions {
-                if !bars.contains_key(&(instrument.key.clone(), *day)) {
-                    let untouched_tail = last_observed.is_some_and(|last| *day >= last);
-                    if ranges
-                        .is_some_and(|ranges| ranges.iter().any(|(s, e)| *s <= *day && *day <= *e))
-                        && !untouched_tail
-                    {
-                        report.covered_empty_bars += 1;
-                    } else {
-                        report.retryable_missing_bars += 1;
-                    }
-                    missing.push(*day);
-                }
-            }
-            report
-                .missing_sessions
-                .insert(instrument.key.clone(), missing);
-        }
-        if count == required_sessions.len()
-            && bars.contains_key(&(instrument.key.clone(), previous_session))
-        {
+        if row.missing.is_empty() {
             report.ready_instruments += 1;
+        } else {
+            report.missing_sessions.insert(row.key, row.missing);
         }
     }
-    report.missing_bars = required_bars.saturating_sub(report.observed_bars);
-    report.status = if report.ready_instruments == instruments.len() {
+    report.missing_bars = report.required_bars - report.observed_bars;
+    report.retryable_missing_bars = report.missing_bars - report.covered_empty_bars;
+    report.status = if report.ready_instruments == report.instruments {
         CoverageStatus::Ready
     } else {
         CoverageStatus::Partial
@@ -482,20 +302,28 @@ fn run(request: PreparationRequest, cancelled: Arc<AtomicBool>) -> CoverageRepor
         history_download::prepare_daily(
             &request.config,
             &request.instruments,
-            &request.history_root,
-            request.required_sessions[0],
-            request.previous_session,
-            control.clone(),
+            &request.required_sessions,
+            &control,
         )
     })();
-    let report = coverage_report_control(
-        &request.history_root,
-        &request.instruments,
-        &request.required_sessions,
-        request.target_session,
-        request.previous_session,
-        Some(&control),
-    );
+    let report = if control.check().is_err() {
+        let mut report = base_report(
+            request.target_session,
+            request.previous_session,
+            request.instruments.len(),
+            request.instruments.len() * request.required_sessions.len(),
+        );
+        report.failure = Some("history_preparation_cancelled_or_expired".into());
+        report
+    } else {
+        coverage_report(
+            &request.config,
+            &request.instruments,
+            &request.required_sessions,
+            request.target_session,
+            request.previous_session,
+        )
+    };
     apply_run_outcome(report, result)
 }
 

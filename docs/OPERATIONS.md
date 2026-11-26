@@ -110,8 +110,8 @@ evidence only:
 
 `last_turn` names the evidence: turn id, time, status, error and any fallback
 (from, to and reason). Configuration alone never makes a lane ready.
-`credential_check` stays `not_checked` because readiness never reads
-credentials; `preflight` checks credential presence when the service starts.
+`credential_check` stays `not_checked` because readiness does not check model
+credentials. `preflight` checks credential presence when the service starts.
 
 The decision lane sets `models.status` (`model_roles_ready`,
 `model_roles_degraded`, `model_roles_unknown` or `model_roles_blocked`). The
@@ -125,6 +125,25 @@ coverage without calling the provider. For an overnight pass, run with
 `--upcoming` after midnight IST and before the regular preparation window.
 This uses the current frozen universe and the shared read quota while the
 controller stays running. See [market data](MARKET_DATA.md).
+
+### Move an existing history folder to TimescaleDB
+
+Add `market_archive` to the paper configuration. Keep the database password
+in the private file named by `password_file`. See
+[market archive configuration](../packaging/rust/CONFIGURATION.md#market-archive).
+
+```sh
+nivra archive init --config PAPER_CONFIG
+nivra archive import-history --config PAPER_CONFIG HISTORY_DIR
+nivra archive check --config PAPER_CONFIG
+nivra history-backfill --config PAPER_CONFIG --check-only
+```
+
+Pass the former `history_directory` as `HISTORY_DIR`. The import reads
+`*.receipt.json` and `*.unavailable.json` one file at a time and preserves
+the originals. Each file commits independently. After an interruption, rerun
+the same command. Repeated files insert zero rows. A changed file at a
+previously imported range or a conflicting bar stops the import.
 
 ## Start and stop
 
