@@ -317,6 +317,69 @@ pub(crate) fn build_summary_envelope(view: &serde_json::Value) -> serde_json::Va
     body
 }
 
+pub(super) fn process_memory() -> serde_json::Value {
+    read_process_memory(Path::new("/proc/self/status"))
+}
+
+pub(super) fn read_process_memory(path: &Path) -> serde_json::Value {
+    match std::fs::read_to_string(path) {
+        Ok(text) => parse_process_memory(&text),
+        Err(_) => unavailable_process_memory("proc_status_unavailable"),
+    }
+}
+
+pub(super) fn parse_process_memory(text: &str) -> serde_json::Value {
+    let mut rss_anon = None;
+    let mut vm_rss = None;
+    let mut vm_hwm = None;
+    let mut vm_swap = None;
+    for line in text.lines() {
+        let Some((key, rest)) = line.split_once(':') else {
+            continue;
+        };
+        let slot = match key {
+            "RssAnon" => &mut rss_anon,
+            "VmRSS" => &mut vm_rss,
+            "VmHWM" => &mut vm_hwm,
+            "VmSwap" => &mut vm_swap,
+            _ => continue,
+        };
+        let mut parts = rest.split_whitespace();
+        let Some(value) = parts.next().and_then(|v| v.parse::<u64>().ok()) else {
+            return unavailable_process_memory("proc_status_unparsable");
+        };
+        if parts.next() != Some("kB") || parts.next().is_some() {
+            return unavailable_process_memory("proc_status_unparsable");
+        }
+        *slot = Some(value);
+    }
+    match (rss_anon, vm_rss, vm_hwm, vm_swap) {
+        (Some(rss_anon_kib), Some(vm_rss_kib), Some(vm_hwm_kib), Some(vm_swap_kib)) => {
+            serde_json::json!({
+                "status": "available",
+                "unavailable": false,
+                "source": "/proc/self/status",
+                "unit": "KiB",
+                "rss_anon_kib": rss_anon_kib,
+                "vm_rss_kib": vm_rss_kib,
+                "vm_hwm_kib": vm_hwm_kib,
+                "vm_swap_kib": vm_swap_kib,
+            })
+        }
+        _ => unavailable_process_memory("proc_status_unparsable"),
+    }
+}
+
+fn unavailable_process_memory(reason: &'static str) -> serde_json::Value {
+    serde_json::json!({
+        "status": "unavailable",
+        "unavailable": true,
+        "source": "/proc/self/status",
+        "unit": "KiB",
+        "reason": reason,
+    })
+}
+
 pub(crate) fn summary(
     head: &str,
     view: &Arc<Mutex<serde_json::Value>>,

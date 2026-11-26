@@ -126,7 +126,7 @@ pub(crate) fn series(
     };
     let mut rows = Vec::new();
     for bar in bars {
-        let Some(at) = minute_to_millis(date, bar.start_minute) else {
+        let Some(at) = minute_to_millis(date, bar.start_minute()) else {
             continue;
         };
         if from.is_some_and(|from| at < from) || to.is_some_and(|to| at > to) {
@@ -134,11 +134,11 @@ pub(crate) fn series(
         }
         rows.push(serde_json::json!({
             "at":at,
-            "open":format!("{}", bar.open),
-            "high":format!("{}", bar.high),
-            "low":format!("{}", bar.low),
-            "close":format!("{}", bar.close),
-            "tick_count":bar.tick_count,
+            "open":format!("{}", bar.open()),
+            "high":format!("{}", bar.high()),
+            "low":format!("{}", bar.low()),
+            "close":format!("{}", bar.close()),
+            "tick_count":bar.tick_count(),
             "price_kind":"receipt_price",
             "bar_kind":"receipt_minute",
             "certified_ohlcv":false,

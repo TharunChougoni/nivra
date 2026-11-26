@@ -221,8 +221,8 @@ fn index_regime(
         let point = points.get(key)?;
         let bars = store.bars(key)?;
         prior.push(price_f64(point.prior_close?)?);
-        opening.push(bars.front()?.open);
-        current.push(bars.back()?.close);
+        opening.push(bars.front()?.open());
+        current.push(bars.back()?.close());
     }
     let minute_returns = store.market_minute_returns(1);
     let inputs =

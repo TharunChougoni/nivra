@@ -116,6 +116,7 @@ pub(super) fn health_body(view: &serde_json::Value, now_ms: i64) -> serde_json::
         });
     }
     body["version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
+    body["process_memory"] = summary::process_memory();
     body["updater"] = view["updater"].clone();
     body["model_status"] = view["model_status"].clone();
     body["entry_status"] = view["entry_status"].clone();

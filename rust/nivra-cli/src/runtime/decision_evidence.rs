@@ -85,18 +85,18 @@ fn window(bars: &std::collections::VecDeque<MinuteBar>, end: u32, minutes: u32) 
     let start = end.checked_sub(minutes)?;
     let rows = bars
         .iter()
-        .filter(|b| (start..=end).contains(&b.start_minute))
+        .filter(|b| (start..=end).contains(&b.start_minute()))
         .collect::<Vec<_>>();
     if rows.len() != minutes as usize + 1
-        || rows.first()?.start_minute != start
-        || rows.last()?.start_minute != end
+        || rows.first()?.start_minute() != start
+        || rows.last()?.start_minute() != end
         || rows
             .windows(2)
-            .any(|w| w[1].start_minute != w[0].start_minute + 1)
+            .any(|w| w[1].start_minute() != w[0].start_minute() + 1)
     {
         return None;
     }
-    let value = (rows.last()?.close / rows.first()?.close - 1.0) * 10_000.0;
+    let value = (rows.last()?.close() / rows.first()?.close() - 1.0) * 10_000.0;
     value.is_finite().then_some(value)
 }
 impl Snapshot {
@@ -157,13 +157,10 @@ impl Snapshot {
             let retained = bars
                 .into_iter()
                 .flat_map(|b| b.iter())
-                .filter(|b| b.start_minute <= end)
+                .filter(|b| b.start_minute() <= end)
                 .collect::<Vec<_>>();
-            let retained = retained
-                .iter()
-                .skip(retained.len().saturating_sub(settings.max_bars))
-                .map(|b| (*b).clone())
-                .collect();
+            let skip = retained.len().saturating_sub(settings.max_bars);
+            let retained = retained.into_iter().skip(skip).copied().collect();
             rows.insert(
                 i.key.clone(),
                 Row {
@@ -236,7 +233,7 @@ impl Snapshot {
             json!({"instrument_key":key,"status":if fresh {"available"}else if row.receipt.is_none(){"unavailable"}else{"stale"},
                 "last_price_receipt_ms":row.receipt,"scanner_source_ms":row.source,"metadata_receipt_ms":row.metadata_receipt,"metadata_status":if metadata_fresh {"available"}else{"stale_or_unavailable"},
                 "metadata_source_ms":Value::Null,"cumulative_volume":row.volume.filter(|_|metadata_fresh),"avg_daily_volume":row.average_volume,"avg_daily_volume_sessions":row.average_volume_sessions,
-                "features":features,"returns":windows,"bars":row.bars.iter().map(|b|json!([b.start_minute,b.open,b.high,b.low,b.close,b.tick_count])).collect::<Vec<_>>()})
+                "features":features,"returns":windows,"bars":row.bars.iter().map(|b|json!([b.start_minute(),b.open(),b.high(),b.low(),b.close(),b.tick_count()])).collect::<Vec<_>>()})
         }).collect::<Vec<_>>();
         Ok(
             json!({"schema":1,"session":self.session,"as_of_ms":self.at,"read_at_ms":now,"execution_authorized":false,"source":"receipt_observed_prices_and_scanner_metadata",

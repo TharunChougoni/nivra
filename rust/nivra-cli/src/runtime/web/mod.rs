@@ -781,7 +781,18 @@ mod tests {
         );
         assert_eq!(compressed.cache, "private, no-cache");
         assert!(compressed.etag.is_some());
-        assert_eq!(decoded(&compressed), plain.body);
+        assert_eq!(compressed.etag, plain.etag);
+        let mut plain_json: serde_json::Value = serde_json::from_slice(&plain.body).unwrap();
+        let mut compressed_json: serde_json::Value =
+            serde_json::from_slice(&decoded(&compressed)).unwrap();
+        assert!(plain_json.get("process_memory").is_some());
+        assert!(compressed_json.get("process_memory").is_some());
+        plain_json.as_object_mut().unwrap().remove("process_memory");
+        compressed_json
+            .as_object_mut()
+            .unwrap()
+            .remove("process_memory");
+        assert_eq!(compressed_json, plain_json);
         assert!(
             String::from_utf8_lossy(&encode(compressed))
                 .contains("Cache-Control: private, no-cache")

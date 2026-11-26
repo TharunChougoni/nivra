@@ -277,6 +277,32 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
     assert_eq!(health_body["operational_health"], operational);
     assert_eq!(health_body["research_tasks"], research_tasks);
     assert_eq!(health_body["controller_liveness"]["status"], "unknown");
+    let mem = &health_body["process_memory"];
+    assert_eq!(mem["unit"], "KiB");
+    if cfg!(target_os = "linux") {
+        assert_eq!(mem["status"], "available");
+        assert_eq!(mem["unavailable"], false);
+        assert!(mem["rss_anon_kib"].as_u64().is_some());
+        assert!(mem["vm_rss_kib"].as_u64().is_some());
+        assert!(mem["vm_hwm_kib"].as_u64().is_some());
+        assert!(mem["vm_swap_kib"].as_u64().is_some());
+    }
+    let missing_mem = summary::read_process_memory(Path::new("/nonexistent/proc/self/status"));
+    assert_eq!(missing_mem["status"], "unavailable");
+    assert_eq!(missing_mem["unavailable"], true);
+    assert_eq!(missing_mem["reason"], "proc_status_unavailable");
+    let parsed_mem = summary::parse_process_memory(
+        "Name:\tnivra\nVmHWM:\t198000 kB\nVmRSS:\t150000 kB\nRssAnon:\t132000 kB\nVmSwap:\t0 kB\n",
+    );
+    assert_eq!(parsed_mem["status"], "available");
+    assert_eq!(parsed_mem["rss_anon_kib"], 132_000);
+    assert_eq!(parsed_mem["vm_rss_kib"], 150_000);
+    assert_eq!(parsed_mem["vm_hwm_kib"], 198_000);
+    assert_eq!(parsed_mem["vm_swap_kib"], 0);
+    let bad_mem = summary::parse_process_memory("VmHWM:\tnot_a_number kB\n");
+    assert_eq!(bad_mem["status"], "unavailable");
+    assert_eq!(bad_mem["unavailable"], true);
+    assert_eq!(bad_mem["reason"], "proc_status_unparsable");
     {
         let selection_status = serde_json::json!({
             "mode":"shadow","regime":"range/low_vol/strong/no_gap","reason":"NoEligibleCandidates"

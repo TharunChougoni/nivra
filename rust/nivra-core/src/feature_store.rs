@@ -1,8 +1,9 @@
 //! Pure receipt-driven minute features; no clock, feed or runtime wiring.
 //!
-//! Each bar occupies approximately 48 bytes on a 64-bit target: 375 bars use
-//! about 18 KiB per instrument, plus the key, deque/map metadata and allocator
-//! overhead. The cap includes the in-progress bar. Instrument count is caller-owned.
+//! Each bar occupies 24 bytes (`u16` minute, four `u32` integer-paise prices,
+//! `u32` tick count): 375 bars use ~9 KiB per instrument, plus the key,
+//! deque/map metadata and allocator overhead. The cap includes the in-progress
+//! bar. Instrument count is caller-owned.
 use crate::execution::{local, minute};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -38,15 +39,75 @@ impl FeatureStoreSettings {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MinuteBar {
     /// IST minute since midnight (09:15 = 555); date belongs to the store session.
-    pub start_minute: u32,
-    pub open: f64,
-    pub high: f64,
-    pub low: f64,
-    pub close: f64,
-    pub tick_count: u64,
+    start_minute: u16,
+    open_paise: u32,
+    high_paise: u32,
+    low_paise: u32,
+    close_paise: u32,
+    tick_count: u32,
+}
+
+impl MinuteBar {
+    /// Construct a bar directly from whole-paise prices and `u16` IST minute.
+    pub const fn from_paise(
+        start_minute: u16,
+        open_paise: u32,
+        high_paise: u32,
+        low_paise: u32,
+        close_paise: u32,
+        tick_count: u32,
+    ) -> Self {
+        Self {
+            start_minute,
+            open_paise,
+            high_paise,
+            low_paise,
+            close_paise,
+            tick_count,
+        }
+    }
+
+    pub const fn start_minute(&self) -> u32 {
+        self.start_minute as u32
+    }
+
+    pub fn open(&self) -> f64 {
+        f64::from(self.open_paise) / 100.0
+    }
+
+    pub fn high(&self) -> f64 {
+        f64::from(self.high_paise) / 100.0
+    }
+
+    pub fn low(&self) -> f64 {
+        f64::from(self.low_paise) / 100.0
+    }
+
+    pub fn close(&self) -> f64 {
+        f64::from(self.close_paise) / 100.0
+    }
+
+    pub const fn tick_count(&self) -> u32 {
+        self.tick_count
+    }
+}
+
+fn price_to_paise(price: f64) -> Result<u32, String> {
+    if !price.is_finite() || price <= 0.0 {
+        return Err("feature store requires a key and positive finite price".into());
+    }
+    let rounded = (price * 100.0).round();
+    if !rounded.is_finite() || rounded < 1.0 || rounded > f64::from(u32::MAX) {
+        return Err("feature store price overflows paise range".into());
+    }
+    let paise = rounded as u32;
+    if (f64::from(paise) / 100.0).to_bits() != price.to_bits() {
+        return Err("feature store price is not on whole-paise grid".into());
+    }
+    Ok(paise)
 }
 
 /// Bounded in-memory feed-health history used only to classify missing display
@@ -194,13 +255,16 @@ impl FeatureStore {
     /// mutation. Receipts equal to or older than the instrument's last observation
     /// count as duplicate ticks without changing bars. No missing minutes are synthesized.
     pub fn observe(&mut self, key: &str, price: f64, receipt_ms: i64) -> Result<(), String> {
-        if key.is_empty() || !price.is_finite() || price <= 0.0 {
+        if key.is_empty() {
             return Err("feature store requires a key and positive finite price".into());
         }
+        let price_paise = price_to_paise(price)?;
         let date = local(receipt_ms)
             .map_err(|_| "feature store timestamp range")?
             .date_naive();
         let start_minute = minute(receipt_ms).map_err(|_| "feature store timestamp range")?;
+        let start_minute_u16 =
+            u16::try_from(start_minute).map_err(|_| "feature store timestamp range")?;
         if self.session.is_some_and(|session| session != date) {
             return Err("feature store session mismatch; explicit reset required".into());
         }
@@ -215,14 +279,14 @@ impl FeatureStore {
         self.last_receipts.insert(key.to_owned(), receipt_ms);
         let bars = self.bars.entry(key.to_owned()).or_default();
         if let Some(current) = bars.back_mut() {
-            if start_minute < current.start_minute {
+            if start_minute < current.start_minute() {
                 self.ignored_out_of_order = self.ignored_out_of_order.saturating_add(1);
                 return Ok(());
             }
-            if start_minute == current.start_minute {
-                current.high = current.high.max(price);
-                current.low = current.low.min(price);
-                current.close = price;
+            if start_minute == current.start_minute() {
+                current.high_paise = current.high_paise.max(price_paise);
+                current.low_paise = current.low_paise.min(price_paise);
+                current.close_paise = price_paise;
                 current.tick_count = current.tick_count.saturating_add(1);
                 return Ok(());
             }
@@ -230,14 +294,14 @@ impl FeatureStore {
         if bars.len() == self.settings.max_bars {
             bars.pop_front();
         }
-        bars.push_back(MinuteBar {
-            start_minute,
-            open: price,
-            high: price,
-            low: price,
-            close: price,
-            tick_count: 1,
-        });
+        bars.push_back(MinuteBar::from_paise(
+            start_minute_u16,
+            price_paise,
+            price_paise,
+            price_paise,
+            price_paise,
+            1,
+        ));
         self.session = Some(date);
         self.latest_minute = Some(
             self.latest_minute
@@ -280,7 +344,7 @@ impl FeatureStore {
         let mut rows = self
             .last_receipts
             .iter()
-            .filter_map(|(key, receipt)| Some((key, self.bars.get(key)?.back()?.close, *receipt)))
+            .filter_map(|(key, receipt)| Some((key, self.bars.get(key)?.back()?.close(), *receipt)))
             .collect::<Vec<_>>();
         if rows.len() > limit {
             rows.select_nth_unstable_by(limit - 1, |a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(b.0)));
@@ -302,12 +366,12 @@ impl FeatureStore {
         bars.iter()
             .zip(bars.iter().skip(1))
             .filter_map(|(prev, bar)| {
-                let value = bar.close / prev.close - 1.0;
-                (bar.start_minute == prev.start_minute + 1
-                    && self.latest_minute.is_some_and(|m| bar.start_minute < m)
+                let value = bar.close() / prev.close() - 1.0;
+                (bar.start_minute() == prev.start_minute() + 1
+                    && self.latest_minute.is_some_and(|m| bar.start_minute() < m)
                     && value.is_finite()
                     && value > -1.0)
-                    .then_some((bar.start_minute, value))
+                    .then_some((bar.start_minute(), value))
             })
             .collect()
     }
@@ -430,31 +494,24 @@ mod tests {
         assert_eq!(store.status()["ignored_ticks"], 0);
         // Receipt watermarks belong to each instrument independently.
         store.observe("b", 50.0, receipt(555, 0)).unwrap();
-        assert_eq!(store.bars("b").unwrap()[0].tick_count, 1);
+        assert_eq!(store.bars("b").unwrap()[0].tick_count(), 1);
         store.observe("a", 110.0, receipt(556, 0)).unwrap();
         let bars = store.bars("a").unwrap();
         assert_eq!(bars.len(), 2);
         assert_eq!(
             bars[0],
-            MinuteBar {
-                start_minute: 555,
-                open: 100.0,
-                high: 105.0,
-                low: 99.0,
-                close: 99.0,
-                tick_count: 3
-            }
+            MinuteBar::from_paise(555, 10_000, 10_500, 9_900, 9_900, 3)
         );
         store.observe("a", 500.0, receipt(555, 59_999)).unwrap();
         assert_eq!(store.ignored_out_of_order(), 0);
         assert_eq!(store.status()["duplicate_ticks"], 4);
-        assert_eq!(store.bars("a").unwrap()[0].close, 99.0);
+        assert_eq!(store.bars("a").unwrap()[0].close(), 99.0);
         assert!(store.last_n_returns("a", 10).is_empty());
         store.observe("a", 121.0, receipt(557, 0)).unwrap();
         assert!((store.last_n_returns("a", 1)[0] - (110.0 / 99.0 - 1.0)).abs() < 1e-12);
         store.observe("a", 125.0, receipt(558, 0)).unwrap();
         assert_eq!(store.bars("a").unwrap().len(), 3);
-        assert_eq!(store.bars("a").unwrap()[0].start_minute, 556);
+        assert_eq!(store.bars("a").unwrap()[0].start_minute(), 556);
         assert!((store.last_n_returns("a", 10)[0] - 0.1).abs() < 1e-12);
         assert_eq!(store.realised_vol("a", 1), Some(0.0));
         assert_eq!(store.realised_vol("a", 0), None);
@@ -477,7 +534,7 @@ mod tests {
         assert!(store.last_n_returns("a", 10).is_empty());
         store.reset_for_session(NaiveDate::from_ymd_opt(2026, 10, 27).unwrap());
         store.observe("a", 100.0, receipt(555, 0)).unwrap();
-        assert_eq!(store.bars("a").unwrap()[0].tick_count, 1);
+        assert_eq!(store.bars("a").unwrap()[0].tick_count(), 1);
         assert_eq!(store.status()["duplicate_ticks"], 0);
     }
 
@@ -526,5 +583,229 @@ mod tests {
         store.observe("c", 140.0, receipt(558, 0)).unwrap();
         store.observe("a", 140.0, receipt(559, 0)).unwrap();
         assert_eq!(store.last_n_returns("c", 10).len(), 1);
+    }
+
+    #[test]
+    fn compact_minute_bar_preserves_recorded_features_and_price_grid() {
+        assert!(std::mem::size_of::<MinuteBar>() <= 24);
+        assert_eq!(std::mem::size_of::<MinuteBar>(), 24);
+
+        // Prove correctly rounded division matches decimal string parsing across the paise grid.
+        let check_paise = |paise: u32| {
+            let text = format!("{}.{:02}", paise / 100, paise % 100);
+            let parsed: f64 = text.parse().unwrap();
+            let divided = f64::from(paise) / 100.0;
+            assert_eq!(
+                divided.to_bits(),
+                parsed.to_bits(),
+                "paise={paise} text={text}"
+            );
+            assert_eq!(price_to_paise(parsed).unwrap(), paise, "paise={paise}");
+        };
+        for paise in 1..=50_000 {
+            check_paise(paise);
+        }
+        for exp in 16..32 {
+            let base = 1_u32 << exp;
+            for delta in -16_i64..=16 {
+                if let Ok(paise) = u32::try_from(i64::from(base) + delta)
+                    && paise > 0
+                {
+                    check_paise(paise);
+                }
+            }
+        }
+        for paise in (u32::MAX - 500)..=u32::MAX {
+            check_paise(paise);
+        }
+
+        // Recorded observation sequence with exact frozen baseline f64 bit patterns.
+        let mut store = FeatureStore::new(FeatureStoreSettings {
+            max_bars: 375,
+            min_instruments: 2,
+        })
+        .unwrap();
+        let obs = [
+            ("RELIANCE", 555, 0, 1280.25),
+            ("RELIANCE", 555, 15_000, 1285.50),
+            ("RELIANCE", 555, 30_000, 1279.05),
+            ("RELIANCE", 555, 55_000, 1284.10),
+            ("RELIANCE", 556, 0, 1284.10),
+            ("RELIANCE", 556, 40_000, 1291.75),
+            ("RELIANCE", 557, 10_000, 1290.00),
+            ("RELIANCE", 557, 50_000, 1288.45),
+            ("RELIANCE", 558, 20_000, 1295.30),
+            ("RELIANCE", 559, 5_000, 1299.95),
+            ("TCS", 555, 5_000, 3890.15),
+            ("TCS", 555, 45_000, 3895.00),
+            ("TCS", 556, 10_000, 3902.80),
+            ("TCS", 558, 15_000, 3910.40),
+            ("TCS", 559, 25_000, 3905.05),
+            ("INFY", 555, 1_000, 0.29),
+            ("INFY", 556, 2_000, 1.13),
+            ("INFY", 557, 3_000, 19.99),
+            ("INFY", 558, 4_000, 133.10),
+            ("INFY", 559, 5_000, 42_949_672.95),
+        ];
+        for (key, min, ms, price) in obs {
+            store.observe(key, price, receipt(min, ms)).unwrap();
+        }
+
+        let to_bits = |vals: Vec<f64>| vals.into_iter().map(f64::to_bits).collect::<Vec<_>>();
+        assert_eq!(
+            to_bits(store.last_n_returns("RELIANCE", 10)),
+            vec![
+                4573518528897894912,
+                13791409136315793152,
+                4572779489580868096
+            ]
+        );
+        assert_eq!(
+            store.realised_vol("RELIANCE", 10).map(f64::to_bits),
+            Some(4571071041135585007)
+        );
+        assert_eq!(
+            to_bits(store.last_n_returns("TCS", 10)),
+            vec![4566764028552465920]
+        );
+        assert_eq!(store.realised_vol("TCS", 10).map(f64::to_bits), Some(0));
+        assert_eq!(
+            to_bits(store.last_n_returns("INFY", 10)),
+            vec![
+                4613704873432760885,
+                4625391109771299668,
+                4618056730706676008
+            ]
+        );
+        assert_eq!(
+            store.realised_vol("INFY", 10).map(f64::to_bits),
+            Some(4618395365599292865)
+        );
+        assert_eq!(
+            to_bits(store.market_minute_returns(2)),
+            vec![
+                4573518528897894912,
+                4620886791067154916,
+                4613559116887339872
+            ]
+        );
+
+        let mut latest = store.latest_prices(3);
+        latest.sort_by(|a, b| a.0.cmp(&b.0));
+        let latest_bits: Vec<(String, u64, i64)> = latest
+            .into_iter()
+            .map(|(k, p, r)| (k, p.to_bits(), r))
+            .collect();
+        assert_eq!(
+            latest_bits,
+            vec![
+                ("INFY".to_owned(), 4721033417378601370, 1793072945000),
+                ("RELIANCE".to_owned(), 4653432056008461517, 1793072945000),
+                ("TCS".to_owned(), 4660805710837815706, 1793072965000),
+            ]
+        );
+
+        let reliance_bars: Vec<(u32, u64, u64, u64, u64, u32)> = store
+            .bars("RELIANCE")
+            .unwrap()
+            .iter()
+            .map(|b| {
+                (
+                    b.start_minute(),
+                    b.open().to_bits(),
+                    b.high().to_bits(),
+                    b.low().to_bits(),
+                    b.close().to_bits(),
+                    b.tick_count(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            reliance_bars,
+            vec![
+                (
+                    555,
+                    0x4094010000000000,
+                    0x4094160000000000,
+                    0x4093fc3333333333,
+                    0x4094106666666666,
+                    4
+                ),
+                (
+                    556,
+                    0x4094106666666666,
+                    0x40942f0000000000,
+                    0x4094106666666666,
+                    0x40942f0000000000,
+                    2
+                ),
+                (
+                    557,
+                    0x4094280000000000,
+                    0x4094280000000000,
+                    0x409421cccccccccd,
+                    0x409421cccccccccd,
+                    2
+                ),
+                (
+                    558,
+                    0x40943d3333333333,
+                    0x40943d3333333333,
+                    0x40943d3333333333,
+                    0x40943d3333333333,
+                    1
+                ),
+                (
+                    559,
+                    0x40944fcccccccccd,
+                    0x40944fcccccccccd,
+                    0x40944fcccccccccd,
+                    0x40944fcccccccccd,
+                    1
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn off_grid_and_overflow_prices_return_error_without_mutation() {
+        let mut store = FeatureStore::new(FeatureStoreSettings::default()).unwrap();
+        for bad in [
+            0.005,
+            100.001,
+            100.004,
+            19.995,
+            42_949_672.96,
+            1e12,
+            0.0,
+            -10.0,
+            f64::NAN,
+            f64::INFINITY,
+        ] {
+            assert!(
+                store.observe("OFFGRID", bad, receipt(555, 0)).is_err(),
+                "expected error for {bad}"
+            );
+            assert!(store.bars("OFFGRID").is_none());
+            assert!(store.last_receipt("OFFGRID").is_none());
+            assert!(store.session().is_none());
+        }
+
+        store.observe("VALID", 100.05, receipt(555, 0)).unwrap();
+        let before_bars = store.bars("VALID").unwrap().clone();
+        let before_status = store.status();
+        assert!(
+            store
+                .observe("VALID", 100.055, receipt(555, 1_000))
+                .is_err()
+        );
+        assert!(
+            store
+                .observe("VALID", 42_949_672.96, receipt(556, 0))
+                .is_err()
+        );
+        assert_eq!(store.bars("VALID").unwrap(), &before_bars);
+        assert_eq!(store.last_receipt("VALID"), Some(receipt(555, 0)));
+        assert_eq!(store.status(), before_status);
     }
 }

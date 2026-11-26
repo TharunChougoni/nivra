@@ -78,7 +78,7 @@ fn shadow_inputs_use_receipt_minutes_and_skip_missing_references() {
         shadow_regime_inputs(&scan, now + 120_000, 2000, &minutes).minute_count,
         1
     );
-    assert_eq!(store.bars("available").unwrap()[0].start_minute, 555);
+    assert_eq!(store.bars("available").unwrap()[0].start_minute(), 555);
     assert_eq!(store.status()["bars_total"], 3);
     let points = BTreeMap::from([(
         instrument.key.clone(),
@@ -106,7 +106,7 @@ fn shadow_inputs_use_receipt_minutes_and_skip_missing_references() {
             .unwrap()
             .back()
             .unwrap()
-            .start_minute,
+            .start_minute(),
         558
     );
     assert_eq!(store.market_minute_returns(1).len(), 1); // cap retains three bars
