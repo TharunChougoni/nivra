@@ -142,3 +142,17 @@ fn invalid_strategy_output_fails_with_a_reason_and_no_actions() {
         assert_eq!(call(&c, source.as_bytes(), &observation), Err(reason), "{source}");
     }
 }
+
+#[test]
+fn tape_dates_count_only_sessions_the_strategy_ran_on() {
+    let Some(c) = sandbox() else { return };
+    let mut parameters: replay::Parameters = serde_json::from_slice(PARAMETERS).unwrap();
+    // The window opens after the last receipt, so the strategy never runs.
+    parameters.from_ms = Some(1_795_578_700_000);
+    parameters.to_ms = Some(1_795_578_800_000);
+    let report = replay::run(&c, SOURCE, &parameters, MANIFEST, EVENTS, &|| None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(report["tape"]["strategy_calls"], 0);
+    assert_eq!(report["tape"]["dates"], json!([]));
+}

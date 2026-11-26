@@ -226,7 +226,7 @@ controller's order:
 
 Screening receipts update the features and the built-in prospect ranking.
 The report is canonical JSON with no floats, so its SHA-256 identifies it. It
-holds the input hashes, the tape dates, every fill, every trade with its exit
+holds the input hashes, the session dates the strategy ran on, every fill, every trade with its exit
 reason and net P&L, and every refusal code. Its `summary` gives the trade
 count, the win rate, the net P&L after costs, the median trade, the worst
 drawdown and the fees. Net P&L counts closed trades only, and
@@ -292,8 +292,7 @@ each date is eligible. Use a configured `current_session_features` dataset ID fo
 a current-session diagnostic.
 
 The result reports the selected trading dates, dates with no archived screen
-or protection quotes, and the tape's `events_sha256`. For acceptance, a tape
-date counts when the strategy ran on a protection receipt that day. The
+or protection quotes, and the tape's `events_sha256`. The
 archive reader pins the latest committed quote receipt ID before it reads the
 window. Pass `tape.archive_window.as_of_receipt_id` back as `as_of_receipt_id`
 on the same request to reproduce the tape after new batches arrive. Keep the
@@ -415,7 +414,7 @@ planner config's optional `strategy_acceptance` block sets the bars:
 | `min_trades` | 10 closed trades | `too_few_trades` |
 | `min_net_pnl` | `"0"`. Net P&L after costs must be above it | `net_pnl_too_low` |
 | `max_drawdown_bps` | 300 bps of the replay capital | `drawdown_too_deep` |
-| `min_tape_dates` | 3 distinct session dates | `too_few_tape_dates` |
+| `min_tape_dates` | 3 distinct session dates with a strategy call | `too_few_tape_dates` |
 | `max_failure_bps` | 100 bps of strategy calls | `too_many_strategy_failures` |
 
 A report that still holds a position at the end of the tape is rejected with

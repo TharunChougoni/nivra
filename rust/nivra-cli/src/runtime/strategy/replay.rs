@@ -183,7 +183,6 @@ pub(crate) fn run(
         nivra_cli::strategy_actions::parse_archive_events(events, first_day, last_day, &universe)?;
     let manifest_value: Value =
         serde_json::from_slice(manifest).map_err(|_| "strategy_replay_manifest_invalid")?;
-    let archive_window = manifest_value["provenance"]["archive_window"].is_object();
     let capital = match parameters.capital {
         Some(capital) => capital,
         None => serde_json::from_value(manifest_value["capital"].clone())
@@ -226,9 +225,6 @@ pub(crate) fn run(
                 strategy_calls: calls,
                 last_at_ms: last_call_at,
             }));
-        }
-        if !archive_window {
-            dates.insert(day);
         }
         if matches!(event.kind, EventKind::VirtualObservation) {
             return Err("strategy_replay_virtual_observation_unauthorized".into());
@@ -295,9 +291,7 @@ pub(crate) fn run(
                     last_at_ms: last_call_at,
                 }));
             }
-            if archive_window {
-                dates.insert(day);
-            }
+            dates.insert(day);
             calls += 1;
             last_call_at = Some(now);
             let observation = Observation::new(
