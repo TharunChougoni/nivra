@@ -1074,6 +1074,14 @@ pub(super) fn preparation_request(
         deadline_ms: deadline,
     })
 }
+pub(super) fn history_admitted(c: &Config, history_status: &serde_json::Value) -> bool {
+    !c.history_preparation_enabled
+        || (history_status["target_session"] == c.session.to_string()
+            && history_status["ready_instruments"]
+                .as_u64()
+                .is_some_and(|n| n > 0)
+            && matches!(history_status["status"].as_str(), Some("READY" | "PARTIAL")))
+}
 pub(super) fn readiness_snapshot(
     c: &Config,
     p: &Portfolio,
@@ -1205,21 +1213,28 @@ fn scan_rest_rows(
     }
     Ok(())
 }
-#[allow(clippy::too_many_arguments)] // Explicit original receipt tracking; never resample it.
-fn read_apply(
+struct FetchedQuoteRows {
+    requested: i64,
+    receipt: i64,
+    raw: String,
+    body: serde_json::Value,
+}
+
+pub(super) enum QuoteReadTarget<'a> {
+    Held { depth_sink: Option<&'a mut Scanner> },
+    Plan,
+    Depth(&'a mut Scanner),
+    Scan(&'a mut Scanner),
+}
+
+fn fetch_quote_rows(
     client: &data::Client,
     c: &Config,
     db: &mut Connection,
     p: &mut Portfolio,
     instruments: &[Instrument],
-    mut scanner: Option<&mut Scanner>,
-    last_fresh_receipt: &mut Option<i64>,
     event_config: Option<&planner::PlannerConfig>,
-    metadata_only: bool,
-    depth_sink: Option<&mut Scanner>,
-    feature_store: &Arc<Mutex<FeatureStore>>,
-    held_positions: bool,
-) -> Result<Option<String>> {
+) -> Result<std::result::Result<FetchedQuoteRows, String>> {
     let keys = instruments
         .iter()
         .map(|i| i.key.as_str())
@@ -1233,7 +1248,7 @@ fn read_apply(
             }
             p.health = "read_unavailable_no_financial_action".into();
             persist(db, c, p, millis(), None, None, "read_unavailable")?;
-            return Ok(Some(reason));
+            return Ok(Err(reason));
         }
     };
     let body: serde_json::Value = match serde_json::from_str(&raw) {
@@ -1251,7 +1266,7 @@ fn read_apply(
                 Some(&raw),
                 "invalid_quote_json",
             )?;
-            return Ok(Some("invalid_quote_json".into()));
+            return Ok(Err("invalid_quote_json".into()));
         }
     };
     if body["status"] != "success" {
@@ -1267,9 +1282,9 @@ fn read_apply(
             Some(&raw),
             "invalid_quote_status",
         )?;
-        return Ok(Some("invalid_quote_status".into()));
+        return Ok(Err("invalid_quote_status".into()));
     }
-    let Some(rows) = body["data"].as_object() else {
+    if !body["data"].is_object() {
         if event_config.is_some() {
             block_data_failure(db, c, p);
         }
@@ -1282,35 +1297,82 @@ fn read_apply(
             Some(&raw),
             "invalid_quote_data",
         )?;
-        return Ok(Some("invalid_quote_data".into()));
+        return Ok(Err("invalid_quote_data".into()));
+    }
+    Ok(Ok(FetchedQuoteRows {
+        requested,
+        receipt,
+        raw,
+        body,
+    }))
+}
+
+pub(super) fn read_scanner_metadata(
+    client: &data::Client,
+    c: &Config,
+    db: &mut Connection,
+    p: &mut Portfolio,
+    instruments: &[Instrument],
+    scan: &mut Scanner,
+    event_config: Option<&planner::PlannerConfig>,
+) -> Result<Option<String>> {
+    let FetchedQuoteRows {
+        requested,
+        receipt,
+        raw,
+        body,
+    } = match fetch_quote_rows(client, c, db, p, instruments, event_config)? {
+        Ok(fetched) => fetched,
+        Err(reason) => return Ok(Some(reason)),
     };
-    if metadata_only {
-        if let Some(scan) = scanner.as_deref_mut()
-            && scan_rest_rows(scan, instruments, rows, receipt, millis(), 2000, true, None).is_err()
-        {
-            persist(
-                db,
-                c,
-                p,
-                millis(),
-                Some(receipt),
-                Some(&raw),
-                "duplicate_metadata_quote",
-            )?;
-            return Ok(Some("duplicate_quote".into()));
-        }
-        let archive=serde_json::json!({"source":"upstox-readonly-v1","purpose":"scanner_metadata","requested_ms":requested,"received_ms":receipt,"body":raw}).to_string();
+    let rows = body["data"].as_object().ok_or("invalid_quote_data")?;
+    if scan_rest_rows(scan, instruments, rows, receipt, millis(), 2000, true, None).is_err() {
         persist(
             db,
             c,
             p,
             millis(),
             Some(receipt),
-            Some(&archive),
-            "scanner_metadata",
+            Some(&raw),
+            "duplicate_metadata_quote",
         )?;
-        return Ok(None);
+        return Ok(Some("duplicate_quote".into()));
     }
+    let archive=serde_json::json!({"source":"upstox-readonly-v1","purpose":"scanner_metadata","requested_ms":requested,"received_ms":receipt,"body":raw}).to_string();
+    persist(
+        db,
+        c,
+        p,
+        millis(),
+        Some(receipt),
+        Some(&archive),
+        "scanner_metadata",
+    )?;
+    Ok(None)
+}
+
+#[allow(clippy::too_many_arguments)] // Explicit original receipt tracking; never resample it.
+pub(super) fn read_executable_quotes(
+    client: &data::Client,
+    c: &Config,
+    db: &mut Connection,
+    p: &mut Portfolio,
+    instruments: &[Instrument],
+    last_fresh_receipt: &mut Option<i64>,
+    event_config: Option<&planner::PlannerConfig>,
+    feature_store: &Arc<Mutex<FeatureStore>>,
+    mut target: QuoteReadTarget<'_>,
+) -> Result<Option<String>> {
+    let FetchedQuoteRows {
+        requested,
+        receipt,
+        raw,
+        body,
+    } = match fetch_quote_rows(client, c, db, p, instruments, event_config)? {
+        Ok(fetched) => fetched,
+        Err(reason) => return Ok(Some(reason)),
+    };
+    let rows = body["data"].as_object().ok_or("invalid_quote_data")?;
     let mut quotes = BTreeMap::new();
     let mut duplicate = BTreeSet::new();
     for row in rows.values() {
@@ -1340,56 +1402,68 @@ fn read_apply(
         }
     }
     // Shortlist depth reads attach the executable quote to the prospect (#38).
-    if let Some(scan) = depth_sink {
-        for (key, quote) in &quotes {
-            if let Some(sample) = scan.samples.get_mut(key) {
-                sample.executable = Some(quote.clone());
-            }
+    match &mut target {
+        QuoteReadTarget::Held {
+            depth_sink: Some(scan),
         }
-    }
-    if let Some(scan) = scanner.as_deref_mut() {
-        let mut store = feature_store
-            .lock()
-            .map_err(|_| Fail::new("feature_store_lock"))?;
-        scan_rest_rows(
-            scan,
-            instruments,
-            rows,
-            receipt,
-            millis(),
-            event_config
-                .and_then(|c| c.discovery.as_ref())
-                .map(|d| d.max_scan_age_ms)
-                .unwrap_or(2000),
-            metadata_only,
-            Some(&mut store),
-        )?;
-        if event_config
-            .and_then(|cfg| cfg.discovery.as_ref())
-            .and_then(|d| d.strategy_selection.as_ref())
-            .is_some_and(|s| s.enabled)
-        {
-            for row in rows.values() {
-                if let Some(sample) = row["instrument_token"]
-                    .as_str()
-                    .and_then(|key| scan.samples.get_mut(key))
-                {
-                    sample.regime_references = (|| {
-                        let close = Price::try_from(
-                            nivra_core::execution::number(&row["ohlc"]["close"]).ok()?,
-                        )
-                        .ok()?;
-                        let open = Price::try_from(
-                            nivra_core::execution::number(&row["ohlc"]["open"]).ok()?,
-                        )
-                        .ok()?;
-                        Some((receipt, close, open))
-                    })();
+        | QuoteReadTarget::Depth(scan) => {
+            for (key, quote) in &quotes {
+                if let Some(sample) = scan.samples.get_mut(key) {
+                    sample.executable = Some(quote.clone());
                 }
             }
         }
+        QuoteReadTarget::Scan(scan) => {
+            let mut store = feature_store
+                .lock()
+                .map_err(|_| Fail::new("feature_store_lock"))?;
+            scan_rest_rows(
+                scan,
+                instruments,
+                rows,
+                receipt,
+                millis(),
+                event_config
+                    .and_then(|c| c.discovery.as_ref())
+                    .map(|d| d.max_scan_age_ms)
+                    .unwrap_or(2000),
+                false,
+                Some(&mut store),
+            )?;
+            if event_config
+                .and_then(|cfg| cfg.discovery.as_ref())
+                .and_then(|d| d.strategy_selection.as_ref())
+                .is_some_and(|s| s.enabled)
+            {
+                for row in rows.values() {
+                    if let Some(sample) = row["instrument_token"]
+                        .as_str()
+                        .and_then(|key| scan.samples.get_mut(key))
+                    {
+                        sample.regime_references = (|| {
+                            let close = Price::try_from(
+                                nivra_core::execution::number(&row["ohlc"]["close"]).ok()?,
+                            )
+                            .ok()?;
+                            let open = Price::try_from(
+                                nivra_core::execution::number(&row["ohlc"]["open"]).ok()?,
+                            )
+                            .ok()?;
+                            Some((receipt, close, open))
+                        })();
+                    }
+                }
+            }
+        }
+        QuoteReadTarget::Held { depth_sink: None } | QuoteReadTarget::Plan => {}
     }
-    let archive=serde_json::json!({"source":"upstox-readonly-v1","purpose":if scanner.is_some(){"scanner"}else{"execution_or_protection"},"requested_ms":requested,"received_ms":receipt,"body":raw}).to_string();
+    let purpose = if matches!(target, QuoteReadTarget::Scan(_)) {
+        "scanner"
+    } else {
+        "execution_or_protection"
+    };
+    let held_positions = matches!(target, QuoteReadTarget::Held { .. });
+    let archive=serde_json::json!({"source":"upstox-readonly-v1","purpose":purpose,"requested_ms":requested,"received_ms":receipt,"body":raw}).to_string();
     let policy = event_config
         .and_then(|cfg| cfg.discovery.as_ref())
         .and_then(|d| d.screens.clone())
@@ -1455,10 +1529,6 @@ fn read_apply(
         *last_fresh_receipt = Some(receipt);
     }
     Ok(None)
-}
-pub(super) fn pending_orders(_p: &Portfolio) -> u64 {
-    // This paper runtime fills immediately; there is no broker order pipeline.
-    0
 }
 pub(super) fn history_instruments(c: &Config) -> Result<Vec<Instrument>> {
     Ok(universe::cached(c)?.instruments)

@@ -255,7 +255,6 @@ fn stopped_carry_evidence(c: &Config, db: &Connection, body: &str) -> Result<Val
         || !p.stopped
         || p.halted
         || p.positions.is_empty()
-        || wide::pending_orders(&p) != 0
     {
         return Err("stopped_carry_requires_closed_stopped_non_halted_model_led_positions".into());
     }
@@ -374,7 +373,6 @@ fn halted_carry_evidence(c: &Config, db: &Connection, body: &str) -> Result<Valu
         || !p.halted
         || p.stopped
         || p.positions.is_empty()
-        || wide::pending_orders(&p) != 0
     {
         return Err("halted_carry_requires_closed_halted_non_stopped_model_led_positions".into());
     }
@@ -1187,7 +1185,6 @@ pub(super) fn record_review(c: &Config) -> Result<()> {
 /// Bounded, read-only book admission for release activation. Unknown state defers.
 pub(crate) struct BookAdmission {
     pub open_positions: u64,
-    pub pending_orders: u64,
     pub halted: bool,
     /// An open session book that an operator stopped; a restart keeps it stopped.
     pub open_stopped: bool,
@@ -1208,10 +1205,6 @@ pub(super) fn update_book(path: &Path) -> Result<BookAdmission> {
     let (db, body) = bound_state(&c)?;
     let (open, stopped, halted, closed) = book_flags(&body)?;
     let portfolio = serde_json::from_str::<Portfolio>(&body).ok();
-    let pending = portfolio
-        .as_ref()
-        .map(super::wide::pending_orders)
-        .unwrap_or(0);
     // The flat rule stays the in-session contract. A carried book can only be
     // adopted read-only when every journal is settled; the successor session
     // still starts through the reviewed rollover/carry path.
@@ -1225,11 +1218,9 @@ pub(super) fn update_book(path: &Path) -> Result<BookAdmission> {
                 && !p.stopped
                 && !p.halted
                 && !p.positions.is_empty()
-                && super::wide::pending_orders(p) == 0
         });
     Ok(BookAdmission {
         open_positions: open,
-        pending_orders: pending,
         halted,
         open_stopped: stopped && !closed,
         flat_safe: open == 0 && closed && !halted,
@@ -1238,10 +1229,9 @@ pub(super) fn update_book(path: &Path) -> Result<BookAdmission> {
         // needs no restart either, even when a planner halt remains: this is the
         // reviewed path that deploys first and clears the halt with the new
         // release, avoiding a cross-version authority rebind (#158).
-        stopped_safe: portfolio.as_ref().is_some_and(|p| {
-            super::wide::pending_orders(p) == 0
-                && ((p.stopped && !p.halted) || (p.closed && p.positions.is_empty()))
-        }),
+        stopped_safe: portfolio
+            .as_ref()
+            .is_some_and(|p| (p.stopped && !p.halted) || (p.closed && p.positions.is_empty())),
         carried_safe,
     })
 }

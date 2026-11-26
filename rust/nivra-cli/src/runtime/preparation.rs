@@ -102,6 +102,12 @@ pub struct CoverageReport {
     pub required_bars: usize,
     pub observed_bars: usize,
     pub missing_bars: usize,
+    /// Missing bars already covered by a validated provider receipt (e.g. listing or suspension gaps).
+    #[serde(default)]
+    pub covered_empty_bars: usize,
+    /// Missing bars not yet covered by any validated receipt (retryable).
+    #[serde(default)]
+    pub retryable_missing_bars: usize,
     /// Exact unobserved sessions per instrument; never infer bars from exclusions.
     #[serde(default)]
     pub missing_sessions: BTreeMap<String, Vec<NaiveDate>>,
@@ -125,6 +131,8 @@ fn base_report(
         required_bars,
         observed_bars: 0,
         missing_bars: required_bars,
+        covered_empty_bars: 0,
+        retryable_missing_bars: required_bars,
         missing_sessions: BTreeMap::new(),
         failure: None,
     }
@@ -205,6 +213,7 @@ fn coverage_report_control(
     }
     let dates: BTreeSet<_> = required_sessions.iter().copied().collect();
     let mut bars = BTreeMap::<(String, NaiveDate), serde_json::Value>::new();
+    let mut covered = BTreeMap::<String, Vec<(NaiveDate, NaiveDate)>>::new();
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
         Err(_) => {
@@ -299,6 +308,10 @@ fn coverage_report_control(
                 return report;
             }
         };
+        covered
+            .entry(receipt.key.clone())
+            .or_default()
+            .push((receipt.start, receipt.end));
         for (day, row) in rows {
             if !dates.contains(&day) {
                 continue;
@@ -312,6 +325,7 @@ fn coverage_report_control(
             }
         }
     }
+    report.retryable_missing_bars = 0;
     for instrument in instruments {
         let count = required_sessions
             .iter()
@@ -330,14 +344,23 @@ fn coverage_report_control(
         }
         report.observed_bars += count;
         if count < required_sessions.len() {
-            report.missing_sessions.insert(
-                instrument.key.clone(),
-                required_sessions
-                    .iter()
-                    .filter(|day| !bars.contains_key(&(instrument.key.clone(), **day)))
-                    .copied()
-                    .collect(),
-            );
+            let ranges = covered.get(&instrument.key);
+            let mut missing = Vec::new();
+            for day in required_sessions {
+                if !bars.contains_key(&(instrument.key.clone(), *day)) {
+                    if ranges
+                        .is_some_and(|ranges| ranges.iter().any(|(s, e)| *s <= *day && *day <= *e))
+                    {
+                        report.covered_empty_bars += 1;
+                    } else {
+                        report.retryable_missing_bars += 1;
+                    }
+                    missing.push(*day);
+                }
+            }
+            report
+                .missing_sessions
+                .insert(instrument.key.clone(), missing);
         }
         if count == required_sessions.len()
             && bars.contains_key(&(instrument.key.clone(), previous_session))
@@ -477,7 +500,15 @@ fn preparation_failure_code(error: &(dyn std::error::Error + 'static)) -> String
     }
 }
 
-fn apply_run_outcome(mut report: CoverageReport, result: Result<usize>) -> CoverageReport {
+#[cfg(test)]
+pub(crate) fn apply_run_outcome(report: CoverageReport, result: Result<usize>) -> CoverageReport {
+    apply_run_outcome_inner(report, result)
+}
+#[cfg(not(test))]
+fn apply_run_outcome(report: CoverageReport, result: Result<usize>) -> CoverageReport {
+    apply_run_outcome_inner(report, result)
+}
+fn apply_run_outcome_inner(mut report: CoverageReport, result: Result<usize>) -> CoverageReport {
     if report.failure.as_deref() == Some("history_preparation_cancelled_or_expired") {
         report.status = CoverageStatus::Failed;
     }

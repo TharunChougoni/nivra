@@ -8,9 +8,10 @@ A strategy is one of two kinds of Python script:
 - A **ranker** scores scanner prospects. The top prospects become the
   candidates the decision lane sees. It cannot buy, sell, size or exit.
 - An **action strategy** (`strategy_actions_v1`) returns buys, sells and exit
-  revisions. Today it runs in an after-cost replay, and an accepted version is
-  registered in the action-strategy library. A paper executor is the next
-  step. See [direction](DIRECTION.md).
+  revisions. It runs in an after-cost replay, an accepted version is
+  registered in the action-strategy library, and when `strategy_execution` is
+  enabled the paper controller runs the active version on every scan. See
+  [direction](DIRECTION.md).
 
 | Stage | What runs today | Where |
 | --- | --- | --- |

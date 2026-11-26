@@ -1194,3 +1194,298 @@ fn manifest_reuse_tolerates_engine_and_symbol_rename_only() {
     spaced.push(b' ');
     assert!(!reusable_manifest(&spaced, &rebuilt));
 }
+
+#[test]
+fn pre_open_preparation_separates_empty_gaps_from_rate_limit_and_zero_ready() {
+    use super::super::preparation::{self, CoverageStatus};
+    use super::super::wide::{self, HistoryAttempts};
+
+    let d = tempfile::tempdir().unwrap();
+    let mut cfg = super::super::tests::config(d.path());
+    cfg.history_preparation_enabled = true;
+    cfg.history_preparation_max_attempts = 3;
+    cfg.history_preparation_retry_ms = 60_000;
+    cfg.history_preparation_failed_retry_ms = 60_000;
+    cfg.history_preparation_max_fetch_failures = 1;
+    cfg.daily_history_sessions = 21;
+    let previous = date("2026-10-16");
+    let target = date("2026-10-19");
+    cfg.session = target;
+    cfg.previous_session = previous;
+    let mut list = instruments();
+    for n in 2..=3 {
+        let mut other = list[0].clone();
+        other.key = format!("NSE_EQ|INE00000000{n}");
+        other.symbol = format!("FIX{n}");
+        list.push(other);
+    }
+    let sessions: Vec<NaiveDate> = (0..35)
+        .map(|offset| previous.checked_sub_days(Days::new(offset)).unwrap())
+        .filter(|day| cfg.is_trading_day(*day).unwrap())
+        .take(21)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    assert_eq!(sessions.len(), 21);
+
+    enum Mode {
+        AllBars,
+        ListingGapOnThird,
+        ThrottleSubset { limit: usize },
+        ThrottleAll,
+    }
+    struct FakePrep {
+        mode: Mode,
+        calls: usize,
+        throttled: usize,
+        sessions: Vec<NaiveDate>,
+    }
+    impl Transport for FakePrep {
+        fn max_fetch_failures(&self) -> usize {
+            1
+        }
+        fn fetch(
+            &mut self,
+            key: &str,
+            _: &str,
+            _: NaiveDate,
+            _: NaiveDate,
+        ) -> Result<(i64, i64, String)> {
+            self.calls += 1;
+            match self.mode {
+                Mode::AllBars => {}
+                Mode::ListingGapOnThird if key.ends_with('3') => {
+                    let candles: Vec<_> = self
+                        .sessions
+                        .iter()
+                        .skip(10)
+                        .map(|day| {
+                            json!([format!("{day}T00:00:00+05:30"), 100, 102, 99, 101, 1000, 0])
+                        })
+                        .collect();
+                    return Ok((
+                        now() - 1000,
+                        now(),
+                        json!({"status":"success","data":{"candles":candles}}).to_string(),
+                    ));
+                }
+                Mode::ListingGapOnThird => {}
+                Mode::ThrottleSubset { limit } if key.ends_with('3') && self.throttled < limit => {
+                    self.throttled += 1;
+                    return Err(Fail::new("http_429_rate_limited").into());
+                }
+                Mode::ThrottleSubset { .. } => {}
+                Mode::ThrottleAll => {
+                    return Err(Fail::new("http_429_rate_limited").into());
+                }
+            }
+            let candles: Vec<_> = self
+                .sessions
+                .iter()
+                .map(|day| json!([format!("{day}T00:00:00+05:30"), 100, 102, 99, 101, 1000, 0]))
+                .collect();
+            Ok((
+                now() - 1000,
+                now(),
+                json!({"status":"success","data":{"candles":candles}}).to_string(),
+            ))
+        }
+    }
+    let control = PreparationControl {
+        cancelled: Arc::new(AtomicBool::new(false)),
+        deadline_ms: i64::MAX,
+    };
+
+    // 1. Successful preparation: all bars present, zero retries scheduled, admitted.
+    let ok_dir = tempfile::tempdir().unwrap();
+    let mut t_ok = FakePrep {
+        mode: Mode::AllBars,
+        calls: 0,
+        throttled: 0,
+        sessions: sessions.clone(),
+    };
+    let res = download_controlled(
+        &mut t_ok,
+        now,
+        &list,
+        ok_dir.path(),
+        Some(sessions[0]),
+        Some(previous),
+        Interval::Days,
+        Some(&control),
+        Some(&cfg),
+    );
+    let report = preparation::apply_run_outcome(
+        preparation::coverage_report(ok_dir.path(), &list, &sessions, target, previous),
+        res,
+    );
+    assert_eq!(report.status, CoverageStatus::Ready);
+    assert_eq!(report.ready_instruments, 3);
+    assert_eq!(report.observed_bars, 63);
+    assert_eq!(report.missing_bars, 0);
+    assert_eq!(report.covered_empty_bars, 0);
+    assert_eq!(report.retryable_missing_bars, 0);
+    assert!(wide::history_admitted(
+        &cfg,
+        &serde_json::to_value(&report).unwrap()
+    ));
+
+    // 2. Provider has no data (listing gap on 3rd instrument): PARTIAL, but all
+    // missing bars are covered by a valid receipt, so retries stop after pass 1.
+    let gap_dir = tempfile::tempdir().unwrap();
+    let mut t_gap = FakePrep {
+        mode: Mode::ListingGapOnThird,
+        calls: 0,
+        throttled: 0,
+        sessions: sessions.clone(),
+    };
+    let res = download_controlled(
+        &mut t_gap,
+        now,
+        &list,
+        gap_dir.path(),
+        Some(sessions[0]),
+        Some(previous),
+        Interval::Days,
+        Some(&control),
+        Some(&cfg),
+    );
+    assert_eq!(t_gap.calls, 3);
+    let report = preparation::apply_run_outcome(
+        preparation::coverage_report(gap_dir.path(), &list, &sessions, target, previous),
+        res,
+    );
+    assert_eq!(report.status, CoverageStatus::Partial);
+    assert_eq!(report.ready_instruments, 2);
+    assert_eq!(report.missing_bars, 10);
+    assert_eq!(report.covered_empty_bars, 10);
+    assert_eq!(report.retryable_missing_bars, 0);
+    assert!(report.failure.is_none());
+    let report_json = serde_json::to_value(&report).unwrap();
+    assert!(wide::history_admitted(&cfg, &report_json));
+    let mut attempts = HistoryAttempts::default();
+    attempts.started(&cfg, 1_000).unwrap();
+    attempts.completed(&cfg, 2_000, &report_json).unwrap();
+    assert!(attempts.retry_at.is_none());
+    assert!(!attempts.due(&cfg, 1_000_000));
+    download_controlled(
+        &mut t_gap,
+        now,
+        &list,
+        gap_dir.path(),
+        Some(sessions[0]),
+        Some(previous),
+        Interval::Days,
+        Some(&control),
+        Some(&cfg),
+    )
+    .unwrap();
+    assert_eq!(
+        t_gap.calls, 3,
+        "covered empty receipts must not be refetched"
+    );
+
+    // 3. Rate-limited partial admission (HTTP 429 on subset): retryable gaps stay
+    // retryable, attempt schedules a retry, and pass 2 reuses cached receipts.
+    let rl_dir = tempfile::tempdir().unwrap();
+    let mut t_rl = FakePrep {
+        mode: Mode::ThrottleSubset { limit: 1 },
+        calls: 0,
+        throttled: 0,
+        sessions: sessions.clone(),
+    };
+    let res = download_controlled(
+        &mut t_rl,
+        now,
+        &list,
+        rl_dir.path(),
+        Some(sessions[0]),
+        Some(previous),
+        Interval::Days,
+        Some(&control),
+        Some(&cfg),
+    );
+    assert_eq!(t_rl.calls, 3);
+    let report = preparation::apply_run_outcome(
+        preparation::coverage_report(rl_dir.path(), &list, &sessions, target, previous),
+        res,
+    );
+    assert_eq!(report.status, CoverageStatus::Partial);
+    assert_eq!(report.ready_instruments, 2);
+    assert_eq!(report.covered_empty_bars, 0);
+    assert_eq!(report.retryable_missing_bars, 21);
+    assert_eq!(
+        report.failure.as_deref(),
+        Some("history_fetch_failures_skipped:1")
+    );
+    let report_json = serde_json::to_value(&report).unwrap();
+    assert!(wide::history_admitted(&cfg, &report_json));
+    let mut attempts = HistoryAttempts::default();
+    attempts.started(&cfg, 1_000).unwrap();
+    attempts.completed(&cfg, 2_000, &report_json).unwrap();
+    assert_eq!(attempts.retry_at, Some(62_000));
+    assert!(attempts.due(&cfg, 62_000));
+    let res2 = download_controlled(
+        &mut t_rl,
+        now,
+        &list,
+        rl_dir.path(),
+        Some(sessions[0]),
+        Some(previous),
+        Interval::Days,
+        Some(&control),
+        Some(&cfg),
+    );
+    assert_eq!(t_rl.calls, 4, "retry fetches only the throttled instrument");
+    let recovered = preparation::apply_run_outcome(
+        preparation::coverage_report(rl_dir.path(), &list, &sessions, target, previous),
+        res2,
+    );
+    assert_eq!(recovered.status, CoverageStatus::Ready);
+    assert_eq!(recovered.ready_instruments, 3);
+    assert_eq!(recovered.retryable_missing_bars, 0);
+
+    // 4. Zero-ready boundary under HTTP 429: never admits history.
+    let zero_dir = tempfile::tempdir().unwrap();
+    let mut t_zero = FakePrep {
+        mode: Mode::ThrottleAll,
+        calls: 0,
+        throttled: 0,
+        sessions: sessions.clone(),
+    };
+    let res = download_controlled(
+        &mut t_zero,
+        now,
+        &list,
+        zero_dir.path(),
+        Some(sessions[0]),
+        Some(previous),
+        Interval::Days,
+        Some(&control),
+        Some(&cfg),
+    );
+    assert_eq!(
+        failure_code(res.as_ref().unwrap_err().as_ref()),
+        "http_429_rate_limited"
+    );
+    let failed_report = preparation::apply_run_outcome(
+        preparation::coverage_report(zero_dir.path(), &list, &sessions, target, previous),
+        res,
+    );
+    assert_eq!(failed_report.status, CoverageStatus::Failed);
+    assert_eq!(failed_report.ready_instruments, 0);
+    assert_eq!(failed_report.retryable_missing_bars, 63);
+    assert!(!wide::history_admitted(
+        &cfg,
+        &serde_json::to_value(&failed_report).unwrap()
+    ));
+    let recovered_zero =
+        preparation::coverage_report(zero_dir.path(), &list, &sessions, target, previous);
+    assert_eq!(recovered_zero.status, CoverageStatus::Partial);
+    assert_eq!(recovered_zero.ready_instruments, 0);
+    assert!(!wide::history_admitted(
+        &cfg,
+        &serde_json::to_value(&recovered_zero).unwrap()
+    ));
+}

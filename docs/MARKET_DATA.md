@@ -173,9 +173,14 @@ add `--check-only`. It succeeds only when every required bar is present. For
 a new config whose universe is not frozen yet, add `--prepare-universe`.
 
 With `history_preparation_enabled`, the controller runs the same acquisition
-before the open. It reports coverage as `READY`, `PARTIAL` or `BLOCKED`. It
-skips at most `history_preparation_max_fetch_failures` (default 25)
-instruments whose fetch fails. A manual download fails on the first error.
+before the open. It reports coverage as `READY`, `PARTIAL` or `BLOCKED`, and
+separates missing bars already covered by valid provider receipts
+(`covered_empty_bars`, such as listing or suspension gaps) from unfetched
+gaps (`retryable_missing_bars`). A `PARTIAL` pass with zero
+`retryable_missing_bars` and no fetch failures stops retrying for the session;
+transient fetch failures such as HTTP 429 keep the bounded retry schedule. It
+skips at most `history_preparation_max_fetch_failures` (default 25) instruments
+whose fetch fails. A manual download fails on the first error.
 
 ## Coverage gaps
 

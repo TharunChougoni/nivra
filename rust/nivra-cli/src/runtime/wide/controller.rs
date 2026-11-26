@@ -982,16 +982,7 @@ impl<'a> Controller<'a> {
     }
 
     fn history_admitted(&self) -> bool {
-        let c = &self.config;
-        !c.history_preparation_enabled
-            || (self.history_status["target_session"] == c.session.to_string()
-                && self.history_status["ready_instruments"]
-                    .as_u64()
-                    .is_some_and(|n| n > 0)
-                && matches!(
-                    self.history_status["status"].as_str(),
-                    Some("READY" | "PARTIAL")
-                ))
+        history_admitted(&self.config, &self.history_status)
     }
 
     /// Market reads, scanning, ranking and the owner tick inside the session.
@@ -1210,20 +1201,17 @@ impl<'a> Controller<'a> {
         if !held.is_empty() && now - self.last_protection_read >= 2000 {
             self.last_protection_read = now;
             // A strategy observes held depth too, so it can sell what it holds.
-            let held_depth = self.strategy.is_some().then_some(&mut self.scan);
-            match read_apply(
+            let depth_sink = self.strategy.is_some().then_some(&mut self.scan);
+            match read_executable_quotes(
                 self.client,
                 c,
                 &mut self.db,
                 &mut self.p,
                 held,
-                None,
                 &mut self.last_fresh_receipt,
                 self.event_config.as_ref(),
-                false,
-                held_depth,
                 &self.feature_store,
-                true,
+                QuoteReadTarget::Held { depth_sink },
             )? {
                 Some(reason) => self.read_failure = Some(reason),
                 None => self.read_failure = None,
@@ -1270,19 +1258,16 @@ impl<'a> Controller<'a> {
                 .collect();
             if !planned.is_empty() {
                 self.last_plan_read = now;
-                self.read_failure = read_apply(
+                self.read_failure = read_executable_quotes(
                     self.client,
                     c,
                     &mut self.db,
                     &mut self.p,
                     &planned,
-                    None,
                     &mut self.last_fresh_receipt,
                     self.event_config.as_ref(),
-                    false,
-                    None,
                     &self.feature_store,
-                    false,
+                    QuoteReadTarget::Plan,
                 )?;
             }
         }
@@ -1310,20 +1295,30 @@ impl<'a> Controller<'a> {
         self.scan
             .ranking
             .retain(|(_, _, at)| now - *at <= ranking_window);
-        match read_apply(
-            self.client,
-            c,
-            &mut self.db,
-            &mut self.p,
-            batch,
-            Some(&mut self.scan),
-            &mut self.last_fresh_receipt,
-            self.event_config.as_ref(),
-            feed_live,
-            None,
-            &self.feature_store,
-            false,
-        )? {
+        let outcome = if feed_live {
+            read_scanner_metadata(
+                self.client,
+                c,
+                &mut self.db,
+                &mut self.p,
+                batch,
+                &mut self.scan,
+                self.event_config.as_ref(),
+            )?
+        } else {
+            read_executable_quotes(
+                self.client,
+                c,
+                &mut self.db,
+                &mut self.p,
+                batch,
+                &mut self.last_fresh_receipt,
+                self.event_config.as_ref(),
+                &self.feature_store,
+                QuoteReadTarget::Scan(&mut self.scan),
+            )?
+        };
+        match outcome {
             Some(reason) => {
                 self.read_failure = Some(reason);
                 self.last_scan = millis();
@@ -1352,19 +1347,16 @@ impl<'a> Controller<'a> {
             && now - self.last_option_depth >= 2000
         {
             self.last_option_depth = now;
-            self.read_failure = read_apply(
+            self.read_failure = read_executable_quotes(
                 self.client,
                 c,
                 &mut self.db,
                 &mut self.p,
                 &self.option_instruments,
-                None,
                 &mut self.last_fresh_receipt,
                 self.event_config.as_ref(),
-                false,
-                Some(&mut self.scan),
                 &self.feature_store,
-                false,
+                QuoteReadTarget::Depth(&mut self.scan),
             )?;
         }
         Ok(())
@@ -1566,19 +1558,16 @@ impl<'a> Controller<'a> {
         let c = &self.config;
         if !shortlist.is_empty() {
             self.last_depth = now;
-            self.read_failure = read_apply(
+            self.read_failure = read_executable_quotes(
                 self.client,
                 c,
                 &mut self.db,
                 &mut self.p,
                 &shortlist,
-                None,
                 &mut self.last_fresh_receipt,
                 self.event_config.as_ref(),
-                false,
-                Some(&mut self.scan),
                 &self.feature_store,
-                false,
+                QuoteReadTarget::Depth(&mut self.scan),
             )?;
         }
         Ok(())

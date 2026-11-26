@@ -34,7 +34,6 @@ struct Fake {
     rollback_preflight_fail: bool,
     rollback_preflights: Vec<PathBuf>,
     open_positions: u64,
-    pending_orders: u64,
     halted: bool,
     fail_stop: bool,
     swap_failures: usize,
@@ -61,7 +60,6 @@ impl Fake {
             rollback_preflight_fail: false,
             rollback_preflights: vec![],
             open_positions: 0,
-            pending_orders: 0,
             halted: false,
             fail_stop: false,
             swap_failures: 0,
@@ -124,32 +122,21 @@ impl Host for Fake {
         }
         let market = !window(self.now, true);
         let open = self.open_positions > 0;
-        let pending = self.pending_orders > 0;
-        if (open || pending) && self.halted {
+        if open && self.halted {
             return Ok(Admission::Deferred("deferred_halted_book"));
         }
-        if open || pending {
-            let exposure = if open {
-                "open_positions"
-            } else {
-                "pending_orders"
-            };
+        if open {
             if force {
                 return Ok(Admission::Forced(if market {
-                    if open {
-                        "market_open_open_positions"
-                    } else {
-                        "market_open_pending_orders"
-                    }
+                    "market_open_open_positions"
                 } else {
-                    exposure
+                    "open_positions"
                 }));
             }
-            return Ok(Admission::Deferred(match (market, exposure) {
-                (true, "open_positions") => "deferred_market_open_open_positions",
-                (true, _) => "deferred_market_open_pending_orders",
-                (false, "open_positions") => "deferred_open_positions",
-                (false, _) => "deferred_pending_orders",
+            return Ok(Admission::Deferred(if market {
+                "deferred_market_open_open_positions"
+            } else {
+                "deferred_open_positions"
             }));
         }
         Ok(if market {
@@ -1011,15 +998,7 @@ fn rollback_preflight_passes_then_updates_and_gates_keep_stopped() {
     assert_eq!(host.stops, 0);
     assert!(host.restarts.is_empty());
     unchanged(h, &host);
-    host.open_positions = 0;
-    host.pending_orders = 1;
-    assert_eq!(
-        apply_selected(h, &mut host, false, false, false, &target),
-        Ok("deferred_market_open_pending_orders")
-    );
-    assert_eq!(host.stops, 0);
     // A risk halt still refuses the forced path.
-    host.pending_orders = 0;
     host.open_positions = 1;
     host.halted = true;
     assert_eq!(

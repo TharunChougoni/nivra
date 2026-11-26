@@ -434,45 +434,34 @@ impl Host for RealHost {
             ));
         }
         let open = book.open_positions > 0;
-        let pending = book.pending_orders > 0;
         // The NSE calendar decides whether the exchange is closed; an unreadable
         // calendar leaves the clock window in force (deferring).
         let calendar_closed =
             crate::runtime::market_closed(&self.paper, now.timestamp_millis()).unwrap_or(false);
         let blackout = market_open(now);
         let market = blackout && !calendar_closed;
-        if (open || pending) && book.halted {
+        if open && book.halted {
             // A risk halt requires operator review; force never bypasses it.
             return Ok(Admission::Deferred("deferred_halted_book"));
         }
-        if open || pending {
-            let exposure = if open {
-                "open_positions"
-            } else {
-                "pending_orders"
-            };
+        if open {
             if force {
                 return Ok(Admission::Forced(if market {
-                    if open {
-                        "market_open_open_positions"
-                    } else {
-                        "market_open_pending_orders"
-                    }
+                    "market_open_open_positions"
                 } else {
-                    exposure
+                    "open_positions"
                 }));
             }
             // A closed, settled model-led book carrying positions can be adopted
             // read-only outside market hours; it never mutates or clears the book
             // and the successor still starts through the reviewed carry path (#153).
-            if open && !pending && !market && book.carried_safe {
+            if !market && book.carried_safe {
                 return Ok(Admission::Safe);
             }
-            return Ok(Admission::Deferred(match (market, exposure) {
-                (true, "open_positions") => "deferred_market_open_open_positions",
-                (true, _) => "deferred_market_open_pending_orders",
-                (false, "open_positions") => "deferred_open_positions",
-                (false, _) => "deferred_pending_orders",
+            return Ok(Admission::Deferred(if market {
+                "deferred_market_open_open_positions"
+            } else {
+                "deferred_open_positions"
             }));
         }
         if market {

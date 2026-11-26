@@ -6,8 +6,10 @@ it chooses when a turn runs, builds the brief, publishes and executes the
 tools, enforces budgets and validates plans. Paper only. No lane can place an
 order or read a broker credential.
 
-Today the decision lane chooses each paper trade. The plan is for models to
-research and supervise while code executes strategies ([DIRECTION](DIRECTION.md)).
+With `strategy_execution` enabled and an active strategy, code executes cash
+entries while the decision lane supervises strategy selection, exceptions and
+options. Without an active strategy, the decision lane chooses each paper trade
+([DIRECTION](DIRECTION.md)).
 
 | Lane | Runs when | Output |
 | --- | --- | --- |

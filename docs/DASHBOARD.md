@@ -73,9 +73,9 @@ A missing or contradictory report shows **Mode unknown**.
 | System | Sessions | `#/sessions` | Current and archived paper sessions. |
 | System | Health | `#/health` | Feed, history, controller, research, calendar and alert status. |
 
-The old routes `#/models` and `#/runs/*` open `#/lanes`. The pi lanes today
-are decision, gate, research and review. The planned change of lane roles is in
-[the direction](DIRECTION.md).
+The old routes `#/models` and `#/runs/*` open `#/lanes`. The pi lanes are
+decision, gate, research and review. See [agent lanes](AGENT.md) and
+[direction](DIRECTION.md).
 
 How the dashboard treats evidence:
 

@@ -12,15 +12,13 @@ quotes. Live orders are disabled.
 
 ## Direction
 
-Nivra is moving to **algorithms first**. Models write and backtest strategies
-after the close. A deterministic check accepts the strategies that beat costs
-on recorded quotes, and the paper controller runs the active strategy on every
-scan. The decision lane supervises, choosing the strategy and handling options
-and exceptions. See [direction](docs/DIRECTION.md) and the tracking issue
-[#44](https://github.com/TharunChougoni/nivra/issues/44).
-
-Today, a model decision lane still plans each trade. The guides describe that
-current behavior.
+Nivra runs **algorithms first** when `strategy_execution` is enabled: models
+research, write and backtest strategies after the close, a deterministic check
+accepts and registers strategies that beat costs on recorded quotes, and the
+paper controller executes the active strategy on every scan while the decision
+lane supervises and handles options and exceptions. When `strategy_execution`
+is off or no strategy is active, the decision lane plans each trade. See
+[direction](docs/DIRECTION.md) and [#44](https://github.com/TharunChougoni/nivra/issues/44).
 
 ## How it works
 

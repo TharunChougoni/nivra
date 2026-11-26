@@ -72,9 +72,6 @@ pub(super) fn resume_preflight(p: &Portfolio) -> std::result::Result<(), &'stati
     if !p.positions.is_empty() && !p.model_led {
         return Err("resume_open_positions");
     }
-    if pending_orders(p) != 0 {
-        return Err("resume_pending_orders");
-    }
     Ok(())
 }
 pub(in crate::runtime) fn planner_recover(c: &Config, confirm: bool) -> Result<()> {
@@ -124,7 +121,7 @@ pub(super) fn planner_recover_checked(
         if !p.halted {
             return Err("planner_recover_halt_not_eligible_book_closed_not_halted".into());
         }
-        if !p.positions.is_empty() || pending_orders(&p) != 0 {
+        if !p.positions.is_empty() {
             return Err("planner_recover_book_not_flat".into());
         }
         // A carried protective halt may have reached the close flat before the
@@ -178,9 +175,6 @@ pub(super) fn planner_recover_checked(
         if p.positions.is_empty() {
             return Err("planner_recover_protection_only_requires_open_position".into());
         }
-        if pending_orders(&p) != 0 {
-            return Err("planner_recover_pending_orders".into());
-        }
         if !redecision::has_authority(&db)? {
             return Err("planner_recover_authority_missing".into());
         }
@@ -233,7 +227,7 @@ pub(super) fn planner_recover_checked(
         }
         Some(redecision::reviewed_stopped_block(&db, c)?)
     };
-    if !p.positions.is_empty() || pending_orders(&p) != 0 {
+    if !p.positions.is_empty() {
         return Err("planner_recover_book_not_flat".into());
     }
     if !redecision::has_authority(&db)? {
@@ -304,7 +298,7 @@ pub(in crate::runtime) fn config_apply(c: &Config, confirm: bool) -> Result<()> 
     // A continuing model-led book keeps its holdings, cash and exit intents across
     // a planner change; only the planner policy hash moves. Other books stay flat-only.
     let carried_ok = p.model_led && desired;
-    if pending_orders(&p) != 0 || (!p.positions.is_empty() && !carried_ok) {
+    if !p.positions.is_empty() && !carried_ok {
         return Err("config_apply_book_not_flat".into());
     }
     let before = serde_json::to_string(&p)?;

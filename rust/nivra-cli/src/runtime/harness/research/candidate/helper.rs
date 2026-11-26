@@ -2,6 +2,16 @@ use super::*;
 use nivra_core::strategy::FeatureSnapshot;
 use nivra_sandbox::{BwrapLeaderReceipt, ScorerSandboxConfig};
 
+macro_rules! latest_ranked_tick {
+    ($report:expr) => {
+        $report
+            .ticks
+            .iter()
+            .rev()
+            .find(|tick| tick.status == "ok" && !tick.candidate_top_n.is_empty())
+    };
+}
+
 /// Content check for the running helper. The path is opened once with
 /// `O_NOFOLLOW` and bounded; a changed byte stream is refused before any
 /// untrusted source is read. Tests exercise this directly with a small file so
@@ -269,11 +279,7 @@ pub(crate) fn run_observation_at(
     let decision_at_ms = score_produced_at_ms;
     // The ranked tick's own observation time is the feature time. The last
     // snapshot may be a later failed tick and must never be relabelled.
-    let ranked = report
-        .ticks
-        .iter()
-        .rev()
-        .find(|tick| tick.status == "ok" && !tick.candidate_top_n.is_empty());
+    let ranked = latest_ranked_tick!(&report);
     let features_at_ms = ranked
         .map(|tick| tick.observed_ms)
         .or_else(|| snapshots.last().map(|snapshot| snapshot.observed_ms))
@@ -632,6 +638,88 @@ pub(super) fn verify_helper_output(
     Ok(())
 }
 
+fn observation_status_allowed(status: &str) -> bool {
+    matches!(
+        status,
+        "scored_entry"
+            | "scored_missed_freshness"
+            | "entry_quote_unavailable"
+            | "entry_instrument_unsupported"
+            | "entry_price_invalid"
+            | "scored_late"
+            | "scored_no_ranked_key"
+            | "scored_no_score"
+    )
+}
+
+fn observation_score_common_valid(
+    score: &nivra_cli::candidate_execution::ObservationScoreV1,
+    report_hash: &str,
+    mean_top_n_overlap: Option<f64>,
+    target: &jobs::ObservationTargetV1,
+    candidate_id: &str,
+    task_id: &str,
+    revision: u32,
+) -> bool {
+    if nivra_cli::candidate_execution::validate_observation_score(score).is_err() {
+        return false;
+    }
+    if score.version != 1
+        || score.abi != nivra_cli::candidate_execution::OBSERVATION_ABI
+        || score.candidate_id != candidate_id
+        || score.task_id != task_id
+        || score.revision != revision
+        || score.source_task_id != target.source_task_id
+        || score.source_revision != target.source_revision
+        || score.source_candidate_id != target.source_candidate_id
+        || score.source_result_sha256 != target.source_result_sha256
+        || score.authoring_at_ms != target.authoring_at_ms
+        || score.target_frozen_at_ms != target.target_frozen_at_ms
+        || score.decision_at_ms != score.score_produced_at_ms
+        || score.exit_due_ms != score.decision_at_ms.saturating_add(target.holding_ms)
+        || score.observation_scope != nivra_cli::candidate_execution::OBSERVATION_SCOPE
+        || score.policy_sha256 != target.policy_sha256
+        || score.score_sha256 != report_hash
+        || score.score != mean_top_n_overlap
+        || !score.score.is_none_or(f64::is_finite)
+        || score.observation_sha256
+            != nivra_cli::candidate_execution::observation_artifact_sha256(
+                &nivra_cli::candidate_execution::ObservationScoreV1 {
+                    observation_sha256: String::new(),
+                    ..score.clone()
+                },
+            )
+            .unwrap_or_default()
+        || !observation_status_allowed(&score.status)
+        || (score.status == "scored_no_score" && score.score.is_some())
+        || (score.status != "scored_no_score" && !score.score.is_some_and(f64::is_finite))
+    {
+        return false;
+    }
+    match (&score.entry, &score.quote) {
+        (Some(entry), Some(quote)) => {
+            entry.virtual_observation
+                && entry.key == quote.key
+                && entry.signal_ms == target.signal_ms
+                && entry.decision_at_ms == score.decision_at_ms
+                && quote.purpose == "research_observation"
+                && quote.source_ms <= quote.receipt_ms
+                && quote.receipt_ms <= quote.available_at_ms
+                && quote.available_at_ms <= quote.event_at_ms
+                && quote.event_at_ms <= score.decision_at_ms
+                && quote.source_age_ms == score.decision_at_ms - quote.source_ms
+                && quote.receipt_age_ms == score.decision_at_ms - quote.receipt_ms
+                && quote.source_age_ms <= nivra_core::market::MAX_FINANCIAL_AGE_MS
+                && quote.receipt_age_ms <= nivra_core::market::MAX_FINANCIAL_AGE_MS
+                && score.status == "scored_entry"
+                && score.quote_at_ms == Some(quote.receipt_ms)
+                && score.gaps.is_empty()
+        }
+        (None, _) => score.status != "scored_entry" && !score.gaps.is_empty(),
+        _ => false,
+    }
+}
+
 fn helper_observation_valid(
     launch: &worker::CandidateLaunch,
     output: &CandidateHelperOutput,
@@ -639,84 +727,26 @@ fn helper_observation_valid(
     match (&launch.observation, &output.observation) {
         (None, None) => true,
         (Some(target), Some(score)) => {
-            if nivra_cli::candidate_execution::validate_observation_score(score).is_err() {
-                return false;
-            }
-            if score.version != 1
-                || score.abi != nivra_cli::candidate_execution::OBSERVATION_ABI
-                || score.candidate_id != launch.candidate_id
-                || score.task_id != launch.task_id
-                || score.revision != launch.revision
-                || score.source_task_id != target.source_task_id
-                || score.source_revision != target.source_revision
-                || score.source_candidate_id != target.source_candidate_id
-                || score.source_result_sha256 != target.source_result_sha256
-                || score.authoring_at_ms != target.authoring_at_ms
-                || score.target_frozen_at_ms != target.target_frozen_at_ms
-                || score.score_produced_at_ms != output.result_produced_at_ms
-                || score.decision_at_ms != output.result_produced_at_ms
-                || score.exit_due_ms != score.decision_at_ms.saturating_add(target.holding_ms)
-                || score.observation_scope != nivra_cli::candidate_execution::OBSERVATION_SCOPE
-                || score.policy_sha256 != target.policy_sha256
-                || score.score_sha256 != output.report.report_hash
-                || score.score != output.report.mean_top_n_overlap
+            if !observation_score_common_valid(
+                score,
+                &output.report.report_hash,
+                output.report.mean_top_n_overlap,
+                target,
+                &launch.candidate_id,
+                &launch.task_id,
+                launch.revision,
+            ) || score.score_produced_at_ms != output.result_produced_at_ms
                 || score.features_at_ms
-                    != output
-                        .report
-                        .ticks
-                        .iter()
-                        .rev()
-                        .find(|tick| tick.status == "ok" && !tick.candidate_top_n.is_empty())
+                    != latest_ranked_tick!(&output.report)
                         .map(|tick| tick.observed_ms)
                         .unwrap_or(0)
-                || !score.score.is_none_or(f64::is_finite)
-                || score.observation_sha256
-                    != nivra_cli::candidate_execution::observation_artifact_sha256(
-                        &nivra_cli::candidate_execution::ObservationScoreV1 {
-                            observation_sha256: String::new(),
-                            ..score.clone()
-                        },
-                    )
-                    .unwrap_or_default()
-                || !matches!(
-                    score.status.as_str(),
-                    "scored_entry"
-                        | "scored_missed_freshness"
-                        | "entry_quote_unavailable"
-                        | "entry_instrument_unsupported"
-                        | "entry_price_invalid"
-                        | "scored_late"
-                        | "scored_no_ranked_key"
-                        | "scored_no_score"
-                )
-                || (score.status == "scored_no_score" && score.score.is_some())
-                || (score.status != "scored_no_score" && !score.score.is_some_and(f64::is_finite))
             {
                 return false;
             }
-            match (&score.entry, &score.quote) {
-                (Some(entry), Some(quote)) => {
-                    entry.virtual_observation
-                        && entry.key == quote.key
-                        && entry.decision_at_ms == score.decision_at_ms
-                        && entry.signal_ms == target.signal_ms
-                        && quote.purpose == "research_observation"
-                        && quote.source_ms <= quote.receipt_ms
-                        && quote.receipt_ms <= quote.available_at_ms
-                        && quote.available_at_ms <= quote.event_at_ms
-                        && quote.event_at_ms <= score.decision_at_ms
-                        && quote.source_age_ms == score.decision_at_ms - quote.source_ms
-                        && quote.receipt_age_ms == score.decision_at_ms - quote.receipt_ms
-                        && quote.source_age_ms <= nivra_core::market::MAX_FINANCIAL_AGE_MS
-                        && quote.receipt_age_ms <= nivra_core::market::MAX_FINANCIAL_AGE_MS
-                        && score.status == "scored_entry"
-                        && score.key.as_deref() == Some(entry.key.as_str())
-                        && score.quote_at_ms == Some(quote.receipt_ms)
-                        && score.gaps.is_empty()
-                }
-                (None, _) => score.status != "scored_entry" && !score.gaps.is_empty(),
-                _ => false,
+            if let Some(entry) = &score.entry {
+                return score.key.as_deref() == Some(entry.key.as_str());
             }
+            true
         }
         _ => false,
     }
@@ -731,58 +761,21 @@ fn observation_score_valid(
     let Some(jobs::CandidatePurposeV1::Observe { target }) = &task.purpose else {
         return Err("candidate_result_invalid");
     };
-    nivra_cli::candidate_execution::validate_observation_score(score)
-        .map_err(|_| "candidate_result_invalid")?;
-    if score.version != 1
-        || score.abi != nivra_cli::candidate_execution::OBSERVATION_ABI
-        || score.candidate_id != task.candidate_id
-        || score.task_id != task.task_id
-        || score.revision != task.revision
-        || score.source_task_id != target.source_task_id
-        || score.source_revision != target.source_revision
-        || score.source_candidate_id != target.source_candidate_id
-        || score.source_result_sha256 != target.source_result_sha256
-        || score.authoring_at_ms != target.authoring_at_ms
-        || score.target_frozen_at_ms != target.target_frozen_at_ms
-        || score.features_at_ms > target.signal_ms
+    if !observation_score_common_valid(
+        score,
+        &report.report_hash,
+        report.mean_top_n_overlap,
+        target,
+        &task.candidate_id,
+        &task.task_id,
+        task.revision,
+    ) || score.features_at_ms > target.signal_ms
         || score.features_at_ms < target.window_from_ms
         || score.score_produced_at_ms < launch.started_ms
-        || score.decision_at_ms != score.score_produced_at_ms
-        || score.exit_due_ms != score.decision_at_ms.saturating_add(target.holding_ms)
-        || score.observation_scope != nivra_cli::candidate_execution::OBSERVATION_SCOPE
-        || score.policy_sha256 != target.policy_sha256
-        || score.score_sha256 != report.report_hash
-        || score.score != report.mean_top_n_overlap
-        || !score.score.is_none_or(f64::is_finite)
-        || score.observation_sha256
-            != nivra_cli::candidate_execution::observation_artifact_sha256(
-                &nivra_cli::candidate_execution::ObservationScoreV1 {
-                    observation_sha256: String::new(),
-                    ..score.clone()
-                },
-            )
-            .unwrap_or_default()
-        || !matches!(
-            score.status.as_str(),
-            "scored_entry"
-                | "scored_missed_freshness"
-                | "entry_quote_unavailable"
-                | "entry_instrument_unsupported"
-                | "entry_price_invalid"
-                | "scored_late"
-                | "scored_no_ranked_key"
-                | "scored_no_score"
-        )
-        || (score.status == "scored_no_score" && score.score.is_some())
-        || (score.status != "scored_no_score" && !score.score.is_some_and(f64::is_finite))
     {
         return Err("candidate_result_invalid");
     }
-    let ranked_tick = report
-        .ticks
-        .iter()
-        .rev()
-        .find(|tick| tick.status == "ok" && !tick.candidate_top_n.is_empty());
+    let ranked_tick = latest_ranked_tick!(report);
     let ranked_key = ranked_tick.and_then(|tick| tick.candidate_top_n.first().cloned());
     if score.key != ranked_key
         || ranked_tick.is_some_and(|tick| score.features_at_ms != tick.observed_ms)
@@ -790,34 +783,12 @@ fn observation_score_valid(
         return Err("candidate_result_invalid");
     }
     match (&score.entry, &score.quote) {
-        (Some(entry), Some(quote)) => {
-            if !entry.virtual_observation
-                || entry.key != quote.key
-                || entry.signal_ms != target.signal_ms
-                || entry.decision_at_ms != score.decision_at_ms
-                || quote.purpose != "research_observation"
-                || quote.source_ms <= 0
-                || quote.receipt_ms <= 0
-                || quote.source_ms > quote.receipt_ms
-                || quote.receipt_ms > quote.available_at_ms
-                || quote.available_at_ms > quote.event_at_ms
-                || quote.event_at_ms > score.decision_at_ms
-                || quote.source_age_ms != score.decision_at_ms - quote.source_ms
-                || quote.receipt_age_ms != score.decision_at_ms - quote.receipt_ms
-                || quote.source_age_ms > nivra_core::market::MAX_FINANCIAL_AGE_MS
-                || quote.receipt_age_ms > nivra_core::market::MAX_FINANCIAL_AGE_MS
-                || quote.evidence_status != "ok"
-                || score.status != "scored_entry"
-                || score.quote_at_ms != Some(quote.receipt_ms)
-                || !score.gaps.is_empty()
-            {
+        (Some(_), Some(quote)) => {
+            if quote.source_ms <= 0 || quote.receipt_ms <= 0 || quote.evidence_status != "ok" {
                 return Err("candidate_result_invalid");
             }
         }
         (None, quote) => {
-            if score.status == "scored_entry" || score.gaps.is_empty() {
-                return Err("candidate_result_invalid");
-            }
             // Early-return statuses have no eligible ranked key/score. They
             // must not carry an unsupported or fabricated quote; only the
             // explicit stale/price-invalid statuses may carry a real receipt,
@@ -1090,12 +1061,7 @@ fn verify_observation_artifacts(
     if bundle["manifest_sha256"] != digest(manifest) || bundle["events_sha256"] != digest(events) {
         return Err("candidate_result_unverified");
     }
-    let Some(tick) = report
-        .ticks
-        .iter()
-        .rev()
-        .find(|tick| tick.status == "ok" && !tick.candidate_top_n.is_empty())
-    else {
+    let Some(tick) = latest_ranked_tick!(report) else {
         // No eligible ranked key: the score may record the explicit no-rank /
         // no-score status, but it must NOT carry a quote. A fabricated quote
         // with a recomputed self-hash is refused here, before measure counts it.

@@ -112,8 +112,12 @@ impl HistoryAttempts {
         }
         record.completed_ms = Some(now);
         record.report = report.clone();
+        // A PARTIAL pass whose missing bars are all covered by valid empty
+        // receipts (and recorded zero fetch failures) has no fillable gaps left.
+        let retry_partial =
+            report["failure"].is_string() || report["retryable_missing_bars"].as_u64() != Some(0);
         let delay = match report["status"].as_str() {
-            Some("PARTIAL") => Some(c.history_preparation_retry_ms.max(0)),
+            Some("PARTIAL") if retry_partial => Some(c.history_preparation_retry_ms.max(0)),
             Some("FAILED") => Some(c.history_preparation_failed_retry_ms.max(1)),
             _ => None,
         };

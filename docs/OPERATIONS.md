@@ -3,9 +3,11 @@
 This guide covers the procedures you run on a paper host. Nivra trades on
 paper only, and nothing here enables live orders.
 
-Today a pi decision lane chooses paper actions on each trigger, and Rust
-validates and fills them. The project is moving to model-written strategies
-that code executes. See [direction](DIRECTION.md).
+With `strategy_execution` enabled and an active strategy, Rust runs the active
+strategy on every scan while the pi decision lane supervises strategy choice,
+exceptions and Nifty options. Without an active strategy, the decision lane
+chooses paper actions on each trigger and Rust validates and fills them. See
+[direction](DIRECTION.md).
 
 Commands use placeholders: `PAPER_CONFIG` is the runtime paper config,
 `UPDATER_CONFIG` is the updater config, and `NEW_PLANNER` is a planner file.

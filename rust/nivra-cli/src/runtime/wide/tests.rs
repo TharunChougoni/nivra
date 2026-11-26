@@ -1905,6 +1905,18 @@ fn history_attempts_survive_restarts_without_replay() {
     assert!(!attempts.due(&cfg, 1000)); // running claim is not retried
     assert!(attempts.started(&cfg, 1000).is_err());
     attempts
+        .completed(
+            &cfg,
+            10,
+            &serde_json::json!({"status":"PARTIAL","retryable_missing_bars":0}),
+        )
+        .unwrap();
+    attempts = HistoryAttempts::load(&cfg).unwrap();
+    assert_eq!(attempts.retry_at, None);
+    assert!(!attempts.due(&cfg, 1000));
+    let mut attempts = HistoryAttempts::default();
+    attempts.started(&cfg, 0).unwrap();
+    attempts
         .completed(&cfg, 10, &serde_json::json!({"status":"PARTIAL"}))
         .unwrap();
     attempts = HistoryAttempts::load(&cfg).unwrap();
@@ -2385,7 +2397,6 @@ fn resume_preflight_requires_flat_paper_operator_stop() {
     );
     p.stopped = true;
     assert_eq!(resume_preflight(&p), Err("resume_open_positions"));
-    assert_eq!(pending_orders(&p), 0);
     p.model_led = true;
     assert_eq!(resume_preflight(&p), Ok(()));
 }

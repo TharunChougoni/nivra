@@ -4,12 +4,14 @@ Nivra runs one continuing paper account. It trades long-only NSE cash equities
 and ETFs, and buy-only long-premium Nifty weekly options. The objective is
 profit. Futures, stock options, short options and live orders are out of scope.
 
-Today a model in the pi decision lane chooses each paper action, size and
-holding period. Only a completed turn with a validated `TradePlan` reaches the
-paper plan. [pi agent lanes](AGENT.md) describes triggers, budgets and
-evidence. Change the policy through the reviewed config-apply flow in
-[operations](OPERATIONS.md). The planned design has models write strategies
-that code executes. See [direction](DIRECTION.md).
+With `strategy_execution` enabled and an accepted active strategy, the paper
+controller executes cash strategies on every scan while the pi decision lane
+supervises strategy selection, exceptions and Nifty options. Otherwise, the
+decision lane chooses each paper action, size and holding period. Only a
+completed turn with a validated `TradePlan` reaches the paper plan.
+[pi agent lanes](AGENT.md) describes triggers, budgets and evidence. Change the
+policy through the reviewed config-apply flow in [operations](OPERATIONS.md).
+See [direction](DIRECTION.md).
 
 ## Execution gate
 
@@ -99,5 +101,5 @@ FIFO cost of the closed lots. It never changes fills or cash.
 
 ## Research
 
-Strategies today only rank scanner prospects. See [research](RESEARCH.md) for
-the sandboxed workspace, rankers, replay, registration and research jobs.
+See [research](RESEARCH.md) for the sandboxed workspace, rankers, action
+strategies, after-cost replay, acceptance, registration and research jobs.
