@@ -816,14 +816,14 @@ pub(super) fn candidate_quotes_window_with(
         "receipt ASC,id ASC"
     };
     let sql = format!(
-        "SELECT at,receipt,body FROM ticks WHERE receipt IS NOT NULL AND receipt>0 AND receipt>=?1 AND receipt<=?2 AND ({purpose_filter}) ORDER BY {order} LIMIT ?3"
+        "SELECT at,receipt,body FROM ticks WHERE receipt IS NOT NULL AND receipt>0 AND receipt>=?1 AND receipt<=?2 AND at<=?3 AND ({purpose_filter}) ORDER BY {order} LIMIT ?4"
     );
     let mut statement = db
         .prepare(&sql)
         .map_err(|_| "candidate_quotes_unavailable".to_string())?;
     let rows = statement
         .query_map(
-            rusqlite::params![from_ms, to_ms, (max_rows + 1) as i64],
+            rusqlite::params![from_ms, to_ms, now, (max_rows + 1) as i64],
             |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
@@ -850,19 +850,22 @@ pub(super) fn candidate_quotes_window_with(
         "receipt ASC,id ASC"
     };
     let compacted_sql = format!(
-        "SELECT at,receipt,body FROM ticks WHERE event='wide_quotes' AND receipt IS NOT NULL AND receipt>0 AND receipt>=?1 AND receipt<=?2 AND instr(body,'\"kind\":\"compacted_quote_receipt\"')>0 ORDER BY {compacted_order} LIMIT ?3"
+        "SELECT at,receipt,body FROM ticks WHERE event='wide_quotes' AND receipt IS NOT NULL AND receipt>0 AND receipt>=?1 AND receipt<=?2 AND at<=?3 AND instr(body,'\"kind\":\"compacted_quote_receipt\"')>0 ORDER BY {compacted_order} LIMIT ?4"
     );
     let mut compacted_statement = db
         .prepare(&compacted_sql)
         .map_err(|_| "candidate_quotes_unavailable".to_string())?;
     let compacted_rows = compacted_statement
-        .query_map(rusqlite::params![from_ms, to_ms, max_rows as i64], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })
+        .query_map(
+            rusqlite::params![from_ms, to_ms, now, max_rows as i64],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
         .map_err(|_| "candidate_quotes_unavailable".to_string())?;
     let mut compacted = Vec::new();
     for row in compacted_rows {
@@ -884,10 +887,8 @@ pub(super) fn candidate_quotes_window_with(
         }));
     }
     let mut quotes = Vec::new();
-    // Keep the original row limit and resolve only events visible as of now.
     let rows = receipt_rows
         .into_iter()
-        .filter(|row| row.0 <= now)
         .map(|(at, receipt, raw)| Ok((at, Some(receipt), raw)));
     for row in source.rows(rows) {
         let (at, receipt, raw) = row?;

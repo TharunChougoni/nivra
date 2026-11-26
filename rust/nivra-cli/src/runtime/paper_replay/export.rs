@@ -331,6 +331,32 @@ mod tests {
         assert_eq!(capped["truncated"], true);
         assert_eq!(capped["quotes"].as_array().unwrap().len(), 1);
 
+        // A later journal event can carry a receipt in the requested range.
+        // It must not take a slot from a replay bounded by the host's clock.
+        let db = super::super::super::open_book(&c).unwrap();
+        db.execute(
+            "INSERT INTO ticks(at,receipt,body,event)
+             SELECT ?1,?2,body,event FROM ticks WHERE receipt=?3 AND event='wide_quotes'",
+            rusqlite::params![open + 17_000, open + 9_000, open + 8_000],
+        )
+        .unwrap();
+        drop(db);
+        let bounded = super::candidate_quotes_window_with(
+            c.quote_source(),
+            c.session,
+            &keys,
+            open + 8_000,
+            open + 9_000,
+            1,
+            open + 16_000,
+            &[QuotePurposeV1::Protection],
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(bounded["quotes"][0]["receipt_ms"], open + 8_000);
+        assert_eq!(bounded["truncated"], false);
+
         let missing = super::candidate_quotes(
             c.quote_source(),
             c.session,
