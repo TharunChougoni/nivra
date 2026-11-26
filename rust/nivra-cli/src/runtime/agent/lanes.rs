@@ -419,6 +419,7 @@ impl<'a> LaneRunner<'a> {
                     },
                     model_id: &model_id,
                     requests: &self.requests,
+                    preempt: &self.preempt,
                 },
                 context.web.as_mut(),
             )?,

@@ -215,6 +215,7 @@ fn all_tools(dir: &std::path::Path) -> (Config, planner::PlannerConfig) {
             }],
             execution: None,
             observation: None,
+            strategy: None,
         }),
         registrations: Vec::new(),
     });

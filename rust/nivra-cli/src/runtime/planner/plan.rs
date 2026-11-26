@@ -120,7 +120,17 @@ pub(crate) fn validate(
     {
         return Err("planner_plan_bounds".into());
     }
-    if plan.actions.is_empty() {
+    validate_actions(plan.actions, p, instruments, now)
+}
+/// The per-action half of [`validate`]: the same schema, allowlist, size, cash
+/// and held-unit checks for a model plan's actions or a strategy's actions.
+pub(crate) fn validate_actions(
+    actions: Vec<Value>,
+    p: &Portfolio,
+    instruments: &[Instrument],
+    now: i64,
+) -> Result<Vec<Verdict>> {
+    if actions.is_empty() {
         return Ok(Vec::new());
     }
     let costs = p.costs.clone().ok_or("paper_costs_required")?;
@@ -131,8 +141,7 @@ pub(crate) fn validate(
         .iter()
         .map(|(k, v)| (k.clone(), v.units))
         .collect();
-    Ok(plan
-        .actions
+    Ok(actions
         .into_iter()
         .enumerate()
         .map(|(index, v)| {

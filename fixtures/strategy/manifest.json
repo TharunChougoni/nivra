@@ -1,0 +1,35 @@
+{
+ "schema": 1,
+ "session": "2026-11-25",
+ "previous_session": "2026-11-24",
+ "capital": "5000",
+ "universe": [
+  {
+   "key": "NSE_EQ|TESTA",
+   "symbol": "TESTA",
+   "series": "EQ",
+   "tick": "0.05"
+  },
+  {
+   "key": "NSE_EQ|TESTB",
+   "symbol": "TESTB",
+   "series": "EQ",
+   "tick": "0.05"
+  }
+ ],
+ "events_sha256": "1c41f8f97a79c8a789065971528f2f7a522a1ed3947be72a9d16a6c95c40b01c",
+ "synthetic": true,
+ "max_observation_gap_ms": 1000,
+ "history_directory": null,
+ "paper_costs": {
+  "per_order": "0",
+  "buy_bps": "10",
+  "sell_bps": "10",
+  "slippage_bps": "0",
+  "rounding_increment": "0.01"
+ },
+ "provenance": {
+  "source": "synthetic_fixture",
+  "legacy_quote_purpose_unknown": 0
+ }
+}

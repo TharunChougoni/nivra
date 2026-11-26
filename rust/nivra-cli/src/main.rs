@@ -28,6 +28,26 @@ struct Args {
 }
 
 #[derive(Subcommand)]
+enum StrategyLabCommand {
+    /// Replay a strategy_actions_v1 strategy over a quote tape after costs.
+    ReplayStrategy {
+        /// The strategy's Python source.
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        parameters: PathBuf,
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        events: PathBuf,
+        /// New report file; existing reports are never replaced.
+        #[arg(long)]
+        output: PathBuf,
+    },
+    #[command(flatten)]
+    Lab(nivra_cli::strategy_lab::Commands),
+}
+#[derive(Subcommand)]
 enum Command {
     /// Prepare a fresh current-policy paper installation; never starts trading.
     Setup(runtime::setup::Args),
@@ -51,7 +71,7 @@ enum Command {
     /// Offline strategy proposals, recorded-data evaluation and read-only evidence.
     StrategyLab {
         #[command(subcommand)]
-        command: nivra_cli::strategy_lab::Commands,
+        command: StrategyLabCommand,
     },
     /// Offline experiment lifecycle: admit, ingest workspace scores, and persist transitions.
     ExperimentLifecycle {
@@ -509,7 +529,19 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::StrategyLab { command } => match nivra_cli::strategy_lab::run(command) {
+        Command::StrategyLab {
+            command:
+                StrategyLabCommand::ReplayStrategy {
+                    source,
+                    parameters,
+                    manifest,
+                    events,
+                    output,
+                },
+        } => runtime::strategy::replay_entry(&source, &parameters, &manifest, &events, &output),
+        Command::StrategyLab {
+            command: StrategyLabCommand::Lab(command),
+        } => match nivra_cli::strategy_lab::run(command) {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => {
                 eprintln!("strategy_lab_failed: check configuration and recorded evidence");
@@ -718,7 +750,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, ()> {
+pub(crate) fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, ()> {
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)

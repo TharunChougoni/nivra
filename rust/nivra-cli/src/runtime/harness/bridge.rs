@@ -25,6 +25,8 @@ pub(crate) struct LaneGrant<'a> {
     /// Model identity recorded on the research tasks this turn starts.
     pub model_id: &'a str,
     pub requests: &'a dyn LaneRequests,
+    /// Set when a higher-priority turn waits; long tools stop on it.
+    pub preempt: &'a std::sync::atomic::AtomicBool,
 }
 
 /// One lane turn's tool executor.
@@ -171,9 +173,20 @@ impl<'a> Bridge<'a> {
                 Some(request) => request,
                 None => research::research_task_cancel(c, cfg, &task_id, revision, now)?,
             },
-            Tool::CandidateSubmit(args) => candidate(research::candidate_submit(
-                c, cfg, model, 0, turn, args, now, None,
-            ))?,
+            Tool::CandidateSubmit(args) => {
+                let preempt = self.grant.preempt;
+                candidate(research::candidate_submit_preemptible(
+                    c,
+                    cfg,
+                    model,
+                    0,
+                    turn,
+                    args,
+                    now,
+                    None,
+                    &|| preempt.load(std::sync::atomic::Ordering::Acquire),
+                ))?
+            }
             Tool::CandidateStatus(task_id, revision) => {
                 candidate(research::candidate_status(c, cfg, &task_id, revision, now))?
             }

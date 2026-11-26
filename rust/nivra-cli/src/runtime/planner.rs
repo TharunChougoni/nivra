@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 mod turn;
 pub(super) use turn::call_time_input;
 mod plan;
-pub(crate) use plan::{PlanSide, Verdict, validate};
+pub(crate) use plan::{PlanSide, Verdict, validate, validate_actions};
 mod guard;
 pub(crate) use guard::CallGuard;
 /// How much evidence the model sees in its user message. `ToolsOnly` is the

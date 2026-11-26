@@ -3,18 +3,20 @@
 Research writes and tests strategies away from the paper book. Nothing here
 places an order or changes a running session.
 
-Today a strategy is a **ranker**, a Python script that scores scanner
-prospects. The top prospects become the candidates the decision lane sees. A
-ranker cannot buy, sell, size a position or set an exit. The model in the
-decision lane still chooses every action. Strategies with entry and exit rules,
-accepted automatically by an after-cost replay and run by code, are the planned
-next step. See [direction](DIRECTION.md).
+A strategy is one of two kinds of Python script:
+
+- A **ranker** scores scanner prospects. The top prospects become the
+  candidates the decision lane sees. It cannot buy, sell, size or exit.
+- An **action strategy** (`strategy_actions_v1`) returns buys, sells and exit
+  revisions. Today it runs only in an after-cost replay. Acceptance and a paper
+  executor are the next steps. See [direction](DIRECTION.md).
 
 | Stage | What runs today | Where |
 | --- | --- | --- |
 | Write | The research lane writes `scripts/<name>.py` in the workspace | [Workspace](#workspace) |
 | Test | The sandbox runs the ranker on inline feature rows | [Rankers](#rankers) |
 | Evaluate | Recorded replay with forward marks and declared costs | [Replay and evaluation](#replay-and-evaluation) |
+| Replay actions | An action strategy trades a recorded quote tape after costs | [Action strategies](#action-strategies) |
 | Register | An operator copies a reviewed script into the strategy library | [Registering a ranker](#registering-a-ranker) |
 | Select | The scanner ranks with a library version, or falls back to the built-in ranking | [Live ranking selection](#live-ranking-selection) |
 | Analyse | Pre-registered analyses run in a contained worker | [Registered research jobs](#registered-research-jobs) |
@@ -92,6 +94,109 @@ nivra agent-turn --config PAPER_CONFIG --lane research \
 ```
 
 The turn uses the research lane's budget.
+
+## Action strategies
+
+An action strategy reads one observation from the JSON file named by
+`sys.argv[1]` and prints `{"actions":[...]}`. It runs in the ranker
+[sandbox](#sandbox), with the same limits, once per observation. It keeps no
+state between calls.
+
+The observation holds:
+
+| Field | Contents |
+| --- | --- |
+| `abi`, `at_ms` | `strategy_actions_v1` and the observation time |
+| `params` | The strategy's parameter object |
+| `prospects` | Up to 20 ranked prospects, best first: `key`, `rank`, `score` and `features` |
+| `quotes` | Depth quotes no more than two seconds old: `bid`, `ask`, `bid_units`, `ask_units`, `source`, `receipt` |
+| `positions` | Held `units`, `entry`, `mark`, `marked_at_ms` and `exit_intent` |
+| `instruments` | Each key above with its `symbol` and `tick`. Only these keys may be traded |
+| `cash`, `costs` | Cash after fees, and the `paper_costs` fee schedule |
+
+Each action is a planner action, the same object a decision-lane plan holds:
+
+```json
+{"instrument_key":"NSE_EQ|INE000000001","side":"buy","units":10,"rupees":null,
+ "max_price":"100.50","rationale":"breakout",
+ "exit_intent":{"target":"102.00","stop":"99.50","time":1795579200000}}
+```
+
+- `buy` needs exactly one of `units` or `rupees`, a `max_price`, and an exit
+  intent. A fill adds the cost policy's slippage, so leave headroom above
+  the ask.
+- `sell` needs `units` and `max_price`.
+- `revise_exit` needs only the new `exit_intent`.
+
+Prices and rupees are decimal strings. `time` is absolute epoch milliseconds.
+At most 32 actions are allowed per call.
+
+Deterministic code runs each action through the planner checks and then the
+shared execution gate, the same path as a model plan. A failed call produces
+no actions and one reason: `strategy_exit` (a crash or a blocked network
+call), `strategy_wall_timeout`, `strategy_output_limit`,
+`strategy_output_invalid`, `strategy_output_non_finite`,
+`strategy_output_schema`, `strategy_too_many_actions` or
+`strategy_unknown_instrument`.
+
+### Strategy replay
+
+The replay treats each depth receipt on the tape as one scan, in the paper
+controller's order:
+
+1. Held stops, targets and time exits fill on the receipt, as in the paper
+   book.
+2. The strategy runs on the observation.
+3. Its actions are validated, filled or refused. A fill uses up depth on that
+   receipt.
+
+Screening receipts update the features and the built-in prospect ranking.
+The report is canonical JSON with no floats, so its SHA-256 identifies it. It
+holds the input hashes, the tape dates, every fill, every trade with its exit
+reason and net P&L, and every refusal code. Its `summary` gives the trade
+count, the win rate, the net P&L after costs, the median trade, the worst
+drawdown and the fees. Net P&L counts closed trades only, and
+`open_positions` lists what is still held at the end of the tape.
+
+Offline, replay a tape from `scanner-archive --tape`:
+
+```sh
+nivra strategy-lab replay-strategy --source strategy.py --parameters parameters.json \
+  --manifest manifest.json --events events.jsonl --output new-report.json
+```
+
+The parameters are `{"version":1}` plus these optional fields:
+
+| Field | Default |
+| --- | --- |
+| `params` | `{}` |
+| `capital`, `costs` | The manifest's `capital` and `paper_costs` |
+| `exit_policy` | None: every held stop, target and time exit executes |
+| `top_n` | 20 prospects (at most 50) |
+| `from_ms`, `to_ms` | The whole tape. The window limits strategy calls, not held exits |
+
+The command prints the summary and the `report_sha256`, which is the SHA-256
+of the report file. [`fixtures/strategy/`](../fixtures/strategy/strategy.py) has an
+example strategy, tape and parameters.
+
+In the research lane, enable `candidate_compute.strategy`:
+
+```json
+"strategy": {"enabled": true, "abi": "strategy_actions_v1", "max_wall_ms": 20000,
+  "max_quote_events": 10000, "max_observations": 100000, "max_tape_bytes": 16777216}
+```
+
+Then `backtest` takes `strategy: true`. It replays `source` with `params` over
+the selection window of the current session's tape, with the book's capital,
+costs and exit policy. It returns the summary and the report hash at once.
+The report is kept as `model/strategy-replays/<sha256>.json` in the book.
+
+The replay runs on the lane worker that also runs decision turns, so it is
+bounded. It stops before the next strategy call when it passes `max_wall_ms`
+(default 20,000, at most 120,000) with `strategy_replay_wall_budget`, or when
+a decision turn is waiting, with `strategy_replay_preempted`. A stopped replay
+keeps no report. It returns `strategy_calls` and `last_at_ms`, so retry with a
+narrower `selection_from_ms` and `selection_to_ms`.
 
 ## Replay and evaluation
 

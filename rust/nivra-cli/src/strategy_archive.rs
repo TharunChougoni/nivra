@@ -32,12 +32,12 @@ struct PaperManifest {
 
 /// Accept each producer's actual contract; paper captures have no historical
 /// engine/calendar bindings and must never acquire invented ones during import.
-type ArchiveIdentity = (
+pub type ArchiveIdentity = (
     chrono::NaiveDate,
     chrono::NaiveDate,
     Vec<nivra_core::execution::Instrument>,
 );
-pub(crate) fn archive_identity(manifest: &[u8], events: &[u8]) -> Result<ArchiveIdentity, String> {
+pub fn archive_identity(manifest: &[u8], events: &[u8]) -> Result<ArchiveIdentity, String> {
     let value: Value = serde_json::from_slice(manifest).map_err(|_| rejected())?;
     if value.get("schema").is_some() {
         let paper: PaperManifest = serde_json::from_value(value).map_err(|_| rejected())?;

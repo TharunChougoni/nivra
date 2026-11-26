@@ -28,6 +28,7 @@ mod library;
 pub(crate) use library::*;
 mod status;
 pub(crate) use status::*;
+mod strategy_replay;
 
 const CANDIDATE_ABI: &str = "scorer_replay_v1";
 const CANDIDATE_ENGINE: &str = "sadr_sandbox::score_source";
@@ -232,6 +233,10 @@ pub(crate) struct CandidateSubmitArgs {
     /// supplies those bytes.
     #[serde(default, deserialize_with = "deserialize_optional_observation")]
     pub observation: Option<Box<CandidateObservationArgsV1>>,
+    /// Advertised only with `candidate_compute.strategy`. `true` replays the
+    /// source as a `strategy_actions_v1` strategy now instead of queueing it.
+    #[serde(default)]
+    pub strategy: Option<bool>,
 }
 
 /// The fixed helper's only result. It is advisory input to the controller: the

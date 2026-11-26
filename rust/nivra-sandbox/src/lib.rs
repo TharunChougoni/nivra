@@ -35,6 +35,13 @@ pub struct ScorerSandboxConfig {
     #[serde(default, skip_serializing_if = "is_false")]
     pub network: bool,
 }
+/// The containment limits for any payload: rankers and action strategies alike.
+pub type SandboxConfig = ScorerSandboxConfig;
+/// True when the host gate demands a working sandbox, so a caller that probes
+/// for one fails instead of skipping.
+pub fn sandbox_required() -> bool {
+    std::env::var_os("NIVRA_REQUIRE_SCORER_SANDBOX").is_some()
+}
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -261,14 +268,18 @@ fn prepare(
     features: &Features,
 ) -> Result<Prepared, Failure> {
     c.validate()?;
-    if source.len() > 262144 {
-        return Err(Failure::Input);
-    }
     if features.len() > c.max_keys || features.keys().any(|k| k.is_empty() || k.len() > 512) {
         return Err(Failure::Input);
     }
-    let input = serde_json::to_vec(features).map_err(|_| Failure::Input)?;
-    if input.len() > 4 * 1024 * 1024 {
+    prepare_input(
+        c,
+        source,
+        &serde_json::to_vec(features).map_err(|_| Failure::Input)?,
+    )
+}
+fn prepare_input(c: &SandboxConfig, source: &[u8], input: &[u8]) -> Result<Prepared, Failure> {
+    c.validate()?;
+    if source.len() > 262144 || input.len() > 4 * 1024 * 1024 {
         return Err(Failure::Input);
     }
     let dir = tempfile::tempdir().map_err(|_| Failure::Setup)?;
@@ -400,11 +411,11 @@ fn prepare(
     })
 }
 
+/// Raw bounded stdout of one payload run. `true` means the leader exited by itself.
 fn run_child(
-    c: &ScorerSandboxConfig,
-    features: &Features,
+    c: &SandboxConfig,
     child: &mut std::process::Child,
-) -> (Result<Scores, Failure>, bool) {
+) -> (Result<Vec<u8>, Failure>, bool) {
     use std::os::fd::AsRawFd;
     let Some(mut pipe) = child.stdout.take() else {
         return (Err(Failure::Setup), false);
@@ -441,10 +452,12 @@ fn run_child(
                     .read_to_end(&mut tail);
                 bytes.extend(tail);
                 return (
-                    if status.success() {
-                        output(&bytes, features, c)
-                    } else {
+                    if !status.success() {
                         Err(Failure::Exit)
+                    } else if bytes.len() > c.max_output_bytes {
+                        Err(Failure::OutputLimit)
+                    } else {
+                        Ok(bytes)
                     },
                     true,
                 );
@@ -496,14 +509,20 @@ pub fn score_source_with_receipt(
     source: &[u8],
     features: &Features,
 ) -> ScorerExecution {
-    let mut prepared = match prepare(c, source, features) {
+    let (result, receipt) = spawn(c, prepare(c, source, features));
+    ScorerExecution {
+        result: result.and_then(|bytes| output(&bytes, features, c)),
+        receipt,
+    }
+}
+
+fn spawn(
+    c: &SandboxConfig,
+    prepared: Result<Prepared, Failure>,
+) -> (Result<Vec<u8>, Failure>, BwrapLeaderReceipt) {
+    let mut prepared = match prepared {
         Ok(prepared) => prepared,
-        Err(failure) => {
-            return ScorerExecution {
-                result: Err(failure),
-                receipt: BwrapLeaderReceipt::not_started(),
-            };
-        }
+        Err(failure) => return (Err(failure), BwrapLeaderReceipt::not_started()),
     };
     let mut child = match prepared.cmd.spawn() {
         Ok(child) => child,
@@ -513,18 +532,30 @@ pub fn score_source_with_receipt(
             } else {
                 Failure::Setup
             };
-            return ScorerExecution {
-                result: Err(failure),
-                receipt: BwrapLeaderReceipt::not_started(),
-            };
+            return (Err(failure), BwrapLeaderReceipt::not_started());
         }
     };
     let pid = child.id() as i32;
     #[cfg(test)]
     tests::LAST_PID.with(|slot| slot.set(pid));
-    let (result, normal_exit) = run_child(c, features, &mut child);
+    let (result, normal_exit) = run_child(c, &mut child);
     let receipt = cleanup(&mut child, pid, normal_exit);
-    ScorerExecution { result, receipt }
+    (result, receipt)
+}
+
+/// Run a program on one JSON document under the same containment and limits
+/// as a ranker, returning its bounded stdout. The caller parses the output
+/// for its own ABI. A config that shares the network is refused here.
+pub fn run_document(
+    c: &SandboxConfig,
+    source: &[u8],
+    input: &serde_json::Value,
+) -> Result<Vec<u8>, Failure> {
+    if c.network {
+        return Err(Failure::Config);
+    }
+    let input = serde_json::to_vec(input).map_err(|_| Failure::Input)?;
+    spawn(c, prepare_input(c, source, &input)).0
 }
 
 /// Score already-loaded source bytes (for example an exact library version).

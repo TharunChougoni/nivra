@@ -103,6 +103,37 @@ impl CandidateExecutionSettings {
         Ok(())
     }
 }
+/// Opt-in after-cost replay of a `strategy_actions_v1` strategy over the
+/// current session's frozen quote tape, with the book's capital and costs.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CandidateStrategySettings {
+    pub enabled: bool,
+    pub abi: String,
+    pub max_quote_events: usize,
+    pub max_observations: usize,
+    pub max_tape_bytes: u64,
+    /// Wall budget for one replay. The lane worker also runs decision turns,
+    /// so a longer replay stops with `strategy_replay_wall_budget`.
+    #[serde(default = "default_strategy_wall_ms")]
+    pub max_wall_ms: u64,
+}
+fn default_strategy_wall_ms() -> u64 {
+    20_000
+}
+impl CandidateStrategySettings {
+    pub(crate) fn validate(&self) -> std::result::Result<(), &'static str> {
+        if self.abi != crate::runtime::strategy::ABI
+            || !(1..=120_000).contains(&self.max_wall_ms)
+            || !(1..=10_000).contains(&self.max_quote_events)
+            || !(1..=100_000).contains(&self.max_observations)
+            || !(1..=16 * 1024 * 1024).contains(&self.max_tape_bytes)
+        {
+            return Err("candidate_strategy_invalid");
+        }
+        Ok(())
+    }
+}
 /// Reviewed opt-in policy for one prospective-observation attempt. It reuses
 /// the existing candidate queue, helper, owned unit and caps; the only new
 /// authority is a virtual research quote that can never enter the paper book.
@@ -180,6 +211,10 @@ pub(crate) struct CandidateComputeSettings {
     /// policy bytes when absent so historical policy hashes are unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observation: Option<CandidateObservationSettings>,
+    /// Optional `strategy_actions_v1` replay. Omitted when absent, so existing
+    /// policy bytes do not change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy: Option<CandidateStrategySettings>,
 }
 fn default_unit_tasks() -> u32 {
     16
@@ -223,6 +258,9 @@ impl CandidateComputeSettings {
             .map_err(|_| "candidate_sandbox_invalid")?;
         if let Some(observation) = &self.observation {
             observation.validate()?;
+        }
+        if let Some(strategy) = &self.strategy {
+            strategy.validate()?;
         }
         self.replay
             .validate()

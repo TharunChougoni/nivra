@@ -116,7 +116,7 @@
 4	scorer	rust/nivra-research/src/bubblewrap.rs
 5	scorer	rust/nivra-research/src/strategy_sandbox.rs
 2	scorer	rust/nivra-research/src/worker.rs
-44	scorer	rust/nivra-sandbox/src/lib.rs
+43	scorer	rust/nivra-sandbox/src/lib.rs
 19	scorer	rust/nivra-sandbox/src/selector.rs
 24	scorer	rust/nivra-store/src/research_jobs.rs
 28	scorer	rust/nivra-store/src/strategy_results.rs

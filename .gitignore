@@ -25,6 +25,8 @@ token*.txt
 *.sqlite-shm
 *.log
 *.jsonl
+# Synthetic fixture tape for the strategy replay test.
+!/fixtures/strategy/events.jsonl
 
 # Private author audit workspace
 /.audit/

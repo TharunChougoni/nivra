@@ -227,6 +227,7 @@ fn candidate_settings(root: &Path, base: &ResearchSettings) -> ResearchSettings 
         }],
         execution: None,
         observation: None,
+        strategy: None,
     });
     settings
 }
@@ -262,6 +263,7 @@ fn candidate_submit_args(
         execution: None,
         parent_ref: None,
         observation: None,
+        strategy: None,
     }
 }
 
@@ -593,6 +595,86 @@ fn candidate_execution_book(c: &Config) {
         .unwrap();
     }
     drop(db);
+}
+
+/// `backtest` with `strategy: true` replays a strategy_actions_v1 strategy
+/// over the session tape now and keeps the report by its content hash.
+fn candidate_strategy_contract(
+    root: &Path,
+    base_settings: &ResearchSettings,
+    base_policy: &PlannerConfig,
+) {
+    let dir = root.join("candidate-strategy-contract");
+    fs::create_dir_all(&dir).unwrap();
+    let mut settings = candidate_execution_settings(&dir, base_settings, 1_048_576);
+    let (c, cfg) = candidate_config(&dir, base_policy, settings.clone());
+    candidate_execution_book(&c);
+    let source = r#"import json,sys
+o=json.load(open(sys.argv[1]))
+a=[{"instrument_key":k,"side":"buy","units":1,"rupees":None,"max_price":"120","rationale":"",
+    "exit_intent":{"time":o["at_ms"]+500}} for k,q in o["quotes"].items()
+   if k.endswith("INE000000001") and k not in o["positions"]]
+print(json.dumps({"actions":a}))"#;
+    let submit = |cfg: &PlannerConfig| {
+        let mut args = candidate_submit_args("candidate-strategy", source, None);
+        args.horizon_minutes = 1;
+        args.strategy = Some(true);
+        candidate_submit(
+            &c,
+            cfg,
+            "grok-4.7",
+            3,
+            "turn-candidate",
+            args,
+            candidate_at(9, 23),
+            Some(candidate_evidence()),
+        )
+        .unwrap()
+    };
+    assert_eq!(submit(&cfg)["reason"], "candidate_strategy_disabled");
+    settings.candidate_compute.as_mut().unwrap().strategy = Some(CandidateStrategySettings {
+        enabled: true,
+        abi: "strategy_actions_v1".into(),
+        max_quote_events: 100,
+        max_observations: 1_000,
+        max_tape_bytes: 1_048_576,
+        max_wall_ms: 20_000,
+    });
+    let (_, cfg) = candidate_config(&dir, base_policy, settings);
+    // A waiting higher-priority turn stops the replay before its first call.
+    let mut args = candidate_submit_args("candidate-strategy", source, None);
+    args.horizon_minutes = 1;
+    args.strategy = Some(true);
+    let stopped = candidate_submit_preemptible(
+        &c,
+        &cfg,
+        "grok-4.7",
+        3,
+        "turn-candidate",
+        args,
+        candidate_at(9, 23),
+        Some(candidate_evidence()),
+        &|| true,
+    )
+    .unwrap();
+    assert_eq!(stopped["reason"], "strategy_replay_preempted", "{stopped}");
+    assert_eq!(stopped["strategy_calls"], 0);
+    assert!(!c.directory.join("model/strategy-replays").exists());
+    let done = submit(&cfg);
+    assert_eq!(done["status"], "completed", "{done}");
+    // One call in the 09:21-09:22 window buys AAA near 110.05; its time exit
+    // sells at the next receipt's 110 bid, outside the window.
+    assert_eq!(done["tape"]["strategy_calls"], 1, "{done}");
+    assert_eq!(done["summary"]["trades"], 1, "{done}");
+    assert_eq!(done["trades"][0]["exit_reason"], "time");
+    let sha = done["report_sha256"].as_str().unwrap();
+    let kept = fs::read(
+        c.directory
+            .join(format!("model/strategy-replays/{sha}.json")),
+    )
+    .unwrap();
+    assert_eq!(digest(&kept), sha);
+    assert_eq!(submit(&cfg)["report_sha256"], sha);
 }
 
 fn candidate_execution_spec(
@@ -3157,6 +3239,7 @@ fn candidate_recovery_and_execution_contracts() {
             ("recovery", candidate_recovery_contract),
             ("execution", candidate_execution_contract),
             ("execution_recovery", candidate_execution_recovery_contract),
+            ("strategy", candidate_strategy_contract),
         ],
         true,
     );

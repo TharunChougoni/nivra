@@ -674,6 +674,15 @@ pub(crate) fn bridge_definitions(cfg: &PlannerConfig, lane_requests: bool) -> Re
                 .map(|dataset| &dataset.dataset_id)
                 .collect::<Vec<_>>()
         );
+        if candidate.strategy.as_ref().is_some_and(|s| s.enabled) {
+            submit["parameters"]["properties"]["strategy"] = json!({
+                "type":["boolean","null"],
+                "description":"true runs source as a strategy_actions_v1 strategy (entry and exit actions) over the selection window of this session's quote tape, with the book's capital, costs and exit policy, and returns the after-cost replay report now. params is its params object; horizon_minutes is not used. A replay over the wall budget, or one a waiting decision turn preempts, stops with no report and says how far it got; retry with a narrower selection window."
+            });
+            if let Some(required) = submit["parameters"]["required"].as_array_mut() {
+                required.push(json!("strategy"));
+            }
+        }
     }
     Ok(tools)
 }

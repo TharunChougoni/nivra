@@ -610,6 +610,7 @@ fn candidate_observation_submit(
     }))
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn candidate_submit(
     c: &Config,
@@ -620,6 +621,33 @@ pub(crate) fn candidate_submit(
     args: CandidateSubmitArgs,
     now: i64,
     owner_evidence: Option<jobs::OwnerEvidence>,
+) -> Result<Value> {
+    candidate_submit_preemptible(
+        c,
+        cfg,
+        model_id,
+        model_revision,
+        parent_turn_id,
+        args,
+        now,
+        owner_evidence,
+        &|| false,
+    )
+}
+
+/// [`candidate_submit`] for a lane turn: `preempted` stops a strategy replay
+/// when a higher-priority turn is waiting.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn candidate_submit_preemptible(
+    c: &Config,
+    cfg: &PlannerConfig,
+    model_id: &str,
+    model_revision: u64,
+    parent_turn_id: &str,
+    args: CandidateSubmitArgs,
+    now: i64,
+    owner_evidence: Option<jobs::OwnerEvidence>,
+    preempted: &dyn Fn() -> bool,
 ) -> Result<Value> {
     if args.observation.is_some() {
         return candidate_observation_submit(
@@ -739,6 +767,9 @@ pub(crate) fn candidate_submit(
         parent.len() != 64 || !parent.bytes().all(|byte| byte.is_ascii_hexdigit())
     }) {
         return Ok(not_dispatched("candidate_parent_invalid"));
+    }
+    if args.strategy == Some(true) {
+        return super::strategy_replay::strategy_backtest(c, cfg, candidate, &args, now, preempted);
     }
     // Optional reviewed after-cost cash replay. The capability is host policy;
     // a request without the grant is refused before any artifact or task row.

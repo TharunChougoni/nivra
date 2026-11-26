@@ -196,7 +196,7 @@ fn archive_view_with(
     })
 }
 
-pub(crate) fn parse_archive_events(
+pub fn parse_archive_events(
     events: &[u8],
     first_day: chrono::NaiveDate,
     last_day: chrono::NaiveDate,

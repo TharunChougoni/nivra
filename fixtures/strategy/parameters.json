@@ -1,0 +1,12 @@
+{
+ "version": 1,
+ "params": {
+  "start_ms": 1795578600000,
+  "units": 10,
+  "rupees": "1000",
+  "target": "0.50",
+  "stop": "0.50",
+  "revised_target": "100.40",
+  "hold_ms": 600000
+ }
+}
