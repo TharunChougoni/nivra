@@ -197,13 +197,10 @@ struct HistoryRecoveryMarker {
     original_report: serde_json::Value,
 }
 
-/// Crash-safe claims are `IN_PROGRESS` with `completed_ms:null`. Legacy files
-/// pre-wrote `BLOCKED`/`history_attempt_interrupted_no_replay` for the same
-/// in-flight state; both are operator-recoverable and never auto-replayed.
+/// A crash-safe claim is `IN_PROGRESS` with `completed_ms:null`. It is
+/// operator-recoverable and never auto-replayed.
 fn interrupted_incomplete(record: &HistoryAttempt) -> bool {
-    record.completed_ms.is_none()
-        && (record.report["status"].as_str() == Some("IN_PROGRESS")
-            || record.report["reason"].as_str() == Some(HISTORY_ATTEMPT_INTERRUPTED))
+    record.completed_ms.is_none() && record.report["status"].as_str() == Some("IN_PROGRESS")
 }
 
 fn history_recovery_marker(record: &HistoryAttempt) -> Option<HistoryRecoveryMarker> {

@@ -369,34 +369,6 @@ fn interrupted_history_recovery_settles_no_replay_and_bounds_retry() {
     assert_eq!(restarted.records[1].report["status"], "IN_PROGRESS");
 }
 #[test]
-fn history_recovery_accepts_legacy_interrupted_prewrite() {
-    let fixture = tempfile::tempdir().unwrap();
-    let mut cfg = super::super::super::tests::config(fixture.path());
-    cfg.history_preparation_max_attempts = 2;
-    cfg.history_preparation_failed_retry_ms = 100;
-    rollover::atomic(
-        &HistoryAttempts::path(&cfg),
-        &serde_json::json!({
-            "account":cfg.account,
-            "session":cfg.session,
-            "count":1,
-            "records":[{"started_ms":0,"completed_ms":null,
-                "report":{"status":"BLOCKED","reason":HISTORY_ATTEMPT_INTERRUPTED}}],
-            "retry_at":null
-        }),
-    )
-    .unwrap();
-    let output = history_recover(&cfg, 10, true).unwrap();
-    assert_eq!(output["status"], "recovered");
-    let stored = HistoryAttempts::load(&cfg).unwrap();
-    assert_eq!(stored.records[0].report["status"], "FAILED");
-    assert_eq!(
-        stored.records[0].report["original_report"]["reason"],
-        HISTORY_ATTEMPT_INTERRUPTED
-    );
-    assert_eq!(stored.retry_at, Some(110));
-}
-#[test]
 fn history_recovery_refuses_unsafe_or_malformed_state() {
     fn refused(cfg: &Config, code: &str) {
         let path = HistoryAttempts::path(cfg);
@@ -472,7 +444,7 @@ fn history_recovery_refuses_unsafe_or_malformed_state() {
             "session":cfg.session,
             "count":2,
             "records":[{"started_ms":40,"completed_ms":null,
-                "report":{"status":"BLOCKED","reason":HISTORY_ATTEMPT_INTERRUPTED}}],
+                "report":{"status":"IN_PROGRESS"}}],
             "retry_at":null
         }),
     )

@@ -1001,8 +1001,7 @@ fn contain_event_error(
 mod history;
 #[cfg(test)]
 pub(super) use history::{
-    HISTORY_ATTEMPT_INTERRUPTED, HISTORY_ATTEMPT_RECOVERED, HISTORY_RECOVERY_RECEIPT_KIND,
-    history_recovery_receipt_path,
+    HISTORY_ATTEMPT_RECOVERED, HISTORY_RECOVERY_RECEIPT_KIND, history_recovery_receipt_path,
 };
 pub(super) use history::{
     HistoryAttempts, history_attempt_window, history_recover, late_preparation_due,
