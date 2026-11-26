@@ -681,3 +681,50 @@ pub(crate) fn read_spend(c: &Config) -> Result<BTreeMap<Lane, Usage>> {
     }
     Ok(spend.lanes)
 }
+
+/// The fields of one `turns.ndjson` line that readiness reports as evidence.
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct JournaledTurn {
+    pub turn_id: String,
+    pub lane: Lane,
+    pub at_ms: i64,
+    /// `ok`, `error`, `aborted`, or `refused` when the turn never ran.
+    pub status: String,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub fallback: Option<super::protocol::Fallback>,
+}
+
+const MAX_TURN_JOURNAL_BYTES: u64 = 16_000_000;
+
+/// Each lane's latest journaled turn this session. The journal is appended in
+/// turn order, so the last line per lane wins. A missing journal holds no
+/// turns; an unreadable or malformed one is an error, never an empty map. A
+/// final line without its newline is a write a crash cut off and is not
+/// evidence.
+pub(crate) fn latest_turns(c: &Config) -> Result<BTreeMap<Lane, JournaledTurn>> {
+    let path = root(c).join("turns.ndjson");
+    let bytes = match crate::read_bounded(&path, MAX_TURN_JOURNAL_BYTES) {
+        Ok(bytes) => bytes,
+        Err(_) if !path.exists() => return Ok(BTreeMap::new()),
+        Err(_) => return Err("agent_turns_unreadable".into()),
+    };
+    let mut latest = BTreeMap::new();
+    for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+        if !line.ends_with(b"\n") {
+            break;
+        }
+        let turn: JournaledTurn =
+            serde_json::from_slice(line).map_err(|_| "agent_turns_unreadable")?;
+        let day = turn
+            .at_ms
+            .checked_add(19_800_000)
+            .and_then(chrono::DateTime::from_timestamp_millis)
+            .map(|time| time.date_naive());
+        if day == Some(c.session) {
+            latest.insert(turn.lane, turn);
+        }
+    }
+    Ok(latest)
+}

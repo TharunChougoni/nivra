@@ -95,10 +95,26 @@ registered research file reports `research_registered_bytes_changed`. See
 [research](RESEARCH.md).
 
 `readiness` is read-only and calls no provider. It reports models, history and
-rollover separately. It cannot verify provider access, so a healthy pi planner
-reports `model_roles_unknown` with `agent_provider_not_checked` and exits
-non-zero. `model_roles_blocked` names a reason such as `agent_node_unavailable`
-or `daily_budget_exhausted`.
+rollover separately. Each lane in `models.roles` takes its status from local
+evidence only:
+
+| Status | When | `reason` |
+| --- | --- | --- |
+| `blocked` | The pi runtime is missing, usage is unreadable or the daily budget is spent | For example `agent_node_unavailable` or `daily_budget_exhausted` |
+| `unknown` | The lane ran no turn this session, or `turns.ndjson` is unreadable | `agent_provider_not_checked` or `agent_turns_unreadable` |
+| `ready` | The lane's latest turn this session finished `ok` on its primary model | `agent_turn_ok` |
+| `degraded` | The latest turn failed, was refused or aborted, or fell back | The turn's error, or `agent_fallback_used` |
+
+`last_turn` names the evidence: turn id, time, status, error and any fallback
+(from, to and reason). Configuration alone never makes a lane ready.
+`credential_check` stays `not_checked` because readiness never reads
+credentials; `preflight` checks credential presence when the service starts.
+
+The decision lane sets `models.status` (`model_roles_ready`,
+`model_roles_degraded`, `model_roles_unknown` or `model_roles_blocked`). The
+command exits zero only for `model_roles_ready`. Before the session's first
+decision turn, and after the close when the target is the next session, a
+healthy pi planner reports `model_roles_unknown`.
 
 To catch up missing daily history by hand, run
 `nivra history-backfill --config PAPER_CONFIG`. Add `--check-only` to report

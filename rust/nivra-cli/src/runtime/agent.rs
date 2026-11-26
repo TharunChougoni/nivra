@@ -20,7 +20,7 @@ mod triggers;
 pub(crate) mod turn_cli;
 
 pub(crate) use client::{Agent, AgentClient, command};
-pub(crate) use lanes::read_spend;
+pub(crate) use lanes::{JournaledTurn, latest_turns, read_spend};
 pub(crate) use triggers::{Ranked, TriggerSettings};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

@@ -1,5 +1,5 @@
 //! Bounded, read-only model readiness projection for the next paper session.
-use super::agent::{AgentSettings, Lane};
+use super::agent::{AgentSettings, JournaledTurn, Lane};
 use super::*;
 use serde_json::{Value, json};
 
@@ -21,9 +21,42 @@ fn pi_runtime_issue(settings: &AgentSettings) -> Option<&'static str> {
     None
 }
 
+/// A lane's status from its latest turn this session: a clean OK turn is
+/// ready; a failed, refused, aborted or fallen-back turn is degraded.
+fn turn_status(turn: &JournaledTurn) -> (&'static str, String) {
+    match (turn.status.as_str(), &turn.fallback) {
+        ("ok", None) => ("ready", "agent_turn_ok".into()),
+        ("ok", Some(_)) => ("degraded", "agent_fallback_used".into()),
+        (status, _) => (
+            "degraded",
+            error_code(turn).map_or_else(|| format!("agent_turn_{status}"), str::to_owned),
+        ),
+    }
+}
+
+/// The turn's error when it is a reason code. Provider messages can carry
+/// free text, so readiness never repeats them.
+fn error_code(turn: &JournaledTurn) -> Option<&str> {
+    turn.error.as_deref().filter(|error| {
+        !error.is_empty()
+            && error.len() <= 64
+            && error.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_:".contains(&byte)
+            })
+    })
+}
+
+fn turn_evidence(turn: &JournaledTurn) -> Value {
+    json!({"turn_id":turn.turn_id,"at_ms":turn.at_ms,"status":turn.status,"error":error_code(turn),
+    "fallback":turn.fallback.as_ref().map(|fallback| json!({
+        "from":fallback.from,"to":fallback.to,"reason":fallback.reason
+    }))})
+}
+
 fn pi_report(c: &Config, settings: &AgentSettings, session: NaiveDate) -> Value {
     let runtime_issue = pi_runtime_issue(settings);
-    let spend = (session == c.session).then(|| super::agent::read_spend(c));
+    let current = session == c.session;
+    let spend = current.then(|| super::agent::read_spend(c));
     let (usage, usage_issue) = match &spend {
         Some(Ok(by_lane)) => (json!({"status":"reported","used":by_lane}), None),
         Some(Err(_)) => (
@@ -35,7 +68,13 @@ fn pi_report(c: &Config, settings: &AgentSettings, session: NaiveDate) -> Value 
             None,
         ),
     };
-    let mut decision_issue = Some("agent_decision_lane_required");
+    let turns = current.then(|| super::agent::latest_turns(c));
+    let journal = match &turns {
+        Some(Ok(_)) => json!({"status":"reported"}),
+        Some(Err(_)) => json!({"status":"unavailable","reason":"agent_turns_unreadable"}),
+        None => json!({"status":"unknown","reason":"future_session_namespace_not_created"}),
+    };
+    let mut decision = ("blocked", "agent_decision_lane_required".to_owned());
     let mut roles = Vec::new();
     for (lane, lane_settings) in &settings.lanes {
         let spent = match &spend {
@@ -55,14 +94,27 @@ fn pi_report(c: &Config, settings: &AgentSettings, session: NaiveDate) -> Value 
                 }
             })
         });
+        // No evidence means unknown: configuration alone never makes a lane ready.
+        let last = match &turns {
+            Some(Ok(latest)) => latest.get(lane),
+            _ => None,
+        };
+        let (status, reason) = match (issue, &turns, last) {
+            (Some(issue), _, _) => ("blocked", issue.to_owned()),
+            (None, Some(Err(_)), _) => ("unknown", "agent_turns_unreadable".to_owned()),
+            (None, _, Some(turn)) => turn_status(turn),
+            (None, _, None) => ("unknown", "agent_provider_not_checked".to_owned()),
+        };
         if *lane == Lane::Decision {
-            decision_issue = issue;
+            decision = (status, reason.clone());
         }
         roles.push(json!({
             "role":lane.as_str(),"enabled":true,"model":lane_settings.model.id,
             "transport":"pi","provider":lane_settings.model.provider,
-            "status":if issue.is_some() {"blocked"} else {"unknown"},
-            "reason":issue.unwrap_or("agent_provider_not_checked"),
+            "status":status,"reason":reason,
+            "last_turn":last.map(turn_evidence),
+            // Stored-credential presence is the pi preflight's check at service
+            // start; readiness never reads credentials.
             "credential_check":{"status":"not_checked","reason":"agent_provider_not_checked"},
             "daily_call_budget":lane_settings.daily_calls,"budget_unit":"request",
             "daily_cost_usd":lane_settings.daily_cost_usd,
@@ -72,9 +124,9 @@ fn pi_report(c: &Config, settings: &AgentSettings, session: NaiveDate) -> Value 
             "remaining_cost_usd":spent.as_ref().map(|spent| (lane_settings.daily_cost_usd - spent.cost_usd).max(0.0))
         }));
     }
-    json!({"status":if decision_issue.is_some() {"model_roles_blocked"} else {"model_roles_unknown"},
-        "reason":decision_issue.unwrap_or("agent_provider_not_checked"),"harness":"pi",
-        "planner_enabled":true,"roles":roles,"current_usage":usage,
+    json!({"status":format!("model_roles_{}", decision.0),
+        "reason":decision.1,"harness":"pi",
+        "planner_enabled":true,"roles":roles,"current_usage":usage,"turn_journal":journal,
         "runtime":{"status":if runtime_issue.is_some() {"blocked"} else {"present"},"reason":runtime_issue}})
 }
 
@@ -217,7 +269,7 @@ pub fn entry(path: &Path, now_ms: i64) -> ExitCode {
 
 #[cfg(test)]
 #[test]
-fn pi_readiness_projects_only_locally_verified_facts() {
+fn pi_readiness_derives_lane_status_from_local_turn_evidence() {
     let root = tempfile::tempdir().unwrap();
     let dir = root.path();
     let mut c = super::tests::config(dir);
@@ -231,61 +283,194 @@ fn pi_readiness_projects_only_locally_verified_facts() {
     fs::set_permissions(&node, fs::Permissions::from_mode(0o700)).unwrap();
     fs::write(&entry, b"fixture; do not execute").unwrap();
     fs::write(agent_dir.join("auth.json"), b"opaque provider credentials").unwrap();
-    fs::create_dir_all(dir.join("model/agent")).unwrap();
-    fs::write(dir.join("model/usage-identity.json"), b"legacy evidence").unwrap();
+    let journal_dir = dir.join("model/agent");
+    fs::create_dir_all(&journal_dir).unwrap();
+    let lane =
+        json!({"model":{"provider":"fixture","id":"primary"},"daily_calls":2,"daily_cost_usd":3.0});
     fs::write(
         planner,
         json!({"enabled":true,"agent":{
             "mode":"paper","node":node,"entry":entry,"agent_dir":agent_dir,
-            "lanes":{"decision":{"model":{"provider":"fixture","id":"decision-model"},
-                "daily_calls":2,"daily_cost_usd":3.0}}
+            "lanes":{"decision":lane,"gate":lane}
         }})
         .to_string(),
     )
     .unwrap();
-    let now = DateTime::parse_from_rfc3339("2026-10-16T08:00:00+05:30")
-        .unwrap()
-        .timestamp_millis();
-    let fresh = report(&c, now).unwrap();
-    assert_eq!(fresh["harness"], "pi");
-    assert_eq!(fresh["status"], "model_roles_unknown");
-    assert_eq!(fresh["runtime"]["status"], "present");
-    assert_eq!(fresh["roles"].as_array().unwrap().len(), 1);
-    assert_eq!(fresh["roles"][0]["role"], "decision");
+    let at = |time: &str| {
+        DateTime::parse_from_rfc3339(&format!("2026-10-16T{time}+05:30"))
+            .unwrap()
+            .timestamp_millis()
+    };
+    let now = at("10:00:00");
+    let turn = |id: &str, status: &str, error: Value, fallback: Value| {
+        json!({"turn_id":id,"lane":"decision","at_ms":at("09:30:00"),"status":status,
+            "error":error,"fallback":fallback,"model":"primary","usage":{}})
+    };
+    let fell_back = json!({"from":{"provider":"fixture","id":"primary"},
+        "to":{"provider":"fixture","id":"spare"},"reason":"quota","error":"provider said no"});
+    let yesterday = json!({"turn_id":"decision-old","lane":"decision",
+        "at_ms":at("09:00:00") - 86_400_000,"status":"ok"});
+    let ok = turn("decision-ok", "ok", Value::Null, Value::Null);
+    let spent = |calls: u64| {
+        json!({"date":c.session,"lanes":{"decision":{
+            "input":0,"output":0,"cache_read":0,"cache_write":0,"cost_usd":0,"calls":calls
+        }}})
+    };
+    // (case, journal lines, usage ledger, decision status, reason, evidenced turn, overall)
+    let cases = [
+        (
+            "no turns",
+            vec![],
+            None,
+            "unknown",
+            "agent_provider_not_checked",
+            None,
+            "model_roles_unknown",
+        ),
+        (
+            "only an older session",
+            vec![yesterday],
+            None,
+            "unknown",
+            "agent_provider_not_checked",
+            None,
+            "model_roles_unknown",
+        ),
+        (
+            "ok turn",
+            vec![ok.clone()],
+            Some(spent(1)),
+            "ready",
+            "agent_turn_ok",
+            Some("decision-ok"),
+            "model_roles_ready",
+        ),
+        (
+            "failed turn after an ok one",
+            vec![
+                ok.clone(),
+                turn(
+                    "decision-failed",
+                    "error",
+                    json!("agent_exited"),
+                    Value::Null,
+                ),
+            ],
+            None,
+            "degraded",
+            "agent_exited",
+            Some("decision-failed"),
+            "model_roles_degraded",
+        ),
+        (
+            "failed turn with provider text",
+            vec![turn(
+                "decision-text",
+                "error",
+                json!("401 Unauthorized: token sk-redacted expired"),
+                Value::Null,
+            )],
+            None,
+            "degraded",
+            "agent_turn_error",
+            Some("decision-text"),
+            "model_roles_degraded",
+        ),
+        (
+            "fallback turn",
+            vec![turn("decision-spare", "ok", Value::Null, fell_back.clone())],
+            None,
+            "degraded",
+            "agent_fallback_used",
+            Some("decision-spare"),
+            "model_roles_degraded",
+        ),
+        (
+            "exhausted budget",
+            vec![ok.clone()],
+            Some(spent(2)),
+            "blocked",
+            "daily_budget_exhausted",
+            Some("decision-ok"),
+            "model_roles_blocked",
+        ),
+    ];
+    let journal = journal_dir.join("turns.ndjson");
+    let usage = journal_dir.join("usage.json");
+    for (case, lines, ledger, status, reason, evidence, overall) in cases {
+        let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+        fs::write(&journal, text).unwrap();
+        let ledger_written = ledger.is_some();
+        match ledger {
+            Some(ledger) => fs::write(&usage, ledger.to_string()).unwrap(),
+            None => drop(fs::remove_file(&usage)),
+        }
+        let report = report(&c, now).unwrap();
+        // Readiness only reads: it never creates the usage ledger.
+        assert_eq!(usage.exists(), ledger_written, "{case}");
+        let decision = &report["roles"][0];
+        assert_eq!(decision["role"], "decision", "{case}");
+        assert_eq!(
+            (decision["status"].as_str(), decision["reason"].as_str()),
+            (Some(status), Some(reason)),
+            "{case}"
+        );
+        assert_eq!(
+            decision["last_turn"]["turn_id"].as_str(),
+            evidence,
+            "{case}"
+        );
+        assert_eq!(report["status"], overall, "{case}");
+        assert_eq!(report["reason"], reason, "{case}");
+        assert_eq!(
+            decision["credential_check"]["status"], "not_checked",
+            "{case}"
+        );
+        // The gate lane ran no turn, so it stays unknown whatever decision did.
+        assert_eq!(report["roles"][1]["role"], "gate", "{case}");
+        assert_eq!(report["roles"][1]["status"], "unknown", "{case}");
+        assert!(!report.to_string().contains("opaque provider credentials"));
+    }
+    fs::remove_file(&usage).unwrap();
+    fs::write(
+        &journal,
+        format!("{}\n", turn("decision-spare", "ok", Value::Null, fell_back)),
+    )
+    .unwrap();
+    let named = report(&c, now).unwrap();
     assert_eq!(
-        fresh["roles"][0]["credential_check"]["status"],
-        "not_checked"
+        named["roles"][0]["last_turn"]["fallback"]["to"]["id"],
+        "spare"
     );
-    assert_eq!(fresh["roles"][0]["remaining_current"], 2);
-    assert!(!fresh.to_string().contains("opaque provider credentials"));
-    assert!(!dir.join("model/agent/usage.json").exists());
+    assert_eq!(
+        named["roles"][0]["last_turn"]["fallback"]["reason"],
+        "quota"
+    );
+    assert!(!named.to_string().contains("provider said no"));
 
-    let spend = dir.join("model/agent/usage.json");
-    fs::write(&spend, b"invalid usage").unwrap();
+    // A malformed journal is no evidence; a crash-cut final line is ignored.
+    fs::write(&journal, format!("{ok}\n{{\"turn_id\"")).unwrap();
+    assert_eq!(report(&c, now).unwrap()["status"], "model_roles_ready");
+    fs::write(&journal, b"not json\n").unwrap();
+    let unreadable = report(&c, now).unwrap();
+    assert_eq!(unreadable["reason"], "agent_turns_unreadable");
+    assert_eq!(unreadable["turn_journal"]["status"], "unavailable");
+    fs::remove_file(&journal).unwrap();
+
+    fs::write(&usage, b"invalid usage").unwrap();
     let blocked = report(&c, now).unwrap();
     assert_eq!(blocked["status"], "model_roles_blocked");
     assert_eq!(blocked["reason"], "agent_usage_unavailable");
-    assert_eq!(fs::read(&spend).unwrap(), b"invalid usage");
+    assert_eq!(fs::read(&usage).unwrap(), b"invalid usage");
+    fs::remove_file(&usage).unwrap();
 
-    fs::write(
-        &spend,
-        json!({"date":c.session,"lanes":{"decision":{
-            "input":0,"output":0,"cache_read":0,"cache_write":0,"cost_usd":3,"calls":1
-        }}})
-        .to_string(),
-    )
-    .unwrap();
-    let exhausted = report(&c, now).unwrap();
-    assert_eq!(exhausted["status"], "model_roles_blocked");
-    assert_eq!(exhausted["reason"], "daily_budget_exhausted");
-
-    let after_close = DateTime::parse_from_rfc3339("2026-10-16T15:30:01+05:30")
-        .unwrap()
-        .timestamp_millis();
-    let future = report(&c, after_close).unwrap();
+    // After the close the target is the next session, which has no turns yet.
+    fs::write(&journal, format!("{ok}\n")).unwrap();
+    let future = report(&c, at("15:30:01")).unwrap();
     assert_eq!(future["target_session"], "2026-10-19");
     assert_eq!(future["reason"], "agent_provider_not_checked");
     assert_eq!(future["roles"][0]["remaining_current"], Value::Null);
+    assert_eq!(future["roles"][0]["last_turn"], Value::Null);
 
     fs::remove_file(entry).unwrap();
     assert_eq!(
