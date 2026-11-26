@@ -7,12 +7,19 @@ publish.workspace = true
 
 [dependencies]
 nivra-core = { path = "../nivra-core" }
+nivra-research = { path = "../nivra-research" }
+nivra-sandbox = { path = "../nivra-sandbox" }
+nivra-store = { path = "../nivra-store" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 clap.workspace = true
 chrono.workspace = true
 libc.workspace = true
+
+[dev-dependencies]
+postgres.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

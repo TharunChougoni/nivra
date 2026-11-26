@@ -143,6 +143,15 @@ struct Summary {
     fill_sample: Vec<Fill>,
 }
 
+/// Per-split series kept beside the report for offline benches. It is not
+/// serialized, so the report bytes and hash do not depend on it.
+pub struct Trace {
+    /// Mark-to-market equity after the last batch of each IST date, oldest first.
+    pub daily_equity: Vec<(chrono::NaiveDate, Amount)>,
+    /// Sum of filled notional on both sides.
+    pub traded_notional: Amount,
+}
+
 struct Book<'a> {
     costs: &'a FeeArithmetic,
     capital: Amount,
@@ -150,6 +159,7 @@ struct Book<'a> {
     pending: BTreeMap<usize, Pending>,
     held: BTreeMap<usize, Position>,
     summary: Summary,
+    trace: Trace,
 }
 
 fn inr(paise: i64) -> Result<Amount> {
@@ -180,7 +190,17 @@ impl<'a> Book<'a> {
                 mark_to_market_pnl: Amount::ZERO,
                 fill_sample: Vec::new(),
             },
+            trace: Trace {
+                daily_equity: Vec::new(),
+                traded_notional: Amount::ZERO,
+            },
         }
+    }
+
+    fn equity(&self) -> Result<Amount> {
+        self.held.values().try_fold(self.cash, |value, p| {
+            Ok(value.checked_add(inr(p.mark)?.checked_mul(Amount::from_unsigned(p.units))?)?)
+        })
     }
 
     fn fill(&mut self, key: &str, bar: &Bar, at: i64, order: Pending) -> Result<()> {
@@ -255,6 +275,7 @@ impl<'a> Book<'a> {
                 .realized_net_pnl
                 .checked_add(proceeds.checked_sub(position.paid)?)?;
         }
+        self.trace.traded_notional = self.trace.traded_notional.checked_add(notional.amount())?;
         self.summary.fills += 1;
         self.summary.fees = self.summary.fees.checked_add(fee.amount())?;
         if self.summary.fill_sample.len() < 8 {
@@ -287,6 +308,14 @@ impl<'a> Book<'a> {
                 position.mark = bar.close;
             }
         }
+        let day = chrono::DateTime::from_timestamp_millis(at + 19_800_000)
+            .ok_or("archive_bars_time_invalid")?
+            .date_naive();
+        let equity = self.equity()?;
+        match self.trace.daily_equity.last_mut() {
+            Some((last, value)) if *last == day => *value = equity,
+            _ => self.trace.daily_equity.push((day, equity)),
+        }
         Ok(())
     }
 
@@ -306,16 +335,11 @@ impl<'a> Book<'a> {
         Ok(())
     }
 
-    fn finish(mut self) -> Result<Summary> {
+    fn finish(mut self) -> Result<(Summary, Trace)> {
         self.summary.unfilled_signals = self.pending.len();
         self.summary.open_positions = self.held.len();
-        let equity = self.held.values().try_fold(self.cash, |value, p| {
-            Ok::<_, Box<dyn std::error::Error>>(
-                value.checked_add(inr(p.mark)?.checked_mul(Amount::from_unsigned(p.units))?)?,
-            )
-        })?;
-        self.summary.mark_to_market_pnl = equity.checked_sub(self.capital)?;
-        Ok(self.summary)
+        self.summary.mark_to_market_pnl = self.equity()?.checked_sub(self.capital)?;
+        Ok((self.summary, self.trace))
     }
 }
 
@@ -346,6 +370,16 @@ pub fn run(
     db: &mut ArchiveClient,
     budget: Duration,
 ) -> Result<Vec<u8>> {
+    Ok(run_traced(request, source, db, budget)?.0)
+}
+
+/// [`run`] plus the training and test [`Trace`]s, for `nivra-tools bar-bench`.
+pub fn run_traced(
+    request: &Request,
+    source: &str,
+    db: &mut ArchiveClient,
+    budget: Duration,
+) -> Result<(Vec<u8>, [Trace; 2])> {
     if !request.valid() || budget.is_zero() || budget > Duration::from_secs(600) {
         return Err("archive_bars_request_invalid".into());
     }
@@ -409,7 +443,9 @@ pub fn run(
     if started.elapsed() >= budget {
         return Err("archive_bars_wall_budget".into());
     }
-    Ok(serde_json::to_vec(&Report {
+    let (training, training_trace) = training.finish()?;
+    let (test, test_trace) = test.finish()?;
+    let report = serde_json::to_vec(&Report {
         abi: ABI,
         evidence: EVIDENCE,
         paper_only: true,
@@ -425,9 +461,10 @@ pub fn run(
         input_bars_sha256: hex(&hash.finalize()),
         capital: request.capital,
         costs: &request.costs,
-        training: training.finish()?,
-        test: test.finish()?,
-    })?)
+        training,
+        test,
+    })?;
+    Ok((report, [training_trace, test_trace]))
 }
 
 /// Stage-local worker entry. Only this trusted process sees the archive settings.
@@ -511,7 +548,8 @@ mod tests {
         bar.open = 12_000;
         book.on_open(3, &keys, &[bar])?;
         book.orders(3, &[bar], vec![(0, 1)])?;
-        let summary = book.finish()?;
+        let (summary, trace) = book.finish()?;
+        assert_eq!(trace.traded_notional, Amount::parse("219.8")?);
         assert_eq!(summary.unfilled_signals, 1);
         assert_eq!(summary.closed_trades, 1);
         assert_eq!(summary.fees, Amount::from_integer(4));

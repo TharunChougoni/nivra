@@ -1,3 +1,4 @@
+mod bar_bench;
 mod budget;
 mod bundle;
 mod docs;
@@ -7,6 +8,7 @@ mod release;
 mod replay;
 mod retired;
 // Offline repository tooling; never loads application configuration or credentials.
+// `bar-bench` reads only the archive password file its operator names.
 use clap::{Parser, Subcommand};
 use sha2::{Digest, Sha256};
 use std::{
@@ -66,6 +68,47 @@ enum Task {
     MigrationAudit {
         #[arg(default_value = ".")]
         root: PathBuf,
+    },
+    /// Backtest every bar strategy in a directory against an archive and write a leaderboard.
+    BarBench {
+        /// Archive URL without a password, as in `market_archive.url`.
+        #[arg(long)]
+        archive_url: String,
+        /// File holding only the archive password.
+        #[arg(long)]
+        password_file: PathBuf,
+        #[arg(long, default_value = "strategies")]
+        strategies: PathBuf,
+        /// Comma-separated strategy names; default is every bar strategy of the unit.
+        #[arg(long, value_delimiter = ',')]
+        only: Vec<String>,
+        #[arg(long, value_parser = bar_bench::parse_unit)]
+        unit: nivra_store::market_archive::BarUnit,
+        /// First training date.
+        #[arg(long)]
+        from: chrono::NaiveDate,
+        /// First test date; training ends the day before.
+        #[arg(long)]
+        test_from: chrono::NaiveDate,
+        /// Last test date.
+        #[arg(long)]
+        to: chrono::NaiveDate,
+        #[arg(long, default_value = "1000000")]
+        capital: nivra_core::finance::Amount,
+        /// A `paper_costs` fee schedule JSON file.
+        #[arg(long)]
+        costs: PathBuf,
+        /// Wall budget per strategy in seconds (at most 600).
+        #[arg(long, default_value_t = 600)]
+        budget_secs: u64,
+        #[arg(long, default_value_t = std::thread::available_parallelism().map_or(1, |n| n.get()))]
+        jobs: usize,
+        /// Markdown leaderboard path.
+        #[arg(long)]
+        output: PathBuf,
+        /// Optional JSON path with every metric and the report hashes.
+        #[arg(long)]
+        json: Option<PathBuf>,
     },
 }
 fn main() -> ExitCode {
@@ -158,6 +201,50 @@ fn main() -> ExitCode {
             };
         }
         Task::MigrationAudit { root } => root,
+        Task::BarBench {
+            archive_url,
+            password_file,
+            strategies,
+            only,
+            unit,
+            from,
+            test_from,
+            to,
+            capital,
+            costs,
+            budget_secs,
+            jobs,
+            output,
+            json,
+        } => {
+            let options = bar_bench::Options {
+                archive_url,
+                password_file,
+                strategies,
+                only,
+                unit,
+                from,
+                test_from,
+                to,
+                capital,
+                costs,
+                budget: std::time::Duration::from_secs(budget_secs),
+                jobs,
+                output,
+                json,
+            };
+            return match bar_bench::run(&options) {
+                Ok(entries) => {
+                    let failed = entries.iter().filter(|e| e.result.is_err()).count();
+                    println!("bar_bench_ok strategies={} failed={failed}", entries.len());
+                    ExitCode::SUCCESS
+                }
+                Err(code) => {
+                    eprintln!("{code}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         Task::TestBudget { root } => {
             return match budget::check(&root) {
                 Ok((count, ignored)) => {
