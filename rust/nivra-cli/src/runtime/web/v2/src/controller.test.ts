@@ -578,3 +578,86 @@ test("a stalled controller shows as stalled within the watchdog bound while SSE 
     mock.timers.reset();
   }
 });
+
+test("controller retries series reads after initial unavailable or error responses", async () => {
+  const dom = new JSDOM("", { url: "http://localhost" });
+  let phase: "startup" | "live" = "startup";
+  const fetch = async (url: string) => {
+    const path = url.split("?")[0];
+    if (path === "/api/v1/meta") return json({ mode: "paper" });
+    if (path === "/api/v1/series") {
+      if (phase === "startup") {
+        return json({
+          unavailable: true,
+          reason: "series_session_not_started",
+          points: [],
+        });
+      }
+      if (url.includes("kind=account-equity")) {
+        return json({
+          points: [{ at: 2000, equity: "5100", cash: "5100" }],
+          watermark_ms: 2000,
+          unavailable: false,
+        });
+      }
+      return json({
+        points: [{ at: 2000, close: "105" }],
+        watermark_ms: 2000,
+        unavailable: false,
+      });
+    }
+    if (path === "/api/v1/scanner") {
+      return json({
+        items: [{ instrument_key: "TEST|1", symbol: "TEST" }],
+        coverage: { fresh: 1, universe: 1 },
+      });
+    }
+    return json(
+      projections({
+        status: "open",
+        as_of_ms: phase === "startup" ? 1000 : 2000,
+      })[path] || {},
+    );
+  };
+  const app = createController(dom.window, { connect: false, fetch });
+  try {
+    await app.authenticate("fixture");
+    await wait(() => app.getSnapshot().series.equityState === "unavailable");
+    assert.equal(app.getSnapshot().series.priceState, "unavailable");
+    phase = "live";
+    await app.refresh();
+    await wait(() => app.getSnapshot().series.equityState === "ready");
+    await wait(() => app.getSnapshot().series.priceState === "ready");
+    assert.equal(app.getSnapshot().series.price[0]?.value, 105);
+    assert.equal(app.getSnapshot().series.equity[0]?.value, 5100);
+  } finally {
+    app.stop();
+    dom.window.close();
+  }
+});
+
+test("API ETag cache is bounded to prevent unbounded browser memory growth", async () => {
+  const { createApi } = await import("./api");
+  const seenIfNoneMatch: (string | null)[] = [];
+  const api = createApi({
+    getToken: () => "tok",
+    fetchImpl: async (url, init) => {
+      const hdrs = new Headers(init?.headers);
+      seenIfNoneMatch.push(hdrs.get("If-None-Match"));
+      const q = new URL(url, "http://x").searchParams.get("q") || "0";
+      return new Response(JSON.stringify({ items: [], q }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ETag: `"etag-${q}"` },
+      });
+    },
+  });
+  for (let i = 0; i < 80; i++) {
+    await api.instruments({ q: `sym-${i}` });
+  }
+  seenIfNoneMatch.length = 0;
+  // Oldest entry (sym-0) should have been evicted; most recent (sym-79) should remain cached.
+  await api.instruments({ q: "sym-0" });
+  await api.instruments({ q: "sym-79" });
+  assert.equal(seenIfNoneMatch[0], null);
+  assert.equal(seenIfNoneMatch[1], '"etag-sym-79"');
+});

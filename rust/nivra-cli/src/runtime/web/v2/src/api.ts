@@ -47,9 +47,23 @@ export interface ApiOptions {
   getToken: () => string;
   onUnauthorized?: () => void;
 }
+const MAX_CACHE_ENTRIES = 64;
+
 export function createApi({ fetchImpl, getToken, onUnauthorized }: ApiOptions) {
   const cache = new Map<string, { etag: string | null; body: unknown }>();
   let generation = 0;
+
+  function cacheSet(
+    path: string,
+    entry: { etag: string | null; body: unknown },
+  ) {
+    if (cache.has(path)) cache.delete(path);
+    else if (cache.size >= MAX_CACHE_ENTRIES) {
+      const oldest = cache.keys().next().value;
+      if (oldest !== undefined) cache.delete(oldest);
+    }
+    cache.set(path, entry);
+  }
 
   async function get<T>(path: string): Promise<T> {
     const requestGeneration = generation;
@@ -82,7 +96,8 @@ export function createApi({ fetchImpl, getToken, onUnauthorized }: ApiOptions) {
     if (token !== getToken() || requestGeneration !== generation)
       throw new ApiError("session_changed", 0);
     const etag = response.headers?.get?.("etag") || cached?.etag || null;
-    if (response.status !== 304 || !cached) cache.set(path, { etag, body });
+    if (response.status !== 304 || !cached) cacheSet(path, { etag, body });
+    else cacheSet(path, cached);
     return body as T;
   }
 

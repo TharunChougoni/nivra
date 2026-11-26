@@ -113,6 +113,10 @@ export function createController(
   let stream: ReturnType<typeof createEventStream> | null = null;
   let pending: Promise<ProjectionResults> | null = null;
   let agentPending: Promise<void> | null = null;
+  const seriesPending = {
+    price: null as string | null,
+    equity: null as string | null,
+  };
   // Revision of each projection as last fetched, per the summary's `revisions`.
   let fetched: Revisions = {};
   let dirty: Pace | null = null,
@@ -185,36 +189,43 @@ export function createController(
     const prefix = instrument === null ? "equity" : "price";
     const generation = epoch;
     const binding = summaryIdentity(state.summary);
+    const pendingKey = `${generation}:${binding}:${instrument ?? ""}`;
+    if (seriesPending[prefix] === pendingKey) return;
+    seriesPending[prefix] = pendingKey;
     const current = () =>
       generation === epoch &&
       !stopped &&
       binding === summaryIdentity(state.summary) &&
       (instrument === null || instrument === state.watch);
     const key = `${binding}|${kind}|${instrument ?? ""}|latest`;
-    const cached = await evidence.get(key);
-    if (!current()) return;
-    if (cached?.body) set(seriesPatch(kind, cached.body, true));
     try {
-      const body = await api.series(query);
+      const cached = await evidence.get(key);
       if (!current()) return;
-      if (body?.unavailable) {
-        if (!cached?.body)
+      if (cached?.body) set(seriesPatch(kind, cached.body, true));
+      try {
+        const body = await api.series(query);
+        if (!current()) return;
+        if (body?.unavailable) {
+          if (!cached?.body)
+            set({
+              series: clearSeries(prefix, "unavailable", body.reason || null),
+            });
+          return;
+        }
+        set(seriesPatch(kind, body, false));
+        void evidence.put(key, { body }, { binding, ...query });
+      } catch {
+        if (current() && !cached?.body)
           set({
-            series: clearSeries(prefix, "unavailable", body.reason || null),
+            series: {
+              ...state.series,
+              [`${prefix}State`]: "error",
+              [`${prefix}Cached`]: false,
+            },
           });
-        return;
       }
-      set(seriesPatch(kind, body, false));
-      void evidence.put(key, { body }, { binding, ...query });
-    } catch {
-      if (current() && !cached?.body)
-        set({
-          series: {
-            ...state.series,
-            [`${prefix}State`]: "error",
-            [`${prefix}Cached`]: false,
-          },
-        });
+    } finally {
+      if (seriesPending[prefix] === pendingKey) seriesPending[prefix] = null;
     }
   }
   const loadSeries = () => {
@@ -481,13 +492,13 @@ export function createController(
         set({ watch: first });
         set(observe(summary, portfolio, scanner));
         void fetchSeries({ kind: "receipt-minute-bar", instrument: first });
-      } else if (state.watch && state.series.priceState === "idle") {
+      } else if (state.watch && state.series.priceState !== "ready") {
         void fetchSeries({
           kind: "receipt-minute-bar",
           instrument: state.watch,
         });
       }
-      if (state.series.equityState === "idle")
+      if (state.series.equityState !== "ready")
         void fetchSeries({ kind: "account-equity" });
     } catch {
       if (generation === epoch && !stopped)
