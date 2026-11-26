@@ -20,8 +20,6 @@ pub struct Summary {
     would_pack: Vec<String>,
     would_delete: Vec<String>,
     bytes_freed: u64,
-    would_compact_quotes: usize,
-    compacted_quotes: usize,
     would_rewrite_quotes: usize,
     rewritten_quotes: usize,
     kept_missing_archive_quotes: usize,
@@ -422,34 +420,10 @@ pub fn run(c: &Config, today: NaiveDate, apply: bool) -> Result<Summary> {
     Ok(summary)
 }
 
-/// Newest `keep_full` quote bodies stay intact. Older bodies over `max_body`
-/// are the ones a closed session may replace with a receipt.
-pub(crate) fn quote_rows_to_compact(
-    rows: &[(i64, u64)],
-    keep_full: usize,
-    max_body: u64,
-) -> Vec<i64> {
-    let newest = rows.len().saturating_sub(keep_full);
-    rows.iter()
-        .take(newest)
-        .filter(|(_, len)| *len > max_body)
-        .map(|(id, _)| *id)
-        .collect()
-}
-
 /// Only the large planner artifacts inside a run directory are replaceable.
 /// Failure files and transcripts are not model-size ballast.
 pub(crate) fn model_artifact_over_cap(name: &str, len: u64, max_bytes: u64) -> bool {
     len > max_bytes && matches!(name, "plan.json" | "output.json" | "input.json")
-}
-
-fn quote_receipt(original: &str) -> String {
-    serde_json::json!({
-        "kind": "compacted_quote_receipt",
-        "sha256": super::digest(original.as_bytes()),
-        "original_bytes": original.len(),
-    })
-    .to_string()
 }
 
 fn model_receipt(name: &str, original: &[u8]) -> Result<Vec<u8>> {
@@ -514,7 +488,9 @@ fn bound_closed_sessions_with_lookup(
             continue;
         }
         compact_model_artifacts(&session, c, apply, summary)?;
-        compact_quote_bodies(&session, c, apply, summary, lookup)?;
+        if c.market_archive.is_some() {
+            compact_quote_bodies(&session, apply, summary, lookup)?;
+        }
     }
     Ok(())
 }
@@ -801,7 +777,6 @@ impl ProtectedCitations {
 
 fn compact_quote_bodies(
     session: &Path,
-    c: &Config,
     apply: bool,
     summary: &mut Summary,
     lookup: &mut impl ArchiveLookup,
@@ -843,104 +818,16 @@ fn compact_quote_bodies(
     {
         return Err("retention_book_identity_mismatch".into());
     }
-    if c.market_archive.is_some() {
-        compact_quote_bodies_with_archive(
-            &db_path,
-            &anchor_path,
-            meta,
-            &mut db,
-            anchor,
-            state,
-            apply,
-            summary,
-            lookup,
-        )
-    } else {
-        compact_quote_bodies_offline(
-            &db_path,
-            &anchor_path,
-            meta,
-            &mut db,
-            anchor,
-            state,
-            c,
-            apply,
-            summary,
-        )
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn compact_quote_bodies_offline(
-    db_path: &Path,
-    anchor_path: &Path,
-    meta: fs::Metadata,
-    db: &mut rusqlite::Connection,
-    anchor: Option<Value>,
-    state: Option<(String, String)>,
-    c: &Config,
-    apply: bool,
-    summary: &mut Summary,
-) -> Result<()> {
-    let mut rows = Vec::new();
-    {
-        let protected_filter = if sqlite_table(db, "archive_protected_receipts")? {
-            "AND id NOT IN (SELECT tick_id FROM archive_protected_receipts)"
-        } else {
-            ""
-        };
-        let mut statement = db.prepare(&format!(
-            "SELECT id, length(CAST(body AS BLOB)) FROM ticks
-             WHERE event='wide_quotes' AND body IS NOT NULL
-             AND body NOT LIKE '{{\"kind\":\"market_archive_quote\"%' {protected_filter} ORDER BY id",
-        ))?;
-        let mut query = statement.query([])?;
-        while let Some(row) = query.next()? {
-            rows.push((row.get::<_, i64>(0)?, row.get::<_, i64>(1)? as u64));
-        }
-    }
-    let policy = &c.dashboard.retention;
-    let ids = quote_rows_to_compact(
-        &rows,
-        policy.keep_full_quote_bodies,
-        policy.max_quote_body_bytes as u64,
-    );
-    summary.would_compact_quotes = summary.would_compact_quotes.saturating_add(ids.len());
-    if !apply || ids.is_empty() {
-        return Ok(());
-    }
-    finish_quote_compaction(
-        db_path,
-        anchor_path,
+    compact_quote_bodies_with_archive(
+        &db_path,
+        &anchor_path,
         meta,
-        db,
+        &mut db,
         anchor,
-        state.as_ref(),
+        state,
+        apply,
         summary,
-        |tx, summary| {
-            let mut freed = 0u64;
-            for id in &ids {
-                let original: String = tx.query_row(
-                    "SELECT body FROM ticks WHERE id=?1 AND event='wide_quotes'",
-                    [id],
-                    |row| row.get(0),
-                )?;
-                let receipt = quote_receipt(&original);
-                if receipt.len() >= original.len() {
-                    continue;
-                }
-                let updated = tx.execute(
-                    "UPDATE ticks SET body=?1 WHERE id=?2 AND event='wide_quotes'",
-                    rusqlite::params![receipt, id],
-                )?;
-                if updated != 1 {
-                    return Err("retention_quote_update_invalid".into());
-                }
-                freed = freed.saturating_add((original.len() - receipt.len()) as u64);
-                summary.compacted_quotes = summary.compacted_quotes.saturating_add(1);
-            }
-            Ok(freed)
-        },
+        lookup,
     )
 }
 
@@ -1343,7 +1230,7 @@ mod tests {
     }
 
     #[test]
-    fn closed_session_bound_keeps_book_journals_and_failures_and_stops_growth() {
+    fn model_file_bound_preserves_books_journals_and_failed_runs() {
         use std::os::unix::fs::MetadataExt;
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("sessions");
@@ -1435,9 +1322,7 @@ mod tests {
         c.session = "2026-10-29".parse().unwrap();
         let today = c.session;
         let preview = run(&c, today, false).unwrap();
-        assert_eq!(preview.would_compact_quotes, 8);
         assert_eq!(preview.would_compact_model_files, 1);
-        assert_eq!(preview.compacted_quotes, 0);
         assert_eq!(preview.compacted_model_files, 0);
         assert_eq!(
             fs::read(run_dir.join("plan.json")).unwrap(),
@@ -1445,10 +1330,9 @@ mod tests {
         );
         let before_len = fs::metadata(&db_path).unwrap().len();
         let summary = run(&c, today, true).unwrap();
-        assert_eq!(summary.compacted_quotes, 8);
         assert_eq!(summary.compacted_model_files, 1);
         assert!(summary.bytes_freed > 0);
-        assert!(fs::metadata(&db_path).unwrap().len() < before_len);
+        assert_eq!(fs::metadata(&db_path).unwrap().len(), before_len);
         let db = rusqlite::Connection::open(&db_path).unwrap();
         let (binding, body): (String, String) = db
             .query_row("SELECT binding, body FROM state WHERE id=1", [], |row| {
@@ -1463,31 +1347,17 @@ mod tests {
             })
             .unwrap();
         assert_eq!(stored_audit, audit);
-        let mut full = 0usize;
-        let mut logical = 0u64;
-        let mut statement = db
+        let rows = db
             .prepare("SELECT id, body FROM ticks WHERE event='wide_quotes' ORDER BY id")
-            .unwrap();
-        let rows: Vec<(i64, String)> = statement
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
             .unwrap()
-            .map(|row| row.unwrap())
-            .collect();
-        drop(statement);
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
         assert_eq!(rows.len(), 40);
-        for (id, body) in &rows {
-            logical += body.len() as u64;
-            if body.len() > 4096 {
-                full += 1;
-                assert_eq!(body, &quote(*id));
-                assert!(*id > 8);
-            } else {
-                assert_eq!(body, &quote_receipt(&quote(*id)));
-                assert!(*id <= 8);
-            }
-        }
-        assert_eq!(full, 32);
-        assert!(logical < 32 * (quote_len as u64 + 16) + 8 * 512);
+        assert!(rows.iter().all(|(id, body)| body == &quote(*id)));
         drop(db);
         let anchor: Value =
             serde_json::from_slice(&fs::read(old.join("book-identity.json")).unwrap()).unwrap();
@@ -1516,72 +1386,8 @@ mod tests {
             fs::read(open.join("model/harness-digest-1000-open/plan.json")).unwrap(),
             live_plan.as_bytes()
         );
-        let db = rusqlite::Connection::open(&db_path).unwrap();
-        for id in 41..=56 {
-            db.execute(
-                "INSERT INTO ticks(id,at,receipt,body,event) VALUES(?1, ?1, ?1, ?2, 'wide_quotes')",
-                rusqlite::params![id, quote(id)],
-            )
-            .unwrap();
-        }
-        // A research-observation receipt is a later session's original
-        // evidence (#240): retention never compacts it, however large.
-        db.execute(
-            "INSERT INTO ticks(id,at,receipt,body,event) VALUES(57, 57, 57, ?1, 'research_quotes')",
-            [quote(57)],
-        )
-        .unwrap();
-        drop(db);
         let again = run(&c, today, true).unwrap();
-        assert_eq!(again.compacted_quotes, 16);
-        let db = rusqlite::Connection::open(&db_path).unwrap();
-        let research: String = db
-            .query_row("SELECT body FROM ticks WHERE id=57", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(research, quote(57));
-        let full: i64 = db
-            .query_row(
-                "SELECT count(*) FROM ticks WHERE event='wide_quotes' AND length(CAST(body AS BLOB)) > 4096",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let total: i64 = db
-            .query_row(
-                "SELECT count(*) FROM ticks WHERE event='wide_quotes'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(total, 56);
-        assert_eq!(full, 32);
-        let (binding, body): (String, String) = db
-            .query_row("SELECT binding, body FROM state WHERE id=1", [], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })
-            .unwrap();
-        assert_eq!((binding.as_str(), body.as_str()), ("bind-1", book));
-        let logical: i64 = db
-            .query_row(
-                "SELECT coalesce(sum(length(CAST(body AS BLOB))), 0) FROM ticks WHERE event='wide_quotes'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(logical < 56 * (quote_len as i64 + 8) + 80_000);
-        assert!(logical < 32 * (quote_len as i64 + 16) + 24 * 512 + 80_000);
-        drop(db);
-        let anchor: Value =
-            serde_json::from_slice(&fs::read(old.join("book-identity.json")).unwrap()).unwrap();
-        let meta = fs::metadata(&db_path).unwrap();
-        assert_eq!(anchor["binding"], "bind-1");
-        assert_eq!(anchor["inode"], json!(meta.ino()));
-        assert_eq!(fs::read(run_dir.join("failure.json")).unwrap(), failure);
-        assert_eq!(
-            fs::read(run_dir.join("transcript.ndjson")).unwrap(),
-            transcript
-        );
-        assert_eq!(fs::read(old.join("untouched-journal")).unwrap(), journal);
+        assert_eq!(again.compacted_model_files, 0);
     }
 
     #[test]

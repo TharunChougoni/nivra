@@ -157,21 +157,9 @@ pub struct RetentionSettings {
     pub pack_after_days: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delete_after_days: Option<u32>,
-    /// Newest `wide_quotes` bodies left intact in a closed sibling session.
-    #[serde(default = "default_keep_full_quote_bodies")]
-    pub keep_full_quote_bodies: usize,
-    /// Older `wide_quotes` bodies above this size become sha256 receipts.
-    #[serde(default = "default_max_quote_body_bytes")]
-    pub max_quote_body_bytes: usize,
     /// `plan.json`, `output.json` and `input.json` above this size become receipts.
     #[serde(default = "default_max_model_file_bytes")]
     pub max_model_file_bytes: u64,
-}
-pub(crate) fn default_keep_full_quote_bodies() -> usize {
-    32
-}
-pub(crate) fn default_max_quote_body_bytes() -> usize {
-    4096
 }
 pub(crate) fn default_max_model_file_bytes() -> u64 {
     65_536
@@ -181,8 +169,6 @@ impl Default for RetentionSettings {
         Self {
             pack_after_days: None,
             delete_after_days: None,
-            keep_full_quote_bodies: default_keep_full_quote_bodies(),
-            max_quote_body_bytes: default_max_quote_body_bytes(),
             max_model_file_bytes: default_max_model_file_bytes(),
         }
     }
@@ -297,8 +283,6 @@ impl DashboardSettings {
             || !(1..=256).contains(&self.price_batch_instruments)
             || !(500..=60_000).contains(&self.price_batch_interval_ms)
             || !(1..=600).contains(&self.failed_auth_per_minute)
-            || !(1..=4_096).contains(&self.retention.keep_full_quote_bodies)
-            || !(256..=1_048_576).contains(&self.retention.max_quote_body_bytes)
             || !(1_024..=16_777_216).contains(&self.retention.max_model_file_bytes)
         {
             return Err("dashboard_settings_invalid".into());

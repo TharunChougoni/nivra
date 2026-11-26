@@ -207,10 +207,7 @@ fn dashboard_phase1_settings_defaults_bounds_and_roundtrip() {
         ),
         ("\"retention\": {\"delete_after_days\": 30}", true),
         ("\"retention\": {\"pack_after_days\": 7}", true),
-        ("\"retention\": {\"keep_full_quote_bodies\": 0}", false),
-        ("\"retention\": {\"max_quote_body_bytes\": 100}", false),
         ("\"retention\": {\"max_model_file_bytes\": 10}", false),
-        ("\"retention\": {\"keep_full_quote_bodies\": 32}", true),
         (
             "\"model_prices\": {\"m\": {\"input_inr_per_mtok\": \"x\", \"output_inr_per_mtok\": \"2\"}}",
             false,
