@@ -26,12 +26,15 @@ export interface MetaResponse extends Envelope {
   version?: string;
   roles?: string[];
   capabilities?: string[];
+  archive_configured?: boolean;
   limits?: {
     sse_max_streams?: number;
     sse_heartbeat_ms?: number;
     longpoll_hold_ms?: number;
     series_max_points?: number;
     series_max_range_ms?: number;
+    archive_minute_max_range_ms?: number;
+    archive_daily_max_range_ms?: number;
     equity_max_points?: number;
     equity_sample_interval_ms?: number;
     price_batch_instruments?: number;
@@ -936,6 +939,7 @@ export interface SeriesCoverage {
 }
 export interface SeriesRow {
   at?: number;
+  day?: string;
   equity?: Decimal | null;
   cash?: Decimal;
   mark_basis?: string;
@@ -943,13 +947,17 @@ export interface SeriesRow {
   high?: Decimal;
   low?: Decimal;
   close?: Decimal;
-  tick_count?: number;
+  tick_count?: number | null;
   price_kind?: string;
   bar_kind?: string;
   certified_ohlcv?: boolean;
-  volume?: null;
+  volume?: number | null;
 }
-export type SeriesKind = "receipt-minute-bar" | "account-equity";
+export type SeriesKind =
+  | "receipt-minute-bar"
+  | "account-equity"
+  | "archive-minute-bar"
+  | "archive-daily-bar";
 export interface SeriesResponse extends Envelope {
   kind?: SeriesKind;
   limit?: number;
@@ -975,7 +983,7 @@ export interface Point {
   priceKind?: string | null;
   barKind?: string | null;
   certified?: boolean;
-  volume?: null;
+  volume?: number | null;
   source?: string | number | null;
   kind?: string;
   cash?: number | null;

@@ -5,8 +5,9 @@ mod reader;
 mod writer;
 
 pub use history::{
-    CoverageWindow, CoveredDays, DailyBar, DailyCoverage, covered_days, daily_bars, daily_coverage,
-    daily_instrument_keys, latest_daily_bars, lock_history_download,
+    ArchiveMinuteBar, CoverageWindow, CoveredDays, DailyBar, DailyCoverage, archive_daily_bars,
+    archive_minute_bars, covered_days, daily_bars, daily_coverage, daily_instrument_keys,
+    latest_daily_bars, lock_history_download,
 };
 pub use postgres::Client as ArchiveClient;
 pub use reader::{
@@ -80,6 +81,13 @@ pub fn invalid_quote_write(error: &(dyn std::error::Error + 'static)) -> bool {
             error.to_string().as_str(),
             "archive_receipt_conflict" | "archive_receipt_invalid"
         )
+}
+
+/// True when the error comes from a transport/socket failure rather than SQL.
+pub fn is_connection_error(error: &(dyn std::error::Error + 'static)) -> bool {
+    error
+        .downcast_ref::<postgres::Error>()
+        .is_some_and(|e| e.as_db_error().is_none())
 }
 
 pub fn init(db: &mut Client) -> Result<()> {

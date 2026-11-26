@@ -67,6 +67,38 @@ export const datetime = (v: unknown) => {
       }).format(at) + " IST"
     : "Not reported";
 };
+export const shortDate = (v: unknown) => {
+  if (v === null || v === undefined || v === "") return "Not reported";
+  const at = numeric(v) ?? Date.parse(String(v));
+  return Number.isFinite(at)
+    ? new Intl.DateTimeFormat("en-IN", {
+        timeZone: "Asia/Kolkata",
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      }).format(at)
+    : "Not reported";
+};
+const IST_OFFSET_MS = 19_800_000;
+const DAY_MS = 86_400_000;
+export function istDateString(ms: number): string {
+  return new Date(ms + IST_OFFSET_MS).toISOString().slice(0, 10);
+}
+export function shiftIstDate(date: string, days: number): string {
+  const start = Date.parse(`${date}T00:00:00Z`);
+  if (!Number.isFinite(start)) return date;
+  return new Date(start + days * DAY_MS).toISOString().slice(0, 10);
+}
+export function istDayStartMs(date: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const ms = Date.parse(`${date}T00:00:00+05:30`);
+  return Number.isFinite(ms) ? ms : null;
+}
+export function istDayEndMs(date: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const ms = Date.parse(`${date}T23:59:59.999+05:30`);
+  return Number.isFinite(ms) ? ms : null;
+}
 export const duration = (v: unknown) =>
   numeric(v) === null
     ? "—"
@@ -514,15 +546,17 @@ export function projectSeries(
         priceKind: row?.price_kind || null,
         barKind: row?.bar_kind || null,
         certified: row?.certified_ohlcv === true,
-        volume: null,
-        source: "receipt_minute_bar",
+        volume: numeric(row?.volume),
+        source: body?.source || "receipt_minute_bar",
       };
       bars.push(point);
       points.push(point);
     }
   }
   const barAt = new Map(bars.map((point) => [point.at, point]));
-  for (const gap of body?.coverage?.gaps || []) {
+  const gapRows =
+    kind === "archive-daily-bar" ? [] : body?.coverage?.gaps || [];
+  for (const gap of gapRows) {
     const from = numeric(gap?.from_ms);
     const to = numeric(gap?.to_ms) ?? from;
     if (from === null || from <= 0 || to === null || to < from) continue;

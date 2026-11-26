@@ -18,6 +18,7 @@ use book::*;
 use market::*;
 use ops::*;
 use revision::*;
+pub(crate) use series::ArchiveReader;
 use series::*;
 #[cfg(test)]
 pub(crate) use stream::TestFeed;
@@ -46,9 +47,10 @@ pub(crate) fn dispatch(
     features: Option<&Arc<Mutex<FeatureStore>>>,
     equity: Option<&Arc<Mutex<EquitySeries>>>,
     instrument_catalog: Option<&Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
+    archive: Option<&ArchiveReader>,
 ) -> Response {
     match route {
-        Ok(Route::Meta) => meta(head, view, settings),
+        Ok(Route::Meta) => meta(head, view, settings, archive),
         Ok(Route::Summary) => summary(head, view, session_root),
         Ok(Route::Portfolio) => portfolio(head, view),
         Ok(Route::Positions(query)) => positions(head, query, view),
@@ -68,7 +70,7 @@ pub(crate) fn dispatch(
         Ok(Route::AgentTranscript(query)) => {
             transcript::agent_transcript(head, query, session_root, settings)
         }
-        Ok(Route::Series(query)) => series(head, query, view, settings, features, equity),
+        Ok(Route::Series(query)) => series(head, query, view, settings, features, equity, archive),
         Ok(Route::Events(query)) => poll_source(head, query, EventSource::Global, settings),
         Ok(_) => error("404 Not Found", "route_not_found"),
         Err("method_not_allowed") => error("405 Method Not Allowed", "method_not_allowed"),

@@ -418,6 +418,7 @@ impl<'a> Controller<'a> {
             Some(Arc::clone(&feature_store)),
             Some(Arc::clone(&equity_series)),
             Some(Arc::clone(&instrument_catalog)),
+            c.market_archive.clone(),
         )?;
         let stopping = Arc::new(AtomicBool::new(false));
         signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&stopping))?;

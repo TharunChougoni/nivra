@@ -1610,6 +1610,8 @@ export function metaFor(data: MockData): MetaResponse {
       longpoll_hold_ms: 25_000,
       series_max_points: 2_000,
       series_max_range_ms: 86_400_000,
+      archive_minute_max_range_ms: 14 * 86_400_000,
+      archive_daily_max_range_ms: 366 * 86_400_000,
       equity_max_points: 4_096,
       equity_sample_interval_ms: 15_000,
       price_batch_instruments: 24,
@@ -1860,6 +1862,70 @@ export function seriesAt(
     };
   }
   const key = query.instrument ?? "";
+  if (query.kind === "archive-daily-bar" || query.kind === "archive-minute-bar") {
+    const known = data.bars[key];
+    if (!known)
+      return {
+        ...env,
+        kind: query.kind,
+        instrument_key: key,
+        unavailable: true,
+        reason: "archive_not_configured",
+        points: [],
+      };
+    const isDaily = query.kind === "archive-daily-bar";
+    const end = query.to ?? now;
+    const start = query.from ?? end - (isDaily ? 30 : 5) * 86_400_000;
+    const baseClose = Number(known.at(-1)?.close ?? 100);
+    const stepMs = isDaily ? 86_400_000 : MINUTE_MS;
+    const points = [];
+    for (
+      let at = Math.max(start, end - (isDaily ? 30 : 5) * 86_400_000), i = 0;
+      at <= end && points.length < limit;
+      at += stepMs, i++
+    ) {
+      if (!isDaily) {
+        const istMin = Math.floor(((at + 19_800_000) % 86_400_000) / MINUTE_MS);
+        if (istMin < 555 || istMin >= 930) continue;
+      }
+      const close = baseClose * (1 + Math.sin(i / 25) * 0.012);
+      points.push({
+        at,
+        open: d2(close * 0.999),
+        high: d2(close * 1.002),
+        low: d2(close * 0.998),
+        close: d2(close),
+        tick_count: isDaily ? null : 4,
+        price_kind: isDaily ? "archive_candle" : "receipt_price",
+        bar_kind: isDaily ? "archive_daily" : "archive_quote_minute",
+        certified_ohlcv: false,
+        volume: isDaily ? 50_000 : null,
+      });
+    }
+    const sliced = points.slice(-limit);
+    return {
+      ...env,
+      kind: query.kind,
+      limit,
+      range: { from: start, to: end },
+      instrument_key: key,
+      points: sliced,
+      watermark_ms: sliced.at(-1)?.at ?? null,
+      coverage: {
+        from_ms: sliced[0]?.at ?? null,
+        to_ms: sliced.at(-1)?.at ?? null,
+        interval_ms: stepMs,
+        observed: sliced.length,
+        expected: sliced.length,
+        gap_count: 0,
+        gaps: [],
+      },
+      next: null,
+      truncated: false,
+      unavailable: false,
+      source: "market_archive",
+    };
+  }
   const known = data.bars[key];
   if (!known)
     return {

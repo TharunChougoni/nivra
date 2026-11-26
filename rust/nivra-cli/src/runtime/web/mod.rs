@@ -257,6 +257,7 @@ fn dispatch_source(
         None,
         None,
         None,
+        None,
     )
 }
 #[allow(clippy::too_many_arguments)]
@@ -271,6 +272,7 @@ fn dispatch_source_with(
     features: Option<&Arc<Mutex<FeatureStore>>>,
     equity: Option<&Arc<Mutex<EquitySeries>>>,
     instrument_catalog: Option<&Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
+    archive: Option<&v1::ArchiveReader>,
 ) -> Response {
     if values(head, "if-none-match").len() > 1 || values(head, "accept-encoding").len() > 1 {
         return if router::is_v1(head.lines().next().unwrap_or_default()) {
@@ -290,6 +292,7 @@ fn dispatch_source_with(
         features,
         equity,
         instrument_catalog,
+        archive,
     );
     negotiate(reply, head, settings)
 }
@@ -330,6 +333,7 @@ fn dispatch_inner(
     features: Option<&Arc<Mutex<FeatureStore>>>,
     equity: Option<&Arc<Mutex<EquitySeries>>>,
     instrument_catalog: Option<&Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
+    archive: Option<&v1::ArchiveReader>,
 ) -> Response {
     let line = head.split("\r\n").next().unwrap_or("");
     if !local_host(head, public_host) {
@@ -363,6 +367,7 @@ fn dispatch_inner(
             features,
             equity,
             instrument_catalog,
+            archive,
         );
     }
     let request_path = line
@@ -473,6 +478,7 @@ pub fn start(
     features: Option<Arc<Mutex<FeatureStore>>>,
     equity: Option<Arc<Mutex<EquitySeries>>>,
     instrument_catalog: Option<Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
+    archive: Option<MarketArchiveSettings>,
 ) -> Result<()> {
     serve(
         token,
@@ -483,6 +489,7 @@ pub fn start(
         features,
         equity,
         instrument_catalog,
+        archive,
     )
 }
 pub fn start_research(
@@ -490,8 +497,19 @@ pub fn start_research(
     public_host: Option<DashboardPublicHost>,
     view: Arc<Mutex<serde_json::Value>>,
     settings: DashboardSettings,
+    archive: Option<MarketArchiveSettings>,
 ) -> Result<()> {
-    serve(token, public_host, view, settings, None, None, None, None)
+    serve(
+        token,
+        public_host,
+        view,
+        settings,
+        None,
+        None,
+        None,
+        None,
+        archive,
+    )
 }
 #[allow(clippy::too_many_arguments)]
 fn serve(
@@ -503,6 +521,7 @@ fn serve(
     features: Option<Arc<Mutex<FeatureStore>>>,
     equity: Option<Arc<Mutex<EquitySeries>>>,
     instrument_catalog: Option<Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
+    archive: Option<MarketArchiveSettings>,
 ) -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:8771")?;
     let sender = worker_pool(Arc::new(Ctx {
@@ -514,6 +533,7 @@ fn serve(
         features,
         equity,
         instrument_catalog,
+        archive: archive.map(|s| Arc::new(v1::ArchiveReader::new(s))),
         streams: Arc::new(AtomicUsize::new(0)),
         price_batches: Arc::default(),
         #[cfg(test)]
@@ -539,6 +559,7 @@ struct Ctx {
     features: Option<Arc<Mutex<FeatureStore>>>,
     equity: Option<Arc<Mutex<EquitySeries>>>,
     instrument_catalog: Option<Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
+    archive: Option<Arc<v1::ArchiveReader>>,
     streams: Arc<AtomicUsize>,
     price_batches: Arc<v1::PriceBatches>,
     #[cfg(test)]
@@ -674,6 +695,7 @@ fn handle(mut stream: TcpStream, ctx: &Ctx) {
             ctx.features.as_ref(),
             ctx.equity.as_ref(),
             ctx.instrument_catalog.as_ref(),
+            ctx.archive.as_deref(),
         ))
     })()
     .unwrap_or_else(|(): ()| error("400 Bad Request", "request_unavailable"));
@@ -696,6 +718,7 @@ mod tests {
                 features: None,
                 equity: None,
                 instrument_catalog: None,
+                archive: None,
                 streams: Arc::new(AtomicUsize::new(0)),
                 price_batches: Arc::default(),
                 event_feed: None,

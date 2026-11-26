@@ -32,7 +32,15 @@ pub fn entry(token_file: &Path, config: Option<&Path>) -> ExitCode {
             .unwrap_or_default();
         let public_host = configured_public_host(config.as_ref());
 
-        web::start_research(token.trim().to_owned(), public_host, view.clone(), settings)?;
+        let archive = config.as_ref().and_then(|c| c.market_archive.clone());
+
+        web::start_research(
+            token.trim().to_owned(),
+            public_host,
+            view.clone(),
+            settings,
+            archive,
+        )?;
         tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()?

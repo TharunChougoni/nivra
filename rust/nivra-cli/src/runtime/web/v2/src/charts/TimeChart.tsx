@@ -1,6 +1,6 @@
 import type uPlot from "uplot";
 import React, { useEffect, useRef, useState } from "react";
-import { clock } from "../data";
+import { clock, datetime, shortDate } from "../data";
 import { readTokens, withAlpha } from "./tokens";
 
 export interface TimeSeries {
@@ -206,7 +206,16 @@ export function TimeChart(props: TimeChartProps) {
                 font: FONT,
                 grid: { stroke: c["--line"], width: 0.5 },
                 ticks: { show: false },
-                values: (_, ticks) => ticks.map((t) => clock(t * 1000)),
+                values: (_, ticks) => {
+                  const span =
+                    (x.at(-1) ?? 0) - (x[0] ?? 0);
+                  if (span > 7 * 86_400) return ticks.map((t) => shortDate(t * 1000));
+                  if (span > 86_400)
+                    return ticks.map((t) =>
+                      datetime(t * 1000).replace(" IST", ""),
+                    );
+                  return ticks.map((t) => clock(t * 1000));
+                },
               },
               {
                 side: 1,

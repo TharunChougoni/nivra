@@ -1218,3 +1218,155 @@ test("#/lanes side by side shows two lanes and the right one can change", async 
     page.close();
   }
 });
+test("instrument chart range picker loads archive history and shows plain unavailable state", async () => {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "http://localhost/",
+    pretendToBeVisual: true,
+  });
+  for (const key of GLOBALS)
+    Object.defineProperty(globalThis, key, {
+      value:
+        key === "getComputedStyle"
+          ? dom.window.getComputedStyle.bind(dom.window)
+          : dom.window[key],
+      configurable: true,
+      writable: true,
+    });
+  globalThis.addEventListener = dom.window.addEventListener.bind(dom.window);
+  globalThis.removeEventListener = dom.window.removeEventListener.bind(
+    dom.window,
+  );
+  const { App, Context } = await loadApp();
+  const { createRoot } = await import("react-dom/client");
+  const requests: string[] = [];
+  let unavailableMode = false;
+  const fetch = fetchFixture({
+    "/api/v1/series": (url) => {
+      const q = new URLSearchParams(url.split("?")[1] || "");
+      const kind = q.get("kind") || "receipt-minute-bar";
+      if (kind === "archive-minute-bar" || kind === "archive-daily-bar") {
+        if (unavailableMode) {
+          return json({
+            ...envelope,
+            kind,
+            unavailable: true,
+            reason: "archive_not_configured",
+            points: [],
+          });
+        }
+        const from = Number(q.get("from"));
+        return json({
+          ...envelope,
+          kind,
+          instrument_key: q.get("instrument"),
+          unavailable: false,
+          source: "market_archive",
+          truncated: false,
+          next: null,
+          points: [
+            {
+              at: from + 33_300_000,
+              open: "100",
+              high: "102",
+              low: "99.5",
+              close: "101.25",
+              tick_count: 3,
+              price_kind: "receipt_price",
+              bar_kind: "archive_quote_minute",
+              certified_ohlcv: false,
+              volume: null,
+            },
+            {
+              at: from + 4 * 86_400_000 + 33_300_000,
+              open: "101.25",
+              high: "104",
+              low: "101",
+              close: "103.50",
+              tick_count: 5,
+              price_kind: "receipt_price",
+              bar_kind: "archive_quote_minute",
+              certified_ohlcv: false,
+              volume: null,
+            },
+          ],
+          coverage: {
+            from_ms: from + 33_300_000,
+            to_ms: from + 4 * 86_400_000 + 33_300_000,
+            interval_ms: 60_000,
+            observed: 2,
+            expected: 2,
+            gap_count: 0,
+            gaps: [],
+          },
+        });
+      }
+      return json({
+        ...envelope,
+        kind,
+        points: [],
+        coverage: null,
+        unavailable: false,
+      });
+    },
+  });
+  const app = createController(dom.window, {
+    connect: false,
+    fetch: async (url) => {
+      requests.push(String(url));
+      return fetch(url);
+    },
+  });
+  const root = createRoot(document.getElementById("root")!);
+  root.render(
+    <Context.Provider value={app}>
+      <App />
+    </Context.Provider>,
+  );
+  try {
+    await app.authenticate("fixture-only");
+    await until(() =>
+      [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find((t) =>
+        t.textContent?.includes("Instrument price"),
+      ),
+    );
+    const priceTab = [
+      ...document.querySelectorAll<HTMLElement>('[role="tab"]'),
+    ].find((t) => t.textContent?.includes("Instrument price"))!;
+    priceTab.dispatchEvent(
+      new dom.window.MouseEvent("mousedown", { bubbles: true, button: 0 }),
+    );
+    priceTab.click();
+    await until(() =>
+      document.querySelector<HTMLSelectElement>('select[aria-label="History range"]'),
+    );
+    const rangeSelect = document.querySelector<HTMLSelectElement>(
+      'select[aria-label="History range"]',
+    )!;
+    rangeSelect.value = "5d";
+    rangeSelect.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    await until(() =>
+      requests.some((u) => u.includes("kind=archive-minute-bar")),
+    );
+    await until(() => document.body.textContent?.includes("103.50"));
+    assert.ok(document.body.textContent?.includes("Market archive"));
+    assert.doesNotMatch(
+      document.body.textContent || "",
+      /\b(archive_not_configured|archive_minute_bar|archive_quote_minute)\b/,
+    );
+
+    unavailableMode = true;
+    rangeSelect.value = "30d";
+    rangeSelect.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    await until(() =>
+      requests.some((u) => u.includes("kind=archive-daily-bar")),
+    );
+    await until(() =>
+      document.body.textContent?.includes("Market archive is not configured"),
+    );
+    assert.ok(document.body.textContent?.includes("Archive unavailable"));
+  } finally {
+    app.stop();
+    root.unmount();
+    dom.window.close();
+  }
+});

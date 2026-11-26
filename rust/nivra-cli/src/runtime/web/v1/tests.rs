@@ -494,6 +494,7 @@ fn series_projects_receipt_bars_and_equity_without_volume() {
             Some(&features),
             Some(&equity),
             Some(&catalog),
+            None,
         )
     };
     let reply = send("/api/v1/instruments?limit=1");
@@ -1347,4 +1348,300 @@ fn transcript_route_rejects_bad_queries_and_serves_an_empty_missing_lane() {
         (code.as_str(), body["sessions"].clone()),
         ("200 OK", serde_json::json!([]))
     );
+}
+
+#[test]
+fn archive_series_enforces_bounds_and_reports_unavailable_state() {
+    let view = Arc::new(Mutex::new(serde_json::json!({
+        "paper_only":true,"live_enabled":false,"account":"fixture-alias",
+        "authorized_session":"2026-10-29","as_of_ms":1_760_000_000_000i64
+    })));
+    let send = |path: &str, archive: Option<&ArchiveReader>| {
+        dispatch_source_with(
+            &format!(
+                "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:8771\r\nAuthorization: Bearer fixture\r\n\r\n"
+            ),
+            b"",
+            "fixture",
+            &view,
+            None,
+            None,
+            &DashboardSettings::default(),
+            None,
+            None,
+            None,
+            archive,
+        )
+    };
+    for (path, reason) in [
+        (
+            "/api/v1/series?kind=archive-minute-bar&from=1&to=60000",
+            "series_instrument_required",
+        ),
+        (
+            "/api/v1/series?kind=archive-minute-bar&instrument=bad%22key&from=1&to=60000",
+            "series_instrument_invalid",
+        ),
+        (
+            "/api/v1/series?kind=archive-minute-bar&instrument=NSE_EQ%7CINE00U801010&from=1000",
+            "series_range_required",
+        ),
+        (
+            "/api/v1/series?kind=archive-daily-bar&instrument=NSE_EQ%7CINE00U801010&to=1000",
+            "series_range_required",
+        ),
+        (
+            "/api/v1/series?kind=archive-minute-bar&instrument=NSE_EQ%7CINE00U801010&from=1000&to=500",
+            "series_range_invalid",
+        ),
+        (
+            &format!(
+                "/api/v1/series?kind=archive-minute-bar&instrument=NSE_EQ%7CINE00U801010&from=1&to={}",
+                ARCHIVE_MINUTE_MAX_RANGE_MS + 2
+            ),
+            "series_range_too_large",
+        ),
+        (
+            &format!(
+                "/api/v1/series?kind=archive-daily-bar&instrument=NSE_EQ%7CINE00U801010&from=1&to={}",
+                ARCHIVE_DAILY_MAX_RANGE_MS + 2
+            ),
+            "series_range_too_large",
+        ),
+        (
+            "/api/v1/series?kind=archive-minute-bar&instrument=NSE_EQ%7CINE00U801010&from=1&to=60000&limit=0",
+            "page_limit_invalid",
+        ),
+        (
+            "/api/v1/series?kind=archive-minute-bar&instrument=NSE_EQ%7CINE00U801010&from=1&to=60000&limit=2001",
+            "page_limit_invalid",
+        ),
+    ] {
+        let reply = send(path, None);
+        assert_eq!(reply.code, "400 Bad Request", "{path}");
+        let body: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(body["error"], reason, "{path}");
+    }
+
+    for kind in ["archive-minute-bar", "archive-daily-bar"] {
+        let reply = send(
+            &format!(
+                "/api/v1/series?kind={kind}&instrument=NSE_EQ%7CINE00U801010&from=1000&to=86400000"
+            ),
+            None,
+        );
+        assert_eq!(reply.code, "200 OK");
+        let body: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(body["unavailable"], true);
+        assert_eq!(body["reason"], "archive_not_configured");
+        assert_eq!(body["points"], serde_json::json!([]));
+        assert_eq!(body["execution_authority"], false);
+    }
+
+    let unreachable = ArchiveReader::new(MarketArchiveSettings {
+        url: "postgresql://test@127.0.0.1:1/archive".into(),
+        password_file: PathBuf::from("/nonexistent-archive-password"),
+    });
+    let reply = send(
+        "/api/v1/series?kind=archive-minute-bar&instrument=NSE_EQ%7CINE00U801010&from=1000&to=86400000",
+        Some(&unreachable),
+    );
+    assert_eq!(reply.code, "200 OK");
+    let body: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+    assert_eq!(body["unavailable"], true);
+    assert_eq!(body["reason"], "archive_unavailable");
+    assert_eq!(body["points"], serde_json::json!([]));
+    assert_eq!(body["execution_authority"], false);
+}
+
+#[test]
+#[ignore = "requires TimescaleDB at NIVRA_ARCHIVE_TEST_URL"]
+fn archive_series_reads_five_day_minute_chart_under_200ms() -> crate::runtime::Result<()> {
+    use nivra_store::market_archive::{
+        CandleBar, CandleBatch, CandleUnit, QuoteBatch, QuoteObservation, QuotePurpose, Receipt,
+        init, write_candles, write_quotes,
+    };
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let test_url = std::env::var("NIVRA_ARCHIVE_TEST_URL")?;
+    let (scheme, auth_host) = test_url.split_once("://").ok_or("fixture_url")?;
+    let (auth, host) = auth_host.rsplit_once('@').ok_or("fixture_url")?;
+    let (user, password) = auth.split_once(':').ok_or("fixture_url")?;
+    let tmp = tempfile::tempdir()?;
+    let password_file = tmp.path().join("archive-password");
+    std::fs::OpenOptions::new()
+        .create_new(true)
+        .mode(0o600)
+        .write(true)
+        .open(&password_file)?
+        .write_all(password.as_bytes())?;
+    let settings = MarketArchiveSettings {
+        url: format!("{scheme}://{user}@{host}"),
+        password_file,
+    };
+    let mut db = crate::runtime::market_archive::connect(&settings)?;
+    init(&mut db)?;
+
+    let nonce = millis();
+    let instrument = format!("SYNTHETIC|{nonce}-H");
+    let other = format!("SYNTHETIC|{nonce}-BG");
+    let start_day = NaiveDate::from_ymd_opt(2026, 11, 2).unwrap();
+    for day_offset in 0..5 {
+        let day = start_day + chrono::Duration::days(day_offset);
+        for minute in 0..375u32 {
+            let base_ms = minute_to_millis(day, 555 + minute).unwrap();
+            let receipt_ms = base_ms + 15_000;
+            let body = format!("quote-{nonce}-{day_offset}-{minute}");
+            let ltp = 10_000 + (day_offset * 100) + i64::from(minute);
+            let batch = QuoteBatch {
+                receipt: Receipt::new(receipt_ms - 10, receipt_ms, body.as_bytes()),
+                purpose: QuotePurpose::Scanner,
+                observations: vec![
+                    QuoteObservation {
+                        instrument_key: instrument.clone(),
+                        source_ms: receipt_ms - 5,
+                        ltp,
+                        bid: Some(ltp),
+                        ask: None,
+                        bid_qty: Some(10),
+                        ask_qty: None,
+                        volume: 1_000,
+                        lower_circuit: 8_000,
+                        upper_circuit: 12_000,
+                    },
+                    QuoteObservation {
+                        instrument_key: other.clone(),
+                        source_ms: receipt_ms - 5,
+                        ltp: ltp + 50,
+                        bid: None,
+                        ask: None,
+                        bid_qty: None,
+                        ask_qty: None,
+                        volume: 500,
+                        lower_circuit: 8_000,
+                        upper_circuit: 12_000,
+                    },
+                ],
+            };
+            assert!(write_quotes(&mut db, &batch)?);
+        }
+    }
+    let daily_bars: Vec<CandleBar> = (0..5)
+        .map(|day_offset| {
+            let day = start_day + chrono::Duration::days(day_offset);
+            CandleBar {
+                day,
+                bar_ms: minute_to_millis(day, 555).unwrap(),
+                o: 10_000 + day_offset * 100,
+                h: 10_400 + day_offset * 100,
+                l: 9_900 + day_offset * 100,
+                c: 10_374 + day_offset * 100,
+                volume: 50_000,
+                oi: 0,
+            }
+        })
+        .collect();
+    let daily_body = format!("daily-{nonce}");
+    assert!(write_candles(
+        &mut db,
+        &CandleBatch {
+            receipt: Receipt::new(1_000, 1_010, daily_body.as_bytes()),
+            instrument_key: instrument.clone(),
+            unit: CandleUnit::Daily,
+            start: start_day,
+            end: start_day + chrono::Duration::days(4),
+            bars: daily_bars,
+        }
+    )?);
+
+    let from = minute_to_millis(start_day, 555).unwrap();
+    let to = minute_to_millis(start_day + chrono::Duration::days(4), 929).unwrap() + 59_999;
+    let encoded_key = instrument.replace('|', "%7C");
+    let view = Arc::new(Mutex::new(serde_json::json!({
+        "paper_only":true,"live_enabled":false,"account":"fixture-alias",
+        "authorized_session":"2026-11-06","as_of_ms":to
+    })));
+    let archive = ArchiveReader::new(settings);
+    let request = |path: &str| {
+        dispatch_source_with(
+            &format!(
+                "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:8771\r\nAuthorization: Bearer fixture\r\n\r\n"
+            ),
+            b"",
+            "fixture",
+            &view,
+            None,
+            None,
+            &DashboardSettings::default(),
+            None,
+            None,
+            None,
+            Some(&archive),
+        )
+    };
+
+    let cold_started = Instant::now();
+    let reply = request(&format!(
+        "/api/v1/series?kind=archive-minute-bar&instrument={encoded_key}&from={from}&to={to}"
+    ));
+    let cold_elapsed = cold_started.elapsed();
+    assert_eq!(reply.code, "200 OK");
+    let body: serde_json::Value = serde_json::from_slice(&reply.body)?;
+    assert_eq!(body["unavailable"], false);
+    assert_eq!(body["source"], "market_archive");
+    assert_eq!(body["truncated"], false);
+    let points = body["points"].as_array().unwrap();
+    assert_eq!(points.len(), 5 * 375);
+    assert_eq!(points[0]["close"], "100");
+    assert_eq!(points[1874]["close"], "107.74");
+    assert_eq!(body["coverage"]["gaps"].as_array().unwrap().len(), 4);
+
+    let warm_started = Instant::now();
+    let warm_reply = request(&format!(
+        "/api/v1/series?kind=archive-minute-bar&instrument={encoded_key}&from={from}&to={to}"
+    ));
+    let warm_elapsed = warm_started.elapsed();
+    assert_eq!(warm_reply.code, "200 OK");
+    println!(
+        "5-day minute chart server time: cold={:.2} ms warm={:.2} ms (1875 bars)",
+        cold_elapsed.as_secs_f64() * 1000.0,
+        warm_elapsed.as_secs_f64() * 1000.0
+    );
+    assert!(
+        warm_elapsed < Duration::from_millis(200),
+        "5-day minute chart exceeded 200ms: {:?}",
+        warm_elapsed
+    );
+
+    let page1_reply = request(&format!(
+        "/api/v1/series?kind=archive-minute-bar&instrument={encoded_key}&from={from}&to={to}&limit=500"
+    ));
+    let page1: serde_json::Value = serde_json::from_slice(&page1_reply.body)?;
+    assert_eq!(page1["points"].as_array().unwrap().len(), 500);
+    assert_eq!(page1["truncated"], true);
+    let next_to = page1["next"].as_i64().unwrap();
+    let page2_reply = request(&format!(
+        "/api/v1/series?kind=archive-minute-bar&instrument={encoded_key}&from={from}&to={next_to}&limit=500"
+    ));
+    let page2: serde_json::Value = serde_json::from_slice(&page2_reply.body)?;
+    assert_eq!(page2["points"].as_array().unwrap().len(), 500);
+    assert!(
+        page2["points"].as_array().unwrap().last().unwrap()["at"]
+            .as_i64()
+            .unwrap()
+            < page1["points"].as_array().unwrap()[0]["at"]
+                .as_i64()
+                .unwrap()
+    );
+
+    let daily_reply = request(&format!(
+        "/api/v1/series?kind=archive-daily-bar&instrument={encoded_key}&from={from}&to={to}"
+    ));
+    assert_eq!(daily_reply.code, "200 OK");
+    let daily: serde_json::Value = serde_json::from_slice(&daily_reply.body)?;
+    assert_eq!(daily["points"].as_array().unwrap().len(), 5);
+    assert_eq!(daily["points"][0]["close"], "103.74");
+    assert_eq!(daily["points"][4]["close"], "107.74");
+    Ok(())
 }

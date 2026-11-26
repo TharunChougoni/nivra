@@ -1,10 +1,11 @@
 import type uPlot from "uplot";
 import type { Point, SeriesCoverage } from "./types";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Crosshair, Pause, Play } from "lucide-react";
-import { amount, clock, downsamplePoints } from "./data";
+import { amount, clock, datetime, downsamplePoints, shortDate } from "./data";
 import { plain } from "./labels";
 import { Button, Empty, Segments } from "./ui";
+import type { EmptyTone } from "./ui";
 import { TimeChart } from "./charts/TimeChart";
 import type { Band, Marker } from "./charts/TimeChart";
 export function chartData(
@@ -39,11 +40,17 @@ export interface FillMarker {
   at: number;
   side: "buy" | "sell";
 }
-const RANGES: [string, string][] = [
+const LIVE_RANGES: [string, string][] = [
   ["5m", "5m"],
   ["15m", "15m"],
   ["1h", "1h"],
   ["all", "day"],
+];
+const ARCHIVE_RANGES: [string, string][] = [
+  ["5m", "5m"],
+  ["15m", "15m"],
+  ["1h", "1h"],
+  ["all", "all"],
 ];
 /** Value of the last non-null observation at or before `at`. */
 function valueAt(x: number[], values: (number | null)[], at: number) {
@@ -69,9 +76,14 @@ export default function Chart({
   height = 280,
   emptyTitle = "No chart data",
   emptyDetail = "Not loaded yet.",
+  emptyTone,
   baseline = null,
   drawdown = false,
   markers = [],
+  multiDay = false,
+  daily = false,
+  maxPoints,
+  toolbarExtra = null,
 }: {
   points?: Point[];
   label?: string;
@@ -80,24 +92,51 @@ export default function Chart({
   height?: number;
   emptyTitle?: string;
   emptyDetail?: string;
+  emptyTone?: EmptyTone;
   /** Session-start reference drawn dashed; also feeds the tooltip's day net. */
   baseline?: number | null;
   /** Add a synced drawdown pane computed from the plotted values. */
   drawdown?: boolean;
   markers?: FillMarker[];
+  multiDay?: boolean;
+  daily?: boolean;
+  maxPoints?: number;
+  toolbarExtra?: React.ReactNode;
 }) {
   const [range, setRange] = useState("all"),
     [follow, setFollow] = useState(true),
     [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+  }, [points]);
   const valid = points.filter((p) => p.value !== null && !p.carried),
     enough = valid.length >= 2,
-    data = useMemo(() => chartData(points, range), [points, range]),
+    isMultiDay =
+      multiDay ||
+      daily ||
+      (valid.length >= 2 && valid[valid.length - 1].at - valid[0].at > 86_400_000),
+    effectiveRange = daily ? "all" : range,
+    data = useMemo(
+      () =>
+        chartData(
+          points,
+          effectiveRange,
+          maxPoints ?? (isMultiDay ? 2000 : 1200),
+        ),
+      [points, effectiveRange, maxPoints, isMultiDay],
+    ),
     plotted = data[0].length,
     historyStart =
       coverage?.store_started_after_open &&
       Number.isFinite(Number(coverage?.store_start_ms))
         ? Number(coverage.store_start_ms)
         : null;
+  const formatTime = (at: number) =>
+    daily
+      ? shortDate(at)
+      : isMultiDay
+        ? datetime(at)
+        : `${clock(at)} IST`;
   const [x, values, carried] = data as [
     number[],
     (number | null)[],
@@ -190,7 +229,7 @@ export default function Chart({
     );
     if (gap)
       return {
-        title: `${clock(at)} IST`,
+        title: formatTime(at),
         rows: [["Not observed", plain(gap.reason)]] as [string, string][],
       };
     const value = values[i] ?? carried[i];
@@ -201,7 +240,7 @@ export default function Chart({
     if (baseline !== null) rows.push(["Day net", amount(value - baseline)]);
     if (drawdown && peaks[i] !== null)
       rows.push(["drawdown", `${peaks[i]!.toFixed(2)}%`]);
-    return { title: `${clock(at)} IST`, rows };
+    return { title: formatTime(at), rows };
   };
   const current = valid.at(-1);
   return (
@@ -211,18 +250,21 @@ export default function Chart({
           <span className="chart-series-dot" />
           {label}
           <strong>{current ? amount(current.value) : "—"}</strong>
-          <time>{current ? clock(current.at) + " IST" : ""}</time>
+          <time>{current ? formatTime(current.at) : ""}</time>
         </div>
         <div className="chart-tools">
-          <Segments
-            value={range}
-            onChange={(v) => {
-              setRange(v);
-              setFollow(true);
-            }}
-            items={RANGES}
-            label="Chart time range"
-          />
+          {toolbarExtra}
+          {!daily && (
+            <Segments
+              value={range}
+              onChange={(v) => {
+                setRange(v);
+                setFollow(true);
+              }}
+              items={isMultiDay ? ARCHIVE_RANGES : LIVE_RANGES}
+              label="Chart time range"
+            />
+          )}
           <Button
             icon={follow ? Pause : Play}
             onClick={() => setFollow(!follow)}
@@ -246,7 +288,10 @@ export default function Chart({
         </div>
       ) : (
         <div className="chart-unavailable" style={{ minHeight: height }}>
-          <Empty title={failed ? "Could not load the chart" : emptyTitle}>
+          <Empty
+            title={enough && failed ? "Could not load the chart" : emptyTitle}
+            tone={enough && failed ? "failed" : emptyTone}
+          >
             {emptyDetail}
             {valid.length === 1
               ? ` One point: ${amount(valid[0].value)} at ${clock(valid[0].at)} IST.`

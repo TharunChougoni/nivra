@@ -222,6 +222,31 @@ export function turnOutcome(t: AgentTurn): string {
       : "—";
 }
 
+/** Market archive series labels, errors and range choices. */
+export const ARCHIVE_LABELS: Record<string, string> = {
+  archive_not_configured: "Market archive is not configured",
+  archive_unavailable: "Market archive is unavailable",
+  market_archive: "Market archive",
+  archive_quote_minute: "Archive minute bars from quotes",
+  archive_minute: "Archive minute bars",
+  archive_daily: "Archive daily bars",
+  archive_candle: "Archive candle",
+  series_range_invalid: "Choose a valid date range",
+  series_range_required: "Choose both start and end dates",
+  series_range_too_large: "Selected date range is too wide",
+  series_instrument_required: "Choose an instrument first",
+  series_instrument_invalid: "Instrument selection is not valid",
+};
+
+export const ARCHIVE_RANGE_LABELS: Record<string, string> = {
+  today: "Today (live)",
+  "5d": "Past 5 days (1 min)",
+  "7d": "Past 7 days (1 min)",
+  "30d": "Past 30 days (daily)",
+  "90d": "Past 90 days (daily)",
+  custom: "Custom range",
+};
+
 /** State banner text for a controller whose loop stopped updating. */
 export function stalledText(lastUpdateMs: number | null) {
   return {

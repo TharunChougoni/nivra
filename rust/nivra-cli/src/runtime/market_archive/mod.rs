@@ -68,7 +68,7 @@ pub(crate) fn connect_from_config(path: &Path) -> Result<ArchiveClient> {
     open(&read_config(path)?)
 }
 
-pub(super) fn connect(archive: &MarketArchiveSettings) -> Result<ArchiveClient> {
+pub(crate) fn connect(archive: &MarketArchiveSettings) -> Result<ArchiveClient> {
     let secret = private(&archive.password_file).map_err(|_| "archive_password_file_invalid")?;
     let password = secret.trim_end_matches(['\r', '\n']);
     if password.is_empty() || password.contains(['\r', '\n', '\0']) {
@@ -165,7 +165,7 @@ pub(crate) fn entry(command: Command) -> ExitCode {
     }
 }
 
-pub(super) fn from_paise(paise: i64) -> Result<nivra_core::finance::Amount> {
+pub(crate) fn from_paise(paise: i64) -> Result<nivra_core::finance::Amount> {
     use nivra_core::finance::Amount;
     Ok(Amount::from_integer(paise).checked_div(Amount::from_integer(100))?)
 }

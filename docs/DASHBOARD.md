@@ -89,6 +89,10 @@ How the dashboard treats evidence:
 - Minute bars come from quote receipts, not exchange OHLCV. A `no_trade`
   minute draws as a flat step. An `unobserved` minute, such as during a feed
   outage, breaks the line and is shaded.
+- Past sessions and multi-day instrument history load on demand from the
+  TimescaleDB market archive when `market_archive` is configured, without
+  holding historical series in controller memory. Today's live view keeps
+  streaming from controller memory over SSE.
 - A failed read clears that section's financial values instead of showing
   stale ones.
 
@@ -142,6 +146,8 @@ All routes live in `rust/nivra-cli/src/runtime/web/` and return JSON with
 | `GET /api/v1/health` | Readiness, feed and history state, controller liveness, retention, model budgets, alerts and updater status. |
 | `GET /api/v1/alerts` | Alerts with their original evidence. |
 | `GET /api/v1/series?kind=receipt-minute-bar&instrument=&from=&to=` | Minute bars from quote receipts, with classified gaps and `watermark_ms`. |
+| `GET /api/v1/series?kind=archive-minute-bar&instrument=&from=&to=&limit=` | Paged minute bars from the market archive (`minute_bars` where present or `quote_obs` bucketed by minute). Max range 14 days; max `limit` is `series_max_points`. |
+| `GET /api/v1/series?kind=archive-daily-bar&instrument=&from=&to=&limit=` | Paged daily bars from `daily_bars` in the market archive. Max range 366 days; max `limit` is `series_max_points`. |
 | `GET /api/v1/series?kind=account-equity&from=&to=` | Recorded portfolio checkpoints: cash, equity and mark basis. |
 | `GET /api/v1/agent` | pi lane turns, newest first, with tool calls, usage, trigger counts and per-lane totals. `limit` is 1 to 200, default 50. |
 | `GET /api/v1/agent/transcript?lane=` | One lane's newest eight session files as chat exchanges. `limit` is 1 to 50, default 20. System prompts are not served. |

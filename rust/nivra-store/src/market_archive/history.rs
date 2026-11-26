@@ -205,3 +205,112 @@ pub fn daily_instrument_keys(
         .map(|row| row.get(0))
         .collect())
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ArchiveMinuteBar {
+    pub bar_ms: i64,
+    pub open_paise: i64,
+    pub high_paise: i64,
+    pub low_paise: i64,
+    pub close_paise: i64,
+    pub tick_count: Option<i64>,
+    pub volume: Option<i64>,
+    pub from_quote: bool,
+}
+
+/// Bounded minute bars for one instrument from `minute_bars` where present or
+/// `quote_obs` aggregated per minute with Timescale `time_bucket`.
+/// Returns chronological bars and whether older bars were truncated by `limit`.
+pub fn archive_minute_bars(
+    db: &mut Client,
+    key: &str,
+    from_ms: i64,
+    to_ms: i64,
+    limit: usize,
+) -> Result<(Vec<ArchiveMinuteBar>, bool)> {
+    let fetch_limit = i64::try_from(limit.max(1).saturating_add(1))?;
+    let rows = db.query(
+        "WITH inst AS MATERIALIZED (
+             SELECT id FROM instruments WHERE key = $1
+         ),
+         quotes AS (
+             SELECT
+                 time_bucket(60000::bigint, q.receipt_ms) AS bar_ms,
+                 first(q.ltp, q.receipt_ms) AS o,
+                 max(q.ltp) AS h,
+                 min(q.ltp) AS l,
+                 last(q.ltp, q.receipt_ms) AS c,
+                 count(*)::bigint AS tick_count
+             FROM quote_obs q
+             WHERE q.instrument_id = (SELECT id FROM inst)
+               AND q.receipt_ms BETWEEN $2 AND $3
+             GROUP BY 1
+         ),
+         bars AS (
+             SELECT m.bar_ms, m.o, m.h, m.l, m.c, m.volume
+             FROM minute_bars m
+             WHERE m.instrument_id = (SELECT id FROM inst)
+               AND m.bar_ms BETWEEN $2 AND $3
+         )
+         SELECT
+             coalesce(b.bar_ms, q.bar_ms) AS bar_ms,
+             coalesce(b.o, q.o) AS o,
+             coalesce(b.h, q.h) AS h,
+             coalesce(b.l, q.l) AS l,
+             coalesce(b.c, q.c) AS c,
+             q.tick_count,
+             b.volume,
+             (b.bar_ms IS NULL) AS from_quote
+         FROM quotes q
+         FULL OUTER JOIN bars b ON b.bar_ms = q.bar_ms
+         ORDER BY bar_ms DESC
+         LIMIT $4",
+        &[&key, &from_ms, &to_ms, &fetch_limit],
+    )?;
+    let truncated = rows.len() > limit;
+    let mut bars: Vec<ArchiveMinuteBar> = rows
+        .into_iter()
+        .take(limit)
+        .map(|row| ArchiveMinuteBar {
+            bar_ms: row.get(0),
+            open_paise: row.get(1),
+            high_paise: row.get(2),
+            low_paise: row.get(3),
+            close_paise: row.get(4),
+            tick_count: row.get(5),
+            volume: row.get(6),
+            from_quote: row.get(7),
+        })
+        .collect();
+    bars.reverse();
+    Ok((bars, truncated))
+}
+
+/// Bounded daily bars for one instrument from `daily_bars`.
+/// Returns chronological bars and whether older bars were truncated by `limit`.
+pub fn archive_daily_bars(
+    db: &mut Client,
+    key: &str,
+    start: NaiveDate,
+    end: NaiveDate,
+    limit: usize,
+) -> Result<(Vec<DailyBar>, bool)> {
+    let fetch_limit = i64::try_from(limit.max(1).saturating_add(1))?;
+    let rows = db.query(
+        "SELECT $1::text, b.day, b.o, b.h, b.l, b.c, b.volume
+         FROM daily_bars b
+         WHERE b.instrument_id = (SELECT id FROM instruments WHERE key = $1)
+           AND b.day BETWEEN $2 AND $3
+         ORDER BY b.day DESC
+         LIMIT $4",
+        &[&key, &start, &end, &fetch_limit],
+    )?;
+    let truncated = rows.len() > limit;
+    let mut bars: Vec<DailyBar> = rows
+        .into_iter()
+        .take(limit)
+        .map(DailyBar::from_row)
+        .collect();
+    bars.reverse();
+    Ok((bars, truncated))
+}
