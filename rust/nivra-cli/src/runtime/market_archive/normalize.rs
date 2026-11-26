@@ -6,7 +6,7 @@ use nivra_store::market_archive::{
 };
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 #[derive(Deserialize)]
 struct ArchivedQuote {
@@ -66,19 +66,9 @@ fn validate_receipt_times(requested_ms: i64, received_ms: i64) -> Result<()> {
     Ok(())
 }
 
-/// Normalize the original JSON envelope from a wide_quotes or scanner_metadata tick.
-#[cfg(test)]
-fn quotes(raw: &str) -> Result<QuoteBatch<'_>> {
-    quote_batch(raw, false)
-}
-
-/// Keep the exact body even when individual instruments lack normalizable
-/// fields. Replay applies its own receipt checks to the original bytes.
+/// Keep the exact body while normalizing only observations with a valid,
+/// unambiguous instrument identity.
 pub(in crate::runtime) fn capture_quotes(raw: &str) -> Result<QuoteBatch<'_>> {
-    quote_batch(raw, true)
-}
-
-fn quote_batch(raw: &str, allow_partial: bool) -> Result<QuoteBatch<'_>> {
     let archive: ArchivedQuote = serde_json::from_str(raw)?;
     validate_receipt_times(archive.requested_ms, archive.received_ms)?;
     if archive.source != "upstox-readonly-v1" {
@@ -96,22 +86,23 @@ fn quote_batch(raw: &str, allow_partial: bool) -> Result<QuoteBatch<'_>> {
         return Err("quote_status".into());
     }
     let rows = body["data"].as_object().ok_or("quote_data")?;
-    let mut keys = BTreeSet::new();
-    let mut observations = Vec::with_capacity(rows.len());
+    let mut unique = BTreeMap::new();
     for row in rows.values() {
-        let key = row["instrument_token"]
+        let Some(key) = row["instrument_token"]
             .as_str()
             .filter(|key| !key.is_empty())
-            .ok_or("quote_identity")?;
-        if !keys.insert(key) {
-            return Err("duplicate_quote".into());
-        }
-        match quote_observation(key, row, archive.received_ms) {
-            Ok(observation) => observations.push(observation),
-            Err(_) if allow_partial => {}
-            Err(error) => return Err(error),
-        }
+        else {
+            continue;
+        };
+        unique
+            .entry(key)
+            .and_modify(|row| *row = None)
+            .or_insert(Some(row));
     }
+    let observations = unique
+        .into_iter()
+        .filter_map(|(key, row)| quote_observation(key, row?, archive.received_ms).ok())
+        .collect();
     Ok(QuoteBatch {
         receipt: Receipt::new(archive.requested_ms, archive.received_ms, raw.as_bytes()),
         purpose,
@@ -206,7 +197,7 @@ mod tests {
             "body": include_str!("../../../../../fixtures/upstox_full_quote_doc_example.json"),
         });
         let raw = archive.to_string();
-        let batch = quotes(&raw).unwrap();
+        let batch = capture_quotes(&raw).unwrap();
         assert_eq!(batch.purpose, QuotePurpose::ScannerMetadata);
         assert_eq!(batch.receipt.requested_ms, 1697673120000);
         assert_eq!(batch.receipt.received_ms, 1697673120010);
@@ -231,12 +222,11 @@ mod tests {
         body["data"]["NSE_EQ:NHPC"]["depth"]["sell"] = json!([{"quantity": 1, "price": 51.90}]);
         archive["body"] = json!(body.to_string());
         let invalid = archive.to_string();
-        assert!(quotes(&invalid).is_err());
         let partial = capture_quotes(&invalid).unwrap();
         assert!(partial.observations.is_empty());
         assert_eq!(partial.receipt.body, invalid.as_bytes());
         archive["received_ms"] = json!(0);
-        assert!(quotes(&archive.to_string()).is_err());
+        assert!(capture_quotes(&archive.to_string()).is_err());
     }
 
     #[test]
@@ -257,6 +247,33 @@ mod tests {
         let batch = capture_quotes(&raw).unwrap();
         assert_eq!(batch.receipt.body, raw.as_bytes());
         assert_eq!(batch.observations, []);
+    }
+
+    #[test]
+    fn capture_preserves_observations_when_an_unrelated_row_has_no_identity() {
+        let mut body: Value = serde_json::from_str(include_str!(
+            "../../../../../fixtures/upstox_full_quote_doc_example.json"
+        ))
+        .unwrap();
+        body["data"]["unidentified"] = Value::Null;
+        let envelope = |body: &Value| {
+            json!({
+                "source":"upstox-readonly-v1","purpose":"scanner_metadata",
+                "requested_ms":1697673120000_i64,"received_ms":1697673120010_i64,
+                "body":body.to_string(),
+            })
+            .to_string()
+        };
+        let raw = envelope(&body);
+        let batch = capture_quotes(&raw).unwrap();
+        assert_eq!(batch.receipt.body, raw.as_bytes());
+        assert_eq!(batch.observations.len(), 1);
+
+        body["data"]["duplicate"] = body["data"]["NSE_EQ:NHPC"].clone();
+        let raw = envelope(&body);
+        let batch = capture_quotes(&raw).unwrap();
+        assert_eq!(batch.receipt.body, raw.as_bytes());
+        assert!(batch.observations.is_empty());
     }
 
     #[test]

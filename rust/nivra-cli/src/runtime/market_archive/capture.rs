@@ -19,7 +19,7 @@ const SPOOL_PAGES: u32 = 64 * 1024 * 1024 / PAGE_BYTES;
 const RETRY_MS: i64 = 5_000;
 
 pub(in crate::runtime) struct Writer {
-    wake: Option<SyncSender<()>>,
+    notify: Option<SyncSender<()>>,
     spool: Arc<Mutex<Spool>>,
     worker: Option<JoinHandle<()>>,
     dropped: Arc<AtomicU64>,
@@ -38,7 +38,7 @@ impl Writer {
         let spool = Arc::new(Mutex::new(Spool::open(&path, SPOOL_PAGES)?));
         fs::File::open(directory)?.sync_all()?;
         let worker_spool = spool.clone();
-        let (wake, notified) = mpsc::sync_channel(1);
+        let (notify, notified) = mpsc::sync_channel(1);
         let (report_prior, prior_gaps) = mpsc::channel();
         let dropped = Arc::new(AtomicU64::new(0));
         let worker_dropped = dropped.clone();
@@ -71,7 +71,7 @@ impl Writer {
                 }
             })?;
         Ok(Self {
-            wake: Some(wake),
+            notify: Some(notify),
             spool,
             worker: Some(worker),
             dropped,
@@ -82,7 +82,7 @@ impl Writer {
     /// Commit the original bytes before the ledger can publish a reference.
     /// The worker holds the spool lock only while it reads or deletes a row.
     pub(in crate::runtime) fn stage(&self, raw: &str) -> Result<()> {
-        let Some(wake) = &self.wake else {
+        let Some(notify) = &self.notify else {
             return Err("archive_capture_stopped".into());
         };
         let spool = self.spool.lock().map_err(|_| "archive_spool_unavailable")?;
@@ -90,7 +90,10 @@ impl Writer {
             self.dropped.fetch_add(1, Ordering::Relaxed);
             return Err("archive_spool_unavailable".into());
         }
-        if matches!(wake.try_send(()), Err(mpsc::TrySendError::Disconnected(()))) {
+        if matches!(
+            notify.try_send(()),
+            Err(mpsc::TrySendError::Disconnected(()))
+        ) {
             return Err("archive_capture_stopped".into());
         }
         Ok(())
@@ -109,7 +112,7 @@ impl Writer {
     }
 
     pub(in crate::runtime) fn stop(&mut self) {
-        self.wake.take();
+        self.notify.take();
         if let Some(worker) = self.worker.take()
             && worker.join().is_err()
         {
@@ -299,8 +302,13 @@ impl Capture {
 }
 
 fn record_prior_gap(spool: &Path) -> Result<()> {
+    let book = spool.with_file_name("paper.sqlite");
+    if fs::symlink_metadata(&book).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    {
+        return Ok(());
+    }
     let db = Connection::open_with_flags(
-        spool.with_file_name("paper.sqlite"),
+        book,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )?;
     record_gap(&db, 1)
@@ -373,5 +381,48 @@ mod tests {
         ) {}
         assert_eq!(sink.committed, [&batches[0], &batches[1], "later"]);
         assert!(spool.lock().unwrap().first().unwrap().is_none());
+    }
+
+    #[test]
+    fn missing_historical_book_does_not_block_capture_after_an_invalid_batch() -> Result<()> {
+        struct FakeSink;
+        impl Sink for FakeSink {
+            fn write(&mut self, raw: &str) -> WriteResult {
+                if raw == "invalid" {
+                    WriteResult::Invalid
+                } else {
+                    WriteResult::Stored
+                }
+            }
+        }
+
+        let directory = tempfile::tempdir()?;
+        let earlier = directory.path().join("2026-10-16");
+        fs::create_dir(&earlier)?;
+        let path = earlier.join(SPOOL_NAME);
+        Spool::open(&path, SPOOL_PAGES)?.push("invalid")?;
+        let current = Spool::open(&directory.path().join(SPOOL_NAME), SPOOL_PAGES)?;
+        current.push("current")?;
+
+        let (report_prior, prior_gaps) = mpsc::channel();
+        let spool = Arc::new(Mutex::new(current));
+        let mut capture = Capture {
+            spool: spool.clone(),
+            prior: None,
+            backlog: VecDeque::from([path.clone()]),
+            report_prior,
+        };
+        let mut sink = FakeSink;
+        let dropped = AtomicU64::new(0);
+        for _ in 0..3 {
+            assert!(matches!(
+                capture.replay(&mut sink, &dropped)?,
+                Replay::Progress
+            ));
+        }
+        assert_eq!(prior_gaps.try_recv()?, "2026-10-16".parse()?);
+        assert!(!path.exists());
+        assert!(spool.lock().unwrap().first()?.is_none());
+        Ok(())
     }
 }
