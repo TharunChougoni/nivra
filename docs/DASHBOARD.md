@@ -113,6 +113,13 @@ The stream carries two frame types:
 
 **Refresh**, a stream gap and returning to the tab refetch every projection.
 
+Only the controller loop sends `summary_changed`. Stream heartbeats and
+`price_batch` frames keep flowing when the loop stalls. If no
+`summary_changed` arrives for 15 seconds (three summary refreshes), the browser
+reads the summary and health directly. When health reports the controller
+stale, the state banner says the controller has stopped updating and names its
+last update time. The browser clock never decides this. The next `summary_changed` clears the banner.
+
 ## API routes
 
 All routes live in `rust/nivra-cli/src/runtime/web/` and return JSON with

@@ -1,7 +1,11 @@
 import type { SummaryResponse } from "./types";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import { createController } from "./controller";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { createController, WATCHDOG_MS } from "./controller";
+import { conditionOf } from "./model";
+import { StateBanner } from "./StateBanner";
 import { JSDOM } from "jsdom";
 const json = (v: unknown) =>
   new Response(JSON.stringify(v), {
@@ -499,4 +503,78 @@ test("run_ended reloads the lane journal without touching projections", async ()
   assert.deepEqual(projectionReads(fx.requests), ["/api/v1/agent"]);
   app.stop();
   dom.window.close();
+});
+test("a stalled controller shows as stalled within the watchdog bound while SSE heartbeats continue", async () => {
+  // Fake the interval clock only; the SSE reader and `wait` keep real timeouts.
+  mock.timers.enable({ apis: ["setInterval", "Date"], now: 100_000 });
+  const dom = new JSDOM("", {
+    url: "http://localhost",
+    pretendToBeVisual: true,
+  });
+  let push: (text: string) => void = () => {};
+  let status = "healthy";
+  const health: string[] = [];
+  const all = projections({});
+  const fetch = async (url: string) => {
+    if (url === "/api/v1/events") {
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          push = (text) => c.enqueue(new TextEncoder().encode(text));
+        },
+      });
+      return new Response(body, {
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    }
+    const path = url.split("?")[0];
+    if (path === "/api/v1/meta") return json({ mode: "paper" });
+    if (path === "/api/v1/health") {
+      health.push(status);
+      return json({
+        controller_liveness: {
+          status,
+          last_completed_at_ms: 1000,
+          max_age_ms: 62_000,
+        },
+      });
+    }
+    if (path === "/api/v1/agent") return json({ turns: [], total: 0 });
+    if (path === "/api/v1/series") return json({ points: [], coverage: null });
+    return json(all[path]);
+  };
+  const app = createController(dom.window, { fetch });
+  try {
+    await app.authenticate("fixture");
+    await wait(() => app.getSnapshot().snapshotState === "ready");
+    await wait(() => app.getSnapshot().connection === "live");
+    // The loop stops: no more summary_changed, only heartbeat comments.
+    status = "stale";
+    for (let t = 0; t < WATCHDOG_MS - 5_000; t += 5_000) {
+      push(": heartbeat\n\n");
+      mock.timers.tick(5_000);
+    }
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(health, []);
+    push(": heartbeat\n\n");
+    mock.timers.tick(5_000);
+    await wait(() => app.getSnapshot().stalled !== null);
+    const condition = conditionOf(app.getSnapshot());
+    assert.deepEqual(condition, { kind: "stalled", lastUpdateMs: 1000 });
+    const banner = renderToStaticMarkup(
+      createElement(StateBanner, {
+        condition,
+        onRefresh: () => {},
+        refreshing: false,
+      }),
+    );
+    assert.match(banner, /The controller has stopped updating/);
+    assert.match(banner, /Its last update was at 01 Jan, 05:30 IST/);
+    // A summary announcement means the loop published again.
+    push(`event: summary_changed\ndata: {"seq":1}\n\n`);
+    await wait(() => app.getSnapshot().stalled === null);
+  } finally {
+    app.stop();
+    dom.window.close();
+    mock.timers.reset();
+  }
 });

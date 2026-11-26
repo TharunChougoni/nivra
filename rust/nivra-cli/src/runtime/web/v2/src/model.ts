@@ -2,6 +2,7 @@
 // projections: nothing here fetches, guesses or fills in a missing value.
 import type {
   AgentResponse,
+  ControllerLiveness,
   AgentTurn,
   Fill,
   Instrument,
@@ -14,11 +15,13 @@ import type {
   WorkspaceState,
 } from "./types";
 import { count, executionText, numeric } from "./data";
+import { validTimestampMs } from "./operational";
 
 // ----------------------------------------------------------- condition
 type Issue = WorkspaceState["issues"][number];
 /** The one workspace-wide state the chrome explains, highest precedence first. */
 export type Condition =
+  | { kind: "stalled"; lastUpdateMs: number | null }
   | { kind: "starting" }
   | { kind: "halted"; stopped: boolean; reason: string | null }
   | { kind: "research"; detached: Issue[] }
@@ -26,10 +29,15 @@ export type Condition =
   | { kind: "degraded"; missing: Issue[] }
   | { kind: "nominal" };
 export function conditionOf(
-  state: Pick<WorkspaceState, "summary" | "issues" | "snapshotState">,
+  state: Pick<
+    WorkspaceState,
+    "summary" | "issues" | "snapshotState" | "stalled"
+  >,
 ): Condition {
   const s = state.summary,
     phase = s?.state?.phase;
+  // A stalled controller makes every other state on the page a past one.
+  if (state.stalled) return { kind: "stalled", ...state.stalled };
   if (s?.status === "starting" || phase === "starting")
     return { kind: "starting" };
   if (s?.state?.halted || s?.state?.stopped)
@@ -44,6 +52,22 @@ export function conditionOf(
   if (state.snapshotState === "unavailable")
     return { kind: "degraded", missing: state.issues };
   return { kind: "nominal" };
+}
+
+/**
+ * Whether a direct read shows the controller loop has stopped updating. Only
+ * the server's liveness verdict decides it; the browser clock never does.
+ */
+export function stalledController(
+  summary: Pick<SummaryResponse, "as_of_ms"> | null,
+  liveness: ControllerLiveness | null,
+): WorkspaceState["stalled"] {
+  if (liveness?.status !== "stale") return null;
+  return {
+    lastUpdateMs:
+      validTimestampMs(liveness.last_completed_at_ms) ??
+      validTimestampMs(summary?.as_of_ms),
+  };
 }
 
 // ---------------------------------------------------------------- mode
@@ -265,7 +289,9 @@ export function orderTracks(
     );
     const fill = at >= 0 ? pool.splice(at, 1)[0] : null;
     const verdict = executionText(
-      execution.find((e) => e.decision_id === decision && e.index === row.index),
+      execution.find(
+        (e) => e.decision_id === decision && e.index === row.index,
+      ),
     )?.replace(/^./, (c) => c.toLowerCase());
     out.push(
       track(

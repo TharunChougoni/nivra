@@ -8,10 +8,11 @@ import {
   MoonStar,
   OctagonX,
   RefreshCw,
+  TimerOff,
 } from "lucide-react";
 import React from "react";
 import type { Condition } from "./model";
-import { plain } from "./labels";
+import { plain, stalledText } from "./labels";
 import { Button } from "./ui";
 
 type Tone = "info" | "warn" | "error" | "busy";
@@ -27,6 +28,13 @@ interface View {
 
 function view(condition: Condition): View | null {
   switch (condition.kind) {
+    case "stalled":
+      return {
+        tone: "error",
+        icon: TimerOff,
+        ...stalledText(condition.lastUpdateMs),
+        link: ["#/health", "Open health"],
+      };
     case "starting":
       return {
         tone: "busy",

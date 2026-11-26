@@ -15,6 +15,7 @@ import {
   laneStats,
   modeOf,
   orderTracks,
+  stalledController,
 } from "./model";
 import type { Mode } from "./model";
 
@@ -353,9 +354,33 @@ test("workspace condition: a halted book outranks research mode, which outranks 
       reason: "portfolio_not_reported",
     },
   ];
-  const at = (summary: SummaryResponse | null) =>
-    conditionOf({ summary, issues: missing, snapshotState: "unavailable" })
-      .kind;
+  const at = (
+    summary: SummaryResponse | null,
+    stalled: { lastUpdateMs: number | null } | null = null,
+  ) =>
+    conditionOf({
+      summary,
+      issues: missing,
+      snapshotState: "unavailable",
+      stalled,
+    }).kind;
+  // A stalled controller outranks everything the last summary said.
+  assert.equal(at({ state: { halted: true } }, { lastUpdateMs: 1 }), "stalled");
+  // Only the server's verdict decides; a skewed browser clock never does.
+  const liveness = { status: "healthy", max_age_ms: 62_000 };
+  assert.equal(stalledController({ as_of_ms: 1_000 }, liveness), null);
+  assert.deepEqual(
+    stalledController({ as_of_ms: 1_000 }, { status: "stale" }),
+    { lastUpdateMs: 1_000 },
+  );
+  assert.deepEqual(
+    stalledController(
+      { as_of_ms: 1_000 },
+      { status: "stale", last_completed_at_ms: 900 },
+    ),
+    { lastUpdateMs: 900 },
+  );
+  assert.equal(stalledController({ as_of_ms: 1_000 }, null), null);
   assert.equal(at({ status: "starting" }), "starting");
   assert.equal(
     at({ status: "research_only", state: { halted: true } }),
@@ -369,6 +394,7 @@ test("workspace condition: a halted book outranks research mode, which outranks 
       summary: { status: "running" },
       issues: [],
       snapshotState: "ready",
+      stalled: null,
     }).kind,
     "nominal",
   );

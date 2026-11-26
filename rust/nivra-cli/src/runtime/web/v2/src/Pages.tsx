@@ -1617,7 +1617,11 @@ function LiveReadiness({ health }: { health: HealthResponse | null }) {
 }
 export function Health() {
   const [state] = useWorkspace(),
-    health = useRead((api) => api.health(), useRevision("health")),
+    // A stalled controller publishes no new revision; reread its liveness.
+    health = useRead(
+      (api) => api.health(),
+      useRevision("health") + (state.stalled ? "|stalled" : ""),
+    ),
     alerts = useRead(
       (api) => api.alerts({ limit: 100 }),
       useRevision("alerts"),

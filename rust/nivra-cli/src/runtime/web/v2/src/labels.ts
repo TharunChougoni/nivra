@@ -1,7 +1,7 @@
 // Plain-language labels for values the backend records as code names. One
 // lookup table plus a humanizing fallback, so a page never formats a code
 // itself and an unknown code still reads as a sentence.
-import { instrumentClassLabels } from "./data";
+import { datetime, instrumentClassLabels } from "./data";
 import { instrumentLabel } from "./model";
 import type { InstrumentRecord } from "./model";
 import type { AgentTurn } from "./types";
@@ -167,4 +167,15 @@ export function turnOutcome(t: AgentTurn): string {
     : t.status
       ? plain(t.status)
       : "—";
+}
+
+/** State banner text for a controller whose loop stopped updating. */
+export function stalledText(lastUpdateMs: number | null) {
+  return {
+    title: "The controller has stopped updating",
+    body:
+      lastUpdateMs === null
+        ? "Its last update time is not reported."
+        : `Its last update was at ${datetime(lastUpdateMs)}. The values below are from then.`,
+  };
 }

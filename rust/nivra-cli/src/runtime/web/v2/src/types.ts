@@ -1076,6 +1076,11 @@ export interface WorkspaceState extends ProjectionData, ProjectionStates {
   watch: string;
   events: StreamEvent[];
   revision: number;
+  /**
+   * Set when the summary announcements stopped and a direct read found the
+   * controller loop older than its liveness bound; holds its last update time.
+   */
+  stalled: { lastUpdateMs: number | null } | null;
 }
 export interface ProjectionSource {
   summary?: SummaryResponse | null;

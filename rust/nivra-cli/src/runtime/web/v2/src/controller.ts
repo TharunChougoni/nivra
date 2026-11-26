@@ -23,6 +23,8 @@ export interface ControllerOptions {
 import { createApi } from "./api";
 import { createEvidenceCache } from "./cache";
 import { createEventStream } from "./events";
+import { stalledController } from "./model";
+import { controllerLivenessFrom } from "./operational";
 import {
   appendPoint,
   currentSession,
@@ -52,6 +54,12 @@ const emptySeries = (): ChartSeries => ({
   priceWatermark: null,
   equityWatermark: null,
 });
+
+/**
+ * With no `summary_changed` for three of the server's 5 s summary refreshes
+ * (`REFRESH_MS` in web/v1/summary.rs), reread summary and health directly.
+ */
+export const WATCHDOG_MS = 15_000;
 
 type SeriesRead =
   | { kind: "receipt-minute-bar"; instrument: string }
@@ -98,6 +106,7 @@ export function createController(
     watch: "",
     events: [],
     revision: 0,
+    stalled: null,
   });
   let state: WorkspaceState = { ...initial(), token };
   let epoch = 0;
@@ -112,6 +121,9 @@ export function createController(
     gap = false,
     chartDeferred = false,
     lastConnection = "";
+  // When the last `summary_changed` (or watchdog check) happened, client clock.
+  let announcedAt = 0;
+  let watchdog: ReturnType<typeof setInterval> | null = null;
   const listeners = new Set<() => void>();
   const set = (patch: Partial<WorkspaceState>) => {
     state = { ...state, ...patch };
@@ -211,6 +223,7 @@ export function createController(
   };
   const lock = () => {
     epoch++;
+    stopWatchdog();
     stream?.stop();
     stream = null;
     pending = null;
@@ -532,6 +545,36 @@ export function createController(
     agentPending = task;
     return task;
   }
+  /**
+   * The summary announcements come from the controller loop; SSE heartbeats
+   * and price batches do not. When announcements go quiet, read the summary
+   * and the server's liveness verdict directly instead of trusting the last one.
+   */
+  async function checkLiveness() {
+    const generation = epoch,
+      since = announcedAt;
+    const [health] = await Promise.all([
+      settle(api.health()),
+      reload("changed"),
+    ]);
+    if (generation !== epoch || stopped || announcedAt !== since) return;
+    const liveness = health.ok ? controllerLivenessFrom(health.value) : null;
+    set({ stalled: stalledController(state.summary, liveness) });
+  }
+  function startWatchdog() {
+    stopWatchdog();
+    announcedAt = Date.now();
+    watchdog = setInterval(() => {
+      if (stopped || !state.meta || win.document.hidden) return;
+      if (Date.now() - announcedAt < WATCHDOG_MS) return;
+      announcedAt = Date.now();
+      void checkLiveness();
+    }, WATCHDOG_MS / 3);
+  }
+  function stopWatchdog() {
+    if (watchdog !== null) clearInterval(watchdog);
+    watchdog = null;
+  }
   function onEvent(event: StreamEvent) {
     if (stopped || !state.token) return;
     if (event.kind === "price_batch") {
@@ -569,6 +612,10 @@ export function createController(
     if (event.kind === "gap") {
       gap = true;
       void loadSeries();
+    }
+    if (event.kind === "summary_changed") {
+      announcedAt = Date.now();
+      if (state.stalled) set({ stalled: null });
     }
     set({
       events: [...state.events, event].slice(-256),
@@ -614,6 +661,7 @@ export function createController(
           onUnauthorized: lock,
         });
         stream.start();
+        startWatchdog();
       }
       void refresh();
     } catch (e) {
@@ -670,6 +718,7 @@ export function createController(
     stop: () => {
       stopped = true;
       epoch++;
+      stopWatchdog();
       stream?.stop();
       api.clear();
       evidence.close?.();
