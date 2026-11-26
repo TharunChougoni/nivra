@@ -1,0 +1,146 @@
+// The paper controller's strategy executor: which accepted strategy runs on
+// each scan, what it asked for, what filled and what the gate refused.
+import { amount, count, datetime } from "./data";
+import {
+  STRATEGY_LABELS,
+  instrumentName,
+  plain,
+  sentenceCase,
+  strategyOutcome,
+} from "./labels";
+import type { StrategyExecution } from "./types";
+import { Empty, Facts, Panel, ShortId, Status, Table } from "./ui";
+
+export function StrategyRun({ run }: { run?: StrategyExecution | null }) {
+  if (!run?.enabled)
+    return (
+      <Panel title="Strategy on each scan">
+        <Empty title="Strategy execution is off">
+          It is turned on in the planner settings.
+        </Empty>
+      </Panel>
+    );
+  const s = run.strategy;
+  const author = s?.author
+    ? [sentenceCase(s.author.lane || "Unknown lane"), s.author.model]
+        .filter(Boolean)
+        .join(" · ")
+    : null;
+  const accepted = s?.summary
+    ? `${count(s.summary.trades)} trades · ${amount(s.summary.net_pnl)} after costs`
+    : null;
+  return (
+    <Panel
+      title="Strategy on each scan"
+      note={
+        <Status value={run.state}>{plain(run.state, STRATEGY_LABELS)}</Status>
+      }
+    >
+      <Facts
+        items={[
+          ["Strategy", s ? <ShortId key="id" value={s.strategy_id} /> : null],
+          ["Written by", author],
+          ["Accepted result", accepted],
+          ["Tested on", s?.tape_dates?.join(", ") || null],
+          [
+            "Why not running",
+            run.reason ? plain(run.reason, STRATEGY_LABELS) : "—",
+          ],
+          [
+            "Calls",
+            `${count(run.calls)} · ${count(run.failures)} failed · ${count(run.skipped)} skipped`,
+          ],
+          [
+            "Last call",
+            run.last_call_at_ms ? datetime(run.last_call_at_ms) : "—",
+          ],
+          [
+            "Last failure",
+            run.last_failure ? plain(run.last_failure, STRATEGY_LABELS) : "—",
+          ],
+        ]}
+      />
+      <h3>Recent actions</h3>
+      <Table
+        compact
+        rows={run.actions || []}
+        columns={[
+          { key: "at", label: "Time", render: (a) => datetime(a.at_ms) },
+          {
+            key: "instrument",
+            label: "Instrument",
+            render: (a) => instrumentName(a.instrument_key),
+          },
+          {
+            key: "side",
+            label: "Side",
+            render: (a) => (a.side ? plain(a.side) : "—"),
+          },
+          {
+            key: "units",
+            label: "Units",
+            num: true,
+            render: (a) => count(a.units),
+          },
+          {
+            key: "outcome",
+            label: "Outcome",
+            render: (a) => strategyOutcome(a.outcome),
+          },
+        ]}
+        empty="No strategy actions yet"
+      />
+      <h3>Refused by the execution gate</h3>
+      <Table
+        compact
+        rows={run.refusals || []}
+        columns={[
+          { key: "at", label: "Time", render: (r) => datetime(r.at_ms) },
+          {
+            key: "instrument",
+            label: "Instrument",
+            render: (r) => instrumentName(r.action?.instrument_key),
+          },
+          {
+            key: "reason",
+            label: "Why",
+            render: (r) => strategyOutcome(r.reason),
+          },
+        ]}
+        empty="No refusals"
+      />
+      <h3>Fills</h3>
+      <Table
+        compact
+        rows={run.fills || []}
+        columns={[
+          { key: "at", label: "Time", render: (f) => datetime(f.at) },
+          {
+            key: "instrument",
+            label: "Instrument",
+            render: (f) =>
+              f.instrument?.symbol || instrumentName(f.instrument?.key),
+          },
+          {
+            key: "side",
+            label: "Side",
+            render: (f) => (f.buy ? "Buy" : "Sell"),
+          },
+          {
+            key: "units",
+            label: "Units",
+            num: true,
+            render: (f) => count(f.units),
+          },
+          {
+            key: "price",
+            label: "Price",
+            num: true,
+            render: (f) => amount(f.price),
+          },
+        ]}
+        empty="No strategy fills yet"
+      />
+    </Panel>
+  );
+}

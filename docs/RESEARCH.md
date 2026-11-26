@@ -248,6 +248,35 @@ To pin, disable or roll back a version, see
 This library is separate from the ranker library below. The ranker selector
 does not read it.
 
+### In the paper controller
+
+With `strategy_execution` enabled in the planner config (see
+[operations](OPERATIONS.md#manage-action-strategies)), the paper controller
+runs the active version on each rank pass:
+
+1. Held stops, targets and time exits run on every quote read, as before.
+2. The controller freezes one observation: the built-in prospects (the
+   report's `top_n`), the depth quotes still within two seconds of their
+   original receipt, held positions with their exit intents, cash and costs.
+3. The strategy runs on a worker thread, with the default sandbox limits and
+   outside the book transaction. While a call runs, later scans start none.
+4. When the call finishes, the controller takes the book transaction and runs
+   its actions through the planner checks and the execution gate against the
+   book at that moment. A fill records the `strategy_id` where a model fill
+   records a decision ID.
+
+The controller runs a version only when its report names this build's
+`engine_sha256` and `adapter_sha256`. Otherwise it runs nothing and reports
+`strategy_engine_changed` or `strategy_adapter_changed`. It reads the library
+again every 30 seconds, so a pin or disable takes effect without a restart.
+
+A failed call, or a failure to read the library, trades nothing and never
+halts the book. Each change of failure reason adds one `strategy_failure` row
+to the book's `ticks` and one `failure` line with stage `strategy` to
+`diagnostics.ndjson`. Every action's outcome is kept in the book's
+`strategy_action` table. Gate refusals also go to `execution_refusal` (see
+[agent](AGENT.md#execution-refusals)).
+
 ## Replay and evaluation
 
 Replay measures what a ranking would have earned on recorded quotes. Every

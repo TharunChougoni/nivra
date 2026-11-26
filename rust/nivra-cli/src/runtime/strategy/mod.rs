@@ -6,9 +6,10 @@
 use super::Result;
 use super::planner::{self, PlanSide};
 use nivra_core::{
-    execution::{ExitIntent, Instrument, Portfolio, Quote},
+    execution::{ExitIntent, Instrument, Portfolio, Quote, Refused, Scanner},
     finance::{Amount, FeeArithmetic, Price},
-    strategy::Feature,
+    market::MAX_FINANCIAL_AGE_MS,
+    strategy::{Feature, StrategySpec, evaluate, extract_features_with_lookback},
 };
 use nivra_sandbox::{Failure, SandboxConfig};
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,32 @@ pub(crate) struct Prospect {
     pub rank: usize,
     pub score: f64,
     pub features: BTreeMap<Feature, f64>,
+}
+
+/// The built-in ranking of the scanner at `now`, best first, as one
+/// observation carries it. The replay and the paper controller share it.
+pub(crate) fn prospects(scanner: &Scanner, now: i64, top_n: usize) -> Result<Vec<Prospect>> {
+    let spec = StrategySpec::default();
+    let snapshot = extract_features_with_lookback(
+        scanner,
+        now,
+        MAX_FINANCIAL_AGE_MS,
+        MAX_FINANCIAL_AGE_MS,
+        spec.lookback_samples,
+    )?;
+    Ok(evaluate(&spec, &snapshot)?
+        .rows
+        .into_iter()
+        .filter_map(|row| row.score.map(|score| (row.key, score, row.features)))
+        .take(top_n)
+        .enumerate()
+        .map(|(rank, (key, score, features))| Prospect {
+            key,
+            rank: rank + 1,
+            score,
+            features,
+        })
+        .collect())
 }
 
 #[derive(Debug, Serialize)]
@@ -113,6 +140,11 @@ impl<'a> Observation<'a> {
             costs,
         }
     }
+
+    /// The only instruments the call's actions may name.
+    pub(crate) fn instruments(&self) -> impl Iterator<Item = &Instrument> {
+        self.instruments.values().copied()
+    }
 }
 
 fn failure_code(failure: Failure) -> &'static str {
@@ -182,6 +214,12 @@ pub(crate) struct ActionResult {
     pub units: u64,
     /// `filled`, `exit_revised` or the refusal code.
     pub outcome: String,
+    /// The limit a buy or sell carried.
+    #[serde(skip)]
+    pub max_price: Option<Price>,
+    /// The execution gate's refusal with the numbers its check used.
+    #[serde(skip)]
+    pub refused: Option<Refused>,
 }
 
 fn side_name(side: &PlanSide) -> &'static str {
@@ -219,6 +257,8 @@ pub(crate) fn apply(
                 side: None,
                 units: 0,
                 outcome: verdict.reason,
+                max_price: None,
+                refused: None,
             });
             continue;
         };
@@ -227,6 +267,7 @@ pub(crate) fn apply(
             .find(|i| i.key == action.instrument_key)
             .ok_or("strategy_instrument_missing")?;
         let side = side_name(&action.side);
+        let mut refused = None;
         let outcome = if matches!(action.side, PlanSide::ReviseExit) {
             if portfolio.revise_exit(instrument, &action.exit_intent, decision)? {
                 "exit_revised"
@@ -256,7 +297,11 @@ pub(crate) fn apply(
                     }
                     "filled"
                 }
-                Err(refusal) => refusal.code(),
+                Err(refusal) => {
+                    let code = refusal.code();
+                    refused = Some(refusal);
+                    code
+                }
             }
         } else {
             "quote_unavailable"
@@ -267,6 +312,8 @@ pub(crate) fn apply(
             side: Some(side),
             units: verdict.units,
             outcome: outcome.into(),
+            max_price: action.max_price,
+            refused,
         });
     }
     Ok(results)

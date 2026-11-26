@@ -117,6 +117,8 @@ struct Controller<'a> {
     research_worker: harness::ResearchRuntime,
     /// pi lanes, when the planner has an `agent` block.
     agent: Option<super::super::agent::service::LaneService>,
+    /// The strategy executor, when the planner enables `strategy_execution`.
+    strategy: Option<super::strategy_run::StrategyRun>,
     /// The built-in ranking the last rank pass produced, best first.
     live_ranking: Vec<super::super::agent::Ranked>,
     /// Top-K names the depth read keeps on the research quote tape.
@@ -233,6 +235,20 @@ fn dashboard_token(c: &Config) -> Result<String> {
         return Err(Fail::new("dashboard_token_invalid").into());
     }
     Ok(token)
+}
+
+/// The executor for a policy that enables `strategy_execution`; none otherwise.
+fn strategy_runner(
+    c: &Config,
+    cfg: Option<&planner::PlannerConfig>,
+) -> Result<Option<super::strategy_run::StrategyRun>> {
+    if !cfg.is_some_and(planner::PlannerConfig::runs_strategies) {
+        return Ok(None);
+    }
+    Ok(Some(super::strategy_run::StrategyRun::new(
+        super::super::strategy_library::Library::at(super::super::strategy_library::root(c)?),
+        nivra_sandbox::SandboxConfig::default(),
+    )))
 }
 
 fn load_pi_policy(c: &Config) -> Result<planner::PlannerConfig> {
@@ -359,6 +375,7 @@ impl<'a> Controller<'a> {
             planner_incident(&mut db, c, &mut p, millis())?;
         }
         let (event_config, agent, event_config_reason) = attach_policy(&mut db, c, &mut p, policy)?;
+        let strategy = strategy_runner(c, event_config.as_ref())?;
         if c.prior_config.is_none() || c.legacy_directory.is_some() {
             persist(&mut db, c, &p, millis(), None, None, "wide_reconciled")?;
         }
@@ -476,6 +493,7 @@ impl<'a> Controller<'a> {
             research_worker: harness::ResearchRuntime::default(),
             // The research lane's own slot (#237): never shared with trading turns.
             agent,
+            strategy,
             live_ranking: Vec::new(),
             tape: super::tape::TapeWatch::default(),
             event_config_reason,
@@ -1015,10 +1033,12 @@ impl<'a> Controller<'a> {
             .as_ref()
             .map(|s| s.tick_ms)
             .unwrap_or(scan_interval);
-        if !self.p.halted && now - self.last_rank >= rank_interval {
+        let ranked = !self.p.halted && now - self.last_rank >= rank_interval;
+        if ranked {
             self.rank(&u, now, feed_settings.as_ref(), feed_fallback, &held)?;
             self.last_rank = now;
         }
+        self.strategy_cycle(ranked)?;
         if self.p.halted {
             status = "risk_halted_protective_exits_only";
         }
@@ -1152,6 +1172,8 @@ impl<'a> Controller<'a> {
         let c = &self.config;
         if !held.is_empty() && now - self.last_protection_read >= 2000 {
             self.last_protection_read = now;
+            // A strategy observes held depth too, so it can sell what it holds.
+            let held_depth = self.strategy.is_some().then_some(&mut self.scan);
             match read_apply(
                 self.client,
                 c,
@@ -1162,7 +1184,7 @@ impl<'a> Controller<'a> {
                 &mut self.last_fresh_receipt,
                 self.event_config.as_ref(),
                 false,
-                None,
+                held_depth,
                 &self.feature_store,
                 true,
             )? {
@@ -1434,6 +1456,42 @@ impl<'a> Controller<'a> {
                     self.tape_gap(now, "feed_fallback", 0)?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Apply a finished strategy call, then start one on this scan when the
+    /// rank pass ran. The call runs on its own thread; protection and fills
+    /// never wait for it.
+    fn strategy_cycle(&mut self, ranked: bool) -> Result<()> {
+        let Some(run) = self.strategy.as_mut() else {
+            return Ok(());
+        };
+        if !self
+            .event_config
+            .as_ref()
+            .is_some_and(planner::PlannerConfig::runs_strategies)
+        {
+            return Ok(());
+        }
+        run.poll(&mut self.db, &self.config, &mut self.p, &millis)?;
+        if !ranked || self.p.halted || self.p.stopped || self.p.closed {
+            return Ok(());
+        }
+        let now = millis();
+        let Some(top_n) = run.ready(&self.db, &self.config, now)? else {
+            return Ok(());
+        };
+        match super::strategy_run::Frozen::capture(&self.scan, now, top_n, &self.p, &self.tradable)
+        {
+            Ok(frozen) => run.start(frozen),
+            Err(error) => run.fail(
+                &self.db,
+                &self.config,
+                now,
+                None,
+                &failure_code(error.as_ref()),
+            )?,
         }
         Ok(())
     }
@@ -1726,6 +1784,8 @@ impl<'a> Controller<'a> {
             attach_policy(&mut self.db, &self.config, &mut self.p, policy)?;
         self.event_config = event_config;
         self.agent = agent;
+        // A call still running for the previous book is dropped with it.
+        self.strategy = strategy_runner(&self.config, self.event_config.as_ref())?;
         self.event_config_reason = event_config_reason;
         let SessionEvidence {
             scan,
@@ -1967,6 +2027,10 @@ impl<'a> Controller<'a> {
         if let Some(agent) = &self.agent {
             v_json["agent"] = agent.status();
         }
+        v_json["strategy_execution"] = match &self.strategy {
+            Some(run) => run.status(&self.db, &self.p),
+            None => serde_json::json!({"enabled":false}),
+        };
         v_json["research_context"] = research_context_status;
         v_json["controller_heartbeat"] = super::super::operational_health::heartbeat(
             completed_at_ms,

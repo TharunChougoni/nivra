@@ -3,7 +3,7 @@
 //! order: held exits first (`Portfolio::apply_at`), then one strategy call,
 //! then its actions through the planner checks and `execute_plan`. Only
 //! original receipts fill; nothing is interpolated or carried forward.
-use super::{ABI, ActionResult, MAX_PROSPECTS, Observation, Prospect, apply, call};
+use super::{ABI, ActionResult, MAX_PROSPECTS, Observation, apply, call};
 use crate::runtime::Result;
 use chrono::{DateTime, FixedOffset, NaiveDate, Timelike};
 use nivra_core::{
@@ -12,7 +12,6 @@ use nivra_core::{
     historical::EventKind,
     market::MAX_FINANCIAL_AGE_MS,
     replay::digest,
-    strategy::{StrategySpec, evaluate, extract_features_with_lookback},
 };
 use nivra_sandbox::SandboxConfig;
 use serde::{Deserialize, Serialize};
@@ -137,6 +136,17 @@ fn median(mut values: Vec<Amount>) -> std::result::Result<Option<Amount>, &'stat
     }))
 }
 
+/// The hash of the code that turns strategy actions into fills: this file and
+/// the contract beside it. The paper controller runs an entry only when its
+/// report names this build's hash.
+pub(crate) fn adapter_sha256() -> String {
+    digest(
+        [include_str!("mod.rs"), include_str!("replay.rs")]
+            .concat()
+            .as_bytes(),
+    )
+}
+
 /// A replay that `stop` ended before the tape did. It has no report.
 #[derive(Debug)]
 pub(crate) struct Stopped {
@@ -191,7 +201,6 @@ pub(crate) fn run(
     portfolio.costs = Some(costs.clone());
     portfolio.model_led = true;
     portfolio.settings.exit_policy = parameters.exit_policy.clone();
-    let spec = StrategySpec::default();
     let mut scanner = Scanner::default();
     // Remaining depth of the latest original receipt per key.
     let mut depth = BTreeMap::<String, Quote>::new();
@@ -266,27 +275,7 @@ pub(crate) fn run(
         let in_window = parameters.from_ms.is_none_or(|from| now >= from)
             && parameters.to_ms.is_none_or(|to| now <= to);
         if in_session && in_window {
-            let snapshot = extract_features_with_lookback(
-                &scanner,
-                now,
-                MAX_FINANCIAL_AGE_MS,
-                MAX_FINANCIAL_AGE_MS,
-                spec.lookback_samples,
-            )?;
-            let ranked = evaluate(&spec, &snapshot)?;
-            let prospects: Vec<Prospect> = ranked
-                .rows
-                .into_iter()
-                .filter_map(|row| row.score.map(|score| (row.key, score, row.features)))
-                .take(parameters.top_n)
-                .enumerate()
-                .map(|(rank, (key, score, features))| Prospect {
-                    key,
-                    rank: rank + 1,
-                    score,
-                    features,
-                })
-                .collect();
+            let prospects = super::prospects(&scanner, now, parameters.top_n)?;
             if let Some(reason) = stop() {
                 return Ok(Err(Stopped {
                     reason,
@@ -416,9 +405,7 @@ pub(crate) fn run(
         "manifest_sha256": digest(manifest),
         "events_sha256": digest(events),
         "engine_sha256": nivra_core::replay::engine_fingerprint(),
-        "adapter_sha256": digest(
-            [include_str!("mod.rs"), include_str!("replay.rs")].concat().as_bytes()
-        ),
+        "adapter_sha256": adapter_sha256(),
         "sandbox": {
             "cpu_seconds": sandbox.cpu_seconds,
             "memory_mb": sandbox.memory_mb,

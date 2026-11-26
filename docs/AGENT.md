@@ -206,8 +206,10 @@ gate. An interrupted decision is recorded and never replayed.
 
 The execution gate can refuse a validated action, for example on a stale
 quote or an ask above `max_price`. The book stores each refusal in the
-`execution_refusal` table, keyed by its source (`decision` and the decision
-ID today), with the action and the numbers the check used. The turn's
+`execution_refusal` table, keyed by its source, with the action and the
+numbers the check used. The source is `decision` with the decision ID, or
+`strategy` with `<strategy_id>@<observation ms>` for an action from the
+[strategy executor](RESEARCH.md#in-the-paper-controller). A turn's
 `execution.json` carries the same numbers as `facts`.
 
 The next decision brief lists the five latest refusals in

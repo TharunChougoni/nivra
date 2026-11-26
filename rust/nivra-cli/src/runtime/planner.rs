@@ -133,6 +133,16 @@ pub(crate) struct PlannerConfig {
     /// Research strategy acceptance thresholds. Absent uses the defaults.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strategy_acceptance: Option<super::strategy_library::acceptance::Thresholds>,
+    /// Run the library's active strategy on each scan. Absent or disabled
+    /// leaves the paper controller exactly as it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy_execution: Option<StrategyExecution>,
+}
+/// The owner's switch for the strategy executor. Paper only.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct StrategyExecution {
+    pub enabled: bool,
 }
 /// Operational allowances do not change the frozen trading policy. Shadow-only
 /// selector diagnostics remain excluded; live ranking participates in the policy.
@@ -166,10 +176,14 @@ impl Default for PlannerConfig {
             decision_evidence: None,
             exit_policy: None,
             strategy_acceptance: None,
+            strategy_execution: None,
         }
     }
 }
 impl PlannerConfig {
+    pub(crate) fn runs_strategies(&self) -> bool {
+        self.strategy_execution.as_ref().is_some_and(|s| s.enabled)
+    }
     pub(crate) fn uses_pi_paper(&self) -> bool {
         self.agent
             .as_ref()

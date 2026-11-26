@@ -482,8 +482,57 @@ export type RevisionName =
   | "agent"
   | "agent_turns";
 export type Revisions = Partial<Record<RevisionName, string>>;
+/** One strategy action and what the execution gate did with it. */
+export interface StrategyAction {
+  at_ms?: number;
+  observed_at_ms?: number;
+  strategy_id?: string;
+  index?: number;
+  instrument_key?: string | null;
+  side?: string | null;
+  units?: number;
+  outcome?: string;
+}
+export interface StrategyRefusal {
+  at_ms?: number;
+  action?: {
+    side?: string;
+    instrument_key?: string;
+    units?: number;
+    max_price?: string;
+  } | null;
+  reason?: string;
+  reason_text?: string;
+}
+/** The paper controller's strategy executor. Absent on older controllers. */
+export interface StrategyExecution {
+  enabled?: boolean;
+  state?: string;
+  reason?: string | null;
+  strategy?: {
+    strategy_id?: string;
+    author?: { lane?: string; model?: string | null } | null;
+    summary?: {
+      trades?: number;
+      net_pnl?: Decimal;
+      win_rate?: Decimal | null;
+      worst_drawdown?: Decimal;
+    } | null;
+    tape_dates?: string[];
+    registered_at_ms?: number;
+  } | null;
+  calls?: number;
+  failures?: number;
+  skipped?: number;
+  last_call_at_ms?: number | null;
+  last_failure?: string | null;
+  actions?: StrategyAction[];
+  refusals?: StrategyRefusal[];
+  fills?: Fill[];
+}
 export interface SummaryResponse extends Envelope {
   revisions?: Revisions;
+  strategy_execution?: StrategyExecution | null;
   research_library?: {
     status?: string;
     items?: ResearchCandidate[];

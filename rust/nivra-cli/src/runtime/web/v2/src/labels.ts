@@ -1,7 +1,7 @@
 // Plain-language labels for values the backend records as code names. One
 // lookup table plus a humanizing fallback, so a page never formats a code
 // itself and an unknown code still reads as a sentence.
-import { datetime, instrumentClassLabels } from "./data";
+import { datetime, instrumentClassLabels, refusalLabels } from "./data";
 import { instrumentLabel } from "./model";
 import type { InstrumentRecord } from "./model";
 import type { AgentTurn } from "./types";
@@ -85,6 +85,52 @@ export const TURN_ERROR_LABELS: Record<string, string> = {
   response_validation: "Invalid model reply",
   turn_timeout: "Timed out",
 };
+
+/** The strategy executor's states, reasons and action outcomes. */
+export const STRATEGY_LABELS: Record<string, string> = {
+  ready: "Running on each scan",
+  calling: "Running a call",
+  blocked: "Not running",
+  no_active_strategy: "No accepted strategy is active",
+  strategy_engine_changed: "Accepted on a different engine build",
+  strategy_adapter_changed: "Accepted with different execution code",
+  strategy_library_unavailable: "The strategy library could not be read",
+  strategy_exit: "The strategy crashed",
+  strategy_wall_timeout: "The strategy ran past its time limit",
+  strategy_output_limit: "The strategy printed too much",
+  strategy_output_invalid: "The strategy printed something unreadable",
+  strategy_output_non_finite:
+    "The strategy printed a number that is not finite",
+  strategy_output_schema: "The strategy's reply had the wrong shape",
+  strategy_too_many_actions: "The strategy asked for too many actions",
+  strategy_unknown_instrument:
+    "The strategy named an instrument it was not shown",
+  strategy_call_panicked: "The strategy call failed",
+  strategy_sandbox_unavailable: "The sandbox was unavailable",
+  filled: "Filled",
+  exit_revised: "Exit updated",
+  exit_revision_rejected: "Exit update refused",
+  quote_unavailable: "Refused: no fresh quote",
+  price_above_max: "Refused: the price was above the strategy's limit",
+  action_cash: "Refused: not enough cash",
+  action_sell_unheld: "Refused: nothing held to sell",
+  action_sell_units: "Refused: more units than held",
+  action_allowlist: "Refused: instrument not allowed",
+  action_bounds: "Refused: the action was malformed",
+  action_schema: "Refused: the action was malformed",
+  action_zero_units: "Refused: the size came to zero units",
+  action_time_exit_expired: "Refused: the exit time had passed",
+  action_revise_unheld: "Refused: nothing held to update",
+};
+
+/** An action outcome in plain words; other gate refusals read "Refused: …". */
+export function strategyOutcome(code: unknown): string {
+  const text = String(code ?? "");
+  if (Object.hasOwn(STRATEGY_LABELS, text)) return STRATEGY_LABELS[text];
+  if (Object.hasOwn(refusalLabels, text))
+    return `Refused: ${refusalLabels[text]}`;
+  return plain(code);
+}
 
 export const sentenceCase = (text: string) =>
   text.charAt(0).toUpperCase() + text.slice(1);

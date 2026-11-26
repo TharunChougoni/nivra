@@ -282,6 +282,20 @@ impl Library {
             .map_err(|_| "strategy_library_source_unreadable")?)
     }
 
+    /// The accepted replay report an entry names, checked against its hash.
+    pub(crate) fn report(&self, entry: &Entry) -> Result<Value> {
+        let path = self
+            .root
+            .join("reports")
+            .join(format!("{}.json", entry.report_sha256));
+        let bytes = crate::read_bounded(&path, 32 * 1024 * 1024)
+            .map_err(|_| "strategy_library_report_unreadable")?;
+        if digest(&bytes) != entry.report_sha256 {
+            return Err("strategy_library_entry_invalid".into());
+        }
+        Ok(serde_json::from_slice(&bytes).map_err(|_| "strategy_library_entry_invalid")?)
+    }
+
     fn report_verifies(&self, entry: &Entry) -> bool {
         let path = self
             .root

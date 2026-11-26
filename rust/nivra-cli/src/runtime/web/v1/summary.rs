@@ -307,6 +307,9 @@ pub(crate) fn build_summary_envelope(view: &serde_json::Value) -> serde_json::Va
     if let Some(operational) = view.get("operational_health") {
         body["operational_health"] = operational.clone();
     }
+    if let Some(strategy) = view.get("strategy_execution") {
+        body["strategy_execution"] = strategy.clone();
+    }
     body["oldest_scan_age_ms"] = view["oldest_scan_age_ms"].clone();
     let alerts = derived_alerts(view);
     body["alert_count"] = serde_json::json!(alerts.len());

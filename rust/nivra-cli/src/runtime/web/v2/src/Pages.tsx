@@ -29,6 +29,7 @@ import { useRead, useRevision } from "./reads";
 import { instrumentIndex, modeOf, orderTracks } from "./model";
 import type { InstrumentRecord, OrderTrack } from "./model";
 import { OperationalPanel } from "./Operational";
+import { StrategyRun } from "./StrategyRun";
 import {
   amount,
   count,
@@ -1218,6 +1219,7 @@ export function Strategies() {
           </a>
         </div>
       </div>
+      <StrategyRun run={state.summary?.strategy_execution} />
       <Panel
         title="Research"
         actions={

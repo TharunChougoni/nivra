@@ -68,7 +68,7 @@ A missing or contradictory report shows **Mode unknown**.
 | Trade | Instruments & F&O | `#/instruments` | The verified cash catalog, captured instrument metadata and option chains. |
 | Agents | pi lanes | `#/lanes` | Each model lane as a chat: the brief, the thinking, the tool calls and the answer. Also lane stats and charts. |
 | Market | Scanner | `#/scanner` | The current prospects, missing or stale instruments and screen totals for NSE cash equities. |
-| Research | Strategies | `#/strategies` | Strategy references from the scanner and the registered research library. |
+| Research | Strategies | `#/strategies` | The strategy run on each scan: its author, accepted result, recent actions, gate refusals and fills. Also strategy references from the scanner and the registered research library. |
 | Research | Backtest lab | `#/backtest` | Offline replay of a manifest and its quote events. |
 | System | Sessions | `#/sessions` | Current and archived paper sessions. |
 | System | Health | `#/health` | Feed, history, controller, research, calendar and alert status. |

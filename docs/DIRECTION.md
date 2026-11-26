@@ -46,7 +46,7 @@ Tracked in [#44](https://github.com/TharunChougoni/nivra/issues/44):
 3. Done: the strategy contract with entry and exit rules, and its after-cost
    replay (#40).
 4. Done: the deterministic acceptance check and automatic registration (#41).
-5. Add the strategy executor to the paper controller (#42).
+5. Done: the strategy executor in the paper controller (#42).
 6. Move the decision lane to supervision, and remove the gate from cash entries (#43).
 
 Capital stays at ₹5,000 for paper trading. Costs are proportional (brokerage

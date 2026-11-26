@@ -17,6 +17,7 @@ use operator::{planner_recover_checked, resume_preflight};
 mod projection;
 mod shadow;
 mod shutdown;
+mod strategy_run;
 mod tape;
 use projection::execution_projection;
 use shadow::{ShadowScorer, ShadowSelection};
@@ -791,16 +792,23 @@ pub(super) fn ensure_actions(db: &Connection) -> Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS planner_action(decision TEXT,idx INTEGER,verdict TEXT NOT NULL,PRIMARY KEY(decision,idx));\n         CREATE TABLE IF NOT EXISTS planner_refusal(decision TEXT,idx INTEGER,reason TEXT NOT NULL,PRIMARY KEY(decision,idx));\n         CREATE TABLE IF NOT EXISTS execution_refusal(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,source TEXT NOT NULL,source_id TEXT NOT NULL,idx INTEGER NOT NULL,reason TEXT NOT NULL,body TEXT NOT NULL,UNIQUE(source,source_id,idx));")?;
     Ok(())
 }
-/// Who proposed a refused action. Strategy actions will record their hash
-/// here once they run through the same gate.
+/// Who proposed a refused action.
 #[derive(Clone, Copy)]
 pub(crate) enum RefusalSource<'a> {
     Decision(&'a str),
+    /// A registered strategy's call on the observation taken at `observed_at`.
+    Strategy {
+        id: &'a str,
+        observed_at: i64,
+    },
 }
 impl RefusalSource<'_> {
-    fn parts(&self) -> (&'static str, &str) {
+    /// The kind and the id that is unique per proposal: a decision id, or a
+    /// strategy id and its observation time as `<strategy_id>@<ms>`.
+    fn parts(&self) -> (&'static str, String) {
         match self {
-            Self::Decision(id) => ("decision", id),
+            Self::Decision(id) => ("decision", (*id).to_owned()),
+            Self::Strategy { id, observed_at } => ("strategy", format!("{id}@{observed_at}")),
         }
     }
 }

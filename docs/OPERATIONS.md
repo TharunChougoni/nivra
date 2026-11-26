@@ -225,6 +225,20 @@ An id can be a unique prefix of at least 8 characters. Each change appends to
 `rollback` disables the active version and pins the eligible version
 registered just before it, or `--to`. A disabled version cannot be pinned.
 
+The paper controller runs the active version only when the planner config
+holds:
+
+```json
+"strategy_execution": {"enabled": true}
+```
+
+The block is absent by default, and then the controller runs no strategy.
+Adding it changes the policy hash, so apply it as in
+[change the planner policy](#change-the-planner-policy). A running
+controller picks up a pin, disable or rollback within 30 seconds. To stop
+strategy execution at once, disable the active version. How the executor runs
+is in [research](RESEARCH.md#in-the-paper-controller).
+
 ## Change paper costs
 
 The runtime config needs a complete `paper_costs` object. See
