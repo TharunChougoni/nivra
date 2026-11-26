@@ -226,9 +226,6 @@ pub(crate) fn run(
                 last_at_ms: last_call_at,
             }));
         }
-        if matches!(event.kind, EventKind::VirtualObservation) {
-            return Err("strategy_replay_virtual_observation_unauthorized".into());
-        }
         for o in &event.observations {
             let instrument = &universe[&o.key];
             if matches!(event.kind, EventKind::Screen) {

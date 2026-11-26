@@ -48,9 +48,6 @@ pub enum EventKind {
     Protection,
     Screen,
     Entry,
-    /// Research-only virtual quote. It is never a paper execution or
-    /// protection event; the historical runner refuses it outright.
-    VirtualObservation,
 }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -193,12 +190,6 @@ impl Runner {
     pub fn apply(&mut self, event: Event) -> Result<(), Error> {
         if self.events >= 1_000_000 || event.observations.len() > 200 {
             return Err(Error::Bound);
-        }
-        // A research-observation quote is not a paper protection/entry event.
-        // The historical runner has no virtual authority, so it must refuse the
-        // event rather than treat it as executable protection.
-        if matches!(event.kind, EventKind::VirtualObservation) {
-            return Err(Error::Manifest);
         }
         if self.last.is_some_and(|last| event.at <= last)
             || date(event.at)? < self.manifest.warmup_start

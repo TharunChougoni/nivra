@@ -189,11 +189,10 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
         &mut p,
         &quotes,
         at,
-        "fixture".into(),
+        "fixture",
         || at,
         Some(&BTreeSet::new()),
         false,
-        None,
     )
     .unwrap();
     assert!(p.fills.is_empty() && !p.halted);
@@ -260,11 +259,10 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
         &mut p,
         &q,
         later,
-        "fixture".into(),
+        "fixture",
         || later,
         Some(&BTreeSet::new()),
         false,
-        None,
     )
     .unwrap();
     assert!(p.positions.is_empty());

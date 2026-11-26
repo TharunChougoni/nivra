@@ -151,9 +151,6 @@ pub(crate) fn archive_window_tape(
             for ((received, _), raw) in page.iter().zip(bodies) {
                 check_tape_stop(stop)?;
                 let mut receipt = archived_receipt(&index, *received, Some(*received), &raw, to)?;
-                if receipt.kind == QuotePurposeV1::ResearchObservation {
-                    continue;
-                }
                 receipt.observations.retain(|o| {
                     o["quote"]["source"]
                         .as_i64()

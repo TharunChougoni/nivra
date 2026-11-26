@@ -65,9 +65,6 @@ fn write_tape(
     for row in c.quote_source().rows(rows) {
         let (at, receipt, raw) = row?;
         let mut receipt = archived_receipt(&index, at, receipt, &raw, i64::MAX)?;
-        if receipt.kind == QuotePurposeV1::ResearchObservation {
-            continue;
-        }
         if !keys.is_empty() {
             receipt
                 .observations

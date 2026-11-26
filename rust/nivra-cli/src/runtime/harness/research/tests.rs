@@ -233,7 +233,7 @@ fn candidate_execution_book(c: &Config) {
             "body":body(at, bid, ask).to_string()
         });
         db.execute(
-            "INSERT INTO ticks(at,receipt,body,event) VALUES(?1,?2,?3,CASE WHEN instr(?3,'\"purpose\":\"research_observation\"')>0 THEN 'research_quotes' ELSE 'wide_quotes' END)",
+            "INSERT INTO ticks(at,receipt,body,event) VALUES(?1,?2,?3,'wide_quotes')",
             rusqlite::params![at, at, archive.to_string()],
         )
         .unwrap();

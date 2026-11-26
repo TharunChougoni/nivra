@@ -594,24 +594,16 @@ fn archive_capture_replays_the_same_session_as_sqlite() -> Result<()> {
                 "received_ms":received,"body":quote_body(count, received)
             })
             .to_string();
+            let reference = reads::stage_quote(Some(&writer), purpose, &raw)?;
             if purpose == "scanner_metadata" {
-                persist_scanner_metadata(
-                    &mut old_book,
-                    &legacy,
-                    &legacy_p,
-                    last,
-                    received,
-                    raw.clone(),
-                    None,
-                )?;
+                persist_scanner_metadata(&mut old_book, &legacy, &legacy_p, last, received, &raw)?;
                 persist_scanner_metadata(
                     &mut new_book,
                     &archived,
                     &archived_p,
                     last,
                     received,
-                    raw,
-                    Some(&writer),
+                    &reference,
                 )?;
             } else {
                 commit_quotes_screened(
@@ -620,11 +612,10 @@ fn archive_capture_replays_the_same_session_as_sqlite() -> Result<()> {
                     &mut legacy_p,
                     &BTreeMap::new(),
                     received,
-                    raw.as_str().into(),
+                    &raw,
                     || last,
                     None,
                     false,
-                    None,
                 )?;
                 commit_quotes_screened(
                     &mut new_book,
@@ -632,14 +623,10 @@ fn archive_capture_replays_the_same_session_as_sqlite() -> Result<()> {
                     &mut archived_p,
                     &BTreeMap::new(),
                     received,
-                    raw.into(),
+                    &reference,
                     || last,
                     None,
                     false,
-                    Some(ArchivedQuote {
-                        writer: &writer,
-                        purpose,
-                    }),
                 )?;
             }
             submitted += 1;
@@ -780,15 +767,7 @@ fn archive_capture_replays_the_same_session_as_sqlite() -> Result<()> {
             "received_ms":receipt,"body":quote_body(1, receipt)
         })
         .to_string();
-        persist_scanner_metadata(
-            &mut legacy_db,
-            &legacy,
-            &legacy_p,
-            receipt,
-            receipt,
-            raw,
-            None,
-        )?;
+        persist_scanner_metadata(&mut legacy_db, &legacy, &legacy_p, receipt, receipt, &raw)?;
         drop(legacy_db);
         let bytes = fs::read(&book_path)?;
         for inserted in [1, 0] {

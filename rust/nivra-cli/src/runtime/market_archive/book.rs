@@ -45,7 +45,7 @@ pub(in crate::runtime) fn import(
     {
         let mut stmt = tx.prepare(
             "SELECT id, at, receipt, body, event FROM ticks
-             WHERE event IN ('wide_quotes','scanner_metadata','research_quotes','archive_quote_gap') ORDER BY id",
+             WHERE event IN ('wide_quotes','scanner_metadata','archive_quote_gap') ORDER BY id",
         )?;
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
@@ -221,7 +221,7 @@ mod tests {
             expected_price: nivra_core::finance::Price::parse("52.20").unwrap(),
             slippage_bps: None,
             decision_id: None,
-            costs: costs,
+            costs,
         });
         let binding = crate::runtime::book_binding(&old_cfg)?;
         let state_body = serde_json::to_string(&portfolio)?;
@@ -281,26 +281,6 @@ mod tests {
         )?;
         let fill_tick_id = db.last_insert_rowid();
         total_quote_ticks += 1;
-        last = last.max(fill_at + 200);
-
-        // Research-observation ticks are bulk-archived too when market_archive is configured.
-        for i in 0..2_i64 {
-            let receipt = last + 1_000 + i * 1_000;
-            last = receipt + 2;
-            let res_raw = json!({
-                "source": "upstox-readonly-v1",
-                "purpose": "research_observation",
-                "requested_ms": receipt - 1,
-                "received_ms": receipt,
-                "body": quote_body(10, receipt)
-            })
-            .to_string();
-            db.execute(
-                "INSERT INTO ticks(at, receipt, body, event) VALUES(?1, ?2, ?3, 'research_quotes')",
-                rusqlite::params![last, receipt, res_raw],
-            )?;
-            total_quote_ticks += 1;
-        }
         db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;")?;
         drop(db);
 
@@ -371,7 +351,7 @@ mod tests {
         );
         let inline_bulk: i64 = db.query_row(
             "SELECT count(*) FROM ticks
-             WHERE event IN ('wide_quotes', 'scanner_metadata', 'research_quotes')
+             WHERE event IN ('wide_quotes', 'scanner_metadata')
                AND body NOT LIKE '{\"kind\":\"market_archive_quote\"%'",
             [],
             |r| r.get(0),

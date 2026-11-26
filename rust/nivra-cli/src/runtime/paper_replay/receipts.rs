@@ -78,36 +78,29 @@ impl Config {
     }
 }
 
-/// Explicit archived quote purpose. Research-observation receipts are virtual
-/// authority only: they are never mapped to protection or screen and never
-/// become executable paper evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum QuotePurposeV1 {
     Protection,
     Screen,
-    ResearchObservation,
 }
 impl QuotePurposeV1 {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Protection => "protection",
             Self::Screen => "screen",
-            Self::ResearchObservation => "research_observation",
         }
     }
     pub(super) fn archive_str(self) -> &'static str {
         match self {
             Self::Protection => "execution_or_protection",
             Self::Screen => "scanner",
-            Self::ResearchObservation => "research_observation",
         }
     }
     pub(super) fn from_archive(value: Option<&str>) -> Option<Self> {
         match value {
             Some("scanner" | "scanner_metadata") => Some(Self::Screen),
             Some("execution_or_protection") => Some(Self::Protection),
-            Some("research_observation") => Some(Self::ResearchObservation),
             _ => None,
         }
     }
@@ -252,7 +245,7 @@ pub(super) fn archived_receipt(
     raw: &str,
     max_source_ms: i64,
 ) -> std::result::Result<QuoteReceipt, String> {
-    archived_receipt_filtered(index, at, receipt, raw, max_source_ms, None, false)
+    archived_receipt_filtered(index, at, receipt, raw, max_source_ms, None)
 }
 
 fn archived_receipt_filtered(
@@ -262,7 +255,6 @@ fn archived_receipt_filtered(
     raw: &str,
     max_source_ms: i64,
     only_keys: Option<&BTreeSet<String>>,
-    skip_research: bool,
 ) -> std::result::Result<QuoteReceipt, String> {
     if raw.len() > MAX_QUOTE_BODY_BYTES {
         return Err("scorer_snapshots_unavailable".into());
@@ -279,14 +271,6 @@ fn archived_receipt_filtered(
     }
     let kind = QuotePurposeV1::from_archive(archive["purpose"].as_str())
         .ok_or("scorer_snapshots_purpose_unknown")?;
-    if skip_research && kind == QuotePurposeV1::ResearchObservation {
-        return Ok(QuoteReceipt {
-            at_ms: at,
-            receipt_ms: receipt,
-            kind,
-            observations: Vec::new(),
-        });
-    }
     let body: Value = serde_json::from_str(
         archive["body"]
             .as_str()
@@ -433,9 +417,6 @@ impl ExecutionTapeBuilder {
     }
 
     pub(super) fn push(&mut self, receipt: QuoteReceipt) -> std::result::Result<(), String> {
-        if receipt.kind == QuotePurposeV1::ResearchObservation {
-            return Ok(());
-        }
         if let Some(previous) = self.previous_receipt_ms {
             self.max_gap_ms = self.max_gap_ms.max(receipt.at_ms.saturating_sub(previous));
         }
@@ -550,12 +531,6 @@ pub(crate) fn session_feature_snapshots(
     let mut max_gap_ms = 0i64;
     let mut previous_receipt_ms = None;
     for receipt in &evidence.receipts {
-        // Research-observation receipts are virtual authority only. The
-        // historical protection tape skips them entirely instead of relabelling
-        // them as screening evidence.
-        if receipt.kind == QuotePurposeV1::ResearchObservation {
-            continue;
-        }
         if let Some(previous) = previous_receipt_ms {
             max_gap_ms = max_gap_ms.max(receipt.at_ms.saturating_sub(previous));
         }
@@ -658,12 +633,7 @@ pub(crate) fn candidate_quotes(
             return Err("scorer_snapshots_chronology".into());
         }
         previous = Some(at);
-        let receipt = archived_receipt_filtered(&index, at, receipt, &raw, now, Some(keys), true)?;
-        // Old lifecycle marks are protection/screen evidence only. A research
-        // receipt is not a mark and is never substituted for one.
-        if receipt.kind == QuotePurposeV1::ResearchObservation {
-            continue;
-        }
+        let receipt = archived_receipt_filtered(&index, at, receipt, &raw, now, Some(keys))?;
         for observation in &receipt.observations {
             let Some(key) = observation["key"].as_str() else {
                 continue;

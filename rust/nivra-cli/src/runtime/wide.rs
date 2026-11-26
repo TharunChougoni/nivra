@@ -16,6 +16,7 @@ pub(super) use operator::{
 use operator::{planner_recover_checked, resume_preflight};
 mod projection;
 mod reads;
+#[cfg(test)]
 use reads::*;
 pub(super) use reads::{QuoteReadTarget, read_executable_quotes, read_scanner_metadata};
 mod shadow;
@@ -484,18 +485,7 @@ pub(super) fn commit_quotes(
     raw: &str,
     clock: impl FnOnce() -> i64,
 ) -> Result<()> {
-    commit_quotes_screened(
-        db,
-        c,
-        p,
-        quotes,
-        receipt,
-        raw.into(),
-        clock,
-        None,
-        false,
-        None,
-    )
+    commit_quotes_screened(db, c, p, quotes, receipt, raw, clock, None, false)
 }
 #[allow(clippy::too_many_arguments)] // Runtime supplies the explicit revalidated buy screen; protection/sells bypass it.
 fn commit_quotes_screened(
@@ -504,13 +494,11 @@ fn commit_quotes_screened(
     p: &mut Portfolio,
     quotes: &BTreeMap<String, Quote>,
     receipt: i64,
-    raw: std::borrow::Cow<'_, str>,
+    body: &str,
     clock: impl FnOnce() -> i64,
     allowed_buys: Option<&BTreeSet<String>>,
     held_positions: bool,
-    archive: Option<ArchivedQuote<'_>>,
 ) -> Result<()> {
-    let body = ArchivedQuote::stage(archive, raw)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let now = clock();
     let mut next = p.clone();
@@ -702,7 +690,7 @@ fn commit_quotes_screened(
     record_halt_transition(&tx, &next, now)?;
     tx.execute(
         "INSERT INTO ticks(at,receipt,body,event) VALUES(?,?,?,'wide_quotes')",
-        rusqlite::params![now, receipt, body.as_ref()],
+        rusqlite::params![now, receipt, body],
     )?;
     tx.execute(
         "INSERT INTO state VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",

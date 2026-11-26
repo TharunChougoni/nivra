@@ -86,27 +86,13 @@ struct FetchedQuoteRows {
     rows: serde_json::Map<String, serde_json::Value>,
 }
 
-pub(super) struct ArchivedQuote<'a> {
-    pub(super) writer: &'a super::super::market_archive::capture::Writer,
-    pub(super) purpose: &'a str,
-}
-
-impl ArchivedQuote<'_> {
-    pub(super) fn stage<'a>(
-        archive: Option<Self>,
-        raw: std::borrow::Cow<'a, str>,
-    ) -> Result<std::borrow::Cow<'a, str>> {
-        match archive {
-            Some(archive) => {
-                archive.writer.stage(&raw)?;
-                Ok(std::borrow::Cow::Owned(
-                    nivra_store::market_archive::quote_reference(archive.purpose, &raw),
-                ))
-            }
-            None if cfg!(test) => Ok(raw),
-            None => Err("archive_config_missing".into()),
-        }
-    }
+pub(super) fn stage_quote(
+    writer: Option<&super::super::market_archive::capture::Writer>,
+    purpose: &str,
+    raw: &str,
+) -> Result<String> {
+    writer.ok_or("archive_config_missing")?.stage(raw)?;
+    Ok(nivra_store::market_archive::quote_reference(purpose, raw))
 }
 
 pub(in crate::runtime) enum QuoteReadTarget<'a> {
@@ -279,7 +265,8 @@ pub(in crate::runtime) fn read_scanner_metadata(
     }
     update_regime_references(scan, &rows, receipt, event_config);
     let archive=serde_json::json!({"source":"upstox-readonly-v1","purpose":"scanner_metadata","requested_ms":requested,"received_ms":receipt,"body":raw}).to_string();
-    persist_scanner_metadata(db, c, p, millis(), receipt, archive, writer)?;
+    let body = stage_quote(writer, "scanner_metadata", &archive)?;
+    persist_scanner_metadata(db, c, p, millis(), receipt, &body)?;
     Ok(None)
 }
 
@@ -289,25 +276,9 @@ pub(super) fn persist_scanner_metadata(
     p: &Portfolio,
     at: i64,
     receipt: i64,
-    archive: String,
-    writer: Option<&super::super::market_archive::capture::Writer>,
+    body: &str,
 ) -> Result<()> {
-    let body = ArchivedQuote::stage(
-        writer.map(|writer| ArchivedQuote {
-            writer,
-            purpose: "scanner_metadata",
-        }),
-        archive.into(),
-    )?;
-    persist(
-        db,
-        c,
-        p,
-        at,
-        Some(receipt),
-        Some(body.as_ref()),
-        "scanner_metadata",
-    )?;
+    persist(db, c, p, at, Some(receipt), Some(body), "scanner_metadata")?;
     Ok(())
 }
 
@@ -422,17 +393,17 @@ pub(in crate::runtime) fn read_executable_quotes(
         })
         .map(|i| i.key.clone())
         .collect::<BTreeSet<_>>();
+    let body = stage_quote(writer, purpose, &archive)?;
     commit_quotes_screened(
         db,
         c,
         p,
         &quotes,
         receipt,
-        archive.into(),
+        &body,
         millis,
         Some(&allowed_buys),
         held_positions,
-        writer.map(|writer| ArchivedQuote { writer, purpose }),
     )?;
     if !event_config.is_some_and(planner::PlannerConfig::uses_pi_paper)
         && let Ok(binding) = book_binding(c)

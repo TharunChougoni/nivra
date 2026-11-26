@@ -222,9 +222,6 @@ pub fn evaluate(
                     // Screening records are not executable depth.
                     EventKind::Screen => continue,
                     EventKind::Protection | EventKind::Entry => {}
-                    EventKind::VirtualObservation => {
-                        return Err("action_replay_unsupported_event_kind".into());
-                    }
                 }
                 match quotes.get(&o.key) {
                     Some(old)
