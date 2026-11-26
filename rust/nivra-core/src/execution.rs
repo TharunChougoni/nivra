@@ -676,7 +676,7 @@ impl Portfolio {
                         || (policy.time == ExitMode::Execute && time_hit)
                 }
             } else {
-                (self.halted
+                self.halted
                     || if self.model_led {
                         target_hit || stop_hit || time_hit
                     } else {
@@ -689,13 +689,15 @@ impl Portfolio {
                                 >= p.entry
                                     .amount()
                                     .checked_mul(self.settings.legacy_target_multiplier)?
-                    })
-                    && q.bid_units >= p.units
+                    }
             };
-            if execute && q.bid_units >= p.units {
-                self.fill(now, &p.instrument, q, false, p.units)?;
-                self.fills.last_mut().expect("fill").decision_id = p.decision_id;
-                continue;
+            if execute {
+                if q.bid_units >= p.units {
+                    self.fill(now, &p.instrument, q, false, p.units)?;
+                    self.fills.last_mut().expect("fill").decision_id = p.decision_id;
+                    continue;
+                }
+                self.health = "held_exit_depth_insufficient".into();
             }
             if let Some(policy) = &policy
                 && !self.halted
@@ -1654,5 +1656,67 @@ mod execution_settings_tests {
         let held = &book.positions[&instrument.key];
         assert_eq!(held.units, 2);
         assert_eq!(held.exit_intent, Some(protected));
+    }
+
+    #[test]
+    fn a_protective_exit_blocked_by_thin_bid_depth_is_reported_every_pass() {
+        let at = chrono::DateTime::parse_from_rfc3339("2026-10-16T10:00:00+05:30").unwrap();
+        let session = at.date_naive();
+        let now = at.timestamp_millis();
+        let price = |v: &str| Price::try_from(a(v)).unwrap();
+        let instrument = Instrument {
+            key: "NSE_EQ|A".into(),
+            symbol: "A".into(),
+            series: "EQ".into(),
+            tick: price("0.05"),
+        };
+        let quotes = |at: i64, bid_units: u64| {
+            BTreeMap::from([(
+                instrument.key.clone(),
+                Quote {
+                    bid: price("100"),
+                    ask: price("100.05"),
+                    bid_units,
+                    ask_units: 10,
+                    source: at,
+                    receipt: at,
+                },
+            )])
+        };
+        let mut book = Portfolio::with_capital(a("5000"));
+        book.model_led = true;
+        book.costs = Some(
+            serde_json::from_str(include_str!(
+                "../../../fixtures/test-legacy-paper-costs.json"
+            ))
+            .unwrap(),
+        );
+        book.settings.exit_policy = Some(ExitPolicy {
+            on_halt: HaltMode::Liquidate,
+            ..ExitPolicy::default()
+        });
+        book.execute_plan(
+            now,
+            &instrument,
+            &quotes(now, 10)[&instrument.key],
+            true,
+            5,
+            price("200"),
+            ExitIntent::default(),
+            "d1",
+        )
+        .unwrap()
+        .unwrap();
+        book.halted = true;
+        for pass in 0..2 {
+            let at = now + pass * 1_000;
+            book.apply_at(session, at, &quotes(at, 2), &[]).unwrap();
+            assert_eq!(book.positions[&instrument.key].units, 5);
+            assert_eq!(book.health, "held_exit_depth_insufficient", "pass {pass}");
+        }
+        let at = now + 2_000;
+        book.apply_at(session, at, &quotes(at, 5), &[]).unwrap();
+        assert!(book.positions.is_empty(), "full depth liquidates");
+        assert_eq!(book.health, "scanning");
     }
 }

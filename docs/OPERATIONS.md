@@ -355,7 +355,10 @@ If the halt came from the policy, run `config-apply` before `resume`.
 Recovery makes no model call and no fill, and leaves the book stopped.
 
 `--protection-only` clears the operator stop and keeps the halt. Held positions
-keep fresh two-second quotes and their exit policy.
+keep fresh two-second quotes and their exit policy. A protective exit sells
+the whole position or nothing. When the best bid shows fewer units than the
+book holds, the exit waits and each pass sets the book health to
+`held_exit_depth_insufficient`.
 
 On a closed flat book, `planner-recover` clears only the halt. The book stays
 closed, and its cash, fills and report do not change.
