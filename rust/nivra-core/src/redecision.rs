@@ -634,8 +634,11 @@ mod tests {
             buy: true,
             price: price("101"),
             fee: a("25"),
-            costs: None,
-            expected_price: None,
+            costs: serde_json::from_str(include_str!(
+                "../../../fixtures/test-legacy-paper-costs.json"
+            ))
+            .unwrap(),
+            expected_price: price("101"),
             slippage_bps: None,
             decision_id: Some("decision".into()),
         };

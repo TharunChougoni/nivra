@@ -1321,9 +1321,6 @@ fn explicit_cost_transition_carries_closed_book_without_rebinding_source() {
         );
         if legacy {
             p.costs = None;
-            for fill in &mut p.fills {
-                fill.costs = None;
-            }
         }
         p.closed = true;
         p.reconcile().unwrap();

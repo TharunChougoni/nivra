@@ -239,7 +239,7 @@ mod tests {
         let fill = p.fills.last().unwrap();
         assert!(!fill.buy);
         assert_eq!(fill.price, Price::parse("49.95").unwrap());
-        assert_eq!(fill.expected_price, Some(Price::parse("50").unwrap()));
+        assert_eq!(fill.expected_price, Price::parse("50").unwrap());
         assert_eq!(fill.fee, a("0.05"));
         assert_eq!(fill.decision_id.as_deref(), Some("option_expiry_flatten"));
         p.reconcile().unwrap();

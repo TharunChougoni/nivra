@@ -225,17 +225,15 @@ pub struct Fill {
     pub buy: bool,
     pub price: Price,
     pub fee: Amount,
-    /// Original executable ask (buy) or bid (sell); absent in legacy fills.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected_price: Option<Price>,
+    /// Original executable ask (buy) or bid (sell).
+    pub expected_price: Price,
     /// Adverse signed bps, including tick rounding, rounded to eight decimal places.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slippage_bps: Option<Amount>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision_id: Option<String>,
-    /// Exact policy used for this fill; missing means the historical default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub costs: Option<FeeArithmetic>,
+    /// Exact policy used for this fill.
+    pub costs: FeeArithmetic,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Portfolio {
@@ -415,18 +413,15 @@ impl Portfolio {
                 .price
                 .amount()
                 .checked_mul(Amount::from_unsigned(f.units))?;
-            if let Some(policy) = &f.costs {
-                policy.validate()?;
-                let expected = policy
-                    .charge(
-                        if f.buy { Side::Buy } else { Side::Sell },
-                        Money::try_from(n)?,
-                    )?
-                    .amount();
-                if f.fee != expected {
-                    return Err("fee_reconciliation".into());
-                }
-            } else if f.fee < Amount::ZERO {
+            f.costs.validate()?;
+            let expected_fee = f
+                .costs
+                .charge(
+                    if f.buy { Side::Buy } else { Side::Sell },
+                    Money::try_from(n)?,
+                )?
+                .amount();
+            if f.fee != expected_fee {
                 return Err("fee_reconciliation".into());
             }
             if f.buy {
@@ -582,11 +577,11 @@ impl Portfolio {
             buy,
             price,
             fee,
-            expected_price: Some(expected_price),
+            expected_price,
             slippage_bps,
             // Record the exact policy charged (cash or per-segment F&O), so
             // reconciliation re-derives the same fee for option fills too.
-            costs: Some(policy),
+            costs: policy,
             decision_id: None,
         });
         Ok(())

@@ -182,6 +182,13 @@ mod tests {
 
         let mut portfolio = crate::runtime::tests::test_portfolio();
         portfolio.closed = true;
+        let costs = nivra_core::finance::FeeArithmetic {
+            per_order: nivra_core::finance::Money::ZERO,
+            buy_bps: nivra_core::finance::Money::ZERO,
+            sell_bps: nivra_core::finance::Money::ZERO,
+            slippage_bps: nivra_core::finance::Money::ZERO,
+            rounding_increment: None,
+        };
         portfolio.fills.push(nivra_core::execution::Fill {
             at: fill_at,
             instrument: nivra_core::execution::Instrument {
@@ -194,10 +201,10 @@ mod tests {
             buy: true,
             price: nivra_core::finance::Price::parse("52.10").unwrap(),
             fee: nivra_core::finance::Amount::ZERO,
-            expected_price: None,
+            expected_price: nivra_core::finance::Price::parse("52.10").unwrap(),
             slippage_bps: None,
             decision_id: None,
-            costs: None,
+            costs: costs.clone(),
         });
         portfolio.fills.push(nivra_core::execution::Fill {
             at: fill_at + 100,
@@ -211,10 +218,10 @@ mod tests {
             buy: false,
             price: nivra_core::finance::Price::parse("52.20").unwrap(),
             fee: nivra_core::finance::Amount::ZERO,
-            expected_price: None,
+            expected_price: nivra_core::finance::Price::parse("52.20").unwrap(),
             slippage_bps: None,
             decision_id: None,
-            costs: None,
+            costs: costs,
         });
         let binding = crate::runtime::book_binding(&old_cfg)?;
         let state_body = serde_json::to_string(&portfolio)?;

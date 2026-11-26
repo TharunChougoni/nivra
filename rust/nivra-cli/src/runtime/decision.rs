@@ -77,31 +77,17 @@ pub(crate) fn activity_analytics(c: &Config, portfolio: &Portfolio) -> Result<Va
             .checked_add(fill.fee)
             .map_err(|e| Fail::new(format!("financial_calc_error: {e:?}")))?;
 
-        if let Some(expected) = fill.expected_price {
-            let adverse = if fill.buy {
-                if fill.price.amount() > expected.amount() {
-                    fill.price
-                        .amount()
-                        .checked_sub(expected.amount())
-                        .map_err(|e| Fail::new(format!("financial_calc_error: {e:?}")))?
-                } else {
-                    Amount::ZERO
-                }
-            } else if expected.amount() > fill.price.amount() {
-                expected
-                    .amount()
-                    .checked_sub(fill.price.amount())
-                    .map_err(|e| Fail::new(format!("financial_calc_error: {e:?}")))?
-            } else {
-                Amount::ZERO
-            };
-            let slip_notional = adverse
-                .checked_mul(Amount::from_unsigned(fill.units))
-                .map_err(|e| Fail::new(format!("financial_calc_error: {e:?}")))?;
-            total_slippage = total_slippage
-                .checked_add(slip_notional)
-                .map_err(|e| Fail::new(format!("financial_calc_error: {e:?}")))?;
-        }
+        let expected = fill.expected_price.amount();
+        let price = fill.price.amount();
+        let adverse = if fill.buy {
+            price.checked_sub(expected)?
+        } else {
+            expected.checked_sub(price)?
+        };
+        let slip_notional = adverse
+            .max(Amount::ZERO)
+            .checked_mul(Amount::from_unsigned(fill.units))?;
+        total_slippage = total_slippage.checked_add(slip_notional)?;
 
         let mut fill_realized_pnl = Amount::ZERO;
         let queue = lots.entry(fill.instrument.key.clone()).or_default();

@@ -215,6 +215,21 @@ fn model_led_cash_has_no_archived_entry_caps_and_keeps_freshness_and_cash_integr
     }
     assert_eq!(p.positions.len(), 8);
     p.reconcile().unwrap();
+    let serialized = serde_json::to_value(&p).unwrap();
+    for field in ["costs", "expected_price"] {
+        let mut missing = serialized.clone();
+        missing["fills"][0].as_object_mut().unwrap().remove(field);
+        assert!(
+            serde_json::from_value::<Portfolio>(missing).is_err(),
+            "missing {field}"
+        );
+    }
+    let mut tampered = p.clone();
+    tampered.fills[0].fee = Amount::ZERO;
+    assert_eq!(
+        tampered.reconcile().unwrap_err().to_string(),
+        "fee_reconciliation"
+    );
     q.receipt = at - 2001;
     assert!(!p.enter(at, &i(9), &q).unwrap());
     q.receipt = at;

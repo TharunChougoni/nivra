@@ -134,7 +134,7 @@ pub fn reconcile(manifest: &[u8], events: &[u8], fills: &[u8]) -> Result<Value, 
         if fill.units == 0 || !instruments.contains_key(&fill.instrument.key) {
             return Err("archive_reconcile_fill_invalid".into());
         }
-        let policy = fill.costs.as_ref().unwrap_or(&costs);
+        let policy = &fill.costs;
         policy
             .validate()
             .map_err(|_| "archive_reconcile_costs_invalid")?;
@@ -165,10 +165,11 @@ pub fn reconcile(manifest: &[u8], events: &[u8], fills: &[u8]) -> Result<Value, 
             let recomputed =
                 Portfolio::execution_with_costs(raw, fill.instrument.tick, fill.buy, policy)
                     .map_err(|_| "archive_reconcile_arithmetic")?;
-            if recomputed != fill.price {
+            let matches = raw == fill.expected_price && recomputed == fill.price;
+            if !matches {
                 price_mismatches += 1;
             }
-            (json!(recomputed == fill.price), json!(fill.slippage_bps))
+            (json!(matches), json!(fill.slippage_bps))
         } else {
             missing_quotes += 1;
             (Value::Null, Value::Null)
@@ -294,12 +295,15 @@ mod tests {
         .unwrap();
         let instrument =
             json!({"key":"SYNTHETIC|A","symbol":"FIXTURE","series":"EQ","tick":"0.05"});
+        let costs = json!({"per_order":"1","buy_bps":"0","sell_bps":"0","slippage_bps":"0","rounding_increment":"0.01"});
         let mut fills = vec![json!({
             "at": at,
             "instrument": instrument,
             "units": 10,
             "buy": true,
             "price": "100",
+            "expected_price": "100",
+            "costs": costs,
             "fee": "1"
         })];
         if sell {
@@ -309,13 +313,15 @@ mod tests {
                 "units": 10,
                 "buy": false,
                 "price": "110",
+            "expected_price": "110",
+            "costs": costs,
                 "fee": "1"
             }));
         }
         let tape = serde_json::to_vec(&json!({
             "version":1,
             "capital":"5000",
-            "costs":{"per_order":"1","buy_bps":"0","sell_bps":"0","slippage_bps":"0","rounding_increment":"0.01"},
+            "costs": costs,
             "fills": fills
         }))
         .unwrap();
