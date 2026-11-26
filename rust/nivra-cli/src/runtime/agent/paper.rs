@@ -163,7 +163,16 @@ pub(super) fn commit(
     {
         return Err("agent_paper_instrument_revision_changed".into());
     }
-    if crate::runtime::transcript::redact(completed.proposal) != *completed.proposal {
+    let (redacted, findings) = crate::runtime::transcript::redact_with_findings(completed.proposal);
+    if redacted != *completed.proposal {
+        crate::runtime::diagnostics::secret_guard(
+            &c.directory,
+            now,
+            "decision_plan",
+            "blocked",
+            Some(completed.turn_id),
+            &findings,
+        );
         return Err("agent_paper_output_secret_refused".into());
     }
     let raw = completed.proposal.to_string();

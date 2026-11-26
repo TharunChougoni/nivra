@@ -17,6 +17,8 @@ const MAX_ANSWER_CHARS: usize = 16_000;
 
 pub(crate) struct Requests {
     file: PathBuf,
+    /// The session directory that holds `diagnostics.ndjson`.
+    directory: PathBuf,
     /// Where research answers are stored, relative paths under `model/`.
     model: PathBuf,
     session: String,
@@ -29,6 +31,7 @@ impl Requests {
         let model = c.directory.join("model");
         Self {
             file: model.join("agent").join("requests.sqlite"),
+            directory: c.directory.clone(),
             model,
             session: c.session.to_string(),
             ttl_ms: settings.request_ttl_ms,
@@ -95,14 +98,20 @@ impl Requests {
 
     /// Fail a running request. Its turn ended without an answer; the request
     /// is never run again, and the decision lane may ask once more.
-    pub(crate) fn fail(&self, id: &str, reason: TransitionReason, now: i64) -> Result<bool> {
+    pub(crate) fn fail(
+        &self,
+        id: &str,
+        reason: TransitionReason,
+        turn_id: Option<&str>,
+        now: i64,
+    ) -> Result<bool> {
         lane_queue::transition(
             &mut self.open()?,
             id,
             MessageState::Running,
             MessageState::Failed,
             reason,
-            None,
+            turn_id,
             now,
         )
     }
@@ -129,7 +138,14 @@ impl Requests {
             let stale = owner.is_none_or(|pid| {
                 pid == std::process::id() || !Path::new(&format!("/proc/{pid}")).exists()
             });
-            if stale && self.fail(&message.id, TransitionReason::Interrupted, now)? {
+            if stale
+                && self.fail(
+                    &message.id,
+                    TransitionReason::Interrupted,
+                    message.turn_id.as_deref(),
+                    now,
+                )?
+            {
                 failed += 1;
             }
         }
@@ -170,7 +186,15 @@ impl Requests {
         };
         let path = self.model.join(&artifact);
         super::lanes::private_dir(path.parent().ok_or("agent_research_path")?)?;
-        let redacted = crate::runtime::transcript::redact(&json!(text));
+        let (redacted, findings) = crate::runtime::transcript::redact_with_findings(&json!(text));
+        crate::runtime::diagnostics::secret_guard(
+            &self.directory,
+            now,
+            "research_answer",
+            "redacted",
+            Some(turn_id),
+            &findings,
+        );
         crate::runtime::rollover::atomic(
             &path,
             &json!({"request_id":current.id,"question":question,"turn_id":turn_id,
@@ -228,12 +252,17 @@ fn read_answer(model: &Path, request_id: &str) -> Result<Option<Value>> {
 
 impl LaneRequests for Requests {
     fn post(&self, turn_id: &str, question: &str, refs: Vec<String>, now: i64) -> Result<Value> {
-        if crate::runtime::transcript::redact(&json!(question)).as_str() != Some(question)
-            || refs.iter().any(|reference| {
-                crate::runtime::transcript::redact(&json!(reference)).as_str()
-                    != Some(reference.as_str())
-            })
-        {
+        let input = json!({"question":question,"refs":refs});
+        let (redacted, findings) = crate::runtime::transcript::redact_with_findings(&input);
+        if redacted != input {
+            crate::runtime::diagnostics::secret_guard(
+                &self.directory,
+                now,
+                "research_request",
+                "blocked",
+                Some(turn_id),
+                &findings,
+            );
             return Err("research_request_secret_refused".into());
         }
         let body = MessageBody::ResearchRequest {

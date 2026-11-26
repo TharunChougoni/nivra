@@ -5,6 +5,7 @@ pub mod closed_incident;
 mod data;
 mod decision;
 mod decision_evidence;
+mod diagnostics;
 mod discovery;
 mod engine;
 pub mod exit_backtest;
@@ -434,7 +435,18 @@ pub fn entry(path: &Path, probe: bool) -> ExitCode {
                 {
                     let alerts =
                         crate::alert::Alerts::start(c.alert_webhook_file.as_deref(), false);
-                    let closed = rollover::current(&c)
+                    let current = rollover::current(&c);
+                    if let Ok(current) = &current
+                        && current.directory.is_dir()
+                    {
+                        diagnostics::note(
+                            &current.directory,
+                            millis(),
+                            "failure",
+                            serde_json::json!({"stage":"paper_runtime","reason":diagnostics::code(&reason)}),
+                        );
+                    }
+                    let closed = current
                         .and_then(|c| rollover::review(&c))
                         .ok()
                         .and_then(|v| v["closed"].as_bool());

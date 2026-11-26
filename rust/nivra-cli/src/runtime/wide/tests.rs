@@ -4064,6 +4064,19 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
     )
     .unwrap();
     assert_eq!(audit[0]["reason"], "stale_quote");
+    let facts = serde_json::json!({"quote_age_ms":2001,"receipt_age_ms":2001,"max_age_ms":2000});
+    assert_eq!(audit[0]["facts"], facts);
+    // The next decision brief restates the refusal by source, with the
+    // action, the reason in plain words and the numbers the check used.
+    assert_eq!(
+        recent_refusals(&db, 5).unwrap(),
+        vec![serde_json::json!({
+            "at_ms":at + 2001,"source":{"kind":"decision","id":"fixture-stale","index":0},
+            "action":{"side":"buy","instrument_key":i.key,"units":2,"max_price":"101"},
+            "reason":"stale_quote","reason_text":"the quote was older than the freshness bound",
+            "facts":facts,
+        })]
+    );
     let mut expired = plan.clone();
     expired["decision_id"] = serde_json::json!("fixture-time-expired");
     expired["verdicts"][0]["action"]["exit_intent"]["time"] = serde_json::json!(at + 1);

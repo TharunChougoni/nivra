@@ -20,6 +20,7 @@ pub(crate) fn research_context_status(unavailable: bool) -> serde_json::Value {
 
 pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
     let mut controller = Controller::start(c, client)?;
+    controller.note_session("startup");
     loop {
         if let Flow::Stopped { at } = controller.tick()? {
             return controller.stop(at);
@@ -88,6 +89,10 @@ struct Controller<'a> {
     stale_since: Option<i64>,
     stop_seen: bool,
     halt_seen: bool,
+    /// The last health snapshot written to `diagnostics.ndjson`.
+    diagnosed_health: serde_json::Value,
+    /// The pi lane failure last written to `diagnostics.ndjson`.
+    agent_failure: Option<String>,
     session_started: bool,
     last_fresh_receipt: Option<i64>,
     alerts: Alerts,
@@ -446,6 +451,8 @@ impl<'a> Controller<'a> {
             stale_since: None,
             stop_seen: false,
             halt_seen: false,
+            diagnosed_health: serde_json::Value::Null,
+            agent_failure: None,
             session_started: false,
             last_fresh_receipt: None,
             alerts,
@@ -541,6 +548,7 @@ impl<'a> Controller<'a> {
             status = "stopped_operator_review_required".to_owned();
         }
         self.emit_transitions(t, active)?;
+        self.note_health(now);
         let interval_ms = self.publish(
             t,
             status,
@@ -589,8 +597,63 @@ impl<'a> Controller<'a> {
                 .enabled
                 .then(|| self.index_context.json()),
         };
-        if let Err(error) = agent.tick(&cycle, &mut self.db) {
-            eprintln!("agent_lanes_failed reason={}", failure_code(error.as_ref()));
+        match agent.tick(&cycle, &mut self.db) {
+            Ok(()) => self.agent_failure = None,
+            Err(error) => {
+                let reason = failure_code(error.as_ref());
+                eprintln!("agent_lanes_failed reason={reason}");
+                // A failure repeated every pass is written once.
+                if self.agent_failure.as_deref() != Some(reason.as_str()) {
+                    diagnostics::note(
+                        &self.config.directory,
+                        t.now,
+                        "failure",
+                        serde_json::json!({"stage":"agent_lanes","reason":diagnostics::code(&reason)}),
+                    );
+                    self.agent_failure = Some(reason);
+                }
+            }
+        }
+    }
+
+    /// The session's startup evidence: release, book flags and lanes. No
+    /// account, path or credential.
+    fn note_session(&mut self, event: &str) {
+        let p = &self.p;
+        diagnostics::note(
+            &self.config.directory,
+            millis(),
+            event,
+            serde_json::json!({
+                "version":env!("CARGO_PKG_VERSION"),"session":self.config.session,
+                "pid":std::process::id(),"halted":p.halted,"stopped":p.stopped,
+                "closed":p.closed,"health":diagnostics::code(&p.health),
+                "positions":p.positions.len(),"fills":p.fills.len(),
+                "agent_lanes":self.agent.is_some(),
+                "planner_reason":self.event_config_reason,
+            }),
+        );
+        self.diagnosed_health = serde_json::Value::Null;
+    }
+
+    /// Write the book's health flags, read failure and feed mode when they
+    /// change, so a closed day's transitions survive host journal retention.
+    fn note_health(&mut self, now: i64) {
+        let p = &self.p;
+        let health = serde_json::json!({
+            "health":diagnostics::code(&p.health),"halted":p.halted,"stopped":p.stopped,
+            "closed":p.closed,
+            "read_failure":self.read_failure.as_deref().map(diagnostics::code),
+            "feed_mode":self.feed_health["mode"],"feed_fallback":self.feed_health["fallback"],
+        });
+        if health != self.diagnosed_health {
+            diagnostics::note(
+                &self.config.directory,
+                now,
+                "health_transition",
+                health.clone(),
+            );
+            self.diagnosed_health = health;
         }
     }
 
@@ -617,6 +680,14 @@ impl<'a> Controller<'a> {
             now,
         )?;
         eprintln!("controller_shutdown kind={}", intent.kind.as_str());
+        diagnostics::note(
+            &self.config.directory,
+            now,
+            "shutdown",
+            serde_json::json!({"kind":intent.kind.as_str(),"halted":self.p.halted,
+                "stopped":self.p.stopped,"closed":self.p.closed,
+                "in_flight_decision":in_flight.is_some()}),
+        );
         self.alerts.emit(Event::Stop, self.config.session, details);
         self.alerts.finish();
         Ok(())
@@ -1677,6 +1748,7 @@ impl<'a> Controller<'a> {
         self.option_retry = 0;
         self.last_option_depth = 0;
         self.index_context = super::IndexContext::default();
+        self.note_session("session_adopted");
         Ok(())
     }
 

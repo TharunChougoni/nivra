@@ -602,13 +602,15 @@ fn commit_quotes_screened(
                     )?;
                     continue;
                 }
+                let buy = matches!(action.side, planner::PlanSide::Buy);
+                let max_price = action.max_price.ok_or("planner_action_max_price_missing")?;
                 let outcome = next.execute_plan(
                     now,
                     &instrument,
                     q,
-                    matches!(action.side, planner::PlanSide::Buy),
+                    buy,
                     verdict.units,
-                    action.max_price.ok_or("planner_action_max_price_missing")?,
+                    max_price,
                     action.exit_intent,
                     decision,
                 )?;
@@ -621,10 +623,24 @@ fn commit_quotes_screened(
                     "INSERT INTO planner_action VALUES(?,?,?)",
                     rusqlite::params![decision, verdict.index as i64, verdict_code],
                 )?;
-                if let Err(refusal) = outcome {
+                if let Err(refused) = outcome {
                     tx.execute(
                         "INSERT INTO planner_refusal VALUES(?,?,?)",
-                        rusqlite::params![decision, verdict.index as i64, refusal.code()],
+                        rusqlite::params![decision, verdict.index as i64, refused.code()],
+                    )?;
+                    let refused_action = RefusedAction {
+                        side: if buy { "buy" } else { "sell" },
+                        instrument_key: &action.instrument_key,
+                        units: verdict.units,
+                        max_price: max_price.amount().to_string(),
+                    };
+                    record_refusal(
+                        &tx,
+                        now,
+                        RefusalSource::Decision(decision),
+                        verdict.index,
+                        &refused_action,
+                        &refused,
                     )?;
                 }
             }
@@ -664,9 +680,13 @@ fn commit_quotes_screened(
                 .as_str()
                 .ok_or("planner_saved_plan_invalid")?;
             let rows = db
-            .prepare("SELECT a.idx,a.verdict,r.reason FROM planner_action a LEFT JOIN planner_refusal r ON r.decision=a.decision AND r.idx=a.idx WHERE a.decision=? ORDER BY a.idx")?
+            .prepare("SELECT a.idx,a.verdict,r.reason,e.body FROM planner_action a LEFT JOIN planner_refusal r ON r.decision=a.decision AND r.idx=a.idx LEFT JOIN execution_refusal e ON e.source='decision' AND e.source_id=a.decision AND e.idx=a.idx WHERE a.decision=? ORDER BY a.idx")?
             .query_map([id], |r| {
-                Ok(serde_json::json!({"index":r.get::<_,i64>(0)?,"verdict":r.get::<_,String>(1)?,"reason":r.get::<_,Option<String>>(2)?}))
+                let facts = r
+                    .get::<_, Option<String>>(3)?
+                    .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
+                    .map(|body| body["facts"].clone());
+                Ok(serde_json::json!({"index":r.get::<_,i64>(0)?,"verdict":r.get::<_,String>(1)?,"reason":r.get::<_,Option<String>>(2)?,"facts":facts}))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
             let audit = c.directory.join("model").join(id);
@@ -768,8 +788,90 @@ pub(super) fn ensure_actions(db: &Connection) -> Result<()> {
     if !present && redecision::has_authority(db)? {
         return Err("planner_action_journal_missing".into());
     }
-    db.execute_batch("CREATE TABLE IF NOT EXISTS planner_action(decision TEXT,idx INTEGER,verdict TEXT NOT NULL,PRIMARY KEY(decision,idx));\n         CREATE TABLE IF NOT EXISTS planner_refusal(decision TEXT,idx INTEGER,reason TEXT NOT NULL,PRIMARY KEY(decision,idx));")?;
+    db.execute_batch("CREATE TABLE IF NOT EXISTS planner_action(decision TEXT,idx INTEGER,verdict TEXT NOT NULL,PRIMARY KEY(decision,idx));\n         CREATE TABLE IF NOT EXISTS planner_refusal(decision TEXT,idx INTEGER,reason TEXT NOT NULL,PRIMARY KEY(decision,idx));\n         CREATE TABLE IF NOT EXISTS execution_refusal(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,source TEXT NOT NULL,source_id TEXT NOT NULL,idx INTEGER NOT NULL,reason TEXT NOT NULL,body TEXT NOT NULL,UNIQUE(source,source_id,idx));")?;
     Ok(())
+}
+/// Who proposed a refused action. Strategy actions will record their hash
+/// here once they run through the same gate.
+#[derive(Clone, Copy)]
+pub(crate) enum RefusalSource<'a> {
+    Decision(&'a str),
+}
+impl RefusalSource<'_> {
+    fn parts(&self) -> (&'static str, &str) {
+        match self {
+            Self::Decision(id) => ("decision", id),
+        }
+    }
+}
+#[derive(serde::Serialize)]
+pub(crate) struct RefusedAction<'a> {
+    pub side: &'static str,
+    pub instrument_key: &'a str,
+    pub units: u64,
+    pub max_price: String,
+}
+/// One gate refusal with the numbers its check used. The body holds the
+/// action and those numbers only: no quote payload, credential or model text.
+pub(crate) fn record_refusal(
+    db: &Connection,
+    at: i64,
+    source: RefusalSource<'_>,
+    index: usize,
+    action: &RefusedAction<'_>,
+    refused: &nivra_core::execution::Refused,
+) -> Result<()> {
+    let (kind, id) = source.parts();
+    db.execute(
+        "INSERT OR IGNORE INTO execution_refusal(at,source,source_id,idx,reason,body) VALUES(?,?,?,?,?,?)",
+        rusqlite::params![
+            at,
+            kind,
+            id,
+            index as i64,
+            refused.code(),
+            serde_json::json!({"action":action,"reason_text":refused.reason.plain(),"facts":refused.facts})
+                .to_string()
+        ],
+    )?;
+    Ok(())
+}
+/// The latest gate refusals, newest first, as the decision brief states them.
+/// A book written before this table existed has none.
+pub(crate) fn recent_refusals(db: &Connection, limit: usize) -> Result<Vec<serde_json::Value>> {
+    let present: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='execution_refusal')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !present {
+        return Ok(Vec::new());
+    }
+    let mut rows = db.prepare(
+        "SELECT at,source,source_id,idx,reason,body FROM execution_refusal ORDER BY id DESC LIMIT ?",
+    )?;
+    let rows = rows
+        .query_map([limit as i64], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    rows.into_iter()
+        .map(|(at, source, id, index, code, body)| {
+            let body: serde_json::Value = serde_json::from_str(&body)?;
+            Ok(serde_json::json!({
+                "at_ms":at,"source":{"kind":source,"id":id,"index":index},
+                "action":body["action"],"reason":code,"reason_text":body["reason_text"],
+                "facts":body["facts"],
+            }))
+        })
+        .collect()
 }
 fn block_data_failure(db: &mut Connection, c: &Config, p: &mut Portfolio) {
     // The caller records the original read failure and current halted state next.

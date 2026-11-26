@@ -762,7 +762,7 @@ impl Portfolio {
         Ok(true)
     }
     /// Deterministic execution gate; caller commits under its ledger lock.
-    /// `Ok(Err(reason))` is a refusal that left the book untouched.
+    /// `Ok(Err(refused))` is a refusal that left the book untouched.
     #[allow(clippy::too_many_arguments)]
     pub fn execute_plan(
         &mut self,
@@ -774,47 +774,77 @@ impl Portfolio {
         max_price: Price,
         exit: ExitIntent,
         decision: &str,
-    ) -> Result<std::result::Result<(), Refusal>> {
+    ) -> Result<std::result::Result<(), Refused>> {
         use Refusal::*;
-        let refuse = |reason| Ok(Err(reason));
+        let refuse = |reason, facts| Ok(Err(Refused { reason, facts }));
+        let units_only = RefusalFacts {
+            units: Some(units),
+            ..RefusalFacts::default()
+        };
         if self.stopped || self.closed {
-            return refuse(BookStoppedOrClosed);
+            return refuse(BookStoppedOrClosed, RefusalFacts::default());
         }
         if buy && self.halted {
-            return refuse(Halted);
+            return refuse(Halted, RefusalFacts::default());
         }
-        if buy && exit.time.is_some_and(|time| time <= now) {
-            return refuse(ExitTimePassed);
+        if let Some(time) = exit.time.filter(|time| buy && *time <= now) {
+            let facts = RefusalFacts {
+                exit_time_ms: Some(time),
+                ..RefusalFacts::default()
+            };
+            return refuse(ExitTimePassed, facts);
         }
         if units == 0 {
-            return refuse(ZeroUnits);
+            return refuse(ZeroUnits, units_only);
         }
         if !q.fresh(now, MAX_FINANCIAL_AGE_MS) {
-            return refuse(StaleQuote);
+            let facts = RefusalFacts {
+                quote_age_ms: Some(now.saturating_sub(q.source)),
+                receipt_age_ms: Some(now.saturating_sub(q.receipt)),
+                max_age_ms: Some(MAX_FINANCIAL_AGE_MS),
+                ..RefusalFacts::default()
+            };
+            return refuse(StaleQuote, facts);
         }
         if q.ask < q.bid {
-            return refuse(CrossedQuote);
+            let facts = RefusalFacts {
+                bid: Some(q.bid.amount().to_string()),
+                ask: Some(q.ask.amount().to_string()),
+                ..RefusalFacts::default()
+            };
+            return refuse(CrossedQuote, facts);
         }
+        let at_minute = minute(now)?;
         if !(self.settings.session_start_minute..self.settings.session_end_minute)
-            .contains(&minute(now)?)
+            .contains(&at_minute)
         {
-            return refuse(OutsideSession);
+            let facts = RefusalFacts {
+                minute: Some(at_minute),
+                session_start_minute: Some(self.settings.session_start_minute),
+                session_end_minute: Some(self.settings.session_end_minute),
+                ..RefusalFacts::default()
+            };
+            return refuse(OutsideSession, facts);
         }
         // Option execution gate: a bounded catalog contract must exist, units
         // must be a lot multiple, and no order may hold past expiry. Unknown
         // NSE_FO keys are never treated as cash.
         if Segment::from_key(&i.key) == Some(Segment::NseFo) {
             let Some(catalog) = self.options.as_ref() else {
-                return refuse(OptionContractInvalid);
+                return refuse(OptionContractInvalid, units_only);
             };
             let Some(contract) = catalog.contract(&i.key) else {
-                return refuse(OptionContractInvalid);
+                return refuse(OptionContractInvalid, units_only);
             };
             if !units.is_multiple_of(contract.lot_size)
                 || (buy && contract.expiry <= catalog.session)
                 || (!buy && contract.expiry < catalog.session)
             {
-                return refuse(OptionContractInvalid);
+                let facts = RefusalFacts {
+                    lot_size: Some(contract.lot_size),
+                    ..units_only
+                };
+                return refuse(OptionContractInvalid, facts);
             }
         }
         let policy = self.fee_policy(&i.key)?;
@@ -822,45 +852,79 @@ impl Portfolio {
             Self::execution_with_costs(if buy { q.ask } else { q.bid }, i.tick, buy, &policy)?;
         if buy {
             if price > max_price {
-                return refuse(PriceAboveMax);
+                let facts = RefusalFacts {
+                    ask: Some(q.ask.amount().to_string()),
+                    price_with_costs: Some(price.amount().to_string()),
+                    max_price: Some(max_price.amount().to_string()),
+                    ..RefusalFacts::default()
+                };
+                return refuse(PriceAboveMax, facts);
             }
             if self
                 .positions
                 .get(&i.key)
                 .is_some_and(|p| p.instrument != *i)
             {
-                return refuse(InstrumentMismatch);
+                return refuse(InstrumentMismatch, RefusalFacts::default());
             }
             if units > q.ask_units {
-                return refuse(InsufficientDepth);
+                let facts = RefusalFacts {
+                    depth_units: Some(q.ask_units),
+                    ..units_only
+                };
+                return refuse(InsufficientDepth, facts);
             }
-            if units > self.size_with_costs(i, q, self.cash)? {
-                return refuse(InsufficientCash);
+            let affordable = self.size_with_costs(i, q, self.cash)?;
+            if units > affordable {
+                let facts = RefusalFacts {
+                    affordable_units: Some(affordable),
+                    price_with_costs: Some(price.amount().to_string()),
+                    cash: Some(self.cash.to_string()),
+                    ..units_only
+                };
+                return refuse(InsufficientCash, facts);
             }
-            if self
+            if let Some(stale) = self
                 .positions
                 .values()
-                .any(|p| now < p.marked_at || now - p.marked_at > MAX_FINANCIAL_AGE_MS)
+                .find(|p| now < p.marked_at || now - p.marked_at > MAX_FINANCIAL_AGE_MS)
             {
-                return refuse(StalePositionMark);
+                let facts = RefusalFacts {
+                    mark_age_ms: Some(now.saturating_sub(stale.marked_at)),
+                    max_age_ms: Some(MAX_FINANCIAL_AGE_MS),
+                    ..RefusalFacts::default()
+                };
+                return refuse(StalePositionMark, facts);
             }
         } else {
             if units > q.bid_units {
-                return refuse(InsufficientDepth);
+                let facts = RefusalFacts {
+                    depth_units: Some(q.bid_units),
+                    ..units_only
+                };
+                return refuse(InsufficientDepth, facts);
             }
             if !self
                 .positions
                 .get(&i.key)
                 .is_some_and(|p| p.instrument == *i && units <= p.units)
             {
-                return refuse(NoHeldUnits);
+                let facts = RefusalFacts {
+                    held_units: Some(self.positions.get(&i.key).map_or(0, |p| p.units)),
+                    ..units_only
+                };
+                return refuse(NoHeldUnits, facts);
             }
             let notional = price.amount().checked_mul(Amount::from_unsigned(units))?;
             let charge = policy
                 .charge(Side::Sell, Money::try_from(notional)?)?
                 .amount();
             if self.cash.checked_add(notional)?.checked_sub(charge)? < Amount::ZERO {
-                return refuse(SellCashNegative);
+                let facts = RefusalFacts {
+                    cash: Some(self.cash.to_string()),
+                    ..units_only
+                };
+                return refuse(SellCashNegative, facts);
             }
         }
         let mut next = self.clone();
@@ -928,24 +992,111 @@ pub enum Refusal {
 }
 impl Refusal {
     pub fn code(self) -> &'static str {
+        self.words().0
+    }
+    /// The reason in plain words, as the decision brief states it.
+    pub fn plain(self) -> &'static str {
+        self.words().1
+    }
+    fn words(self) -> (&'static str, &'static str) {
         match self {
-            Self::BookStoppedOrClosed => "book_stopped_or_closed",
-            Self::Halted => "halted",
-            Self::ExitTimePassed => "exit_time_passed",
-            Self::ZeroUnits => "zero_units",
-            Self::StaleQuote => "stale_quote",
-            Self::CrossedQuote => "crossed_quote",
-            Self::OutsideSession => "outside_session",
-            Self::OptionContractInvalid => "option_contract_invalid",
-            Self::PriceAboveMax => "price_above_max",
-            Self::InstrumentMismatch => "instrument_mismatch",
-            Self::InsufficientDepth => "insufficient_depth",
-            Self::InsufficientCash => "insufficient_cash",
-            Self::StalePositionMark => "stale_position_mark",
-            Self::NoHeldUnits => "no_held_units",
-            Self::SellCashNegative => "sell_cash_negative",
+            Self::BookStoppedOrClosed => {
+                ("book_stopped_or_closed", "the book was stopped or closed")
+            }
+            Self::Halted => ("halted", "the book is halted, so no new buys"),
+            Self::ExitTimePassed => (
+                "exit_time_passed",
+                "the planned exit time had already passed",
+            ),
+            Self::ZeroUnits => ("zero_units", "the order had zero units"),
+            Self::StaleQuote => (
+                "stale_quote",
+                "the quote was older than the freshness bound",
+            ),
+            Self::CrossedQuote => ("crossed_quote", "the quote was crossed (ask below bid)"),
+            Self::OutsideSession => ("outside_session", "the time was outside the trading window"),
+            Self::OptionContractInvalid => (
+                "option_contract_invalid",
+                "the option contract, lot size or expiry did not allow it",
+            ),
+            Self::PriceAboveMax => (
+                "price_above_max",
+                "the ask with costs was above the plan's max price",
+            ),
+            Self::InstrumentMismatch => (
+                "instrument_mismatch",
+                "the held position is a different instrument revision",
+            ),
+            Self::InsufficientDepth => ("insufficient_depth", "the quote showed too few units"),
+            Self::InsufficientCash => (
+                "insufficient_cash",
+                "cash after costs could not pay for the units",
+            ),
+            Self::StalePositionMark => (
+                "stale_position_mark",
+                "a held position's mark was older than the freshness bound",
+            ),
+            Self::NoHeldUnits => (
+                "no_held_units",
+                "the book did not hold that many units to sell",
+            ),
+            Self::SellCashNegative => (
+                "sell_cash_negative",
+                "the sell's costs would leave cash negative",
+            ),
         }
     }
+}
+/// A refusal with the facts its check used: ages, prices, units and cash as
+/// numbers only. No quote payload, credential or model text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refused {
+    pub reason: Refusal,
+    pub facts: RefusalFacts,
+}
+impl Refused {
+    pub fn code(&self) -> &'static str {
+        self.reason.code()
+    }
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefusalFacts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub units: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote_age_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_age_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark_age_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_age_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_with_costs: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_price: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth_units: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub affordable_units: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_units: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lot_size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_time_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minute: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_start_minute: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_end_minute: Option<u32>,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Sample {

@@ -528,7 +528,16 @@ impl<'a> LaneRunner<'a> {
                 json!(fallback.reason).as_str().unwrap_or_default(),
             );
         }
-        self.journal(&crate::runtime::transcript::redact(&line))?;
+        let (line, findings) = crate::runtime::transcript::redact_with_findings(&line);
+        crate::runtime::diagnostics::secret_guard(
+            &self.c.directory,
+            now,
+            "turn_journal",
+            "redacted",
+            Some(&id),
+            &findings,
+        );
+        self.journal(&line)?;
         Ok(LaneTurn {
             outcome,
             plan,
@@ -623,18 +632,31 @@ impl<'a> LaneRunner<'a> {
             match turn {
                 Ok(turn) => {
                     if turn.outcome.status != TurnStatus::Ok {
-                        let reason = if turn.outcome.error.as_deref() == Some("agent_preempted") {
+                        let error = turn.outcome.error.as_deref().unwrap_or("turn_not_ok");
+                        let reason = if error == "agent_preempted" {
                             TransitionReason::Interrupted
                         } else {
                             TransitionReason::TurnFailed
                         };
-                        self.requests.fail(&request.id, reason, at)?;
+                        let failed =
+                            self.requests
+                                .fail(&request.id, reason, Some(&turn.outcome.id), at)?;
+                        // Ties the aborted turn to the request's durable queue outcome.
+                        crate::runtime::diagnostics::note(
+                            &self.c.directory,
+                            at,
+                            "research_request_failed",
+                            json!({"turn_id":turn.outcome.id,"request_id":request.id,
+                                "turn_error":crate::runtime::diagnostics::code(error),
+                                "queue_state":if failed {"failed"} else {"unchanged"},
+                                "queue_reason":reason.as_str()}),
+                        );
                     }
                     turns.push(turn);
                 }
                 Err(error) => {
                     self.requests
-                        .fail(&request.id, TransitionReason::TurnFailed, at)?;
+                        .fail(&request.id, TransitionReason::TurnFailed, None, at)?;
                     return if turns.is_empty() {
                         Err(error)
                     } else {
@@ -656,10 +678,17 @@ impl<'a> LaneRunner<'a> {
     ) -> Result<LaneTurn> {
         let turn = self.turn(Lane::Review, trigger, json!(brief.render()?), context)?;
         if turn.outcome.status == TurnStatus::Ok && !turn.outcome.text.trim().is_empty() {
-            let text = crate::runtime::transcript::redact(&json!(bounded(
-                &turn.outcome.text,
-                MAX_MEMORY_CHARS
-            )));
+            let (text, findings) = crate::runtime::transcript::redact_with_findings(&json!(
+                bounded(&turn.outcome.text, MAX_MEMORY_CHARS)
+            ));
+            crate::runtime::diagnostics::secret_guard(
+                &self.c.directory,
+                (self.clock)(),
+                "review_memory",
+                "redacted",
+                Some(&turn.outcome.id),
+                &findings,
+            );
             rollover::atomic(
                 &self.root().join("memory.json"),
                 &json!({"session":self.c.session.to_string(),"turn_id":turn.outcome.id,"text":text}),

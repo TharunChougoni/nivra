@@ -871,6 +871,26 @@ fn budgets_preemption_and_agent_exit_stop_turns() {
         .unwrap();
     assert_eq!(refused.to_string(), "agent_budget_exhausted");
     use crate::runtime::harness::LaneRequests;
+    // A credential-shaped request is refused; diagnostics keep where the
+    // guard matched and never the matched text.
+    let blocked = runner
+        .requests
+        .post(
+            "decision-1",
+            "Use Bearer abc9 now",
+            vec!["ok".into()],
+            clock(),
+        )
+        .unwrap_err();
+    assert_eq!(blocked.to_string(), "research_request_secret_refused");
+    let guard = std::fs::read_to_string(c.directory.join("diagnostics.ndjson")).unwrap();
+    assert!(!guard.contains("abc9"));
+    assert_eq!(
+        serde_json::from_str::<Value>(guard.trim_end()).unwrap(),
+        json!({"at_ms":clock(),"event":"secret_guard","site":"research_request",
+            "action":"blocked","turn_id":"decision-1","count":1,
+            "matches":[{"class":"bearer_prefix","field":"$.question","length":19,"offset":4}]})
+    );
     runner
         .requests
         .post("decision-1", "Is the gap real?", Vec::new(), clock())
@@ -905,6 +925,24 @@ fn budgets_preemption_and_agent_exit_stop_turns() {
     assert_eq!(
         failed[0].reason,
         Some(lane_queue::TransitionReason::Interrupted)
+    );
+    // The session's diagnostics tie the preempted turn to the request's
+    // durable queue outcome.
+    let research_id = &research[0].outcome.id;
+    assert_eq!(failed[0].turn_id.as_ref(), Some(research_id));
+    let diagnostics = std::fs::read_to_string(c.directory.join("diagnostics.ndjson")).unwrap();
+    let preemption: Value = serde_json::from_str(
+        diagnostics
+            .lines()
+            .find(|line| line.contains("research_request_failed"))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        preemption,
+        json!({"at_ms":clock(),"event":"research_request_failed","turn_id":research_id,
+            "request_id":failed[0].id,"turn_error":"agent_preempted",
+            "queue_state":"failed","queue_reason":"interrupted"})
     );
     drop(runner);
     // An agent that dies mid-turn ends the turn with an error, not a hang,

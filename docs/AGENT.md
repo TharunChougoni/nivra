@@ -128,7 +128,10 @@ Requests sit in `model/agent/requests.sqlite`. At most `max_open_requests` (4)
 are open, and each expires after `request_ttl_ms` (2 hours). One research pass
 answers up to four requests, one turn each. A finished answer goes into the
 next decision brief. A failed or preempted turn fails its request, which never
-runs again. If publishing an answer fails, the turn reports
+runs again. The queue event records the turn ID, and the session's
+`diagnostics.ndjson` gets a `research_request_failed` line with the turn ID,
+request ID, turn error (`agent_preempted` for a preemption) and the queue
+outcome. If publishing an answer fails, the turn reports
 `agent_research_answer_failed` and the artifact stays for audit.
 
 The review lane runs once per session, after the seal. Rust saves its redacted
@@ -192,17 +195,65 @@ of these still hold, and refuses it otherwise:
 | `agent_paper_turn_binding_invalid` | Turn ID, model, input or policy hash differs |
 | `agent_paper_instrument_revision_changed` | The allowlist changed |
 | `agent_paper_outside_session` | The book stopped, halted, closed or left the session window |
+| `agent_paper_output_secret_refused` | The plan held credential-shaped text (see [Diagnostics](#diagnostics)) |
 
 A committed plan is validated again at execution. A changed portfolio records
 `portfolio_changed` and a changed policy records `policy_changed`; neither
 fills. Execution uses the original quote receipt and the two-second freshness
 gate. An interrupted decision is recorded and never replayed.
 
+### Execution refusals
+
+The execution gate can refuse a validated action, for example on a stale
+quote or an ask above `max_price`. The book stores each refusal in the
+`execution_refusal` table, keyed by its source (`decision` and the decision
+ID today), with the action and the numbers the check used. The turn's
+`execution.json` carries the same numbers as `facts`.
+
+The next decision brief lists the five latest refusals in
+`execution_refusals`, newest first:
+
+```json
+{"at_ms":1760600002001,
+ "source":{"kind":"decision","id":"owner-decision-1","index":0},
+ "action":{"side":"buy","instrument_key":"NSE_EQ|INE000000001","units":2,"max_price":"101"},
+ "reason":"stale_quote","reason_text":"the quote was older than the freshness bound",
+ "facts":{"quote_age_ms":2001,"receipt_age_ms":2001,"max_age_ms":2000}}
+```
+
+`facts` holds only the numbers the failed check compared: quote, receipt or
+mark age against `max_age_ms`; `ask` and `price_with_costs` against
+`max_price`; `units` against `depth_units`, `affordable_units` (with `cash`)
+or `held_units`; the minute against the session window. It never holds a
+quote payload, a credential or model text.
+
 ## Failures
 
 A provider, schema or timeout failure means no trade for that trigger and
 never halts the book. A corrupt `usage.json`, identity mismatch or failed
 durable write is an integrity failure. Protection and fills stay deterministic.
+
+## Diagnostics
+
+The secret guard refuses a plan or research request that holds
+credential-shaped text, and redacts research answers, review memory and turn
+journal lines. Each time it matches, the session's `diagnostics.ndjson` gets a
+`secret_guard` line naming the site (`decision_plan`, `research_request`,
+`research_answer`, `review_memory` or `turn_journal`), `blocked` or
+`redacted`, and the turn ID. Each match records the pattern class, the JSON
+field path, the string's length and the match offset in bytes, never the
+matched text:
+
+| Class | Matches |
+| --- | --- |
+| `secret_key_field` | A credential key such as `token` or `api_key`; `field` is the object that held it |
+| `bearer_prefix`, `sk_prefix` | `Bearer ` or `sk-` anywhere in a string |
+| `oauth_access_word`, `oauth_refresh_word` | `access_token` or `refresh_token` in a string |
+| `private_key_block` | A PEM private key header |
+| `credential_assignment` | A credential key followed by `=` or `:`; the offset is the separator |
+
+A field path such as `$.actions[0].rationale` locates the match. Model keys
+that are not short plain identifiers appear as `?`.
 
 ## Check an agent
 

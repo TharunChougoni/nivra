@@ -128,7 +128,10 @@ fn turn(args: &Args) -> Result<(bool, Value)> {
         Lane::Review => json!({"kind":"review","session":c.session.to_string()}),
         Lane::Gate => json!({"kind":"gate"}),
     };
-    let brief = Brief::build(&facts, budget, task, &triggers);
+    let mut brief = Brief::build(&facts, budget, task, &triggers);
+    if lane == Lane::Decision {
+        brief.execution_refusals = wide::recent_refusals(&db, brief::MAX_REFUSALS)?;
+    }
     if args.dry {
         let tools: Vec<Value> = lane_definitions(
             &cfg,

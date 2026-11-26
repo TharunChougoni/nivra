@@ -31,6 +31,7 @@ Every command that changes a book needs `--confirm-paper-review`.
 | `~/nivra-current` | Symlink to the installed release; only the updater moves it |
 | `SESSIONS_ROOT/current.json` | Pointer to the current dated session |
 | `<session>/paper.sqlite` | Ledger, control state and planner journals |
+| `<session>/diagnostics.ndjson` | Redacted startup, health, failure and shutdown evidence for the day |
 | `<session>/model/` | Model inputs, results, usage receipts and pi turn journals |
 | `<session>/report.json`, `review.json` | Sealed close report and review |
 | `~/.local/state/nivra/` | Updater status, failure and recovery records |
@@ -324,9 +325,33 @@ lane budgets, then history coverage. Then read `model/agent/triggers.ndjson`,
 `turns.ndjson` and `plans.ndjson` to see why a turn did not run or which plan
 was refused.
 
-An accepted empty plan is a model abstention.
+The `execution_refusal` table in `paper.sqlite`, and each turn's
+`model/<decision>/execution.json`, say why the execution gate refused an
+action and which numbers it compared. An accepted empty plan is a model
+abstention.
 `nivra agent-turn --config PAPER_CONFIG --lane decision --dry` prints the
 current brief and tools without calling a model.
+
+## Reconstruct a closed day
+
+The service journal can rotate before a closed day is reviewed. Each session
+directory keeps its own `diagnostics.ndjson`, append-only and capped at 1 MB;
+past the cap one `diagnostics_capped` line ends it. Each line has `at_ms` and
+`event`:
+
+| Event | Written when | Fields |
+| --- | --- | --- |
+| `startup`, `session_adopted` | The controller starts, or adopts the next session at rollover | Release version, session, process ID, book flags and health, position and fill counts, whether pi lanes run |
+| `health_transition` | Book health, halt, stop or close flags, the read failure or the feed mode change | The new values |
+| `failure` | The pi lanes fail a pass, or the paper runtime exits on an error | `stage` and a static `reason` code |
+| `shutdown` | The controller settles a stop | Stop kind, book flags, whether a decision was in flight |
+| `secret_guard`, `research_request_failed` | See [model lanes](AGENT.md#diagnostics) | |
+
+Lines hold codes, counts and flags only, never tokens, account payloads, host
+paths, quotes or model text, and each passes the transcript redaction. Writing
+the file never stops the controller. A failed write prints
+`diagnostics_write_failed` to the service journal. The file is new beside the
+book; the book, its journals and stopped or halted state are not changed.
 
 ## Releases and updates
 

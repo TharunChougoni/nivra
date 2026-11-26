@@ -551,7 +551,11 @@ impl LaneService {
             Lane::Gate => json!({"kind":"gate"}),
             Lane::Decision => Value::Null,
         };
-        let brief = Brief::build(&facts, budget, task, &triggers);
+        let mut brief = Brief::build(&facts, budget, task, &triggers);
+        if lane == Lane::Decision {
+            brief.execution_refusals =
+                crate::runtime::wide::recent_refusals(db, brief::MAX_REFUSALS)?;
+        }
         let claim = if lane == Lane::Decision && self.mode == AgentMode::Paper {
             let claim = paper::reserve(
                 db,

@@ -16,6 +16,8 @@ const MAX_FILLS: usize = 10;
 const MAX_POSITIONS: usize = 20;
 const MAX_RANKING: usize = 20;
 const MAX_TRIGGERS: usize = 32;
+/// Gate refusals a decision brief restates.
+pub(crate) const MAX_REFUSALS: usize = 5;
 /// A brief over this size is refused rather than cut silently.
 pub(crate) const MAX_BRIEF_BYTES: usize = 96_000;
 
@@ -29,6 +31,11 @@ pub(crate) struct Brief {
     pub positions: Vec<PositionFacts>,
     pub ranking: Vec<RankFacts>,
     pub fills: Vec<FillFacts>,
+    /// The latest actions the execution gate refused, newest first: who
+    /// proposed each, the action, the reason in plain words and the numbers
+    /// the check used. Decision turns only.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub execution_refusals: Vec<Value>,
     /// Research answers not yet delivered to a decision turn.
     pub research_updates: Vec<Value>,
     /// What this turn is about: a research question, an agenda, the day.
@@ -250,6 +257,7 @@ impl Brief {
             positions,
             ranking,
             fills,
+            execution_refusals: Vec::new(),
             research_updates: Vec::new(),
             task,
             triggers: triggers.iter().take(MAX_TRIGGERS).cloned().collect(),
