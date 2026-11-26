@@ -5,11 +5,13 @@ existing scenario when you can, and avoid duplicate micro-tests.
 
 ## Rules
 
-- The Rust suite has a ceiling of 400 `#[test]` and `#[tokio::test]` functions,
-  ignored ones included. `nivra-tools test-budget` enforces it. To add a test at
-  the ceiling, merge or remove one first. Never raise the limit.
-- Tests never open sockets, use credentials or call a real provider or model.
-  Use fakes, fixture transports and injectable clocks.
+- `nivra-tools test-budget` caps the `#[test]` and `#[tokio::test]` count,
+  ignored ones included. Raise the limit when a change needs more tests.
+- Default tests never use credentials or call a real provider or model. Use
+  fakes, fixture transports and injectable clocks.
+- Integration tests may talk to a local service, such as a Postgres container.
+  Mark them `#[ignore]` so `cargo test` stays self-contained, and run them with
+  `cargo test -- --ignored`.
 - Each Rust fixture owns a unique `tempfile::tempdir()`. Never coordinate tests
   through a fixed `/tmp` path, a process-wide environment change or a shared
   lock file.
