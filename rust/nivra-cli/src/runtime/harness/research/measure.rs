@@ -176,7 +176,7 @@ pub(crate) fn measure_observation_with_status(
     let mut verified = None;
     if let Some(maturation) = maturation {
         let context = super::candidate::StoredObservationContext {
-            source: &c.directory,
+            source: c.quote_source(),
             session: c.session,
             previous_session: super::candidate::candidate_previous_trading_session(c),
             task,

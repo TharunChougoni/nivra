@@ -1,5 +1,6 @@
 //! Dated paper loop and worker orchestration; financial helpers remain in wide.
 use super::*;
+use crate::runtime::market_archive::capture;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -22,8 +23,13 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
     let mut controller = Controller::start(c, client)?;
     controller.note_session("startup");
     loop {
-        if let Flow::Stopped { at } = controller.tick()? {
-            return controller.stop(at);
+        match controller.tick() {
+            Ok(Flow::Continue) => {}
+            Ok(Flow::Stopped { at }) => return controller.stop(at),
+            Err(error) => {
+                controller.stop_archive()?;
+                return Err(error);
+            }
         }
     }
 }
@@ -95,6 +101,7 @@ struct Controller<'a> {
     agent_failure: Option<String>,
     session_started: bool,
     last_fresh_receipt: Option<i64>,
+    archive: Option<capture::Writer>,
     alerts: Alerts,
     option_retry: i64,
     last_option_depth: i64,
@@ -345,6 +352,13 @@ impl SessionEvidence {
     }
 }
 
+fn start_archive(c: &Config) -> Result<Option<capture::Writer>> {
+    c.market_archive
+        .clone()
+        .map(|settings| capture::Writer::start(&c.directory, &rollover::root(c)?, settings))
+        .transpose()
+}
+
 impl<'a> Controller<'a> {
     fn start(c: &Config, client: &'a data::Client) -> Result<Self> {
         let _daily_lock = rollover::controller_lock(c)?;
@@ -433,6 +447,7 @@ impl<'a> Controller<'a> {
         let alerts = Alerts::start(c.alert_webhook_file.as_deref(), true);
         let reported = p.closed && c.directory.join("report.json").is_file();
         let history_attempt = HistoryAttempts::load(&config)?;
+        let archive = start_archive(c)?;
         Ok(Self {
             client,
             volume_history_loaded: false,
@@ -472,6 +487,7 @@ impl<'a> Controller<'a> {
             agent_failure: None,
             session_started: false,
             last_fresh_receipt: None,
+            archive,
             alerts,
             option_retry: 0,
             last_option_depth: 0,
@@ -508,6 +524,7 @@ impl<'a> Controller<'a> {
 
     /// One loop pass. Phase order is the journal and clock order.
     fn tick(&mut self) -> Result<Flow> {
+        self.record_archive_gaps()?;
         self.shadow_scorer.poll();
         let now = millis();
         let t = Now {
@@ -712,8 +729,44 @@ impl<'a> Controller<'a> {
         }
     }
 
+    fn record_archive_gaps(&self) -> Result<()> {
+        let Some(writer) = &self.archive else {
+            return Ok(());
+        };
+        let dropped = writer.take_dropped();
+        if dropped > 0 {
+            if let Err(error) = capture::record_gap(&self.db, dropped) {
+                writer.restore_dropped(dropped);
+                return Err(error);
+            }
+            self.alerts.emit(
+                Event::ArchiveGap,
+                self.config.session,
+                serde_json::json!({"dropped_batches":dropped}),
+            );
+        }
+        for session in writer.prior_gaps() {
+            self.alerts.emit(
+                Event::ArchiveGap,
+                session,
+                serde_json::json!({"dropped_batches":1}),
+            );
+        }
+        Ok(())
+    }
+
+    fn stop_archive(&mut self) -> Result<()> {
+        if let Some(writer) = &mut self.archive {
+            writer.stop();
+        }
+        self.record_archive_gaps()?;
+        self.archive = None;
+        Ok(())
+    }
+
     /// Cancel workers, then settle the book for an operator or service stop.
     fn stop(mut self, now: i64) -> Result<()> {
+        self.stop_archive()?;
         let mut intent = shutdown::intent(&self.config, now);
         if let Some(worker) = self.history_worker.take() {
             worker.cancel();
@@ -1212,6 +1265,7 @@ impl<'a> Controller<'a> {
                 self.event_config.as_ref(),
                 &self.feature_store,
                 QuoteReadTarget::Held { depth_sink },
+                self.archive.as_ref(),
             )? {
                 Some(reason) => self.read_failure = Some(reason),
                 None => self.read_failure = None,
@@ -1268,6 +1322,7 @@ impl<'a> Controller<'a> {
                     self.event_config.as_ref(),
                     &self.feature_store,
                     QuoteReadTarget::Plan,
+                    self.archive.as_ref(),
                 )?;
             }
         }
@@ -1304,6 +1359,7 @@ impl<'a> Controller<'a> {
                 batch,
                 &mut self.scan,
                 self.event_config.as_ref(),
+                self.archive.as_ref(),
             )?
         } else {
             read_executable_quotes(
@@ -1316,6 +1372,7 @@ impl<'a> Controller<'a> {
                 self.event_config.as_ref(),
                 &self.feature_store,
                 QuoteReadTarget::Scan(&mut self.scan),
+                self.archive.as_ref(),
             )?
         };
         match outcome {
@@ -1356,7 +1413,11 @@ impl<'a> Controller<'a> {
                 &mut self.last_fresh_receipt,
                 self.event_config.as_ref(),
                 &self.feature_store,
-                QuoteReadTarget::Depth(&mut self.scan),
+                QuoteReadTarget::Depth {
+                    scan: &mut self.scan,
+                    executable: self.strategy.is_some(),
+                },
+                self.archive.as_ref(),
             )?;
         }
         Ok(())
@@ -1567,7 +1628,11 @@ impl<'a> Controller<'a> {
                 &mut self.last_fresh_receipt,
                 self.event_config.as_ref(),
                 &self.feature_store,
-                QuoteReadTarget::Depth(&mut self.scan),
+                QuoteReadTarget::Depth {
+                    scan: &mut self.scan,
+                    executable: self.strategy.is_some(),
+                },
+                self.archive.as_ref(),
             )?;
         }
         Ok(())
@@ -1702,7 +1767,13 @@ impl<'a> Controller<'a> {
                 Ok(status) => status,
                 Err(_) => serde_json::json!({"status":"unavailable"}),
             };
-            status["observation"] = harness::research_observation_status(c, cfg, now);
+            status["observation"] = if c.market_archive.is_some() && cfg.research_tools.is_some() {
+                self.research_worker.archive_observation().cloned().unwrap_or_else(|| {
+                    serde_json::json!({"status":"unavailable","reason":"archive_research_view_pending"})
+                })
+            } else {
+                harness::research_observation_status(c, cfg, now)
+            };
             if research_context_unavailable {
                 status["context"] = research_context_status(true);
             }
@@ -1711,6 +1782,9 @@ impl<'a> Controller<'a> {
     }
 
     fn rollover(&mut self, t: Now) -> Result<Advance> {
+        if self.research_worker.archive_maturing() {
+            return Ok(Advance::Idle("research_maturation_in_progress"));
+        }
         let Now { now, day, .. } = t;
         let c = &self.config;
         match rollover::advance_pi(c, now) {
@@ -1731,6 +1805,7 @@ impl<'a> Controller<'a> {
     /// Move the controller onto the next dated session's book and reset the
     /// per-session loop state.
     fn adopt(&mut self, next: Config, now: i64) -> Result<()> {
+        self.stop_archive()?;
         fs2::FileExt::unlock(&*self.lock)?;
         self.lock = AdvisoryLock::new(
             fs::OpenOptions::new()
@@ -1763,6 +1838,10 @@ impl<'a> Controller<'a> {
         self.stale_since = None;
         self.stale_seen = false;
         self.rollover_seen = false;
+        self.archive = start_archive(&next)?;
+        if self.archive.is_some() {
+            self.research_worker.reset_archive_evidence();
+        }
         self.config = next;
         self.history_attempt = HistoryAttempts::load(&self.config)?;
         self.last_history_check = 0;
@@ -2083,7 +2162,11 @@ impl<'a> Controller<'a> {
         let experiment_lifecycle = self.event_config
             .as_ref()
             .and_then(|cfg| {
-                super::super::harness::research::checked_lifecycle_library(c, cfg, now).ok()
+                if c.market_archive.is_some() && cfg.research_tools.is_some() {
+                    self.research_worker.archive_lifecycle().cloned()
+                } else {
+                    super::super::harness::research::checked_lifecycle_library(c, cfg, now).ok()
+                }
             })
             .unwrap_or_else(|| serde_json::json!({"status":"unavailable","reason":"experiment_lifecycle_unavailable","items":[],"activation_authorized":false}));
         let research_library = super::super::experiment_ledger::lifecycle::merge_into_library(

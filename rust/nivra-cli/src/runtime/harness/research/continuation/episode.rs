@@ -657,7 +657,10 @@ pub(super) fn decide_episode(
     let query_to = now.min(episode.deadline);
     let source_tape =
         super::super::super::super::paper_replay::virtual_observation_tape_bounded_immutable(
-            &episode.directory,
+            crate::runtime::paper_replay::QuoteSource::new(
+                &episode.directory,
+                c.market_archive.as_ref(),
+            ),
             episode
                 .session
                 .parse()

@@ -85,6 +85,8 @@ CREATE TABLE coverage (
     status text NOT NULL CHECK (status IN ('observed', 'empty', 'unavailable', 'failed_retryable')),
     attempted_ms bigint NOT NULL CHECK (attempted_ms >= 0),
     receipt_id bigint REFERENCES receipts(id),
+    -- A later HTTP 400 exclusion, kept apart from earlier empty coverage.
+    unavailable_ms bigint CHECK (unavailable_ms >= 0),
     PRIMARY KEY (instrument_id, unit, day),
     CHECK ((receipt_id IS NOT NULL) = (status IN ('observed', 'empty')))
 );
@@ -103,4 +105,26 @@ CREATE TRIGGER append_only BEFORE UPDATE OR DELETE ON quote_obs
 CREATE TRIGGER append_only BEFORE UPDATE OR DELETE ON daily_bars
     FOR EACH ROW EXECUTE FUNCTION market_archive_reject_mutation();
 CREATE TRIGGER append_only BEFORE UPDATE OR DELETE ON minute_bars
+    FOR EACH ROW EXECUTE FUNCTION market_archive_reject_mutation();
+
+CREATE INDEX coverage_unit_day ON coverage (unit, day, instrument_id);
+CREATE INDEX daily_bars_day ON daily_bars (day, instrument_id);
+
+CREATE TABLE history_imports (
+    range_id text NOT NULL,
+    kind text NOT NULL CHECK (kind IN ('receipt', 'unavailable')),
+    sha256 bytea NOT NULL CHECK (octet_length(sha256) = 32),
+    PRIMARY KEY (range_id, kind)
+);
+CREATE TRIGGER append_only BEFORE UPDATE OR DELETE ON history_imports
+    FOR EACH ROW EXECUTE FUNCTION market_archive_reject_mutation();
+
+CREATE TABLE book_quote_imports (
+    book_binding text NOT NULL,
+    tick_id bigint NOT NULL,
+    event_ms bigint NOT NULL,
+    receipt_id bigint NOT NULL REFERENCES receipts(id),
+    PRIMARY KEY (book_binding, tick_id)
+);
+CREATE TRIGGER append_only BEFORE UPDATE OR DELETE ON book_quote_imports
     FOR EACH ROW EXECUTE FUNCTION market_archive_reject_mutation();

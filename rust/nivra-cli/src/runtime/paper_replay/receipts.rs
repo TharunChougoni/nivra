@@ -1,5 +1,77 @@
 use super::*;
 
+use nivra_store::market_archive::QuoteBodies;
+
+#[derive(Clone, Copy)]
+pub(crate) struct QuoteSource<'a> {
+    pub(super) directory: &'a Path,
+    archive: Option<&'a MarketArchiveSettings>,
+}
+
+impl<'a> QuoteSource<'a> {
+    pub(crate) fn new(directory: &'a Path, archive: Option<&'a MarketArchiveSettings>) -> Self {
+        Self { directory, archive }
+    }
+
+    pub(super) fn rows(
+        self,
+        mut rows: impl Iterator<Item = rusqlite::Result<QuoteRow>>,
+    ) -> impl Iterator<Item = std::result::Result<QuoteRow, String>> {
+        // Bound decompression independently of the caller's total row limit.
+        const PAGE_SIZE: usize = 8;
+        let mut bodies = QuoteBodies::default();
+        let mut page = Vec::new().into_iter();
+        std::iter::from_fn(move || {
+            if let Some(row) = page.next() {
+                return Some(row);
+            }
+            let mut times = Vec::with_capacity(PAGE_SIZE);
+            let mut raw = Vec::with_capacity(PAGE_SIZE);
+            let mut journal_error = None;
+            for row in rows.by_ref().take(PAGE_SIZE) {
+                match row {
+                    Ok((at, received, body)) => {
+                        times.push((at, received));
+                        raw.push((received, body));
+                    }
+                    Err(error) => {
+                        journal_error = Some(Err(snapshot_unavailable(error)));
+                        break;
+                    }
+                }
+            }
+            let resolved = bodies.resolve_page(raw, || {
+                super::super::market_archive::connect(self.archive.ok_or("archive_config_missing")?)
+            });
+            page = times
+                .into_iter()
+                .zip(resolved)
+                .map(|((at, received), body)| {
+                    body.map(|body| (at, received, body)).map_err(|error| {
+                        let code = failure_code(error.as_ref());
+                        if code.starts_with("archive_") {
+                            code
+                        } else {
+                            "archive_quote_read_failed".into()
+                        }
+                    })
+                })
+                .chain(journal_error)
+                .collect::<Vec<_>>()
+                .into_iter();
+            page.next()
+        })
+    }
+}
+
+pub(super) type QuoteRow = (i64, Option<i64>, String);
+
+impl Config {
+    pub(crate) fn quote_source(&self) -> QuoteSource<'_> {
+        QuoteSource::new(&self.directory, self.market_archive.as_ref())
+    }
+}
+
 /// Explicit archived quote purpose. Research-observation receipts are virtual
 /// authority only: they are never mapped to protection or screen and never
 /// become executable paper evidence.
@@ -57,42 +129,35 @@ fn snapshot_unavailable<E>(_: E) -> String {
 /// eligibility clock. A future row can never enter a candidate dataset or a
 /// maturation window.
 pub(crate) fn quote_receipts_bounded(
-    source: &Path,
+    source: QuoteSource<'_>,
     session: NaiveDate,
     max_rows: usize,
     max_source_ms: i64,
 ) -> std::result::Result<QuoteEvidence, String> {
-    if !source.is_absolute() || !(1..=10_000).contains(&max_rows) || max_source_ms < 0 {
+    if !source.directory.is_absolute() || !(1..=10_000).contains(&max_rows) || max_source_ms < 0 {
         return Err(SNAPSHOT_UNAVAILABLE.into());
     }
-    let instruments = session_universe(source, session)?;
-    let db = open_quote_journal(source)?;
+    let instruments = session_universe(source.directory, session)?;
+    let db = open_quote_journal(source.directory)?;
     let mut statement = db
         .prepare(
-            "SELECT at,receipt,body FROM ticks WHERE event IN ('wide_quotes','scanner_metadata') AND at<=?2 ORDER BY id DESC LIMIT ?1",
+            "SELECT at,receipt,body FROM ticks WHERE id IN (
+                SELECT id FROM ticks WHERE event IN ('wide_quotes','scanner_metadata')
+                AND at<=?2 ORDER BY id DESC LIMIT ?1
+            ) ORDER BY id ASC",
         )
         .map_err(snapshot_unavailable)?;
     let rows = statement
-        .query_map(rusqlite::params![max_rows as i64, max_source_ms], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, Option<i64>>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })
+        .query_map(rusqlite::params![max_rows as i64, max_source_ms], quote_row)
         .map_err(snapshot_unavailable)?;
-    let mut reversed = Vec::new();
-    for row in rows {
-        reversed.push(row.map_err(snapshot_unavailable)?);
-    }
-    reversed.reverse();
     let index = instruments
         .iter()
         .map(|instrument| (instrument.key.as_str(), instrument))
         .collect::<BTreeMap<_, _>>();
-    let mut receipts = Vec::with_capacity(reversed.len());
+    let mut receipts = Vec::new();
     let mut previous = None;
-    for (at, receipt, raw) in reversed {
+    for row in source.rows(rows) {
+        let (at, receipt, raw) = row?;
         let receipt = archived_receipt(&index, at, receipt, &raw, max_source_ms)?;
         if previous.is_some_and(|prior| at <= prior) {
             return Err("scorer_snapshots_chronology".into());
@@ -107,6 +172,10 @@ pub(crate) fn quote_receipts_bounded(
         instruments,
         receipts,
     })
+}
+
+pub(super) fn quote_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<QuoteRow> {
+    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
 }
 
 /// The session's frozen cash universe from `wide-universe.json`.
@@ -266,7 +335,7 @@ pub(crate) struct ExecutionTape {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn execution_tape_bounded(
-    source: &Path,
+    source: QuoteSource<'_>,
     session: NaiveDate,
     previous_session: Option<NaiveDate>,
     capital: Amount,
@@ -388,7 +457,7 @@ pub(crate) fn execution_tape_bounded(
 /// or before the submitted host clock enter the dataset. Later ticks cannot
 /// mutate the frozen bytes because the caller stores them before admission.
 pub(crate) fn session_feature_snapshots(
-    source: &Path,
+    source: QuoteSource<'_>,
     session: NaiveDate,
     previous_session: Option<NaiveDate>,
     max_snapshots: usize,
@@ -396,7 +465,7 @@ pub(crate) fn session_feature_snapshots(
     lookback_samples: usize,
     now: i64,
 ) -> std::result::Result<Vec<nivra_core::strategy::FeatureSnapshot>, String> {
-    if !source.is_absolute()
+    if !source.directory.is_absolute()
         || !(1..=10_000).contains(&max_snapshots)
         || !(1..=300_000).contains(&max_age_ms)
         || !(1..=20).contains(&lookback_samples)
@@ -470,7 +539,7 @@ pub(crate) fn session_feature_snapshots(
 /// receipt time is inside the requested window are returned; the source clock is
 /// the tick observation time. No future or interpolated quote is invented.
 pub(crate) fn candidate_quotes(
-    source: &Path,
+    source: QuoteSource<'_>,
     session: NaiveDate,
     keys: &BTreeSet<String>,
     from_ms: i64,
@@ -486,8 +555,8 @@ pub(crate) fn candidate_quotes(
     {
         return Err("candidate_quotes_invalid".into());
     }
-    let instruments = session_universe(source, session)?;
-    let db = open_quote_journal(source)?;
+    let instruments = session_universe(source.directory, session)?;
+    let db = open_quote_journal(source.directory)?;
     let end_of_evidence_ms: Option<i64> = db
         .query_row(
             "SELECT MAX(at) FROM ticks WHERE event IN ('wide_quotes','scanner_metadata') AND at<=?1",
@@ -507,16 +576,14 @@ pub(crate) fn candidate_quotes(
             "SELECT at,receipt,body FROM ticks WHERE event IN ('wide_quotes','scanner_metadata') AND at<=?1 AND (receipt IS NULL OR (receipt>=?2 AND receipt<=?3)) ORDER BY id ASC",
         )
         .map_err(snapshot_unavailable)?;
-    let mut rows = statement
-        .query(rusqlite::params![now, from_ms, to_ms])
+    let rows = statement
+        .query_map(rusqlite::params![now, from_ms, to_ms], quote_row)
         .map_err(snapshot_unavailable)?;
     let mut quotes = Vec::new();
     let mut truncated = false;
     let mut previous = None;
-    while let Some(row) = rows.next().map_err(snapshot_unavailable)? {
-        let at = row.get::<_, i64>(0).map_err(snapshot_unavailable)?;
-        let receipt = row.get::<_, Option<i64>>(1).map_err(snapshot_unavailable)?;
-        let raw = row.get::<_, String>(2).map_err(snapshot_unavailable)?;
+    for row in source.rows(rows) {
+        let (at, receipt, raw) = row?;
         if previous.is_some_and(|prior| at <= prior) {
             return Err("scorer_snapshots_chronology".into());
         }
@@ -569,7 +636,7 @@ pub(crate) fn candidate_quotes(
 /// being silently dropped.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn candidate_quotes_window_with(
-    source: &Path,
+    source: QuoteSource<'_>,
     session: NaiveDate,
     keys: &BTreeSet<String>,
     from_ms: i64,
@@ -589,7 +656,7 @@ pub(super) fn candidate_quotes_window_with(
     {
         return Err("candidate_quotes_invalid".into());
     }
-    let raw = crate::read_bounded(&source.join("wide-universe.json"), 8_000_000)
+    let raw = crate::read_bounded(&source.directory.join("wide-universe.json"), 8_000_000)
         .map_err(|_| "candidate_quotes_unavailable".to_string())?;
     let universe: Value =
         serde_json::from_slice(&raw).map_err(|_| "candidate_quotes_unavailable".to_string())?;
@@ -604,11 +671,11 @@ pub(super) fn candidate_quotes_window_with(
     let db = if immutable {
         // A CLOSED predecessor book is read without creating `-wal`/`-shm`
         // sidecars. A non-empty WAL is refused by the immutable opener.
-        super::super::open_book_immutable(&source.join("paper.sqlite"))
+        super::super::open_book_immutable(&source.directory.join("paper.sqlite"))
             .map_err(|_| "candidate_quotes_unavailable".to_string())?
     } else {
         Connection::open_with_flags(
-            source.join("paper.sqlite"),
+            source.directory.join("paper.sqlite"),
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .map_err(|_| "candidate_quotes_unavailable".to_string())?
@@ -717,13 +784,14 @@ pub(super) fn candidate_quotes_window_with(
         }));
     }
     let mut quotes = Vec::new();
-    for (at, receipt, raw) in receipt_rows {
-        // The replayable view is bounded by the caller's authoritative clock.
-        // A later archived event is NOT consumed and does not poison an
-        // otherwise valid earlier receipt: it is simply not yet knowable.
-        if at > now {
-            continue;
-        }
+    // Keep the original row limit and resolve only events visible as of now.
+    let rows = receipt_rows
+        .into_iter()
+        .filter(|row| row.0 <= now)
+        .map(|(at, receipt, raw)| Ok((at, Some(receipt), raw)));
+    for row in source.rows(rows) {
+        let (at, receipt, raw) = row?;
+        let receipt = receipt.ok_or("candidate_quotes_receipt_binding")?;
         if receipt > at {
             return Err("candidate_quotes_receipt_binding".into());
         }

@@ -16,6 +16,15 @@ Remove `--output` and `--receipts-only` from `history-download` and
 Use `nivra archive export-daily-history`
 to build daily research datasets. See [operations](docs/OPERATIONS.md#move-an-existing-history-folder-to-timescaledb).
 
+**Quote capture moves to TimescaleDB.** With `market_archive` configured, the
+controller writes bulk REST quote bodies and normalized observations to the
+archive, and the paper book keeps a reference row in their place. Executable
+receipts that fills, protection and plan checks cite stay in the book. Run
+`nivra archive init --config PAPER_CONFIG` before starting the controller, and
+keep the archive configured when replaying books that contain references.
+`nivra archive import-book --config PAPER_CONFIG BOOK_DIR` copies a closed
+book's quote bodies into the archive without changing the book.
+
 ## 0.12.8 — 2026-11-26
 
 A pre-open history pass no longer parks a session it cannot start (#27). A

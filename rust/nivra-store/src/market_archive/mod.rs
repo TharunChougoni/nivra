@@ -1,17 +1,19 @@
 //! TimescaleDB archive for original market receipts and normalized observations.
 
 mod history;
+mod reader;
 mod writer;
 
 pub use history::{
     CoverageWindow, CoveredDays, DailyBar, DailyCoverage, covered_days, daily_bars, daily_coverage,
     daily_instrument_keys, latest_daily_bars, lock_history_download,
 };
-
+pub use postgres::Client as ArchiveClient;
+pub use reader::{QuoteBodies, quote_reference};
 pub use writer::{
     CandleBar, CandleBatch, CandleUnit, FailedAttempt, QuoteBatch, QuoteObservation, QuotePurpose,
-    Receipt, import_candles, import_unavailable, write_candles, write_failed_attempt,
-    write_failed_range, write_quotes,
+    Receipt, import_candles, import_quotes, import_unavailable, write_candles,
+    write_failed_attempt, write_failed_range, write_quotes,
 };
 
 pub use postgres::Client;
@@ -21,7 +23,7 @@ use std::time::Duration;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 1;
 
 fn connection_config(url: &str) -> Result<Config> {
     let invalid = "archive_url_invalid";
@@ -49,9 +51,26 @@ pub fn connect(url: &str, password: &str) -> Result<Client> {
     }
     connection_config(url)?
         .password(password)
-        .connect_timeout(Duration::from_secs(5))
+        .connect_timeout(Duration::from_secs(3))
+        .tcp_user_timeout(Duration::from_secs(5))
+        .keepalives_idle(Duration::from_secs(5))
+        .keepalives_interval(Duration::from_secs(2))
+        .keepalives_retries(2)
+        .options("-c statement_timeout=3000 -c lock_timeout=2000")
         .connect(NoTls)
         .map_err(|_| "archive_connection_failed".into())
+}
+
+/// A data or integrity error is permanent for this receipt.
+pub fn invalid_quote_write(error: &(dyn std::error::Error + 'static)) -> bool {
+    error
+        .downcast_ref::<postgres::Error>()
+        .and_then(postgres::Error::code)
+        .is_some_and(|code| matches!(&code.code()[..2], "22" | "23"))
+        || matches!(
+            error.to_string().as_str(),
+            "archive_receipt_conflict" | "archive_receipt_invalid"
+        )
 }
 
 pub fn init(db: &mut Client) -> Result<()> {
@@ -65,19 +84,16 @@ pub fn init(db: &mut Client) -> Result<()> {
         )",
     )?;
     let version = tx.query_opt("SELECT version FROM schema_version WHERE singleton", &[])?;
-    let version = version.map(|row| row.get::<_, i32>(0));
-    match version {
-        Some(SCHEMA_VERSION | 1) => {}
+    match version.as_ref().map(|row| row.get::<_, i32>(0)) {
+        Some(SCHEMA_VERSION) => {}
         Some(_) => return Err("archive_schema_version_unsupported".into()),
-        None => tx.batch_execute(include_str!("schema.sql"))?,
-    }
-    if version != Some(SCHEMA_VERSION) {
-        tx.batch_execute(include_str!("history.sql"))?;
-        tx.execute(
-            "INSERT INTO schema_version (version) VALUES ($1)
-             ON CONFLICT (singleton) DO UPDATE SET version = EXCLUDED.version",
-            &[&SCHEMA_VERSION],
-        )?;
+        None => {
+            tx.batch_execute(include_str!("schema.sql"))?;
+            tx.execute(
+                "INSERT INTO schema_version (version) VALUES ($1)",
+                &[&SCHEMA_VERSION],
+            )?;
+        }
     }
     tx.commit()?;
     Ok(())

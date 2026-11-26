@@ -1,7 +1,7 @@
 //! Typed orchestrator tools. Operator-supplied sources are read-only; model
 //! arguments contain no paths, SQL, credentials, approval or session controls.
 use crate::{
-    strategy_archive::{SourceQuery, read_source},
+    strategy_archive::{ArchiveConnection, SourceQuery, read_source_with_archive},
     strategy_lab::{ReplayConfig, replay_configured},
 };
 use nivra_core::strategy::{FeatureSnapshot, StrategySpec};
@@ -34,6 +34,7 @@ pub struct PipelineTools<'a> {
     recorded: &'a [FeatureSnapshot],
     replay: ReplayConfig,
     read_sources: bool,
+    archive: Option<ArchiveConnection<'a>>,
 }
 impl<'a> PipelineTools<'a> {
     pub fn new(
@@ -50,7 +51,12 @@ impl<'a> PipelineTools<'a> {
             recorded,
             replay,
             read_sources: config.read_sources,
+            archive: None,
         })
+    }
+    pub(crate) fn with_archive(mut self, archive: Option<ArchiveConnection<'a>>) -> Self {
+        self.archive = archive;
+        self
     }
     pub fn call(&mut self, request: ToolRequest) -> Result<Value, String> {
         match request {
@@ -69,10 +75,11 @@ impl<'a> PipelineTools<'a> {
                 if budget < 1024 {
                     return Err("strategy_tool_budget_exhausted".into());
                 }
-                let page = read_source(
+                let page = read_source_with_archive(
                     self.session.ok_or("strategy_session_not_configured")?,
                     &query,
                     budget,
+                    self.archive,
                 )?;
                 let value = serde_json::to_value(page).map_err(|_| "strategy_tool_encode")?;
                 self.results.charge(&value)?;

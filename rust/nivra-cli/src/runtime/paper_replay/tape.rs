@@ -40,7 +40,7 @@ pub(crate) struct TapeGap {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn virtual_observation_tape_bounded(
-    source: &Path,
+    source: QuoteSource<'_>,
     session: NaiveDate,
     previous_session: Option<NaiveDate>,
     keys: &BTreeSet<String>,
@@ -74,7 +74,7 @@ pub(crate) fn virtual_observation_tape_bounded(
 /// `immutable=1`, so no predecessor `-wal`/`-shm` file is created or changed.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn virtual_observation_tape_bounded_immutable(
-    source: &Path,
+    source: QuoteSource<'_>,
     session: NaiveDate,
     previous_session: Option<NaiveDate>,
     keys: &BTreeSet<String>,
@@ -106,7 +106,7 @@ pub(crate) fn virtual_observation_tape_bounded_immutable(
 
 #[allow(clippy::too_many_arguments)]
 fn virtual_observation_tape_bounded_with(
-    source: &Path,
+    source: QuoteSource<'_>,
     session: NaiveDate,
     previous_session: Option<NaiveDate>,
     keys: &BTreeSet<String>,
@@ -324,12 +324,12 @@ fn virtual_observation_tape_bounded_with(
         });
     }
     let universe: Value = serde_json::from_slice(
-        &crate::read_bounded(&source.join("wide-universe.json"), 8_000_000).map_err(|_| {
-            TapeGap {
+        &crate::read_bounded(&source.directory.join("wide-universe.json"), 8_000_000).map_err(
+            |_| TapeGap {
                 reason: "observation_tape_invalid",
                 gap: json!({"kind":"universe_unavailable"}),
-            }
-        })?,
+            },
+        )?,
     )
     .map_err(|_| TapeGap {
         reason: "observation_tape_invalid",

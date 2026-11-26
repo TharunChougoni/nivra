@@ -90,6 +90,9 @@ pub enum Commands {
         requests: PathBuf,
         #[arg(long)]
         session: Option<PathBuf>,
+        /// Paper config for books that archive their quote bodies.
+        #[arg(long)]
+        archive_config: Option<PathBuf>,
         #[arg(long)]
         recorded: Option<PathBuf>,
         #[arg(long)]
@@ -115,6 +118,9 @@ pub enum Commands {
     Source {
         #[arg(long)]
         session: PathBuf,
+        /// Paper config for books that archive their quote bodies.
+        #[arg(long)]
+        archive_config: Option<PathBuf>,
         #[arg(long)]
         query: PathBuf,
         #[arg(long, default_value_t = 16384)]
@@ -569,7 +575,12 @@ pub(crate) fn cost_adjusted(
     }
     Ok(metrics)
 }
-pub fn run(command: Commands) -> Result<(), Box<dyn Error>> {
+pub fn run(
+    command: Commands,
+    connect_archive: impl Fn(
+        &Path,
+    ) -> Result<nivra_store::market_archive::ArchiveClient, Box<dyn Error>>,
+) -> Result<(), Box<dyn Error>> {
     match command {
         Commands::ReplayActions {
             source,
@@ -666,6 +677,7 @@ pub fn run(command: Commands) -> Result<(), Box<dyn Error>> {
             run,
             requests,
             session,
+            archive_config,
             recorded,
             replay_config,
         } => {
@@ -689,6 +701,8 @@ pub fn run(command: Commands) -> Result<(), Box<dyn Error>> {
                 .transpose()?
                 .unwrap_or_default();
             let db = ResultsDb::open(&database)?;
+            let connect =
+                || connect_archive(archive_config.as_deref().ok_or("archive_config_missing")?);
             let mut tools = crate::strategy_pipeline::PipelineTools::new(
                 &db,
                 run,
@@ -696,7 +710,8 @@ pub fn run(command: Commands) -> Result<(), Box<dyn Error>> {
                 session.as_deref(),
                 &recorded,
                 replay_config,
-            )?;
+            )?
+            .with_archive(Some(&connect));
             for request in requests {
                 println!("{}", serde_json::to_string(&tools.call(request)?)?);
             }
@@ -729,11 +744,19 @@ pub fn run(command: Commands) -> Result<(), Box<dyn Error>> {
         }
         Commands::Source {
             session,
+            archive_config,
             query,
             budget_bytes,
         } => {
             let query = read(&query)?;
-            let page = crate::strategy_archive::read_source(&session, &query, budget_bytes)?;
+            let connect =
+                || connect_archive(archive_config.as_deref().ok_or("archive_config_missing")?);
+            let page = crate::strategy_archive::read_source_with_archive(
+                &session,
+                &query,
+                budget_bytes,
+                Some(&connect),
+            )?;
             println!("{}", serde_json::to_string(&page)?);
         }
         Commands::Init { database } => {

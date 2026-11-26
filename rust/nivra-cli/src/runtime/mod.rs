@@ -256,6 +256,7 @@ fn open_book(c: &Config) -> Result<Connection> {
     db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
         CREATE TABLE IF NOT EXISTS state(id INTEGER PRIMARY KEY CHECK(id=1), binding TEXT NOT NULL, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS ticks(id INTEGER PRIMARY KEY, at INTEGER NOT NULL, receipt INTEGER, body TEXT, event TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS archive_protected_receipts(tick_id INTEGER PRIMARY KEY);
         CREATE INDEX IF NOT EXISTS ticks_event_receipt_idx ON ticks(event, receipt, id);
         CREATE INDEX IF NOT EXISTS ticks_event_at_idx ON ticks(event, at, id);")?;
     if !anchor.exists() {

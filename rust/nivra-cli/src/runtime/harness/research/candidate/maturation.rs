@@ -162,7 +162,7 @@ fn record_observation_terminal(
     // with a correct self-hash and a valid source exit quote cannot poison an
     // empty lifecycle table.
     let context = StoredObservationContext {
-        source: &c.directory,
+        source: c.quote_source(),
         session: c.session,
         previous_session: candidate_previous_trading_session(c),
         task,
@@ -472,7 +472,7 @@ pub(crate) enum StoredObservationKind {
 /// Everything the canonical reader needs to re-derive a stored observation from
 /// VERIFIED source facts. Nothing here is copied from the stored body.
 pub(crate) struct StoredObservationContext<'a> {
-    pub source: &'a Path,
+    pub source: crate::runtime::paper_replay::QuoteSource<'a>,
     pub session: chrono::NaiveDate,
     pub previous_session: Option<chrono::NaiveDate>,
     /// The VERIFIED observation task that produced `score`. The stored body's
@@ -1129,7 +1129,7 @@ pub(crate) fn mature_observation(
     // deadline still queries the original window, never a later read clock.
     let query_to = now.min(deadline);
     let exit_tape = super::super::super::super::paper_replay::virtual_observation_tape_bounded(
-        &c.directory,
+        c.quote_source(),
         c.session,
         previous_session,
         &keys,

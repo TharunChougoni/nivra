@@ -153,16 +153,59 @@ fn insert_instruments(tx: &mut Transaction<'_>, keys: &[&str]) -> Result<()> {
 pub fn write_quotes(db: &mut Client, batch: &QuoteBatch<'_>) -> Result<bool> {
     let compressed = batch.receipt.compress()?;
     let mut tx = db.transaction()?;
-    let Some(receipt_id) = insert_or_verify(&mut tx, 1, &batch.receipt, &compressed)? else {
-        tx.commit()?;
-        return Ok(false);
+    let (_, inserted) = insert_quotes(&mut tx, batch, &compressed)?;
+    tx.commit()?;
+    Ok(inserted)
+}
+
+/// Bind a closed book's tick to the exact receipt in the same transaction.
+pub fn import_quotes(
+    db: &mut Client,
+    batch: &QuoteBatch<'_>,
+    binding: &str,
+    tick_id: i64,
+    event_ms: i64,
+) -> Result<bool> {
+    let compressed = batch.receipt.compress()?;
+    let mut tx = db.transaction()?;
+    let (receipt_id, inserted) = insert_quotes(&mut tx, batch, &compressed)?;
+    let input: &[&(dyn postgres::types::ToSql + Sync)] =
+        &[&binding, &tick_id, &event_ms, &receipt_id];
+    if tx.execute(
+        "INSERT INTO book_quote_imports (book_binding, tick_id, event_ms, receipt_id)
+         VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+        input,
+    )? == 0
+        && tx.query_opt(
+            "SELECT 1 FROM book_quote_imports WHERE (book_binding, tick_id, event_ms, receipt_id)
+             = ($1, $2, $3, $4)",
+            input,
+        )?.is_none()
+    {
+        return Err("archive_receipt_conflict".into());
+    }
+    tx.commit()?;
+    Ok(inserted)
+}
+
+fn insert_quotes(
+    tx: &mut Transaction<'_>,
+    batch: &QuoteBatch<'_>,
+    compressed: &[u8],
+) -> Result<(i64, bool)> {
+    let Some(receipt_id) = insert_or_verify(tx, 1, &batch.receipt, compressed)? else {
+        let row = tx.query_one(
+            "SELECT id FROM receipts WHERE sha256 = $1",
+            &[&batch.receipt.sha256.as_slice()],
+        )?;
+        return Ok((row.get(0), false));
     };
     let keys: Vec<&str> = batch
         .observations
         .iter()
         .map(|row| row.instrument_key.as_str())
         .collect();
-    insert_instruments(&mut tx, &keys)?;
+    insert_instruments(tx, &keys)?;
     let rows = Json(&batch.observations);
     tx.execute_typed(
         "INSERT INTO quote_obs
@@ -182,8 +225,7 @@ pub fn write_quotes(db: &mut Client, batch: &QuoteBatch<'_>) -> Result<bool> {
             (&receipt_id, Type::INT8),
         ],
     )?;
-    tx.commit()?;
-    Ok(true)
+    Ok((receipt_id, true))
 }
 
 const CANDLE_COLUMNS: &str =

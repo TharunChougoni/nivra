@@ -4046,10 +4046,11 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
         &mut p,
         &quotes,
         at,
-        "fixture",
+        "fixture".into(),
         || at,
         Some(&BTreeSet::new()),
         false,
+        None,
     )
     .unwrap();
     assert!(p.fills.is_empty() && !p.halted);
@@ -4116,10 +4117,11 @@ fn planned_fills_commit_freshness_decision_and_exit_intents_atomically() {
         &mut p,
         &q,
         later,
-        "fixture",
+        "fixture".into(),
         || later,
         Some(&BTreeSet::new()),
         false,
+        None,
     )
     .unwrap();
     assert!(p.positions.is_empty());
@@ -4594,4 +4596,346 @@ mod strategy_execution {
         assert!(!tape.p.fills[1].buy && !tape.p.halted && !tape.p.stopped);
         assert!(recent_actions(&tape.db).unwrap().is_empty());
     }
+}
+
+#[test]
+#[ignore = "requires TimescaleDB at NIVRA_ARCHIVE_TEST_URL"]
+fn archive_capture_replays_the_same_session_as_sqlite() -> Result<()> {
+    use crate::runtime::{market_archive, paper_replay};
+    use serde_json::{Value, json};
+    use std::io::Write;
+    use std::time::{Duration, Instant};
+
+    let test_url = std::env::var("NIVRA_ARCHIVE_TEST_URL")?;
+    let (scheme, auth_host) = test_url.split_once("://").ok_or("fixture_url")?;
+    let (auth, host) = auth_host.rsplit_once('@').ok_or("fixture_url")?;
+    let (user, password) = auth.split_once(':').ok_or("fixture_url")?;
+    let tmp = tempfile::tempdir()?;
+    let password_file = tmp.path().join("archive-password");
+    fs::OpenOptions::new()
+        .create_new(true)
+        .mode(0o600)
+        .write(true)
+        .open(&password_file)?
+        .write_all(password.as_bytes())?;
+    let settings = MarketArchiveSettings {
+        url: format!("{scheme}://{user}@{host}"),
+        password_file,
+    };
+    let mut archive_db = market_archive::connect(&settings)?;
+    nivra_store::market_archive::init(&mut archive_db)?;
+    let before = nivra_store::market_archive::check(&mut archive_db)?;
+    drop(archive_db);
+    let mut archived = super::super::tests::config(&tmp.path().join("archive-on"));
+    archived.market_archive = Some(settings.clone());
+    let legacy = super::super::tests::config(&tmp.path().join("archive-off"));
+    let (metadata_batches, screen_batches): (u32, u32) =
+        if std::env::var_os("NIVRA_ARCHIVE_SIZE_REPLAY").is_some() {
+            (2_062, 2_315)
+        } else {
+            (3, 3)
+        };
+    let nonce = millis();
+    let instruments = (0..200)
+        .map(|i| {
+            json!({
+                "key":format!("NSE_EQ|SYNTHETIC{nonce}-{i}"), "symbol":format!("SYNTHETIC{i}"),
+                "series":"EQ", "tick":"0.05"
+            })
+        })
+        .collect::<Vec<_>>();
+    for c in [&archived, &legacy] {
+        fs::create_dir_all(&c.directory)?;
+        fs::write(
+            c.directory.join("wide-universe.json"),
+            json!({"session":c.session,"instruments":instruments}).to_string(),
+        )?;
+    }
+    let mut new_book = open_book(&archived)?;
+    let mut old_book = open_book(&legacy)?;
+    let spool_path = archived.directory.join("archive-spool.sqlite");
+    let unavailable_password = tmp.path().join("archive-password.offline");
+    if metadata_batches == 3 {
+        fs::rename(&settings.password_file, &unavailable_password)?;
+    }
+    let mut writer =
+        market_archive::capture::Writer::start(&archived.directory, tmp.path(), settings)?;
+    let mut archived_p = super::super::tests::test_portfolio();
+    let mut legacy_p = archived_p.clone();
+    let base = archived
+        .session
+        .and_hms_opt(4, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_millis();
+    let template: Value = serde_json::from_str(include_str!(
+        "../../../../../fixtures/upstox_full_quote_doc_example.json"
+    ))?;
+    let quote_body = |count: usize, received: i64| {
+        let data: serde_json::Map<String, Value> = instruments
+            .iter()
+            .take(count)
+            .map(|instrument| {
+                let key = instrument["key"].as_str().unwrap();
+                let mut row = template["data"]["NSE_EQ:NHPC"].clone();
+                row["instrument_token"] = json!(key);
+                row["symbol"] = instrument["symbol"].clone();
+                row["timestamp"] = json!(received);
+                row["depth"]["sell"] = json!([{"price":52.10,"quantity":100}]);
+                (key.replace('|', ":"), row)
+            })
+            .collect();
+        json!({"status":"success","data":data}).to_string()
+    };
+    let mut pace_db = (metadata_batches > 3)
+        .then(|| market_archive::connect(archived.market_archive.as_ref().unwrap()))
+        .transpose()?;
+    let mut submitted = 0;
+    let mut last = base;
+    let mut executable_batches = 0;
+    for i in 0..metadata_batches.max(screen_batches) {
+        for (purpose, count) in [
+            (
+                "scanner_metadata",
+                if i < metadata_batches { 200 } else { 0 },
+            ),
+            ("scanner", if i < screen_batches { 40 } else { 0 }),
+        ] {
+            if count == 0 {
+                continue;
+            }
+            let received = last + 4_900;
+            last = received + 2;
+            let executable = purpose == "scanner" && (i % 100 == 0 || i + 1 == screen_batches);
+            let purpose = if executable {
+                "execution_or_protection"
+            } else {
+                purpose
+            };
+            let raw = json!({
+                "source":"upstox-readonly-v1","purpose":purpose,"requested_ms":received-1,
+                "received_ms":received,"body":quote_body(count, received)
+            })
+            .to_string();
+            if purpose == "scanner_metadata" {
+                persist_scanner_metadata(
+                    &mut old_book,
+                    &legacy,
+                    &legacy_p,
+                    last,
+                    received,
+                    raw.clone(),
+                    None,
+                )?;
+                persist_scanner_metadata(
+                    &mut new_book,
+                    &archived,
+                    &archived_p,
+                    last,
+                    received,
+                    raw,
+                    Some(&writer),
+                )?;
+            } else {
+                executable_batches += i64::from(executable);
+                commit_quotes_screened(
+                    &mut old_book,
+                    &legacy,
+                    &mut legacy_p,
+                    &BTreeMap::new(),
+                    received,
+                    raw.as_str().into(),
+                    || last,
+                    None,
+                    false,
+                    None,
+                )?;
+                commit_quotes_screened(
+                    &mut new_book,
+                    &archived,
+                    &mut archived_p,
+                    &BTreeMap::new(),
+                    received,
+                    raw.into(),
+                    || last,
+                    None,
+                    false,
+                    Some(ArchivedQuote {
+                        writer: &writer,
+                        purpose,
+                        executable,
+                    }),
+                )?;
+            }
+            submitted += 1;
+            // Keep the accelerated fixture below the live channel capacity.
+            // Compare committed row counts before admitting the next group.
+            if submitted % 8 == 0
+                && let Some(db) = &mut pace_db
+            {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                loop {
+                    let receipts: i64 = db.query_one("SELECT count(*) FROM receipts", &[])?.get(0);
+                    if receipts >= before.receipts + submitted {
+                        break;
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "archive did not commit the paced fixture"
+                    );
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+    }
+    if metadata_batches == 3 {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !spool_path.is_file() {
+            assert!(
+                Instant::now() < deadline,
+                "writer did not spool while offline"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        fs::rename(
+            unavailable_password,
+            &archived.market_archive.as_ref().unwrap().password_file,
+        )?;
+        while spool_path.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "writer did not drain the spool on reconnect"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    writer.stop();
+    assert_eq!(writer.take_dropped(), 0);
+    let expected_receipts = i64::from(metadata_batches + screen_batches);
+    let mut archive_db = market_archive::connect(archived.market_archive.as_ref().unwrap())?;
+    let after = nivra_store::market_archive::check(&mut archive_db)?;
+    assert_eq!(after.receipts - before.receipts, expected_receipts);
+    assert_eq!(
+        after.quote_obs - before.quote_obs,
+        i64::from(200 * metadata_batches + 40 * screen_batches)
+    );
+    let compare = |c: &Config| -> Result<_> {
+        let evidence = paper_replay::quote_receipts_bounded(c.quote_source(), c.session, 6, last)?;
+        Ok(evidence
+            .receipts
+            .into_iter()
+            .map(|r| (r.at_ms, r.receipt_ms, r.kind, r.observations))
+            .collect::<Vec<_>>())
+    };
+    assert_eq!(compare(&archived)?, compare(&legacy)?);
+    let keys = BTreeSet::from([instruments[0]["key"].as_str().unwrap().to_owned()]);
+    let query = |c: &Config| {
+        paper_replay::candidate_quotes(
+            c.quote_source(),
+            c.session,
+            &keys,
+            last - 30_000,
+            last,
+            10,
+            last,
+        )
+    };
+    assert_eq!(query(&archived)?, query(&legacy)?);
+    let replay = |c: &Config| {
+        paper_replay::execution_tape_bounded(
+            c.quote_source(),
+            c.session,
+            Some(c.previous_session),
+            c.allocation().unwrap(),
+            6,
+            2_000,
+            2_000_000,
+            last,
+        )
+    };
+    let archived_tape = replay(&archived)?;
+    let legacy_tape = replay(&legacy)?;
+    assert_eq!(archived_tape.events, legacy_tape.events);
+    assert_eq!(archived_tape.manifest, legacy_tape.manifest);
+    assert_eq!(
+        new_book.query_row("SELECT count(*) FROM archive_protected_receipts", [], |r| r
+            .get::<_, i64>(0))?,
+        executable_batches
+    );
+    archived_p.closed = true;
+    persist(
+        &mut new_book,
+        &archived,
+        &archived_p,
+        last + 1,
+        None,
+        None,
+        "session_closed",
+    )?;
+    legacy_p.closed = true;
+    persist(
+        &mut old_book,
+        &legacy,
+        &legacy_p,
+        last + 1,
+        None,
+        None,
+        "session_closed",
+    )?;
+    drop(new_book);
+    drop(old_book);
+    let size =
+        |c: &Config| -> Result<u64> { Ok(fs::metadata(c.directory.join("paper.sqlite"))?.len()) };
+    let (without, with) = (size(&legacy)?, size(&archived)?);
+    assert!(with < without);
+    println!(
+        "synthetic replay processed {expected_receipts} receipts without gaps: paper.sqlite off={without} bytes on={with} bytes"
+    );
+
+    // The short fixture also verifies a legacy-only receipt is inserted once.
+    if metadata_batches == 3 {
+        let book_path = legacy.directory.join("paper.sqlite");
+        let mut legacy_db = Connection::open(&book_path)?;
+        let receipt = last + 2;
+        let raw = json!({
+            "source":"upstox-readonly-v1","purpose":"scanner_metadata","requested_ms":receipt-1,
+            "received_ms":receipt,"body":quote_body(1, receipt)
+        })
+        .to_string();
+        persist_scanner_metadata(
+            &mut legacy_db,
+            &legacy,
+            &legacy_p,
+            receipt,
+            receipt,
+            raw,
+            None,
+        )?;
+        drop(legacy_db);
+        let bytes = fs::read(&book_path)?;
+        for inserted in [1, 0] {
+            let result = market_archive::import_book(&mut archive_db, &legacy.directory)?;
+            assert_eq!(result["inserted"], inserted);
+            assert_eq!(result["verified"], expected_receipts + 1 - inserted);
+            assert_eq!(fs::read(&book_path)?, bytes);
+        }
+        let archive_before = nivra_store::market_archive::check(&mut archive_db)?;
+        let changed = Connection::open(&book_path)?;
+        changed.execute(
+            "UPDATE ticks SET body=json_set(body,'$.requested_ms',receipt-2) WHERE id=1",
+            [],
+        )?;
+        drop(changed);
+        assert_eq!(
+            market_archive::import_book(&mut archive_db, &legacy.directory)
+                .unwrap_err()
+                .to_string(),
+            "archive_receipt_conflict"
+        );
+        assert_eq!(
+            nivra_store::market_archive::check(&mut archive_db)?,
+            archive_before
+        );
+    }
+    Ok(())
 }

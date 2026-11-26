@@ -34,7 +34,7 @@ pub(super) fn strategy_backtest(
     };
     let capital = c.allocation()?;
     let tape = match crate::runtime::paper_replay::execution_tape_bounded(
-        &c.directory,
+        c.quote_source(),
         c.session,
         candidate_previous_trading_session(c),
         capital,

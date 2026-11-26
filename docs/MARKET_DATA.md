@@ -96,7 +96,7 @@ The feed worker records each received binary frame and its original receipt
 time in the session's `market-feed.sqlite`. The archive preserves frames
 before the scanner combines updates and batches disk commits. A forced
 process exit can lose the pending batch. A write error puts the feed into
-fallback. REST quote receipts are recorded in the session's `paper.sqlite`.
+fallback. REST quote storage depends on the [market archive](#market-archive).
 
 Main `market_feed` settings:
 
@@ -112,6 +112,44 @@ Main `market_feed` settings:
 
 The fragment lists the other keys with their defaults.
 
+### Market archive
+
+Set `market_archive.url` to a PostgreSQL URL without a password and
+`market_archive.password_file` to an absolute path to a private mode-0600 file.
+Run `nivra archive init --config PAPER_CONFIG` before starting the controller.
+
+With the archive configured, the controller sends REST quote batches to one
+background writer. Each database transaction stores the original envelope
+compressed with Zstandard and the normalized observations. If a provider row
+lacks valid fields, the archive keeps the original envelope and omits that
+row from the normalized observations. The book keeps SHA-256 references and
+the original event and receipt times for scanner metadata and screen-only
+reads. It keeps full receipts for protection, plan checks, and depth reads
+that can supply the strategy executor.
+
+During a database outage, the writer queues batches in
+`archive-spool.sqlite` in the session directory. The spool database is capped
+at 64 MiB per session, with a transient SQLite rollback journal. The writer
+replays the oldest batch first after reconnecting. It also recovers spools in
+earlier dated session directories under `sessions_root`. The in-memory
+channel has 16 slots. If the channel or spool cannot accept a batch, the
+controller records an `archive_gap` tick and emits an alert. A forced process
+exit can also lose batches still in memory.
+
+Research quote queries, backtests, and tape exports read the archived bytes
+using the journal's original ordering and time bounds. A reference whose
+body is still queued or missing returns an error. Inline receipts remain
+readable from SQLite. The controller refreshes archive-backed research
+projections in the background. Use the same archive config when opening a
+book that contains references. For `strategy-lab source` and `strategy-lab tools`, pass
+that paper config with `--archive-config`.
+
+To copy original quotes from a closed, checkpointed book, run
+`nivra archive import-book --config PAPER_CONFIG BOOK_DIR`. The command
+opens the book without modifying it. It verifies identical receipts on
+repeat runs and refuses a changed receipt for an already imported tick.
+The summary counts compacted legacy rows whose original body is unavailable.
+
 ### Research quote tape
 
 Each name that enters the top `top_k` of the live ranking (see
@@ -119,8 +157,8 @@ Each name that enters the top `top_k` of the live ranking (see
 until 30 minutes after it last ranked there. The names share the existing
 request every `depth_poll_ms` (8 s), after the shortlist, so they use no
 extra reads. Held names are skipped because the protection read covers them
-every 2 s. The receipts are ordinary `wide_quotes` with their original
-receipt times, and the two-second gate is unchanged.
+every 2 s. The journal records ordinary `wide_quotes` with the original
+receipt times used by the two-second gate.
 
 With the default 40-name shortlist, 160 keys are left for watched names
 before the 200-key batch is full. Nivra never adds a read to cover a gap. It

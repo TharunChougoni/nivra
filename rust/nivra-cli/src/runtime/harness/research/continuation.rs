@@ -526,7 +526,10 @@ fn verify_continuation_context(
         .and_then(|raw| raw.parse().ok())
         .or_else(|| source_session.parse::<chrono::NaiveDate>().ok()?.pred_opt());
     let context = super::candidate::StoredObservationContext {
-        source: source_directory,
+        source: crate::runtime::paper_replay::QuoteSource::new(
+            source_directory,
+            c.market_archive.as_ref(),
+        ),
         session: source_session
             .parse()
             .map_err(|_| "candidate_continuation_source_unverified")?,

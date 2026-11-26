@@ -62,6 +62,24 @@ pub(crate) type ActiveResearch = (
 );
 
 #[derive(Default)]
+pub(super) struct ArchiveEvidence {
+    pending: Option<std::sync::mpsc::Receiver<ArchiveUpdate>>,
+    snapshot: Option<Evidence>,
+    started_ms: Option<i64>,
+    maturing: bool,
+}
+
+struct Evidence {
+    observation: Value,
+    lifecycle: Option<Value>,
+}
+
+enum ArchiveUpdate {
+    Matured(Value),
+    Snapshot(Evidence),
+}
+
+#[derive(Default)]
 pub(crate) struct ResearchRuntime {
     pub(crate) active: Option<ActiveResearch>,
     pub(crate) terminal_cursor: Option<jobs::TaskCursor>,
@@ -69,9 +87,104 @@ pub(crate) struct ResearchRuntime {
     pub(crate) blocked: Option<(ResearchTaskKind, String, u32, &'static str)>,
     pub(crate) last_mature_ms: Option<i64>,
     pub(crate) lifecycle: Option<Value>,
+    pub(super) archive_evidence: ArchiveEvidence,
 }
 
 impl ResearchRuntime {
+    pub(crate) fn archive_maturing(&self) -> bool {
+        self.archive_evidence.maturing
+    }
+
+    pub(crate) fn archive_observation(&self) -> Option<&Value> {
+        self.archive_evidence
+            .snapshot
+            .as_ref()
+            .map(|snapshot| &snapshot.observation)
+    }
+
+    pub(crate) fn archive_lifecycle(&self) -> Option<&Value> {
+        self.archive_evidence.snapshot.as_ref()?.lifecycle.as_ref()
+    }
+
+    pub(crate) fn reset_archive_evidence(&mut self) {
+        self.archive_evidence = ArchiveEvidence::default();
+        self.last_mature_ms = None;
+    }
+
+    fn poll_archive_evidence(&mut self) {
+        let Some(receiver) = self.archive_evidence.pending.as_ref() else {
+            return;
+        };
+        loop {
+            match receiver.try_recv() {
+                Ok(ArchiveUpdate::Matured(status)) => {
+                    self.lifecycle = Some(status);
+                    self.archive_evidence.maturing = false;
+                }
+                Ok(ArchiveUpdate::Snapshot(snapshot)) => {
+                    self.archive_evidence.snapshot = Some(snapshot);
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    if self.archive_evidence.maturing {
+                        self.lifecycle = Some(
+                            json!({"status":"error","reason":"candidate_maturation_unavailable"}),
+                        );
+                    }
+                    self.archive_evidence.snapshot = None;
+                    break;
+                }
+            }
+        }
+        self.archive_evidence.maturing = false;
+        self.archive_evidence.pending = None;
+    }
+
+    fn refresh_archive_evidence(
+        &mut self,
+        c: &Config,
+        cfg: &PlannerConfig,
+        now: i64,
+        mature: bool,
+    ) -> Result<()> {
+        if self.archive_evidence.pending.is_some()
+            || !mature
+                && self
+                    .archive_evidence
+                    .started_ms
+                    .is_some_and(|last| now.saturating_sub(last) < 2_000)
+        {
+            return Ok(());
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (c, cfg) = (c.clone(), cfg.clone());
+        std::thread::Builder::new()
+            .name("archive-research".into())
+            .spawn(move || {
+                if mature
+                    && tx
+                        .send(ArchiveUpdate::Matured(maturation_status(&c, &cfg, now)))
+                        .is_err()
+                {
+                    return;
+                }
+                let observation = super::candidate::observation_status(&c, &cfg, now);
+                let lifecycle = super::candidate::checked_lifecycle_library(&c, &cfg, now).ok();
+                let _ = tx.send(ArchiveUpdate::Snapshot(Evidence {
+                    observation,
+                    lifecycle,
+                }));
+            })?;
+        self.archive_evidence.started_ms = Some(now);
+        self.archive_evidence.pending = Some(rx);
+        self.archive_evidence.maturing = mature;
+        if mature {
+            self.last_mature_ms = Some(now);
+        }
+        Ok(())
+    }
+
     pub(crate) fn observe_channel(&mut self) {
         let Some((kind, task_id, revision, _, receiver)) = self.active.as_ref() else {
             return;
@@ -431,6 +544,13 @@ pub(crate) fn tick_tasks(
     })
 }
 
+fn maturation_status(c: &Config, cfg: &PlannerConfig, now: i64) -> Value {
+    match mature_candidates(c, cfg, now) {
+        Ok(value) => json!({"status":"ok","maturation":value["status"]}),
+        Err(_) => json!({"status":"error","reason":"candidate_maturation_unavailable"}),
+    }
+}
+
 /// Testable variant of [`tick_tasks`] with an explicit owned-unit runner
 /// factory. Production uses [`bubblewrap::CandidateRunner`]; tests use a fake
 /// that never invokes systemd.
@@ -446,6 +566,10 @@ pub(crate) fn tick_tasks_with_runner(
     let Some(settings) = cfg.research_tools.as_ref() else {
         return Ok(json!({"status":"disabled"}));
     };
+    runtime.poll_archive_evidence();
+    if runtime.archive_maturing() {
+        return Ok(json!({"status":"maturing","lifecycle":runtime.lifecycle}));
+    }
     let binding = book_binding(c)?;
     runtime.observe_channel();
     let Ok(mut queue) = open_queue(settings, &c.directory.join("model"), false) else {
@@ -593,23 +717,18 @@ pub(crate) fn tick_tasks_with_runner(
             row.status,
         );
     }
-    if runtime.active.is_none()
+    let mature_due = runtime.active.is_none()
         && runtime
             .last_mature_ms
-            .is_none_or(|last| now.saturating_sub(last) >= 60_000)
-    {
-        runtime.last_mature_ms = Some(now);
-        match mature_candidates(c, cfg, now) {
-            Ok(value) => {
-                runtime.lifecycle = Some(json!({"status":"ok","maturation":value["status"]}));
-            }
-            Err(_) => {
-                runtime.lifecycle = Some(json!({
-                    "status":"error",
-                    "reason":"candidate_maturation_unavailable"
-                }));
-            }
+            .is_none_or(|last| now.saturating_sub(last) >= 60_000);
+    if c.market_archive.is_some() {
+        runtime.refresh_archive_evidence(c, cfg, now, mature_due)?;
+        if runtime.archive_maturing() {
+            return Ok(json!({"status":"maturing","lifecycle":runtime.lifecycle}));
         }
+    } else if mature_due {
+        runtime.last_mature_ms = Some(now);
+        runtime.lifecycle = Some(maturation_status(c, cfg, now));
     }
     if runtime.active.is_some() {
         return Ok(json!({"status":"running","lifecycle":runtime.lifecycle}));

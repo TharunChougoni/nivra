@@ -647,7 +647,7 @@ pub(crate) fn mature_candidates(c: &Config, cfg: &PlannerConfig, now: i64) -> Re
             .as_i64()
             .unwrap_or(CANDIDATE_MAX_EXIT_DELAY_MS);
         let quotes = match super::super::super::super::paper_replay::candidate_quotes(
-            &c.directory,
+            c.quote_source(),
             c.session,
             &keys,
             min_due,

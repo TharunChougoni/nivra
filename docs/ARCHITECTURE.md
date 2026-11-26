@@ -55,6 +55,9 @@ strategies that a deterministic executor runs on every scan. See
 | State | Where |
 | --- | --- |
 | Fills, scanner checkpoints, planner events and plans, halt history, review memory | The original book's SQLite database, in WAL mode with `synchronous=FULL` |
+| Original receipts used for execution or protection | The original book's SQLite database, committed with the portfolio and excluded from quote compaction when the market archive is enabled |
+| Bulk REST quote bodies and normalized observations | TimescaleDB when configured. The book holds ordered receipt hashes and times. Without the archive, the original quote bodies stay in the book. |
+| REST quote batches awaiting archive recovery | The session's bounded `archive-spool.sqlite` |
 | Lane trigger batches, turn receipts, plan outcomes, usage and sessions | The book's `model/agent/` directory |
 | Inputs, outputs and receipts | Hashed artifacts. Namespace, device and inode pins prevent journal resets. |
 | The active dated session | `sessions_root/current.json` |

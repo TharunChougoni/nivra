@@ -707,7 +707,7 @@ pub(super) fn research_quote_capture(
     // The archive source is the book directory (universe and journal), as
     // for candidate maturity; never the journal file itself.
     let archived = super::super::paper_replay::candidate_quotes(
-        &c.directory,
+        c.quote_source(),
         c.session,
         &keys,
         from_ms,

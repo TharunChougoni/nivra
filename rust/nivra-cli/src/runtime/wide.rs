@@ -486,7 +486,18 @@ pub(super) fn commit_quotes(
     raw: &str,
     clock: impl FnOnce() -> i64,
 ) -> Result<()> {
-    commit_quotes_screened(db, c, p, quotes, receipt, raw, clock, None, false)
+    commit_quotes_screened(
+        db,
+        c,
+        p,
+        quotes,
+        receipt,
+        raw.into(),
+        clock,
+        None,
+        false,
+        None,
+    )
 }
 #[allow(clippy::too_many_arguments)] // Runtime supplies the explicit revalidated buy screen; protection/sells bypass it.
 fn commit_quotes_screened(
@@ -495,14 +506,17 @@ fn commit_quotes_screened(
     p: &mut Portfolio,
     quotes: &BTreeMap<String, Quote>,
     receipt: i64,
-    raw: &str,
+    raw: std::borrow::Cow<'_, str>,
     clock: impl FnOnce() -> i64,
     allowed_buys: Option<&BTreeSet<String>>,
     held_positions: bool,
+    archive: Option<ArchivedQuote<'_>>,
 ) -> Result<()> {
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let now = clock();
     let mut next = p.clone();
+    let mut executable = archive.as_ref().is_none_or(|archive| archive.executable)
+        || p.positions.keys().any(|key| quotes.contains_key(key));
     next.apply_at(c.session, now, quotes, &[])?;
     // Expiry is not cash rollover: only the held-position read carries every
     // open position, so only that read may flatten or halt an expiring option.
@@ -609,6 +623,7 @@ fn commit_quotes_screened(
                 let Some(q) = quotes.get(&action.instrument_key) else {
                     continue;
                 };
+                executable = true;
                 if matches!(action.side, planner::PlanSide::Buy)
                     && allowed_buys.is_some_and(|keys| !keys.contains(&action.instrument_key))
                 {
@@ -689,16 +704,30 @@ fn commit_quotes_screened(
         }
     };
     record_halt_transition(&tx, &next, now)?;
+    let reference = archive
+        .as_ref()
+        .filter(|_| !executable)
+        .map(|archive| nivra_store::market_archive::quote_reference(archive.purpose, &raw));
     tx.execute(
         "INSERT INTO ticks(at,receipt,body,event) VALUES(?,?,?,'wide_quotes')",
-        rusqlite::params![now, receipt, raw],
+        rusqlite::params![now, receipt, reference.as_deref().unwrap_or(&raw)],
     )?;
+    if archive.is_some() && executable {
+        tx.execute(
+            "INSERT INTO archive_protected_receipts VALUES(?1)",
+            [tx.last_insert_rowid()],
+        )?;
+    }
     tx.execute(
         "INSERT INTO state VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
         rusqlite::params![book_binding(c)?, serde_json::to_string(&next)?],
     )?;
     tx.commit()?;
     *p = next;
+    if let Some(archive) = archive {
+        archive.writer.offer(raw.into_owned());
+    }
+
     let audit_result = (|| -> Result<()> {
         if let Some(plan) = &saved_plan {
             let id = plan["decision_id"]
@@ -1220,10 +1249,21 @@ struct FetchedQuoteRows {
     rows: serde_json::Map<String, serde_json::Value>,
 }
 
+struct ArchivedQuote<'a> {
+    writer: &'a super::market_archive::capture::Writer,
+    purpose: &'a str,
+    executable: bool,
+}
+
 pub(super) enum QuoteReadTarget<'a> {
-    Held { depth_sink: Option<&'a mut Scanner> },
+    Held {
+        depth_sink: Option<&'a mut Scanner>,
+    },
     Plan,
-    Depth(&'a mut Scanner),
+    Depth {
+        scan: &'a mut Scanner,
+        executable: bool,
+    },
     Scan(&'a mut Scanner),
 }
 
@@ -1345,6 +1385,7 @@ fn update_regime_references(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn read_scanner_metadata(
     client: &data::Client,
     c: &Config,
@@ -1353,6 +1394,7 @@ pub(super) fn read_scanner_metadata(
     instruments: &[Instrument],
     scan: &mut Scanner,
     event_config: Option<&planner::PlannerConfig>,
+    writer: Option<&super::market_archive::capture::Writer>,
 ) -> Result<Option<String>> {
     let FetchedQuoteRows {
         requested,
@@ -1388,16 +1430,34 @@ pub(super) fn read_scanner_metadata(
     }
     update_regime_references(scan, &rows, receipt, event_config);
     let archive=serde_json::json!({"source":"upstox-readonly-v1","purpose":"scanner_metadata","requested_ms":requested,"received_ms":receipt,"body":raw}).to_string();
+    persist_scanner_metadata(db, c, p, millis(), receipt, archive, writer)?;
+    Ok(None)
+}
+
+fn persist_scanner_metadata(
+    db: &mut Connection,
+    c: &Config,
+    p: &Portfolio,
+    at: i64,
+    receipt: i64,
+    archive: String,
+    writer: Option<&super::market_archive::capture::Writer>,
+) -> Result<()> {
+    let reference =
+        writer.map(|_| nivra_store::market_archive::quote_reference("scanner_metadata", &archive));
     persist(
         db,
         c,
         p,
-        millis(),
+        at,
         Some(receipt),
-        Some(&archive),
+        reference.as_deref().or(Some(&archive)),
         "scanner_metadata",
     )?;
-    Ok(None)
+    if let Some(writer) = writer {
+        writer.offer(archive);
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)] // Explicit original receipt tracking; never resample it.
@@ -1411,6 +1471,7 @@ pub(super) fn read_executable_quotes(
     event_config: Option<&planner::PlannerConfig>,
     feature_store: &Arc<Mutex<FeatureStore>>,
     mut target: QuoteReadTarget<'_>,
+    writer: Option<&super::market_archive::capture::Writer>,
 ) -> Result<Option<String>> {
     let FetchedQuoteRows {
         requested,
@@ -1454,7 +1515,7 @@ pub(super) fn read_executable_quotes(
         QuoteReadTarget::Held {
             depth_sink: Some(scan),
         }
-        | QuoteReadTarget::Depth(scan) => {
+        | QuoteReadTarget::Depth { scan, .. } => {
             for (key, quote) in &quotes {
                 if let Some(sample) = scan.samples.get_mut(key) {
                     sample.executable = Some(quote.clone());
@@ -1488,6 +1549,15 @@ pub(super) fn read_executable_quotes(
         "execution_or_protection"
     };
     let held_positions = matches!(target, QuoteReadTarget::Held { .. });
+    let executable = matches!(
+        target,
+        QuoteReadTarget::Held { .. }
+            | QuoteReadTarget::Plan
+            | QuoteReadTarget::Depth {
+                executable: true,
+                ..
+            }
+    );
     let archive=serde_json::json!({"source":"upstox-readonly-v1","purpose":purpose,"requested_ms":requested,"received_ms":receipt,"body":raw}).to_string();
     let policy = event_config
         .and_then(|cfg| cfg.discovery.as_ref())
@@ -1524,10 +1594,15 @@ pub(super) fn read_executable_quotes(
         p,
         &quotes,
         receipt,
-        &archive,
+        archive.into(),
         millis,
         Some(&allowed_buys),
         held_positions,
+        writer.map(|writer| ArchivedQuote {
+            writer,
+            purpose,
+            executable,
+        }),
     )?;
     if !event_config.is_some_and(planner::PlannerConfig::uses_pi_paper)
         && let Ok(binding) = book_binding(c)

@@ -300,6 +300,18 @@ pub fn read_source(
     q: &SourceQuery,
     budget_bytes: usize,
 ) -> Result<SourcePage, String> {
+    read_source_with_archive(session, q, budget_bytes, None)
+}
+
+pub(crate) type ArchiveConnection<'a> =
+    &'a dyn Fn() -> Result<nivra_store::market_archive::ArchiveClient, Box<dyn std::error::Error>>;
+
+pub(crate) fn read_source_with_archive(
+    session: &Path,
+    q: &SourceQuery,
+    budget_bytes: usize,
+    archive: Option<ArchiveConnection<'_>>,
+) -> Result<SourcePage, String> {
     if q.from_ms > q.to_ms
         || q.after_rowid < 0
         || !(1..=100).contains(&q.limit)
@@ -376,6 +388,7 @@ pub fn read_source(
             |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
         )
         .map_err(|_| rejected())?;
+    let mut bodies = nivra_store::market_archive::QuoteBodies::default();
     for row in source {
         let (id, raw) = row.map_err(|_| rejected())?;
         if rows.len() == q.limit {
@@ -384,10 +397,17 @@ pub fn read_source(
         }
         let mut value: Value = serde_json::from_str(&raw).map_err(|_| rejected())?;
         if matches!(q.kind, SourceKind::Quotes) {
-            let archive = &value["archive"];
-            let body: Value = serde_json::from_str(archive["body"].as_str().ok_or_else(rejected)?)
+            let raw = bodies
+                .resolve(
+                    value["archive"].to_string(),
+                    value["receipt"].as_i64(),
+                    || archive.ok_or("archive_config_missing")?(),
+                )
+                .map_err(|_| "strategy_source_archive_unavailable".to_string())?;
+            let envelope: Value = serde_json::from_str(&raw).map_err(|_| rejected())?;
+            let body: Value = serde_json::from_str(envelope["body"].as_str().ok_or_else(rejected)?)
                 .map_err(|_| rejected())?;
-            value = json!({"at":value["at"],"receipt":value["receipt"],"purpose":archive["purpose"],"quotes":body["data"]});
+            value = json!({"at":value["at"],"receipt":value["receipt"],"purpose":envelope["purpose"],"quotes":body["data"]});
             if let Some(key) = &q.instrument_key
                 && let Some(data) = value["quotes"].as_object_mut()
             {

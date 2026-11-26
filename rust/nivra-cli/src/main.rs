@@ -550,7 +550,10 @@ fn main() -> ExitCode {
         } => runtime::strategy::replay_entry(&source, &parameters, &manifest, &events, &output),
         Command::StrategyLab {
             command: StrategyLabCommand::Lab(command),
-        } => match nivra_cli::strategy_lab::run(command) {
+        } => match nivra_cli::strategy_lab::run(
+            command,
+            runtime::market_archive::connect_from_config,
+        ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => {
                 eprintln!("strategy_lab_failed: check configuration and recorded evidence");

@@ -203,7 +203,7 @@ fn candidate_observation_submit(
     }
     let previous_session = candidate_previous_trading_session(c);
     let snapshots = match super::super::super::super::paper_replay::session_feature_snapshots(
-        &c.directory,
+        c.quote_source(),
         c.session,
         previous_session,
         candidate.replay.max_snapshots,
@@ -249,7 +249,7 @@ fn candidate_observation_submit(
         }));
     }
     let tape = match super::super::super::super::paper_replay::virtual_observation_tape_bounded(
-        &c.directory,
+        c.quote_source(),
         c.session,
         previous_session,
         &keys,
@@ -824,7 +824,7 @@ pub(crate) fn candidate_submit_preemptible(
     let snapshots = match &dataset.kind {
         CandidateDatasetKind::CurrentSessionFeatures => {
             super::super::super::super::paper_replay::session_feature_snapshots(
-                &c.directory,
+                c.quote_source(),
                 c.session,
                 previous_session,
                 candidate.replay.max_snapshots,
@@ -869,7 +869,7 @@ pub(crate) fn candidate_submit_preemptible(
     let execution_tape = match (args.execution.as_ref(), execution_settings) {
         (Some(spec), Some(execution)) => {
             match super::super::super::super::paper_replay::execution_tape_bounded(
-                &c.directory,
+                c.quote_source(),
                 c.session,
                 previous_session,
                 spec.parameters.capital,

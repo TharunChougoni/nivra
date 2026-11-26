@@ -40,6 +40,7 @@ pub enum Event {
     MarketFeedFallback,
     MarketFeedRecovered,
     ScannerFreshDrop,
+    ArchiveGap,
     ReadinessBlocked,
     SupervisorFailure,
     ModelCredentialUnavailable,
@@ -50,7 +51,7 @@ pub enum Event {
     ModelFallback,
 }
 impl Event {
-    const ALL: [Self; 20] = [
+    const ALL: [Self; 21] = [
         Self::Test,
         Self::Halt,
         Self::Stop,
@@ -63,6 +64,7 @@ impl Event {
         Self::MarketFeedFallback,
         Self::MarketFeedRecovered,
         Self::ScannerFreshDrop,
+        Self::ArchiveGap,
         Self::ReadinessBlocked,
         Self::SupervisorFailure,
         Self::ModelCredentialUnavailable,
@@ -86,6 +88,7 @@ impl Event {
             Self::MarketFeedFallback => "market_feed_fallback",
             Self::MarketFeedRecovered => "market_feed_recovered",
             Self::ScannerFreshDrop => "scanner_fresh_drop",
+            Self::ArchiveGap => "archive_gap",
             Self::ReadinessBlocked => "readiness_blocked",
             Self::SupervisorFailure => "supervisor_failure",
             Self::ModelCredentialUnavailable => "model_credential_unavailable",

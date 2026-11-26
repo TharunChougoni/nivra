@@ -613,10 +613,16 @@ fn compact_quote_bodies(
     }
     let mut rows = Vec::new();
     {
-        let mut statement = db.prepare(
-            "SELECT id, length(CAST(body AS BLOB)) FROM ticks \
-             WHERE event='wide_quotes' AND body IS NOT NULL ORDER BY id",
-        )?;
+        let protected_filter = if sqlite_table(&db, "archive_protected_receipts")? {
+            "AND id NOT IN (SELECT tick_id FROM archive_protected_receipts)"
+        } else {
+            ""
+        };
+        let mut statement = db.prepare(&format!(
+            "SELECT id, length(CAST(body AS BLOB)) FROM ticks
+             WHERE event='wide_quotes' AND body IS NOT NULL
+             AND body NOT LIKE '{{\"kind\":\"market_archive_quote\"%' {protected_filter} ORDER BY id",
+        ))?;
         let mut query = statement.query([])?;
         while let Some(row) = query.next()? {
             rows.push((row.get::<_, i64>(0)?, row.get::<_, i64>(1)? as u64));

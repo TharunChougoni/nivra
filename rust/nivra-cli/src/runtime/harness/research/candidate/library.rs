@@ -439,7 +439,10 @@ fn verify_current_library_body(
         candidate_previous_trading_session(c)
     };
     let context = StoredObservationContext {
-        source: directory,
+        source: crate::runtime::paper_replay::QuoteSource::new(
+            directory,
+            c.market_archive.as_ref(),
+        ),
         session: session
             .parse()
             .map_err(|_| "candidate_observation_session_invalid")?,

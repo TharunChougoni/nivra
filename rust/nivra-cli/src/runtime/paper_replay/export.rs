@@ -57,19 +57,13 @@ fn write_tape(
         )
         .map_err(|_| "quote_tape_unavailable".to_string())?;
     let rows = statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, Option<i64>>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })
+        .query_map([], quote_row)
         .map_err(|_| "quote_tape_unavailable".to_string())?;
     let (mut count, mut observations, mut compacted, mut max_gap_ms) = (0usize, 0usize, 0usize, 0);
     let (mut first, mut last) = (None, None::<i64>);
     let mut seen = BTreeSet::new();
-    for row in rows {
-        let (at, receipt, raw) = row.map_err(|_| "quote_tape_unavailable".to_string())?;
+    for row in c.quote_source().rows(rows) {
+        let (at, receipt, raw) = row?;
         // Retention keeps only a hash of a compacted body; it is counted,
         // never replayed.
         if raw.contains("\"kind\":\"compacted_quote_receipt\"") {
@@ -310,7 +304,7 @@ mod tests {
         drop(check_db);
 
         let in_window = super::candidate_quotes(
-            &c.directory,
+            c.quote_source(),
             c.session,
             &keys,
             open + 8_000,
@@ -325,7 +319,7 @@ mod tests {
         assert_eq!(in_window["quotes"][0]["receipt_ms"], open + 8_000);
 
         let capped = super::candidate_quotes(
-            &c.directory,
+            c.quote_source(),
             c.session,
             &keys,
             open,
@@ -338,7 +332,7 @@ mod tests {
         assert_eq!(capped["quotes"].as_array().unwrap().len(), 1);
 
         let missing = super::candidate_quotes(
-            &c.directory,
+            c.quote_source(),
             c.session,
             &keys,
             open + 2_000,
@@ -350,7 +344,7 @@ mod tests {
         assert_eq!(missing["coverage"], "missing_quotes_in_window");
 
         let ended = super::candidate_quotes(
-            &c.directory,
+            c.quote_source(),
             c.session,
             &keys,
             open + 20_000,

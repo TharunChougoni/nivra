@@ -36,7 +36,7 @@ pub(crate) fn scanner_archive_entry(
             return Ok(quote_tape(&c, &keys, output).map_err(Fail::new)?);
         }
         let snapshots = session_feature_snapshots(
-            &c.directory,
+            c.quote_source(),
             c.session,
             Some(c.previous_session),
             max_snapshots,

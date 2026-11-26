@@ -67,7 +67,18 @@ fn validate_receipt_times(requested_ms: i64, received_ms: i64) -> Result<()> {
 }
 
 /// Normalize the original JSON envelope from a wide_quotes or scanner_metadata tick.
-pub(crate) fn quotes(raw: &str) -> Result<QuoteBatch<'_>> {
+#[cfg(test)]
+fn quotes(raw: &str) -> Result<QuoteBatch<'_>> {
+    quote_batch(raw, false)
+}
+
+/// Keep the exact body even when individual instruments lack normalizable
+/// fields. Replay applies its own receipt checks to the original bytes.
+pub(super) fn capture_quotes(raw: &str) -> Result<QuoteBatch<'_>> {
+    quote_batch(raw, true)
+}
+
+fn quote_batch(raw: &str, allow_partial: bool) -> Result<QuoteBatch<'_>> {
     let archive: ArchivedQuote = serde_json::from_str(raw)?;
     validate_receipt_times(archive.requested_ms, archive.received_ms)?;
     if archive.source != "upstox-readonly-v1" {
@@ -95,36 +106,44 @@ pub(crate) fn quotes(raw: &str) -> Result<QuoteBatch<'_>> {
         if !keys.insert(key) {
             return Err("duplicate_quote".into());
         }
-        let source_ms = data::quote_source(row)?;
-        let best_bid = data::quote_depth(row, "buy")?;
-        let best_ask = data::quote_depth(row, "sell")?;
-        if source_ms < 0 || best_bid.zip(best_ask).is_some_and(|(b, a)| b.0 > a.0) {
-            return Err("archive_quote_values_invalid".into());
+        match quote_observation(key, row) {
+            Ok(observation) => observations.push(observation),
+            Err(_) if allow_partial => {}
+            Err(error) => return Err(error),
         }
-        let (bid, bid_qty) = depth_columns(best_bid)?;
-        let (ask, ask_qty) = depth_columns(best_ask)?;
-        let lower_circuit = price(&row["lower_circuit_limit"])?;
-        let upper_circuit = price(&row["upper_circuit_limit"])?;
-        if lower_circuit > upper_circuit {
-            return Err("archive_quote_circuit_invalid".into());
-        }
-        observations.push(QuoteObservation {
-            instrument_key: key.to_owned(),
-            source_ms,
-            ltp: price(&row["last_price"])?,
-            bid,
-            ask,
-            bid_qty,
-            ask_qty,
-            volume: quantity(&row["volume"])?,
-            lower_circuit,
-            upper_circuit,
-        });
     }
     Ok(QuoteBatch {
         receipt: Receipt::new(archive.requested_ms, archive.received_ms, raw.as_bytes()),
         purpose,
         observations,
+    })
+}
+
+fn quote_observation(key: &str, row: &Value) -> Result<QuoteObservation> {
+    let source_ms = data::quote_source(row)?;
+    let best_bid = data::quote_depth(row, "buy")?;
+    let best_ask = data::quote_depth(row, "sell")?;
+    if source_ms < 0 || best_bid.zip(best_ask).is_some_and(|(b, a)| b.0 > a.0) {
+        return Err("archive_quote_values_invalid".into());
+    }
+    let (bid, bid_qty) = depth_columns(best_bid)?;
+    let (ask, ask_qty) = depth_columns(best_ask)?;
+    let lower_circuit = price(&row["lower_circuit_limit"])?;
+    let upper_circuit = price(&row["upper_circuit_limit"])?;
+    if lower_circuit > upper_circuit {
+        return Err("archive_quote_circuit_invalid".into());
+    }
+    Ok(QuoteObservation {
+        instrument_key: key.to_owned(),
+        source_ms,
+        ltp: price(&row["last_price"])?,
+        bid,
+        ask,
+        bid_qty,
+        ask_qty,
+        volume: quantity(&row["volume"])?,
+        lower_circuit,
+        upper_circuit,
     })
 }
 
@@ -209,7 +228,11 @@ mod tests {
         let mut body: Value = serde_json::from_str(archive["body"].as_str().unwrap()).unwrap();
         body["data"]["NSE_EQ:NHPC"]["depth"]["sell"] = json!([{"quantity": 1, "price": 51.90}]);
         archive["body"] = json!(body.to_string());
-        assert!(quotes(&archive.to_string()).is_err());
+        let invalid = archive.to_string();
+        assert!(quotes(&invalid).is_err());
+        let partial = capture_quotes(&invalid).unwrap();
+        assert!(partial.observations.is_empty());
+        assert_eq!(partial.receipt.body, invalid.as_bytes());
         archive["received_ms"] = json!(0);
         assert!(quotes(&archive.to_string()).is_err());
     }
