@@ -546,10 +546,11 @@ host sends nothing, so watch it from outside as well.
 
 ## Model archive retention
 
-Retention packs or deletes old model run directories. It is off until you set
+Retention packs or deletes old model run directories, and bounds closed
+session books. Packing and deleting model run directories is off until you set
 `dashboard.retention.pack_after_days` or `delete_after_days`, each 1 to 365,
-with delete greater than pack. The controller runs it after the close. To run
-it by hand:
+with delete greater than pack. The controller runs retention after the close. To
+run it by hand:
 
 ```sh
 nivra retention --config PAPER_CONFIG --dry-run
@@ -559,3 +560,25 @@ nivra retention --config PAPER_CONFIG --apply
 Only past sessions whose report is closed, not stopped and not halted qualify.
 Packing writes `model-archive/<date>.tar.gz`. Transcripts stay readable on the
 dashboard.
+
+### Shrink closed books after archiving quotes
+
+When `market_archive` is configured in `PAPER_CONFIG`, retention replaces a
+closed session's bulk quote bodies (`wide_quotes`, `scanner_metadata` and
+`research_quotes`) with `market_archive_quote` references and vacuums
+`paper.sqlite`, while keeping executable receipts cited by fills, protection
+checks or plan checks. A quote body is rewritten only after confirming in
+TimescaleDB that a receipt with the same SHA-256 and receipt time exists for
+that tick; any body missing from the archive is left untouched.
+
+For books written before live archive capture, import each closed session book
+before applying retention on the paper host:
+
+```sh
+nivra archive import-book --config PAPER_CONFIG BOOK_DIR
+nivra retention --config PAPER_CONFIG --dry-run
+nivra retention --config PAPER_CONFIG --apply
+```
+
+Always check the `--dry-run` summary before `--apply` and confirm
+`kept_missing_archive_quotes` is zero for imported books.
