@@ -271,7 +271,8 @@ whose fetch fails. A manual download fails on the first error.
   exists. Check coverage with `history-backfill --check-only`.
 - An HTTP 400 marks the affected dates unavailable. With
   `history_skip_unavailable`, the planner skips those dates. Unavailable dates
-  still count as missing in the coverage report.
+  still count as missing. When the planner skips them, the coverage report
+  counts them in `excluded_bars` and leaves them out of `retryable_missing_bars`.
 - Transient provider errors leave retryable coverage. A failure cannot remove
   an observed bar or erase an earlier successful empty answer.
 - Candles have no bid, ask, depth or circuit data. A candle backtest cannot

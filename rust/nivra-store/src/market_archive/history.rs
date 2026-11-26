@@ -32,16 +32,20 @@ pub struct CoveredDays {
     pub excluded: BTreeSet<NaiveDate>,
 }
 
+const EXCLUDED_DAY: &str = "c.status <> 'observed' AND (c.status = 'unavailable' OR
+     (c.unavailable_ms IS NOT NULL AND (c.receipt_id IS NULL OR c.unavailable_ms > c.attempted_ms)))";
+const ANSWERED_EMPTY_DAY: &str = "status = 'empty' AND (last_bar IS NULL OR day < last_bar)";
+
 /// Days a download can skip. Daily answers may leave an incomplete tail.
 pub fn covered_days(
     db: &mut Client,
     window: &CoverageWindow<'_>,
 ) -> Result<BTreeMap<String, CoveredDays>> {
     let rows = db.query(
-        "WITH evidence AS (
+        &format!(
+            "WITH evidence AS (
            SELECT i.key, c.day, c.status,
-                  (c.status <> 'observed' AND (c.status = 'unavailable' OR (c.unavailable_ms IS NOT NULL
-                       AND (c.receipt_id IS NULL OR c.unavailable_ms > c.attempted_ms)))) AS excluded,
+                  ({EXCLUDED_DAY}) AS excluded,
                   max(c.day) FILTER (WHERE c.status = 'observed'
                                      AND ($5::date[] IS NULL OR c.day = ANY($5)))
                       OVER (PARTITION BY c.instrument_id) AS last_bar
@@ -52,10 +56,11 @@ pub fn covered_days(
                 coalesce(array_agg(day) FILTER (
                     WHERE ($5::date[] IS NULL OR day = ANY($5))
                       AND (status = 'observed'
-                       OR (status = 'empty' AND ($2 = 3 OR last_bar IS NULL OR day < last_bar)))
-                ), '{}'),
-                coalesce(array_agg(day) FILTER (WHERE $6 AND excluded), '{}')
-         FROM evidence GROUP BY key",
+                       OR ({ANSWERED_EMPTY_DAY}) OR ($2 = 3 AND status = 'empty'))
+                ), ARRAY[]::date[]),
+                coalesce(array_agg(day) FILTER (WHERE $6 AND excluded), ARRAY[]::date[])
+         FROM evidence GROUP BY key"
+        ),
         &[
             &window.keys,
             &(window.unit as i16),
@@ -86,6 +91,7 @@ pub struct DailyCoverage {
     pub observed: u32,
     pub average_volume: Option<f64>,
     pub covered_empty: usize,
+    pub excluded: usize,
     pub missing: Vec<NaiveDate>,
 }
 
@@ -94,10 +100,12 @@ pub fn daily_coverage(
     db: &mut Client,
     keys: &[&str],
     sessions: &[NaiveDate],
+    skip_unavailable: bool,
 ) -> Result<Vec<DailyCoverage>> {
     let rows = db.query(
-        "WITH evidence AS (
+        &format!("WITH evidence AS (
            SELECT requested.key, dates.day, b.volume, c.status,
+                  ({EXCLUDED_DAY}) AS excluded,
                   max(b.day) OVER (PARTITION BY requested.key) AS last_bar
            FROM unnest($1::text[]) AS requested(key)
            CROSS JOIN unnest($2::date[]) AS dates(day)
@@ -106,11 +114,12 @@ pub fn daily_coverage(
            LEFT JOIN coverage c ON c.instrument_id = i.id AND c.unit = 2 AND c.day = dates.day AND c.day = ANY($2)
          )
          SELECT key, count(volume)::int, avg(volume::double precision),
-                count(*) FILTER (WHERE volume IS NULL AND status = 'empty'
-                                 AND (last_bar IS NULL OR day < last_bar))::int,
-                coalesce(array_agg(day ORDER BY day) FILTER (WHERE volume IS NULL), '{}')
-         FROM evidence GROUP BY key",
-        &[&keys, &sessions],
+                count(*) FILTER (WHERE volume IS NULL AND ({ANSWERED_EMPTY_DAY}))::int,
+                count(*) FILTER (WHERE $3 AND volume IS NULL AND excluded
+                                 AND NOT ({ANSWERED_EMPTY_DAY}))::int,
+                coalesce(array_agg(day ORDER BY day) FILTER (WHERE volume IS NULL), ARRAY[]::date[])
+         FROM evidence GROUP BY key"),
+        &[&keys, &sessions, &skip_unavailable],
     )?;
     Ok(rows
         .into_iter()
@@ -119,7 +128,8 @@ pub fn daily_coverage(
             observed: row.get::<_, i32>(1) as u32,
             average_volume: row.get(2),
             covered_empty: row.get::<_, i32>(3) as usize,
-            missing: row.get(4),
+            excluded: row.get::<_, i32>(4) as usize,
+            missing: row.get(5),
         })
         .collect())
 }

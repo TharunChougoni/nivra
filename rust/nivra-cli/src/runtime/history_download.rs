@@ -2,7 +2,7 @@
 use super::*;
 use chrono::{Days, Months};
 use nivra_core::{execution::Instrument, finance::Amount};
-use nivra_store::{market_archive as archive, market_data};
+use nivra_store::{history_pacing, market_archive as archive};
 use serde_json::Value;
 use serde_json::json;
 use std::collections::BTreeSet;
@@ -72,8 +72,8 @@ impl<'a> Provider<'a> {
             config.read_journal_device, config.read_journal_inode
         ));
         let pacing =
-            market_data::open(Path::new(&path)).map_err(|_| "history_pacing_unavailable")?;
-        market_data::init_history_pacing(&pacing).map_err(|_| "history_pacing_unavailable")?;
+            history_pacing::open(Path::new(&path)).map_err(|_| "history_pacing_unavailable")?;
+        history_pacing::init_history_pacing(&pacing).map_err(|_| "history_pacing_unavailable")?;
         Ok(Self {
             client: data::Client::new(&config.market_data_transport)?,
             config,
@@ -97,7 +97,7 @@ impl<'a> Provider<'a> {
                 control.check()?;
             }
             let now = millis();
-            let Some((next, cooldown)) = market_data::pace_history(
+            let Some((next, cooldown)) = history_pacing::pace_history(
                 &mut self.pacing,
                 &self.config.read_scope,
                 now,
@@ -154,7 +154,7 @@ impl Transport for Provider<'_> {
                         && let Some(limit) = error.downcast_ref::<data::RateLimited>()
                     {
                         let minimum = millis().saturating_add(RATE_LIMIT_RETRY_MS);
-                        market_data::cool_down_history(
+                        history_pacing::cool_down_history(
                             &self.pacing,
                             &self.config.read_scope,
                             limit.retry_at_ms.unwrap_or(minimum).max(minimum),
@@ -336,6 +336,7 @@ pub fn backfill_entry(
                     "observed_bars": report.observed_bars,
                     "missing_bars": report.missing_bars,
                     "covered_empty_bars": report.covered_empty_bars,
+                    "excluded_bars": report.excluded_bars,
                     "retryable_missing_bars": report.retryable_missing_bars,
                     "failure": report.failure,
                 })

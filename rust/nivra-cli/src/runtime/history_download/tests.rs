@@ -81,6 +81,7 @@ fn reviewed_session_gaps_and_admission() {
         observed: 4,
         average_volume: Some(500.0),
         covered_empty: 0,
+        excluded: 0,
         missing: vec![],
     };
     let partial = || DailyCoverage {
@@ -88,6 +89,7 @@ fn reviewed_session_gaps_and_admission() {
         observed: 1,
         average_volume: Some(100.0),
         covered_empty: 1,
+        excluded: 0,
         missing: vec![first, listing, late],
     };
     let report = |rows: Vec<_>| {
@@ -261,6 +263,14 @@ fn import_history_twice_and_measure_coverage() -> Result<()> {
         ),
         (4, 1, 4)
     );
+    let mut skip_config = config.clone();
+    skip_config.history_skip_unavailable = true;
+    let skipped =
+        preparation::coverage_report(&skip_config, &inputs[..3], &sessions, target, previous);
+    assert_eq!(skipped.missing_bars, 5);
+    assert_eq!(skipped.excluded_bars, 3);
+    assert_eq!(skipped.retryable_missing_bars, 1);
+
     let mut provider = FixtureProvider { calls: vec![] };
     let window = || DownloadWindow {
         start: Some(first),

@@ -629,14 +629,14 @@ mod tests {
         c.read_journal_device = metadata.dev();
         c.read_journal_inode = metadata.ino();
         let path = d.path().join("history-pacing.sqlite");
-        let mut first = nivra_store::market_data::open(&path).unwrap();
-        nivra_store::market_data::init_history_pacing(&first).unwrap();
-        use nivra_store::market_data::{cool_down_history, pace_history};
+        let mut first = nivra_store::history_pacing::open(&path).unwrap();
+        nivra_store::history_pacing::init_history_pacing(&first).unwrap();
+        use nivra_store::history_pacing::{cool_down_history, pace_history};
         assert_eq!(
             pace_history(&mut first, &c.read_scope, 1000, 1250).unwrap(),
             None
         );
-        let mut other = nivra_store::market_data::open(&path).unwrap();
+        let mut other = nivra_store::history_pacing::open(&path).unwrap();
         assert_eq!(
             pace_history(&mut other, &c.read_scope, 2249, 1250).unwrap(),
             Some((2250, 0))

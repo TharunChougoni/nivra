@@ -104,6 +104,9 @@ pub struct CoverageReport {
     /// no bar at all for the instrument (e.g. listing or suspension gaps).
     #[serde(default)]
     pub covered_empty_bars: usize,
+    /// Missing bars the configured download skips after a provider exclusion.
+    #[serde(default)]
+    pub excluded_bars: usize,
     /// Missing bars a receipt cannot vouch for (unfetched, or after the last
     /// bar the provider returned) and that an attempt may still fill.
     #[serde(default)]
@@ -134,6 +137,7 @@ pub(super) fn base_report(
         observed_bars: 0,
         missing_bars: required_bars,
         covered_empty_bars: 0,
+        excluded_bars: 0,
         retryable_missing_bars: required_bars,
         missing_sessions: BTreeMap::new(),
         failure: None,
@@ -154,11 +158,7 @@ pub fn coverage_report(
         instruments.len(),
         instruments.len().saturating_mul(required_sessions.len()),
     );
-    if instruments.is_empty()
-        || required_sessions.is_empty()
-        || required_sessions.last() != Some(&previous_session)
-        || required_sessions.windows(2).any(|w| w[0] >= w[1])
-        || previous_session >= target_session
+    if instruments.is_empty() || !valid_window(required_sessions, previous_session, target_session)
     {
         report.failure = Some("history_coverage_request".into());
         return report;
@@ -169,9 +169,14 @@ pub fn coverage_report(
         return report;
     }
     let keys: Vec<_> = keys.into_iter().collect();
-    match market_archive::open(config)
-        .and_then(|mut db| daily_coverage(&mut db, &keys, required_sessions))
-    {
+    match market_archive::open(config).and_then(|mut db| {
+        daily_coverage(
+            &mut db,
+            &keys,
+            required_sessions,
+            config.history_skip_unavailable,
+        )
+    }) {
         Ok(rows) => apply_coverage(report, rows),
         Err(error) => {
             report.failure = Some(
@@ -193,6 +198,7 @@ pub(super) fn apply_coverage(
     for row in rows {
         report.observed_bars += row.observed as usize;
         report.covered_empty_bars += row.covered_empty;
+        report.excluded_bars += row.excluded;
         if let Some(average) = row.average_volume {
             report
                 .daily_volumes
@@ -205,13 +211,20 @@ pub(super) fn apply_coverage(
         }
     }
     report.missing_bars = report.required_bars - report.observed_bars;
-    report.retryable_missing_bars = report.missing_bars - report.covered_empty_bars;
+    report.retryable_missing_bars =
+        report.missing_bars - report.covered_empty_bars - report.excluded_bars;
     report.status = if report.ready_instruments == report.instruments {
         CoverageStatus::Ready
     } else {
         CoverageStatus::Partial
     };
     report
+}
+
+fn valid_window(sessions: &[NaiveDate], previous: NaiveDate, target: NaiveDate) -> bool {
+    sessions.last() == Some(&previous)
+        && sessions.windows(2).all(|pair| pair[0] < pair[1])
+        && previous < target
 }
 
 pub struct PreparationWorker {
@@ -229,9 +242,11 @@ impl PreparationWorker {
             .deadline_ms(&request.config, request.target_session, now)?;
         if request.instruments.is_empty()
             || request.required_sessions.len() != request.config.daily_history_sessions
-            || request.required_sessions.last() != Some(&request.previous_session)
-            || request.required_sessions.windows(2).any(|w| w[0] >= w[1])
-            || request.previous_session >= request.target_session
+            || !valid_window(
+                &request.required_sessions,
+                request.previous_session,
+                request.target_session,
+            )
             || request.deadline_ms <= now
             || request.deadline_ms > latest
             || local_now.date_naive() != request.target_session
