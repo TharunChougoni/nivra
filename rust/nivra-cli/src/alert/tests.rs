@@ -834,3 +834,11 @@ fn delivery_policy_and_secret_boundary() {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
     assert!(endpoint(&path).is_err());
 }
+
+#[test]
+fn a_crash_leftover_temporary_marker_does_not_block_the_planned_restart_notice() {
+    let state = tempfile::tempdir().unwrap();
+    fs::write(state.path().join("planned-restart.next"), b"half written").unwrap();
+    plan_restart(state.path(), "v0.5.13", 1000).unwrap();
+    assert!(planned_restart(state.path(), 1001).is_some());
+}

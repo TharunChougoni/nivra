@@ -213,6 +213,12 @@ pub fn plan_restart(state: &Path, version: &str, at: i64) -> Result<()> {
         expires_at: at.checked_add(600).ok_or(())?,
     };
     let tmp = state.join("planned-restart.next");
+    // Only the updater writes this file, under its lock; a leftover is a crash.
+    match fs::remove_file(&tmp) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(()),
+    }
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
