@@ -174,12 +174,17 @@ a new config whose universe is not frozen yet, add `--prepare-universe`.
 
 With `history_preparation_enabled`, the controller runs the same acquisition
 before the open. It reports coverage as `READY`, `PARTIAL` or `BLOCKED`, and
-separates missing bars already covered by valid provider receipts
-(`covered_empty_bars`, such as listing or suspension gaps) from unfetched
-gaps (`retryable_missing_bars`). A `PARTIAL` pass with zero
-`retryable_missing_bars` and no fetch failures stops retrying for the session;
-transient fetch failures such as HTTP 429 keep the bounded retry schedule. It
-skips at most `history_preparation_max_fetch_failures` (default 25) instruments
+separates missing bars no further fetch can fill (`covered_empty_bars`: the
+provider answered past the day, or answered no bar at all for that instrument,
+as with listing or suspension gaps) from gaps an attempt may still fill
+(`retryable_missing_bars`: unfetched days, and days after the last bar the
+provider returned for that instrument, which may not be published yet). A
+`PARTIAL` pass stops retrying for the session when it has zero
+`retryable_missing_bars`, no fetch failures and at least one ready instrument. A
+pass with no ready instrument cannot be admitted, so it keeps a bounded attempt
+booked instead of parking the session. Transient fetch failures such as HTTP 429
+also keep the bounded retry schedule. It skips at most
+`history_preparation_max_fetch_failures` (default 25) instruments
 whose fetch fails. A manual download fails on the first error.
 
 ## Coverage gaps

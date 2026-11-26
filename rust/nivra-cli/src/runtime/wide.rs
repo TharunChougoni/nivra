@@ -1217,7 +1217,8 @@ struct FetchedQuoteRows {
     requested: i64,
     receipt: i64,
     raw: String,
-    body: serde_json::Value,
+    /// The validated `data` object of the provider body.
+    rows: serde_json::Map<String, serde_json::Value>,
 }
 
 pub(super) enum QuoteReadTarget<'a> {
@@ -1299,11 +1300,15 @@ fn fetch_quote_rows(
         )?;
         return Ok(Err("invalid_quote_data".into()));
     }
+    let rows = body["data"]
+        .as_object()
+        .ok_or("invalid_quote_data")?
+        .clone();
     Ok(Ok(FetchedQuoteRows {
         requested,
         receipt,
         raw,
-        body,
+        rows,
     }))
 }
 
@@ -1320,13 +1325,23 @@ pub(super) fn read_scanner_metadata(
         requested,
         receipt,
         raw,
-        body,
+        rows,
     } = match fetch_quote_rows(client, c, db, p, instruments, event_config)? {
         Ok(fetched) => fetched,
         Err(reason) => return Ok(Some(reason)),
     };
-    let rows = body["data"].as_object().ok_or("invalid_quote_data")?;
-    if scan_rest_rows(scan, instruments, rows, receipt, millis(), 2000, true, None).is_err() {
+    if scan_rest_rows(
+        scan,
+        instruments,
+        &rows,
+        receipt,
+        millis(),
+        2000,
+        true,
+        None,
+    )
+    .is_err()
+    {
         persist(
             db,
             c,
@@ -1367,12 +1382,11 @@ pub(super) fn read_executable_quotes(
         requested,
         receipt,
         raw,
-        body,
+        rows,
     } = match fetch_quote_rows(client, c, db, p, instruments, event_config)? {
         Ok(fetched) => fetched,
         Err(reason) => return Ok(Some(reason)),
     };
-    let rows = body["data"].as_object().ok_or("invalid_quote_data")?;
     let mut quotes = BTreeMap::new();
     let mut duplicate = BTreeSet::new();
     for row in rows.values() {
@@ -1401,7 +1415,7 @@ pub(super) fn read_executable_quotes(
             quotes.insert(i.key.clone(), q);
         }
     }
-    // Shortlist depth reads attach the executable quote to the prospect (#38).
+    // A depth read attaches the executable quote to the sample it read (#38).
     match &mut target {
         QuoteReadTarget::Held {
             depth_sink: Some(scan),
@@ -1420,7 +1434,7 @@ pub(super) fn read_executable_quotes(
             scan_rest_rows(
                 scan,
                 instruments,
-                rows,
+                &rows,
                 receipt,
                 millis(),
                 event_config

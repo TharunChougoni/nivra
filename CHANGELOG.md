@@ -1,5 +1,20 @@
 # Source snapshot
 
+## 0.12.8 — 2026-11-26
+
+A pre-open history pass no longer parks a session it cannot start (#27). A
+`PARTIAL` pass with no ready instrument keeps its bounded attempt running
+instead of ending the retry schedule, so the controller never sits out the day
+waiting for a pass that will not come.
+
+A missing day counts as an empty gap only when the provider answered past it, or
+answered no bar at all for that instrument. Listing and suspension gaps still
+stop retrying; the days after the last bar the provider returned stay fillable,
+so a bar that is published late is never written off. `covered_empty_bars` and
+`retryable_missing_bars` now mean what docs/MARKET_DATA.md says they mean.
+
+The guides no longer describe a pending-order guard that paper never had.
+
 ## 0.12.7 — 2026-11-25
 
 Nivra now follows an algorithms-first direction: models research and write

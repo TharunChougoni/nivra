@@ -186,9 +186,9 @@ systemctl --user start nivra-paper.service
 
 `config-apply` records the old and new policy hashes and leaves the book
 stopped. It refuses a halted book
-(`config_apply_halted_requires_planner_recover`) and pending orders. It refuses
-positions unless the book is model-led. Switching `model_led` needs a book with
-no fills.
+(`config_apply_halted_requires_planner_recover`) and an open position. It
+refuses positions unless the book is model-led. Switching `model_led` needs a
+book with no fills.
 
 **Closed book.** `config-apply` refuses with `config_apply_book_closed`. Leave
 the book alone. The next rollover binds the edited planner.
@@ -421,7 +421,7 @@ Activation needs all of these:
 - A time outside the weekday 09:00–15:45 IST blackout, unless the NSE calendar
   says the market is closed.
 - A closed, flat book that is not halted. A closed model-led book that carries
-  positions overnight also qualifies, if nothing is pending.
+  positions overnight also qualifies.
 - The installed binary passes `preflight` on the current config, because it is
   the rollback target. If not, the update refuses with
   `update_rollback_config_incompatible`.
@@ -436,7 +436,7 @@ pre-open and after 15:30.
 and records the reason. The same session continues. A flat open book is
 admitted anywhere in the blackout: as `market_open_flat` while the session
 trades, and as `outside_session_flat` in the pre-open or after 15:30. A book
-with positions or pending orders is admitted only as before. Force never
+with positions is admitted only as before. Force never
 bypasses a halt, a hold or an integrity check.
 
 To deploy to an operator-stopped book or inside the blackout:

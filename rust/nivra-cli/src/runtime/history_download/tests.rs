@@ -1232,6 +1232,8 @@ fn pre_open_preparation_separates_empty_gaps_from_rate_limit_and_zero_ready() {
     enum Mode {
         AllBars,
         ListingGapOnThird,
+        ListingGapOnAll,
+        TailLateOnThird,
         ThrottleSubset { limit: usize },
         ThrottleAll,
     }
@@ -1254,34 +1256,24 @@ fn pre_open_preparation_separates_empty_gaps_from_rate_limit_and_zero_ready() {
         ) -> Result<(i64, i64, String)> {
             self.calls += 1;
             match self.mode {
-                Mode::AllBars => {}
-                Mode::ListingGapOnThird if key.ends_with('3') => {
-                    let candles: Vec<_> = self
-                        .sessions
-                        .iter()
-                        .skip(10)
-                        .map(|day| {
-                            json!([format!("{day}T00:00:00+05:30"), 100, 102, 99, 101, 1000, 0])
-                        })
-                        .collect();
-                    return Ok((
-                        now() - 1000,
-                        now(),
-                        json!({"status":"success","data":{"candles":candles}}).to_string(),
-                    ));
-                }
-                Mode::ListingGapOnThird => {}
                 Mode::ThrottleSubset { limit } if key.ends_with('3') && self.throttled < limit => {
                     self.throttled += 1;
                     return Err(Fail::new("http_429_rate_limited").into());
                 }
-                Mode::ThrottleSubset { .. } => {}
                 Mode::ThrottleAll => {
                     return Err(Fail::new("http_429_rate_limited").into());
                 }
+                _ => {}
             }
-            let candles: Vec<_> = self
-                .sessions
+            // A listing gap drops the oldest sessions; a bar the provider has
+            // not published drops the newest one.
+            let (drop_oldest, drop_newest) = match self.mode {
+                Mode::ListingGapOnThird if key.ends_with('3') => (10, 0),
+                Mode::ListingGapOnAll => (10, 0),
+                Mode::TailLateOnThird if key.ends_with('3') => (0, 1),
+                _ => (0, 0),
+            };
+            let candles: Vec<_> = self.sessions[drop_oldest..self.sessions.len() - drop_newest]
                 .iter()
                 .map(|day| json!([format!("{day}T00:00:00+05:30"), 100, 102, 99, 101, 1000, 0]))
                 .collect();
@@ -1332,7 +1324,8 @@ fn pre_open_preparation_separates_empty_gaps_from_rate_limit_and_zero_ready() {
     ));
 
     // 2. Provider has no data (listing gap on 3rd instrument): PARTIAL, but all
-    // missing bars are covered by a valid receipt, so retries stop after pass 1.
+    // missing bars sit behind bars the provider returned, so they are empty gaps
+    // and retries stop after pass 1.
     let gap_dir = tempfile::tempdir().unwrap();
     let mut t_gap = FakePrep {
         mode: Mode::ListingGapOnThird,
@@ -1488,4 +1481,110 @@ fn pre_open_preparation_separates_empty_gaps_from_rate_limit_and_zero_ready() {
         &cfg,
         &serde_json::to_value(&recovered_zero).unwrap()
     ));
+
+    // 5. The provider answers the older sessions but not the previous session for
+    // one instrument. That day follows the last bar it returned, so it stays a
+    // fillable gap rather than an empty one, and the rest of the book is admitted.
+    let late_dir = tempfile::tempdir().unwrap();
+    let mut t_late = FakePrep {
+        mode: Mode::TailLateOnThird,
+        calls: 0,
+        throttled: 0,
+        sessions: sessions.clone(),
+    };
+    let res = download_controlled(
+        &mut t_late,
+        now,
+        &list,
+        late_dir.path(),
+        Some(sessions[0]),
+        Some(previous),
+        Interval::Days,
+        Some(&control),
+        Some(&cfg),
+    );
+    let report = preparation::apply_run_outcome(
+        preparation::coverage_report(late_dir.path(), &list, &sessions, target, previous),
+        res,
+    );
+    assert_eq!(report.status, CoverageStatus::Partial);
+    assert_eq!(report.ready_instruments, 2);
+    assert_eq!(report.covered_empty_bars, 0);
+    assert_eq!(report.retryable_missing_bars, 1);
+    let report_json = serde_json::to_value(&report).unwrap();
+    assert!(wide::history_admitted(&cfg, &report_json));
+    let mut attempts = HistoryAttempts::default();
+    attempts.started(&cfg, 1_000).unwrap();
+    attempts.completed(&cfg, 2_000, &report_json).unwrap();
+    assert_eq!(attempts.retry_at, Some(62_000));
+    download_controlled(
+        &mut t_late,
+        now,
+        &list,
+        late_dir.path(),
+        Some(sessions[0]),
+        Some(previous),
+        Interval::Days,
+        Some(&control),
+        Some(&cfg),
+    )
+    .unwrap();
+    assert_eq!(
+        t_late.calls, 3,
+        "the retry re-reads the receipt, not a range"
+    );
+
+    // 6. Every instrument answers only the older sessions: every missing bar is
+    // an empty gap, so nothing is retryable, yet nothing is ready either. The
+    // pass books an attempt instead of parking the session until the cutoff.
+    let parked_dir = tempfile::tempdir().unwrap();
+    let mut t_parked = FakePrep {
+        mode: Mode::ListingGapOnAll,
+        calls: 0,
+        throttled: 0,
+        sessions: sessions.clone(),
+    };
+    let res = download_controlled(
+        &mut t_parked,
+        now,
+        &list,
+        parked_dir.path(),
+        Some(sessions[0]),
+        Some(previous),
+        Interval::Days,
+        Some(&control),
+        Some(&cfg),
+    );
+    assert_eq!(t_parked.calls, 3);
+    let report = preparation::apply_run_outcome(
+        preparation::coverage_report(parked_dir.path(), &list, &sessions, target, previous),
+        res,
+    );
+    assert_eq!(report.status, CoverageStatus::Partial);
+    assert_eq!(report.ready_instruments, 0);
+    assert_eq!(report.covered_empty_bars, 30);
+    assert_eq!(report.retryable_missing_bars, 0);
+    assert!(report.failure.is_none());
+    let report_json = serde_json::to_value(&report).unwrap();
+    assert!(!wide::history_admitted(&cfg, &report_json));
+    let mut attempts = HistoryAttempts::default();
+    attempts.started(&cfg, 1_000).unwrap();
+    attempts.completed(&cfg, 2_000, &report_json).unwrap();
+    assert_eq!(attempts.retry_at, Some(62_000));
+    download_controlled(
+        &mut t_parked,
+        now,
+        &list,
+        parked_dir.path(),
+        Some(sessions[0]),
+        Some(previous),
+        Interval::Days,
+        Some(&control),
+        Some(&cfg),
+    )
+    .unwrap();
+    assert_eq!(
+        t_parked.calls, 3,
+        "an unadmitted pass keeps its attempt, and refetches nothing"
+    );
 }

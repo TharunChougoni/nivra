@@ -1253,9 +1253,9 @@ pub(super) fn update_safe(path: &Path, now: i64) -> Result<bool> {
     Ok(book.flat_safe || (book.carried_safe && market_closed(path, now)?))
 }
 
-/// Operator-stopped deployment admission: a stopped, non-halted book with no
-/// pending orders. Carried holdings are allowed because the book is preserved
-/// byte-for-byte and the controller stays stopped until an explicit resume.
+/// Operator-stopped deployment admission: a stopped, non-halted book. Carried
+/// holdings are allowed because the book is preserved byte-for-byte and the
+/// controller stays stopped until an explicit resume.
 pub(super) fn stopped_book_safe(path: &Path) -> Result<bool> {
     Ok(update_book(path)?.stopped_safe)
 }

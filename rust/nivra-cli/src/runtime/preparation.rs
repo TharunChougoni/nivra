@@ -102,10 +102,12 @@ pub struct CoverageReport {
     pub required_bars: usize,
     pub observed_bars: usize,
     pub missing_bars: usize,
-    /// Missing bars already covered by a validated provider receipt (e.g. listing or suspension gaps).
+    /// Missing bars a validated provider receipt answered past, or an answer with
+    /// no bar at all for the instrument (e.g. listing or suspension gaps).
     #[serde(default)]
     pub covered_empty_bars: usize,
-    /// Missing bars not yet covered by any validated receipt (retryable).
+    /// Missing bars a receipt cannot vouch for (unfetched, or after the last
+    /// bar the provider returned) and that an attempt may still fill.
     #[serde(default)]
     pub retryable_missing_bars: usize,
     /// Exact unobserved sessions per instrument; never infer bars from exclusions.
@@ -345,11 +347,23 @@ fn coverage_report_control(
         report.observed_bars += count;
         if count < required_sessions.len() {
             let ranges = covered.get(&instrument.key);
+            // A receipt proves a day holds no bar only when the provider answered
+            // past it: an older empty day sits behind a returned bar, while the
+            // days after the last returned bar may simply not be published yet.
+            // An instrument the provider answered no bar for in the whole window
+            // is listing or suspension evidence, so the range stands as empty.
+            let last_observed = required_sessions
+                .iter()
+                .rev()
+                .find(|day| bars.contains_key(&(instrument.key.clone(), **day)))
+                .copied();
             let mut missing = Vec::new();
             for day in required_sessions {
                 if !bars.contains_key(&(instrument.key.clone(), *day)) {
+                    let untouched_tail = last_observed.is_some_and(|last| *day >= last);
                     if ranges
                         .is_some_and(|ranges| ranges.iter().any(|(s, e)| *s <= *day && *day <= *e))
+                        && !untouched_tail
                     {
                         report.covered_empty_bars += 1;
                     } else {
@@ -500,15 +514,10 @@ fn preparation_failure_code(error: &(dyn std::error::Error + 'static)) -> String
     }
 }
 
-#[cfg(test)]
-pub(crate) fn apply_run_outcome(report: CoverageReport, result: Result<usize>) -> CoverageReport {
-    apply_run_outcome_inner(report, result)
-}
-#[cfg(not(test))]
-fn apply_run_outcome(report: CoverageReport, result: Result<usize>) -> CoverageReport {
-    apply_run_outcome_inner(report, result)
-}
-fn apply_run_outcome_inner(mut report: CoverageReport, result: Result<usize>) -> CoverageReport {
+pub(crate) fn apply_run_outcome(
+    mut report: CoverageReport,
+    result: Result<usize>,
+) -> CoverageReport {
     if report.failure.as_deref() == Some("history_preparation_cancelled_or_expired") {
         report.status = CoverageStatus::Failed;
     }
