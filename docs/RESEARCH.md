@@ -398,6 +398,30 @@ nivra-cli --bin nivra-analysis`. Set `NIVRA_ARCHIVE_BAR_PERF=day` or
 The timer starts after the synthetic rows are committed and covers submission
 through verified report retrieval.
 
+### Benchmark the bar strategy library
+
+`nivra-tools bar-bench` runs every bar strategy in a directory through the
+same `archive_bars` engine, against an archive URL and a password file you
+name. A bar strategy is a `<name>.py` file with a `<name>.params.json`
+file that holds `{"abi":"archive_bars_v1","unit":"day","params":{...}}`.
+Use `"minute"` as the unit for a minute strategy. The bench calls the
+engine directly, with no research job queue, and runs strategies in
+parallel. It writes a Markdown leaderboard of return, Sharpe, maximum
+drawdown, turnover, trades and fees for each split, and with `--json` all
+metrics and the report hashes. Training runs from `--from` to the day
+before `--test-from`, and the test runs from `--test-from` to `--to`. See
+[the library benchmark](../strategies/BENCHMARK.md) for the commands and
+the results on the local archive copy.
+
+To check the bench itself, point `NIVRA_ARCHIVE_TEST_URL` at a Postgres
+server with a password in the URL. The test creates and drops its own
+database:
+
+```sh
+NIVRA_ARCHIVE_TEST_URL=postgresql://postgres:PASSWORD@127.0.0.1:5432/postgres \
+  cargo test -p nivra-tools --locked bench_ranks -- --ignored
+```
+
 ### Acceptance and the library
 
 When the research `backtest` finishes a strategy replay, deterministic code

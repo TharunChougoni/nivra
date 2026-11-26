@@ -138,6 +138,7 @@ the annotated tag `vX.Y.Z` must match on the same commit.
 | `nivra-tools check-release` | Changelog and version, Markdown links and retired words |
 | `nivra-tools test-budget` | Count Rust tests against the 400 limit |
 | `nivra-tools golden-check` | Verify frozen fixture bytes |
+| `nivra-tools bar-bench` | Leaderboard of every bar strategy over an archive ([research](RESEARCH.md#benchmark-the-bar-strategy-library)) |
 | `nivra-tools release-artifact` | Assemble release assets |
 | `nivra-tools replay`, `replay-fingerprint` | Offline shared replay ([reference](reference/SHARED_REPLAY.md)) |
 | `nivra self-check --expected-version vX.Y.Z` | Offline check of a built binary |
