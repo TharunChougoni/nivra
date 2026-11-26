@@ -68,7 +68,7 @@ SELECT set_integer_now_func('minute_bars', 'market_archive_now_ms');
 ALTER TABLE quote_obs SET (
     timescaledb.compress,
     timescaledb.compress_segmentby = 'instrument_id',
-    timescaledb.compress_orderby = 'receipt_ms DESC'
+    timescaledb.compress_orderby = 'receipt_ms DESC, receipt_id'
 );
 ALTER TABLE minute_bars SET (
     timescaledb.compress,
