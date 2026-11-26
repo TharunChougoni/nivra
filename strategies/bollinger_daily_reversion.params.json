@@ -1,0 +1,18 @@
+{
+ "abi": "archive_bars_v1",
+ "params": {
+  "band_bars": 20,
+  "band_z": 2.0,
+  "capital_rupees": 1000000,
+  "cost_bps": 25,
+  "history_bars": 110,
+  "max_gap": 0.35,
+  "max_hold_bars": 15,
+  "min_adv_rupees": 100000000,
+  "min_price_rupees": 20,
+  "slots": 10,
+  "stop": 0.08,
+  "trend_bars": 100
+ },
+ "unit": "day"
+}

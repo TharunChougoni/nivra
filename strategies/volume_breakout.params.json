@@ -1,0 +1,18 @@
+{
+ "abi": "archive_bars_v1",
+ "params": {
+  "capital_rupees": 1000000,
+  "channel_bars": 20,
+  "close_location": 0.3,
+  "cost_bps": 25,
+  "history_bars": 25,
+  "hold_bars": 10,
+  "max_gap": 0.35,
+  "min_adv_rupees": 100000000,
+  "min_price_rupees": 20,
+  "slots": 10,
+  "volume_bars": 20,
+  "volume_multiple": 3.0
+ },
+ "unit": "day"
+}

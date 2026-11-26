@@ -1,0 +1,14 @@
+{
+ "abi": "archive_bars_v1",
+ "params": {
+  "capital_rupees": 1000000,
+  "cost_bps": 15,
+  "flat_minute": 914,
+  "last_entry_minute": 570,
+  "max_gap_bps": 400,
+  "min_gap_bps": 75,
+  "slots": 5,
+  "stop_bps": 150
+ },
+ "unit": "minute"
+}

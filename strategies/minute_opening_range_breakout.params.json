@@ -1,0 +1,15 @@
+{
+ "abi": "archive_bars_v1",
+ "params": {
+  "buffer_bps": 5,
+  "capital_rupees": 1000000,
+  "cost_bps": 15,
+  "flat_minute": 914,
+  "last_entry_minute": 690,
+  "min_rel_volume": 1.0,
+  "range_minutes": 15,
+  "slots": 5,
+  "volume_days": 10
+ },
+ "unit": "minute"
+}

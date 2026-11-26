@@ -1,0 +1,7 @@
+{
+  "per_order": "24",
+  "buy_bps": "1",
+  "sell_bps": "3",
+  "slippage_bps": "5",
+  "rounding_increment": "0.01"
+}

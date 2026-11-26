@@ -1,0 +1,12 @@
+{
+ "abi": "archive_bars_v1",
+ "params": {
+  "capital_rupees": 1000000,
+  "cost_bps": 15,
+  "entry_minute": 899,
+  "flat_minute": 927,
+  "min_first_bps": 25,
+  "slots": 5
+ },
+ "unit": "minute"
+}
