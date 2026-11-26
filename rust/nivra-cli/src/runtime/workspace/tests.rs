@@ -22,7 +22,7 @@ fn workspace_seeds_layout_without_touching_the_book() {
         assert!(
             parse_tool(
                 "workspace_run",
-                json!({"script":"scanner/cost_aware_momentum.py","input":input,"input_path":null})
+                json!({"script":"scripts/rank.py","input":input,"input_path":null})
             )
             .is_ok()
         );
@@ -31,16 +31,16 @@ fn workspace_seeds_layout_without_touching_the_book() {
         assert!(
             parse_tool(
                 "workspace_run",
-                json!({"script":"scanner/cost_aware_momentum.py","input":input,"input_path":null})
+                json!({"script":"scripts/rank.py","input":input,"input_path":null})
             )
             .is_err()
         );
     }
     let (dir, root, settings) = enabled_book();
+    assert!(!root.join("scanner").exists());
+    assert!(settings.run_allowlist.is_empty());
     for name in [
         "README.md",
-        "scanner/cost_aware_momentum.py",
-        "scanner/cost_aware_momentum.params.json",
         "notes",
         "skills",
         "tools",
@@ -50,10 +50,6 @@ fn workspace_seeds_layout_without_touching_the_book() {
     ] {
         assert!(root.join(name).exists(), "{name}");
     }
-    assert_eq!(
-        fs::read_to_string(root.join("scanner/cost_aware_momentum.py")).unwrap(),
-        SCANNER_PY
-    );
     fs::write(root.join("README.md"), "operator note").unwrap();
     ensure(dir.path(), &settings).unwrap();
     assert_eq!(
@@ -93,8 +89,15 @@ fn workspace_seeds_layout_without_touching_the_book() {
 
 #[test]
 fn workspace_run_allowlist_and_install_gate() {
-    let (dir, _root, settings) = enabled_book();
+    let (dir, _root, mut settings) = enabled_book();
     let book = dir.path();
+    fs::create_dir_all(_root.join("tools")).unwrap();
+    fs::write(
+        _root.join("tools/rank.py"),
+        "import json,sys\nrows=json.load(open(sys.argv[1]))\nprint(json.dumps({k:v['move_bps'] for k,v in rows.items() if k!='params' and v['move_bps']>0}))\n",
+    )
+    .unwrap();
+    settings.run_allowlist = vec!["tools/rank.py".into()];
     assert!(
         execute(
             book,
@@ -107,7 +110,7 @@ fn workspace_run_allowlist_and_install_gate() {
         )
         .is_err()
     );
-    let params: Value = serde_json::from_str(SCANNER_PARAMS).unwrap();
+    let params = json!({});
     let base = json!({
         "price": 500.0, "move_bps": 150.0, "market_relative_bps": 180.0,
         "traded_value": 50_000_000.0, "circuit_distance_bps": 800.0,
@@ -136,16 +139,29 @@ fn workspace_run_allowlist_and_install_gate() {
     let scored = execute(
         book,
         &settings,
-        parse_tool("workspace_run", json!({"script":"scanner/cost_aware_momentum.py", "input":input.to_string(), "input_path":null})).unwrap(),
+        parse_tool(
+            "workspace_run",
+            json!({"script":"tools/rank.py", "input":input.to_string(), "input_path":null}),
+        )
+        .unwrap(),
     )
     .unwrap();
     fs::write(_root.join("data/input.json"), input.to_string()).unwrap();
-    let path_scored = execute(book, &settings, parse_tool("workspace_run", json!({
-        "script":"scanner/cost_aware_momentum.py", "input":null, "input_path":"data/input.json"
-    })).unwrap()).unwrap();
+    let path_scored = execute(
+        book,
+        &settings,
+        parse_tool(
+            "workspace_run",
+            json!({
+                "script":"tools/rank.py", "input":null, "input_path":"data/input.json"
+            }),
+        )
+        .unwrap(),
+    )
+    .unwrap();
     assert_eq!(path_scored["scores"], scored["scores"]);
     assert!(execute(book, &settings, parse_tool("workspace_run", json!({
-        "script":"scanner/cost_aware_momentum.py", "input":input.to_string(), "input_path":"data/input.json"
+        "script":"tools/rank.py", "input":input.to_string(), "input_path":"data/input.json"
     })).unwrap()).is_err(), "inline and path inputs must not be combined");
     assert_eq!(scored["execution_authorized"], false);
     assert_eq!(scored["authority"], "advisory_scores_not_orders");

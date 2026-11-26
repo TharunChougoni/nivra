@@ -14,9 +14,6 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-const SCANNER_PY: &str = include_str!("../../../../../strategies/cost_aware_momentum.py");
-const SCANNER_PARAMS: &str =
-    include_str!("../../../../../strategies/cost_aware_momentum.params.json");
 const MAX_RANKER_INPUT_BYTES: usize = 65_536;
 const README: &str = r#"# Orchestrator workspace
 
@@ -26,7 +23,6 @@ evidence, never prices, quotes, fills or execution authority.
 
 Layout:
 
-- `scanner/` seeded scoring scripts (read-only for the model)
 - `notes/` persistent notes across turns
 - `skills/` standing procedures the owner writes for itself
 - `tools/` files installed only when name and sha256 match the reviewed allowlist
@@ -54,7 +50,7 @@ fn default_max_list_entries() -> usize {
     256
 }
 fn default_run_allowlist() -> Vec<String> {
-    vec!["scanner/cost_aware_momentum.py".into()]
+    Vec::new()
 }
 fn default_cpu_seconds() -> u64 {
     30
@@ -397,22 +393,10 @@ pub(crate) fn ensure(book: &Path, settings: &WorkspaceSettings) -> Result<PathBu
     settings.validate()?;
     let root = root_dir(book, settings)?;
     ensure_private_root(book, &root)?;
-    for name in [
-        "scanner", "notes", "skills", "tools", "data", "reports", "journal",
-    ] {
+    for name in ["notes", "skills", "tools", "data", "reports", "journal"] {
         ensure_private_dir(&root, &root.join(name))?;
     }
     write_if_missing(&root, &root.join("README.md"), README.as_bytes())?;
-    write_if_missing(
-        &root,
-        &root.join("scanner/cost_aware_momentum.py"),
-        SCANNER_PY.as_bytes(),
-    )?;
-    write_if_missing(
-        &root,
-        &root.join("scanner/cost_aware_momentum.params.json"),
-        SCANNER_PARAMS.as_bytes(),
-    )?;
     Ok(root)
 }
 

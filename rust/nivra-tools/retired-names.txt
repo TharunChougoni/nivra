@@ -80,7 +80,7 @@
 7	scorer	rust/nivra-cli/src/runtime/workspace/mod.rs
 2	scorer	rust/nivra-cli/src/strategy_lab.rs
 6	scorer	rust/nivra-core/src/strategy.rs
-43	scorer	rust/nivra-sandbox/src/lib.rs
+41	scorer	rust/nivra-sandbox/src/lib.rs
 19	scorer	rust/nivra-sandbox/src/selector.rs
 25	scorer	rust/nivra-store/src/strategy_results.rs
 2	scorer	rust/nivra-tools/src/retired.rs
