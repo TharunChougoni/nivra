@@ -83,6 +83,7 @@ export default function Chart({
   multiDay = false,
   daily = false,
   maxPoints,
+  seriesKey,
   toolbarExtra = null,
 }: {
   points?: Point[];
@@ -101,11 +102,17 @@ export default function Chart({
   multiDay?: boolean;
   daily?: boolean;
   maxPoints?: number;
+  /** Unfreezes zoom/pause when the user switches instrument or range preset. */
+  seriesKey?: string;
   toolbarExtra?: React.ReactNode;
 }) {
   const [range, setRange] = useState("all"),
     [follow, setFollow] = useState(true),
     [failed, setFailed] = useState(false);
+  const effectiveSeriesKey = seriesKey ?? `${label}:${multiDay}:${daily}`;
+  useEffect(() => {
+    setFollow(true);
+  }, [effectiveSeriesKey]);
   useEffect(() => {
     setFailed(false);
   }, [points]);
@@ -114,7 +121,8 @@ export default function Chart({
     isMultiDay =
       multiDay ||
       daily ||
-      (valid.length >= 2 && valid[valid.length - 1].at - valid[0].at > 86_400_000),
+      (valid.length >= 2 &&
+        valid[valid.length - 1].at - valid[0].at > 86_400_000),
     effectiveRange = daily ? "all" : range,
     data = useMemo(
       () =>
@@ -132,11 +140,7 @@ export default function Chart({
         ? Number(coverage.store_start_ms)
         : null;
   const formatTime = (at: number) =>
-    daily
-      ? shortDate(at)
-      : isMultiDay
-        ? datetime(at)
-        : `${clock(at)} IST`;
+    daily ? shortDate(at) : isMultiDay ? datetime(at) : `${clock(at)} IST`;
   const [x, values, carried] = data as [
     number[],
     (number | null)[],
@@ -280,6 +284,7 @@ export default function Chart({
             panes={panes}
             bands={bands}
             tooltip={tooltip}
+            daily={daily}
             frozen={!follow}
             onSelect={() => setFollow(false)}
             onError={() => setFailed(true)}

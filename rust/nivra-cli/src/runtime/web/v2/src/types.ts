@@ -24,7 +24,6 @@ export interface Envelope extends Availability {
 }
 export interface MetaResponse extends Envelope {
   version?: string;
-  roles?: string[];
   capabilities?: string[];
   archive_configured?: boolean;
   limits?: {
@@ -1153,32 +1152,6 @@ export interface StrategyReference extends StrategyFields {
   key: string;
   instruments: (string | undefined)[];
   scores: Decimal[];
-}
-export interface ToolCallRecord {
-  v?: number;
-  at_ms?: number;
-  session?: string;
-  run?: string;
-  turn?: number;
-  call?: string;
-  tool?: string;
-  provider?: string;
-  query?: string | null;
-  url?: string | null;
-  status?: string;
-  reason?: string | null;
-  latency_ms?: number;
-  bytes?: number;
-  results?: number;
-  execution_authorized?: false;
-}
-export interface ToolsResponse extends Availability {
-  v?: number;
-  session?: string;
-  calls?: ToolCallRecord[];
-  total?: number;
-  next?: string | null;
-  execution_authorized?: false;
 }
 export interface AgentUsage {
   input?: number;

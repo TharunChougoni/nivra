@@ -50,6 +50,8 @@ export interface TimeChartProps {
   bands?: Band[];
   tooltip?: (index: number) => Tip | null;
   ariaLabel: string;
+  /** Daily bar series always label the x-axis with dates instead of clock times. */
+  daily?: boolean;
   /** Keep the current zoom instead of resetting on new data. */
   frozen?: boolean;
   onSelect?: () => void;
@@ -207,9 +209,10 @@ export function TimeChart(props: TimeChartProps) {
                 grid: { stroke: c["--line"], width: 0.5 },
                 ticks: { show: false },
                 values: (_, ticks) => {
-                  const span =
-                    (x.at(-1) ?? 0) - (x[0] ?? 0);
-                  if (span > 7 * 86_400) return ticks.map((t) => shortDate(t * 1000));
+                  const currentX = latest.current.x;
+                  const span = (currentX.at(-1) ?? 0) - (currentX[0] ?? 0);
+                  if (latest.current.daily || span > 7 * 86_400)
+                    return ticks.map((t) => shortDate(t * 1000));
                   if (span > 86_400)
                     return ticks.map((t) =>
                       datetime(t * 1000).replace(" IST", ""),
@@ -350,7 +353,7 @@ export function TimeChart(props: TimeChartProps) {
         ...(props.panes[i]?.series.map((s) => s.data) ?? []),
       ] as uPlot.AlignedData),
     );
-  }, [props.x, props.panes, props.frozen, ready]);
+  }, [props.x, props.panes, props.frozen, props.daily, ready]);
   useEffect(() => {
     // Markers and bands are drawn from props; repaint without touching scales.
     plots.current.forEach((u) => u.redraw(false));

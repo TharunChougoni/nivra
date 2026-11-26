@@ -105,17 +105,21 @@ function CostChart({ turns, lanes }: { turns: AgentTurn[]; lanes: string[] }) {
         .sort((a, b) => a.at_ms! - b.at_ms!),
     [turns],
   );
+  const pricedLanes = useMemo(
+    () => lanes.filter((lane) => priced.some((t) => t.lane === lane)),
+    [lanes, priced],
+  );
   const x = useMemo(() => priced.map((t) => t.at_ms! / 1000), [priced]);
   const panes = useMemo(
     () => [
       {
         height: 170,
-        format: (v: number) => "$" + v.toFixed(2),
+        format: (v: number) => usd(v),
         yRange: (_min: number, max: number): [number, number] => [
           0,
           max * 1.1 || 1,
         ],
-        series: lanes.map((lane) => {
+        series: pricedLanes.map((lane) => {
           let total = 0;
           return {
             label: sentenceCase(lane),
@@ -130,7 +134,7 @@ function CostChart({ turns, lanes }: { turns: AgentTurn[]; lanes: string[] }) {
         }),
       },
     ],
-    [priced, lanes],
+    [priced, pricedLanes],
   );
   if (priced.length < 2)
     return (
@@ -487,8 +491,21 @@ export default function Lanes() {
   const journalMissing =
     (state.agentState === "error" || state.agentState === "unavailable") &&
     !turns.length;
-  const statFor = (l: string) =>
-    stats.find((s) => s.lane === l) ?? laneStats([], null)[0];
+  const statFor = (l: string): LaneStats =>
+    stats.find((s) => s.lane === l) ?? {
+      lane: l,
+      turns: 0,
+      calls: null,
+      failed: 0,
+      fallbacks: 0,
+      p50_ms: null,
+      p95_ms: null,
+      input: null,
+      output: null,
+      cache_read: null,
+      cost_usd: null,
+      usage_basis: null,
+    };
   const column = (l: string, picker?: React.ReactNode) => (
     <LaneColumn
       key={l}

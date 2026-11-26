@@ -24,10 +24,6 @@ const LIVENESS_STATUS: Record<string, string> = {
   future: "Future clock",
   malformed: "Malformed",
 };
-function sentence(value: string) {
-  const text = value.replaceAll("_", " ");
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
 export function metric(value: unknown): string {
   return numeric(value) === null ? "Not reported" : count(value);
 }
@@ -180,15 +176,6 @@ export function operationalHealthPresence(
   health?: { operational_health?: unknown } | null,
 ): unknown {
   return summary?.operational_health ?? health?.operational_health;
-}
-export function operationalHealthFrom(
-  summary?: { operational_health?: OperationalHealth | null } | null,
-  health?: { operational_health?: OperationalHealth | null } | null,
-): OperationalHealth | null {
-  const value = operationalHealthPresence(summary, health);
-  return operationalHealthState(value) === "present"
-    ? (value as OperationalHealth)
-    : null;
 }
 export function controllerLivenessFrom(
   health?: { controller_liveness?: ControllerLiveness | null } | null,

@@ -1,5 +1,5 @@
 import { count, datetime, numeric } from "./data";
-import { plain } from "./labels";
+import { plain, sentenceCase } from "./labels";
 import { ageLabel, validTimestampMs } from "./operational";
 import type {
   EpisodeMeasurement,
@@ -168,7 +168,7 @@ const RESEARCH_REASON_LABELS: Record<string, string> = {
   independent_episode_observation_not_a_funded_portfolio:
     "Independent episode observation; not a funded portfolio",
   source_candidate_has_no_task8_execution_report:
-    "Source has no Task 8 execution report",
+    "Source has no execution report",
   source_candidate_result_not_available: "Source candidate result unavailable",
 };
 
@@ -332,15 +332,12 @@ const CAPTURE_STATUS: Record<string, string> = {
   not_configured: "Not configured",
 };
 
-function sentence(value: string) {
-  const text = value.replaceAll("_", " ");
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
 export function researchReason(value: unknown, known?: boolean): string {
   if (known === false || typeof value !== "string") return "Unknown reason";
   if (!RESEARCH_REASONS.has(value)) return "Unknown reason";
-  return RESEARCH_REASON_LABELS[value] || sentence(value);
+  return (
+    RESEARCH_REASON_LABELS[value] || sentenceCase(value.replaceAll("_", " "))
+  );
 }
 
 export function safeHash(value: unknown): string {
@@ -913,18 +910,18 @@ export function replayAxes(
       : null;
   const axis = (value: unknown) =>
     value === true ? "Yes" : value === false ? "No" : "Not reported";
-  // The actual d946 source projection has three shapes: an explicit
-  // `unavailable` reason, an authoritative `not_present` absence, or the
-  // copied Task 8 axes object (`copied_unchanged:true`, no status). An unknown
-  // status string is never relabelled as "Copied unchanged".
+  // The replay projection has three shapes: an explicit `unavailable` reason,
+  // an authoritative `not_present` absence, or the copied execution report
+  // axes object (`copied_unchanged:true`, no status). An unknown status string
+  // is never relabelled as "Copied unchanged".
   const status =
     replay?.status === "unavailable"
       ? "Unavailable"
       : replay?.status === "not_present"
-        ? "No Task 8 execution report"
+        ? "No execution report"
         : replay?.copied_unchanged === true &&
             replay?.source === "task8_execution_report"
-          ? "Copied unchanged from Task 8 report"
+          ? "Copied unchanged from execution report"
           : typeof replay?.status === "string"
             ? "Unsupported source status"
             : "Not reported";
@@ -1197,15 +1194,6 @@ export function measurementWindow(
   };
 }
 
-export function measurementItems(
-  library?: {
-    items?: ResearchCandidate[] | null;
-    truncated?: boolean | null;
-  } | null,
-): MeasurementEntry[] {
-  return measurementWindow(library).entries;
-}
-
 export function milestoneWindow(
   lifecycle?: ObservationStatus["lifecycle"],
   displayLimit = 20,
@@ -1327,32 +1315,4 @@ export function continuationQuoteClock(
   return datetime(
     validTimestampMs(clock === "source" ? quote?.source_ms : quote?.receipt_ms),
   );
-}
-
-export function continuationLabel(
-  continuation?: ResearchContinuation | null,
-): string {
-  if (!continuation) return "Not recorded";
-  switch (continuation.state) {
-    case "evaluated":
-      return "Evaluated";
-    case "unknown":
-      return "Unknown";
-    case "waiting":
-      return "Waiting";
-    case "pending_capture":
-      return "Pending capture";
-    case "unavailable":
-      return "Unavailable";
-    default:
-      return "Not reported";
-  }
-}
-
-export function researchLibraryCount(
-  library?: { items?: ResearchCandidate[] | null } | null,
-): string {
-  return Array.isArray(library?.items)
-    ? count(library.items.length)
-    : "Not reported";
 }

@@ -129,13 +129,13 @@ test("unknown measurement states never become zero PnL", () => {
     replayAxes({
       replay: { status: "not_present" },
     } as unknown as EpisodeMeasurement).status,
-    "No Task 8 execution report",
+    "No execution report",
   );
   assert.equal(
     replayAxes({
       replay: { copied_unchanged: true, source: "task8_execution_report" },
     } as unknown as EpisodeMeasurement).status,
-    "Copied unchanged from Task 8 report",
+    "Copied unchanged from execution report",
   );
   assert.equal(
     replayAxes({

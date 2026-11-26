@@ -38,9 +38,34 @@ import type {
   SessionRecord,
   SessionsResponse,
   SummaryResponse,
-  ToolCallRecord,
-  ToolsResponse,
 } from "../src/types";
+
+export interface ToolCallRecord {
+  v?: number;
+  at_ms?: number;
+  session?: string;
+  run?: string;
+  turn?: number;
+  call?: string;
+  tool?: string;
+  provider?: string;
+  query?: string | null;
+  url?: string | null;
+  status?: string;
+  reason?: string | null;
+  latency_ms?: number;
+  bytes?: number;
+  results?: number;
+  execution_authorized?: false;
+}
+export interface ToolsResponse {
+  v?: number;
+  session?: string;
+  calls?: ToolCallRecord[];
+  total?: number;
+  next?: string | null;
+  execution_authorized?: false;
+}
 
 const IST = "+05:30";
 const STEP_MS = 15_000;
@@ -1862,7 +1887,10 @@ export function seriesAt(
     };
   }
   const key = query.instrument ?? "";
-  if (query.kind === "archive-daily-bar" || query.kind === "archive-minute-bar") {
+  if (
+    query.kind === "archive-daily-bar" ||
+    query.kind === "archive-minute-bar"
+  ) {
     const known = data.bars[key];
     if (!known)
       return {

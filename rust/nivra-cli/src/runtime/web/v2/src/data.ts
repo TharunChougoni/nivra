@@ -38,6 +38,22 @@ export const usd = (v: unknown) =>
         minimumFractionDigits: 2,
         maximumFractionDigits: Math.abs(Number(v)) < 1 ? 4 : 2,
       });
+export const signed = (v: number | null) =>
+  v === null ? "—" : (v > 0 ? "+" : "") + amount(v);
+export const tone = (v: number | null) =>
+  v === null || v === 0
+    ? undefined
+    : v > 0
+      ? ("pos" as const)
+      : ("neg" as const);
+export const percent = (value?: number | null) =>
+  typeof value === "number" && Number.isFinite(value)
+    ? `${(value * 100).toFixed(2)}%`
+    : "Not reported";
+export const percentPoints = (value?: number | null) =>
+  typeof value === "number" && Number.isFinite(value)
+    ? `${value.toFixed(2)}%`
+    : "Not reported";
 export const count = (v: unknown) =>
   numeric(v) === null
     ? "—"
@@ -733,10 +749,12 @@ export const refusalLabels: Record<string, string> = {
 };
 
 /** An execution verdict with its refusal reason, in plain words. */
-export function executionText(e?: null | {
-  verdict?: string;
-  reason?: string | null;
-}): string | null {
+export function executionText(
+  e?: null | {
+    verdict?: string;
+    reason?: string | null;
+  },
+): string | null {
   if (!e?.verdict) return null;
   const word = e.verdict.replaceAll("_", " ");
   if (e.verdict !== "execution_gate_rejected")

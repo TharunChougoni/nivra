@@ -1,6 +1,12 @@
 import React, { useMemo, useState } from "react";
 import type { AgentTurn } from "../types";
 import { clock, duration, numeric } from "../data";
+import {
+  TRIGGER_LABELS,
+  TURN_ERROR_LABELS,
+  plain,
+  sentenceCase,
+} from "../labels";
 import { turnFailed } from "../model";
 import { useWidth } from "./useWidth";
 
@@ -99,7 +105,7 @@ export default function LaneTimeline({
           return (
             <g key={lane}>
               <text x={4} y={y0 + rowHeight / 2 + 3}>
-                {lane}
+                {sentenceCase(lane)}
               </text>
               <line
                 className="grid-line"
@@ -184,7 +190,7 @@ export default function LaneTimeline({
         >
           <div>
             <span>{clock(hover.turn.at_ms)} IST</span>
-            <span>{hover.turn.lane}</span>
+            <span>{sentenceCase(hover.turn.lane)}</span>
           </div>
           <div>
             <span>model</span>
@@ -193,7 +199,12 @@ export default function LaneTimeline({
           <div>
             <span>trigger</span>
             <span>
-              {hover.turn.trigger?.reason || hover.turn.trigger?.kind || "—"}
+              {hover.turn.trigger?.reason || hover.turn.trigger?.kind
+                ? plain(
+                    hover.turn.trigger?.reason || hover.turn.trigger?.kind,
+                    TRIGGER_LABELS,
+                  )
+                : "—"}
             </span>
           </div>
           <div>
@@ -201,9 +212,13 @@ export default function LaneTimeline({
             <span>
               {hover.turn.verdict
                 ? hover.turn.verdict.escalate
-                  ? "escalate"
-                  : "pass"
-                : hover.turn.error || hover.turn.status || "—"}
+                  ? "Escalated"
+                  : "Declined"
+                : hover.turn.error
+                  ? plain(hover.turn.error, TURN_ERROR_LABELS)
+                  : hover.turn.status
+                    ? plain(hover.turn.status)
+                    : "—"}
             </span>
           </div>
           <div>
