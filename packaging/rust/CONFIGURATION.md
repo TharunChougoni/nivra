@@ -60,6 +60,31 @@ These optional runtime keys control pre-open history preparation.
 
 Authentication, quota and malformed-response failures stop a pass at once.
 
+## Market archive
+
+Add this optional block to the paper configuration to use the archive commands.
+Use a dedicated PostgreSQL database with TimescaleDB available.
+
+```json
+{
+	"market_archive": {
+		"url": "postgresql://nivra@127.0.0.1/nivra_market",
+		"password_file": "/absolute/path/to/archive-password"
+	}
+}
+```
+
+Include the database user, host, and database name in `url`. Put the password
+on one line in the owner-readable `0600` file at `password_file`. The client
+uses PostgreSQL without TLS. Use a local socket, loopback, or an encrypted
+tunnel for the connection.
+
+Run `nivra archive init --config PAPER_JSON` as a role that can create the
+schema objects. Install the TimescaleDB extension in the database first if
+the role lacks permission to create it. Run
+`nivra archive check --config PAPER_JSON` to print the schema version and
+counts of instruments, receipts, observations, bars, and coverage.
+
 ## Compatibility
 
 A planner key outside the pi policy shape refuses with `planner_config_invalid`.

@@ -14,6 +14,7 @@ pub(crate) mod harness;
 pub mod history_download;
 pub mod instrument_display;
 mod lane_queue;
+pub(crate) mod market_archive;
 mod market_feed;
 mod model_history;
 pub(crate) mod operational_health;

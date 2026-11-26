@@ -139,6 +139,11 @@ enum Command {
     },
     /// Print the engine fingerprint required in archived replay manifests.
     BacktestFingerprint,
+    /// Initialize or inspect the shared TimescaleDB market archive.
+    Archive {
+        #[command(subcommand)]
+        command: runtime::market_archive::Command,
+    },
     /// Read-only Upstox candle evidence download; never starts trading.
     HistoryDownload {
         #[arg(long)]
@@ -582,6 +587,7 @@ fn main() -> ExitCode {
         } => alert::entry(config.as_deref(), test, event),
         Command::Preflight { config, unit_file } => preflight::entry(&config, unit_file.as_deref()),
         Command::Backtest { manifest, events } => backtest::entry(&manifest, &events),
+        Command::Archive { command } => runtime::market_archive::entry(command),
         Command::HistoryBackfill {
             config,
             check_only,

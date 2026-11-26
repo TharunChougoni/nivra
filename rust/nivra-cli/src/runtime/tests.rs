@@ -18,6 +18,7 @@ pub(super) fn config(dir: &Path) -> Config {
         universe_prepare_retry_ms: default_universe_prepare_retry_ms(),
         idle_poll_interval_ms: default_idle_poll_interval_ms(),
         market_data_transport: MarketDataTransportSettings::default(),
+        market_archive: None,
         storage: StorageSettings::default(),
         dashboard: DashboardSettings::default(),
         paper_costs: Some(test_costs()),
@@ -85,6 +86,21 @@ fn execution_preparation_defaults_and_validation() {
     assert_eq!(c.history_preparation_cutoff_minute, 550);
     assert!(c.execution.is_default());
     assert_eq!(serde_json::to_value(&c).unwrap(), original);
+    let mut archive = MarketArchiveSettings {
+        url: "postgresql://nivra@localhost/nivra_market".into(),
+        password_file: "/private/archive-password".into(),
+    };
+    assert!(archive.validate().is_ok());
+    let binding = book_binding(&c).unwrap();
+    c.market_archive = Some(archive.clone());
+    assert_eq!(book_binding(&c).unwrap(), binding);
+    archive.url = "postgresql://nivra:example@localhost/nivra_market".into();
+    assert!(archive.validate().is_err());
+    archive.url = "postgresql://nivra@localhost/nivra_market".into();
+    archive.password_file = "relative-password".into();
+    c.market_archive = Some(archive);
+    assert!(c.validate().is_err());
+    c.market_archive = None;
     c.history_preparation_start_minute = 550;
     assert!(c.validate().is_err());
     c.history_preparation_start_minute = 480;

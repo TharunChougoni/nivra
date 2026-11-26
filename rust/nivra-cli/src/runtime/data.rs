@@ -423,31 +423,8 @@ pub(super) fn parse_row(
         return Err("quote_identity".into());
     }
     let source = quote_source(r)?;
-    let depth = |side: &str, buy: bool| -> Result<(Price, u64)> {
-        let mut levels = vec![];
-        for l in r["depth"][side].as_array().ok_or("quote_depth")? {
-            if !l["price"].is_number() {
-                return Err("depth_price".into());
-            }
-            let p = Amount::parse(&l["price"].to_string())?;
-            let n = l["quantity"].as_u64().ok_or("depth_units")?;
-            if p < Amount::ZERO {
-                return Err("negative_price".into());
-            }
-            if p > Amount::ZERO && n > 0 {
-                levels.push((Price::try_from(p)?, n));
-            }
-        }
-        levels.sort_by_key(|v| v.0);
-        if buy {
-            levels.pop()
-        } else {
-            levels.into_iter().next()
-        }
-        .ok_or_else(|| "empty_depth".into())
-    };
-    let (bid, bid_units) = depth("buy", true)?;
-    let (ask, ask_units) = depth("sell", false)?;
+    let (bid, bid_units) = quote_depth(r, "buy")?.ok_or("empty_depth")?;
+    let (ask, ask_units) = quote_depth(r, "sell")?.ok_or("empty_depth")?;
     if bid > ask {
         return Err("crossed_depth".into());
     }
@@ -462,6 +439,34 @@ pub(super) fn parse_row(
         receipt,
     })
 }
+/// Parse the best priced level, preserving an empty side as missing data.
+pub(super) fn quote_depth(r: &serde_json::Value, side: &str) -> Result<Option<(Price, u64)>> {
+    let mut best = None;
+    for level in r["depth"][side].as_array().ok_or("quote_depth")? {
+        if !level["price"].is_number() {
+            return Err("depth_price".into());
+        }
+        let amount = Amount::parse(&level["price"].to_string())?;
+        let quantity = level["quantity"].as_u64().ok_or("depth_units")?;
+        if amount < Amount::ZERO {
+            return Err("negative_price".into());
+        }
+        if amount > Amount::ZERO && quantity > 0 {
+            let price = Price::try_from(amount)?;
+            if best.is_none_or(|(prior, _)| {
+                if side == "buy" {
+                    price >= prior
+                } else {
+                    price < prior
+                }
+            }) {
+                best = Some((price, quantity));
+            }
+        }
+    }
+    Ok(best)
+}
+
 #[cfg(test)]
 fn check_security(bytes: &[u8]) -> Result<()> {
     let mut plain = Vec::new();

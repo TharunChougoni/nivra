@@ -616,6 +616,23 @@ pub struct PaperCostTransition {
     pub prior_config: PathBuf,
 }
 
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MarketArchiveSettings {
+    pub url: String,
+    pub password_file: PathBuf,
+}
+
+impl MarketArchiveSettings {
+    pub(super) fn validate(&self) -> Result<()> {
+        nivra_store::market_archive::validate_url(&self.url)?;
+        if !self.password_file.is_absolute() || self.password_file.file_name().is_none() {
+            return Err("archive_password_path_invalid".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -658,6 +675,9 @@ pub struct Config {
         skip_serializing_if = "MarketDataTransportSettings::is_default"
     )]
     pub market_data_transport: MarketDataTransportSettings,
+    // Operator connection settings do not participate in the paper book binding.
+    #[serde(default, skip_serializing)]
+    pub market_archive: Option<MarketArchiveSettings>,
     #[serde(default, skip_serializing_if = "StorageSettings::is_default")]
     pub storage: StorageSettings,
     #[serde(default, skip_serializing_if = "DashboardSettings::is_default")]
@@ -828,6 +848,9 @@ impl Config {
     }
     pub(crate) fn validate(&self) -> Result<()> {
         self.execution.validate()?;
+        if let Some(archive) = &self.market_archive {
+            archive.validate()?;
+        }
         if self.history_preparation_start_minute >= self.history_preparation_cutoff_minute
             || self.history_preparation_cutoff_minute >= 555
         {

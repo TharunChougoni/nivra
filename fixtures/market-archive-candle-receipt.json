@@ -1,0 +1,10 @@
+{
+  "key": "NSE_EQ|INF204KB14I2",
+  "unit": "minutes",
+  "start": "2026-10-16",
+  "end": "2026-10-16",
+  "requested_ms": 1792204200000,
+  "received_ms": 1792204200010,
+  "body": "{\"status\":\"success\",\"data\":{\"candles\":[[\"2026-10-16T09:15:00+05:30\",300.1,303.25,299.95,301.0,1588,0]]}}",
+  "body_sha256": "aadf53a08beaa3dc228f085ea4bb99ac1dbac1c7a6b5be748cff7a24c55eb6b2"
+}

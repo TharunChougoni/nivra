@@ -218,8 +218,8 @@ pub(crate) struct Receipt {
     pub(crate) unit: String,
     pub(crate) start: NaiveDate,
     pub(crate) end: NaiveDate,
-    requested_ms: i64,
-    received_ms: i64,
+    pub(super) requested_ms: i64,
+    pub(super) received_ms: i64,
     body: String,
     body_sha256: String,
 }
@@ -384,7 +384,7 @@ pub(crate) fn candles(r: &Receipt) -> Result<Vec<(NaiveDate, Value)>> {
 pub(crate) fn range_id(key: &str, unit: &str, start: NaiveDate, end: NaiveDate) -> String {
     digest(format!("{key}:{unit}:{start}:{end}").as_bytes())
 }
-fn window_end(from: NaiveDate, end: NaiveDate, unit: &str) -> Result<NaiveDate> {
+pub(super) fn window_end(from: NaiveDate, end: NaiveDate, unit: &str) -> Result<NaiveDate> {
     Ok(from
         .checked_add_months(Months::new(if unit == "days" { 120 } else { 1 }))
         .and_then(|day| day.checked_sub_days(Days::new(1)))

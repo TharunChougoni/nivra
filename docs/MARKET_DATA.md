@@ -11,6 +11,32 @@ Nivra reads all market data from Upstox with the application's own token.
 | v3 index keys on the same feed | Index context in the decision brief | No |
 | v3 historical candles | Daily feature history and research shards | No |
 
+## Shared market archive
+
+The optional TimescaleDB archive stores full-quote and candle receipts across
+sessions. It preserves the original receipt envelopes, including the provider
+bodies, as zstd-compressed bytes. It stores prices rounded to the nearest paise
+and leaves missing quote depth null. A candle attempt records coverage for each
+date in its request window.
+
+Set [`market_archive`](../packaging/rust/CONFIGURATION.md#market-archive) in
+the paper configuration. Run `nivra archive init --config PAPER_JSON` to
+create the schema. Run `nivra archive check --config PAPER_JSON` to see its
+version and row counts as JSON. You can repeat either command.
+
+TimescaleDB partitions quote observations by receipt time and minute bars by
+bar time. The compression policies group rows by instrument and compress
+chunks older than one day. Controller capture, history backfill, and backtest
+reads still use their existing storage in this release.
+
+To run the archive integration test, use a dedicated TimescaleDB test database.
+The test writes synthetic rows.
+
+```sh
+NIVRA_ARCHIVE_TEST_URL=postgresql://postgres:test@127.0.0.1:55432/postgres \
+	cargo test --locked -p nivra-store --test market_archive -- --ignored --nocapture
+```
+
 ## Read quota and quote batches
 
 Every REST read and feed authorization counts in one shared read journal.
