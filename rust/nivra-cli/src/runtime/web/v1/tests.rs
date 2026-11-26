@@ -47,17 +47,11 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
         "calendar":{"source":"NSE/CMTR/71775","covered_to":"2026-12-31"},
         "alert_transport":{"status":"missing","counts":null}
     });
-    // Captured read-only research projections. The API must copy these exact
-    // objects and timestamps; it must not sample a new clock or recompute state.
     let research_tasks = serde_json::json!({
-        "status":"unavailable",
-        "reason":"candidate_task_state_unavailable",
-        "observation":{
-            "status":"unavailable",
-            "reason":"candidate_task_state_unavailable",
-            "as_of_ms":900_000,
-            "lifecycle":{"status":"unavailable","recorded":null,"matured":null,"milestones":[]}
-        }
+        "status":"reconciliation_required",
+        "task_id":"fixture-task",
+        "revision":1,
+        "reason":"research_worker_failed"
     });
     let view = Arc::new(Mutex::new(
         serde_json::json!({"paper_only":true,"live_enabled":false,"account":"fixture-alias","authorized_session":"2026-10-29","capital":"5000","portfolio":{"cash":"5000","positions":{},"fills":[]},"private":"must-not-be-served","activity_attribution":activity,"research_tasks":research_tasks.clone()}),
@@ -200,7 +194,6 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
     // producer timestamps and explicit unavailable source. No fake availability
     // or renewed sample is introduced by the GET.
     assert_eq!(plain["research_tasks"], research_tasks);
-    assert_eq!(plain["research_tasks"]["observation"]["as_of_ms"], 900_000);
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&decoded)
             .expect("summary gzip must contain JSON, not a nested gzip stream"),
@@ -776,7 +769,7 @@ fn price_batches_are_shared_bounded_and_send_only_moved_receipts() {
 
 /// The view one controller loop publishes at `at`, with the clocks its
 /// producers stamp: heartbeat, operational capture, feed telemetry, research
-/// queue and scanner ages.
+/// task status and scanner ages.
 fn loop_view(at: i64, generation: u64) -> serde_json::Value {
     serde_json::json!({
         "paper_only":true,"live_enabled":false,"account":"fixture","authorized_session":"2026-11-25",
@@ -790,9 +783,7 @@ fn loop_view(at: i64, generation: u64) -> serde_json::Value {
             "tick_rate_per_s":(at % 97) as f64,"cached_keys":2,"oldest_last_trade_ms":at - 90_000,"reconnects":0},
         "oldest_scan_age_ms":at % 900,
         "readiness":{"status":"ready","checked_at_ms":at},
-        "research_tasks":{"status":"idle","observation":{"as_of_ms":at,"queue":{"pending":1,
-            "oldest_created_ms":1_000,"oldest_age_ms":at - 1_000,
-            "next_deadline_ms":9_000_000_000_000_i64,"deadline_remaining_ms":9_000_000_000_000_i64 - at}}},
+        "research_tasks":{"status":"idle"},
         "discovery":{"as_of_ms":at,"fresh_count":1,"stale_count":1,"unseen_count":0,"eligible_count":1,
             "presented_count":1,"unavailable_count":1,"unavailable_truncated":false,
             "oldest_fresh_age_ms":at % 900,"max_scan_age_ms":180_000,

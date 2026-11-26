@@ -36,7 +36,6 @@ const CLOCKS: &[(Option<&str>, &str)] = &[
     (None, "last_completed_at_ms"),
     (None, "expected_deadline_ms"),
     (None, "next_deadline_ms"),
-    (None, "deadline_remaining_ms"),
     (None, "loop_generation"),
     (None, "process_memory"),
     (Some("controller_heartbeat"), "completed_at_ms"),
