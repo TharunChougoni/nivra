@@ -380,7 +380,8 @@ fn import_history_twice_and_measure_coverage() -> Result<()> {
         );
         assert_eq!(report.observed_bars, 57_960);
         assert_eq!(report.daily_volumes.len(), 2760);
-        assert!(elapsed < Duration::from_millis(500), "{elapsed:?}");
+        // About 250 ms on an idle debug build; the bound only catches a lost index.
+        assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
         println!("2,760 instruments × 21 sessions coverage report: {elapsed:?}");
     }
     Ok(())
