@@ -159,8 +159,12 @@ pub(crate) fn test_settings(dir: &Path) -> Result<MarketArchiveSettings> {
         NEXT.fetch_add(1, Ordering::Relaxed),
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros()
     );
-    market_archive::connect(&format!("{scheme}://{user}@{host}/postgres"), password)?
-        .batch_execute(&format!("CREATE DATABASE {database}"))?;
+    let mut admin =
+        market_archive::connect(&format!("{scheme}://{user}@{host}/postgres"), password)?;
+    // CREATE DATABASE waits for a checkpoint, which can outlast the 3 s client
+    // timeout, and it cannot share a multi-statement batch.
+    admin.batch_execute("SET statement_timeout = 0")?;
+    admin.batch_execute(&format!("CREATE DATABASE {database}"))?;
     let password_file = dir.join("archive-password");
     std::fs::OpenOptions::new()
         .create_new(true)

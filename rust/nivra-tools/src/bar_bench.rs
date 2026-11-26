@@ -374,6 +374,8 @@ mod tests {
         let database = format!("bar_bench_fixture_{}", std::process::id());
         let fixture_url = format!("{scheme}://{user}@{host}/{database}");
         let mut admin = market_archive::connect(&admin_url, password).map_err(|e| e.to_string())?;
+        // CREATE DATABASE waits for a checkpoint, which can outlast the 3 s client timeout.
+        admin.batch_execute("SET statement_timeout = 0")?;
         admin.batch_execute(&format!("DROP DATABASE IF EXISTS {database}"))?;
         admin.batch_execute(&format!("CREATE DATABASE {database}"))?;
         let outcome = (|| -> Result<()> {
