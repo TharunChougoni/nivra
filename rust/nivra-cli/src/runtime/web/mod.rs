@@ -235,66 +235,132 @@ struct BacktestInput {
 fn research_available(v: &serde_json::Value) -> bool {
     v["mode"] == "research"
 }
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-fn dispatch_source(
-    head: &str,
-    body: &[u8],
-    token: &str,
-    view: &Arc<Mutex<serde_json::Value>>,
-    public_host: Option<&str>,
-    history: Option<&PathBuf>,
-    settings: &DashboardSettings,
-) -> Response {
-    dispatch_source_with(
-        head,
-        body,
-        token,
-        view,
-        public_host,
-        history,
-        settings,
-        None,
-        None,
-        None,
-        None,
-    )
-}
-#[allow(clippy::too_many_arguments)]
-fn dispatch_source_with(
-    head: &str,
-    body: &[u8],
-    token: &str,
-    view: &Arc<Mutex<serde_json::Value>>,
-    public_host: Option<&str>,
-    history: Option<&PathBuf>,
-    settings: &DashboardSettings,
-    features: Option<&Arc<Mutex<FeatureStore>>>,
-    equity: Option<&Arc<Mutex<EquitySeries>>>,
-    instrument_catalog: Option<&Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
-    archive: Option<&v1::ArchiveReader>,
-) -> Response {
-    if values(head, "if-none-match").len() > 1 || values(head, "accept-encoding").len() > 1 {
-        return if router::is_v1(head.lines().next().unwrap_or_default()) {
-            v1::error("400 Bad Request", "duplicate_cache_header")
-        } else {
-            error("400 Bad Request", "duplicate_cache_header")
-        };
+/// The dashboard's session API reads the controller's own state directory. The
+/// history file always lives at `<root>/model/...`; anything else
+/// disables the session routes instead of guessing a path.
+fn runtime_root(history: Option<&PathBuf>) -> Option<PathBuf> {
+    let path = history?;
+    let model = path.parent()?;
+    if model.file_name()? != "model" {
+        return None;
     }
-    let reply = dispatch_inner(
-        head,
-        body,
-        token,
-        view,
-        public_host,
-        history,
-        settings,
-        features,
-        equity,
-        instrument_catalog,
-        archive,
-    );
-    negotiate(reply, head, settings)
+    model.parent().map(Path::to_path_buf)
+}
+/// A refused request: status line, error code and an optional `Retry-After`.
+type Refusal = (&'static str, &'static str, Option<u64>);
+fn refusal_reply((code, reason, retry_after): Refusal) -> Response {
+    let mut reply = v1::error(code, reason);
+    reply.retry_after = retry_after;
+    reply
+}
+impl Ctx {
+    /// Every request state the workers share, with the optional projections
+    /// absent. Chain the `with_*` methods to attach them.
+    pub(crate) fn new(
+        token: String,
+        public_host: Option<DashboardPublicHost>,
+        view: Arc<Mutex<serde_json::Value>>,
+        settings: DashboardSettings,
+    ) -> Self {
+        Self {
+            token,
+            public_host,
+            view,
+            settings,
+            history: None,
+            features: None,
+            equity: None,
+            instrument_catalog: None,
+            archive: None,
+            streams: Arc::new(AtomicUsize::new(0)),
+            price_batches: Arc::default(),
+            #[cfg(test)]
+            event_feed: None,
+        }
+    }
+    pub(crate) fn with_history(mut self, history: PathBuf) -> Self {
+        self.history = Some(history);
+        self
+    }
+    pub(crate) fn with_series(
+        mut self,
+        features: Arc<Mutex<FeatureStore>>,
+        equity: Arc<Mutex<EquitySeries>>,
+        instrument_catalog: Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>,
+    ) -> Self {
+        self.features = Some(features);
+        self.equity = Some(equity);
+        self.instrument_catalog = Some(instrument_catalog);
+        self
+    }
+    pub(crate) fn with_archive(mut self, archive: Option<MarketArchiveSettings>) -> Self {
+        self.archive = archive.map(|settings| Arc::new(v1::ArchiveReader::new(settings)));
+        self
+    }
+    fn public_host(&self) -> Option<&str> {
+        self.public_host.as_ref().map(DashboardPublicHost::as_str)
+    }
+    /// The request must name this host and carry the bearer token. A wrong
+    /// token spends from the shared failed-auth budget.
+    fn authenticate(&self, head: &str) -> std::result::Result<(), Refusal> {
+        if !local_host(head, self.public_host()) {
+            return Err(("403 Forbidden", "local_host_required", None));
+        }
+        if authorized(head, &self.token, self.public_host()) {
+            return Ok(());
+        }
+        match record_failed_auth(&self.settings) {
+            Some(retry_after) => Err((
+                "429 Too Many Requests",
+                "failed_auth_rate_limited",
+                Some(retry_after),
+            )),
+            None => Err(("401 Unauthorized", "authentication_required", None)),
+        }
+    }
+    fn respond(&self, head: &str, body: &[u8]) -> Response {
+        let line = head.split("\r\n").next().unwrap_or("");
+        if values(head, "if-none-match").len() > 1 || values(head, "accept-encoding").len() > 1 {
+            return if router::is_v1(line) {
+                v1::error("400 Bad Request", "duplicate_cache_header")
+            } else {
+                error("400 Bad Request", "duplicate_cache_header")
+            };
+        }
+        negotiate(self.route(head, line, body), head, &self.settings)
+    }
+    fn route(&self, head: &str, line: &str, body: &[u8]) -> Response {
+        if !local_host(head, self.public_host()) {
+            return if router::is_v1(line) {
+                v1::error("403 Forbidden", "local_host_required")
+            } else {
+                error("403 Forbidden", "local_host_required")
+            };
+        }
+        if router::is_v1(line) {
+            if let Err(refusal) = self.authenticate(head) {
+                return refusal_reply(refusal);
+            }
+            let route = router::parse(line);
+            if let Ok(route @ (router::Route::Backtest | router::Route::BacktestExample)) = route {
+                return self.backtest(route, head, body);
+            }
+            let session_root = runtime_root(self.history.as_ref());
+            return v1::dispatch(route, head, self, session_root.as_deref());
+        }
+        let request_path = line
+            .strip_prefix("GET ")
+            .and_then(|v| v.strip_suffix(" HTTP/1.1"));
+        if let Some(path) = request_path
+            && let Some((kind, asset)) = v2_asset(path)
+        {
+            // Shell assets use stable filenames, so a long max-age would keep
+            // serving a previous UI after deployment. Always revalidate with
+            // the content ETag instead; a matching browser gets the cheap 304.
+            return asset_reply(head, kind, asset, Cow::Borrowed("no-cache"));
+        }
+        error("404 Not Found", "route_not_found")
+    }
 }
 fn negotiate(mut reply: Response, head: &str, settings: &DashboardSettings) -> Response {
     if reply.kind == "application/json" {
@@ -309,127 +375,51 @@ fn negotiate(mut reply: Response, head: &str, settings: &DashboardSettings) -> R
     }
     reply
 }
-/// The dashboard's session API reads the controller's own state directory. The
-/// history file always lives at `<root>/model/...`; anything else
-/// disables the session routes instead of guessing a path.
-fn runtime_root(history: Option<&PathBuf>) -> Option<PathBuf> {
-    let path = history?;
-    let model = path.parent()?;
-    if model.file_name()? != "model" {
-        return None;
-    }
-    model.parent().map(Path::to_path_buf)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn dispatch_inner(
-    head: &str,
-    body: &[u8],
-    token: &str,
-    view: &Arc<Mutex<serde_json::Value>>,
-    public_host: Option<&str>,
-    history: Option<&PathBuf>,
-    settings: &DashboardSettings,
-    features: Option<&Arc<Mutex<FeatureStore>>>,
-    equity: Option<&Arc<Mutex<EquitySeries>>>,
-    instrument_catalog: Option<&Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
-    archive: Option<&v1::ArchiveReader>,
-) -> Response {
-    let line = head.split("\r\n").next().unwrap_or("");
-    if !local_host(head, public_host) {
-        return if router::is_v1(line) {
-            v1::error("403 Forbidden", "local_host_required")
-        } else {
-            error("403 Forbidden", "local_host_required")
+impl Ctx {
+    fn backtest(&self, route: router::Route, head: &str, body: &[u8]) -> Response {
+        let (view, public_host, settings) = (&self.view, self.public_host(), &self.settings);
+        if matches!(route, router::Route::BacktestExample) {
+            return response(
+                "200 OK",
+                "application/json",
+                nivra_core::replay::example().to_string(),
+            );
+        }
+        if !view.lock().map(|v| research_available(&v)).unwrap_or(false) {
+            return v1::error("409 Conflict", "backtest_paused_for_trading");
+        }
+        if body.len() > MAX_BODY {
+            return v1::error("413 Payload Too Large", "backtest_preview_limit");
+        }
+        if values(head, "content-type") != ["application/json"] {
+            return v1::error("415 Unsupported Media Type", "json_required");
+        }
+        let origin = values(head, "origin");
+        if !origin.is_empty()
+            && origin != ["http://127.0.0.1:8771"]
+            && public_host.is_none_or(|host| origin != [format!("https://{host}")])
+        {
+            return v1::error("403 Forbidden", "local_research_origin_required");
+        }
+        if content_length(head) != Ok(body.len()) {
+            return v1::error("400 Bad Request", "invalid_request_length");
+        }
+        let input: BacktestInput = match serde_json::from_slice(body) {
+            Ok(i) => i,
+            Err(_) => return v1::error("400 Bad Request", "backtest_request_invalid"),
         };
-    }
-    let route = router::parse(line);
-    if router::is_v1(line) {
-        if !authorized(head, token, public_host) {
-            if let Some(retry_after) = record_failed_auth(settings) {
-                let mut reply = v1::error("429 Too Many Requests", "failed_auth_rate_limited");
-                reply.retry_after = Some(retry_after);
-                return reply;
-            }
-            return v1::error("401 Unauthorized", "authentication_required");
+        let started = Instant::now();
+        match nivra_core::replay::evaluate(
+            input.manifest.as_bytes(),
+            input.events.as_bytes(),
+            || started.elapsed() < Duration::from_millis(settings.backtest_timeout_ms.min(3000)),
+        ) {
+            Ok(report) => match serde_json::to_string(&report) {
+                Ok(json) => response("200 OK", "application/json", json),
+                Err(_) => v1::error("422 Unprocessable Content", "backtest_report_unavailable"),
+            },
+            Err(e) => v1::error("422 Unprocessable Content", &e.to_string()),
         }
-        if let Ok(route @ (router::Route::Backtest | router::Route::BacktestExample)) = route {
-            return backtest_route(route, head, body, view, public_host, settings);
-        }
-        let session_root = runtime_root(history);
-        return v1::dispatch(
-            route,
-            head,
-            body,
-            view,
-            settings,
-            session_root.as_deref(),
-            features,
-            equity,
-            instrument_catalog,
-            archive,
-        );
-    }
-    let request_path = line
-        .strip_prefix("GET ")
-        .and_then(|v| v.strip_suffix(" HTTP/1.1"));
-    if let Some(path) = request_path
-        && let Some((kind, asset)) = v2_asset(path)
-    {
-        // Shell assets use stable filenames, so a long max-age would keep
-        // serving a previous UI after deployment. Always revalidate with
-        // the content ETag instead; a matching browser gets the cheap 304.
-        return asset_reply(head, kind, asset, Cow::Borrowed("no-cache"));
-    }
-    error("404 Not Found", "route_not_found")
-}
-fn backtest_route(
-    route: router::Route,
-    head: &str,
-    body: &[u8],
-    view: &Arc<Mutex<serde_json::Value>>,
-    public_host: Option<&str>,
-    settings: &DashboardSettings,
-) -> Response {
-    if matches!(route, router::Route::BacktestExample) {
-        return response(
-            "200 OK",
-            "application/json",
-            nivra_core::replay::example().to_string(),
-        );
-    }
-    if !view.lock().map(|v| research_available(&v)).unwrap_or(false) {
-        return v1::error("409 Conflict", "backtest_paused_for_trading");
-    }
-    if body.len() > MAX_BODY {
-        return v1::error("413 Payload Too Large", "backtest_preview_limit");
-    }
-    if values(head, "content-type") != ["application/json"] {
-        return v1::error("415 Unsupported Media Type", "json_required");
-    }
-    let origin = values(head, "origin");
-    if !origin.is_empty()
-        && origin != ["http://127.0.0.1:8771"]
-        && public_host.is_none_or(|host| origin != [format!("https://{host}")])
-    {
-        return v1::error("403 Forbidden", "local_research_origin_required");
-    }
-    if content_length(head) != Ok(body.len()) {
-        return v1::error("400 Bad Request", "invalid_request_length");
-    }
-    let input: BacktestInput = match serde_json::from_slice(body) {
-        Ok(i) => i,
-        Err(_) => return v1::error("400 Bad Request", "backtest_request_invalid"),
-    };
-    let started = Instant::now();
-    match nivra_core::replay::evaluate(input.manifest.as_bytes(), input.events.as_bytes(), || {
-        started.elapsed() < Duration::from_millis(settings.backtest_timeout_ms.min(3000))
-    }) {
-        Ok(report) => match serde_json::to_string(&report) {
-            Ok(json) => response("200 OK", "application/json", json),
-            Err(_) => v1::error("422 Unprocessable Content", "backtest_report_unavailable"),
-        },
-        Err(e) => v1::error("422 Unprocessable Content", &e.to_string()),
     }
 }
 #[cfg(test)]
@@ -440,15 +430,14 @@ fn dispatch(
     view: &Arc<Mutex<serde_json::Value>>,
     public_host: Option<&str>,
 ) -> Response {
-    dispatch_source(
-        head,
-        body,
-        token,
-        view,
-        public_host,
-        None,
-        &DashboardSettings::default(),
+    let host = public_host.map(|host| DashboardPublicHost::try_from(host.to_owned()).unwrap());
+    Ctx::new(
+        token.into(),
+        host,
+        view.clone(),
+        DashboardSettings::default(),
     )
+    .respond(head, body)
 }
 fn encode(r: Response) -> Vec<u8> {
     let mut bytes = format!(
@@ -468,77 +457,10 @@ fn encode(r: Response) -> Vec<u8> {
     bytes
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn start(
-    token: String,
-    public_host: Option<DashboardPublicHost>,
-    view: Arc<Mutex<serde_json::Value>>,
-    history: PathBuf,
-    settings: DashboardSettings,
-    features: Option<Arc<Mutex<FeatureStore>>>,
-    equity: Option<Arc<Mutex<EquitySeries>>>,
-    instrument_catalog: Option<Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
-    archive: Option<MarketArchiveSettings>,
-) -> Result<()> {
-    serve(
-        token,
-        public_host,
-        view,
-        settings,
-        Some(history),
-        features,
-        equity,
-        instrument_catalog,
-        archive,
-    )
-}
-pub fn start_research(
-    token: String,
-    public_host: Option<DashboardPublicHost>,
-    view: Arc<Mutex<serde_json::Value>>,
-    settings: DashboardSettings,
-    archive: Option<MarketArchiveSettings>,
-) -> Result<()> {
-    serve(
-        token,
-        public_host,
-        view,
-        settings,
-        None,
-        None,
-        None,
-        None,
-        archive,
-    )
-}
-#[allow(clippy::too_many_arguments)]
-fn serve(
-    token: String,
-    public_host: Option<DashboardPublicHost>,
-    view: Arc<Mutex<serde_json::Value>>,
-    settings: DashboardSettings,
-    history: Option<PathBuf>,
-    features: Option<Arc<Mutex<FeatureStore>>>,
-    equity: Option<Arc<Mutex<EquitySeries>>>,
-    instrument_catalog: Option<Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
-    archive: Option<MarketArchiveSettings>,
-) -> Result<()> {
+/// Bind the loopback port and serve until the process exits.
+pub fn start(ctx: Ctx) -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:8771")?;
-    let sender = worker_pool(Arc::new(Ctx {
-        token,
-        public_host,
-        view,
-        settings,
-        history,
-        features,
-        equity,
-        instrument_catalog,
-        archive: archive.map(|s| Arc::new(v1::ArchiveReader::new(s))),
-        streams: Arc::new(AtomicUsize::new(0)),
-        price_batches: Arc::default(),
-        #[cfg(test)]
-        event_feed: None,
-    }))?;
+    let sender = worker_pool(Arc::new(ctx))?;
     thread::Builder::new()
         .name("paper-dashboard".into())
         .stack_size(2 * 1024 * 1024)
@@ -549,8 +471,9 @@ fn serve(
         })?;
     Ok(())
 }
+/// What every request needs: credentials, limits and the live projections.
 #[derive(Clone)]
-struct Ctx {
+pub(crate) struct Ctx {
     token: String,
     public_host: Option<DashboardPublicHost>,
     view: Arc<Mutex<serde_json::Value>>,
@@ -633,20 +556,12 @@ fn handle(mut stream: TcpStream, ctx: &Ctx) {
         if length > MAX_BODY {
             return Ok(error("413 Payload Too Large", "backtest_preview_limit"));
         }
-        // Authenticate before accepting any research payload or doing compute.
-        if head.starts_with("POST ")
-            && !authorized(
-                &head,
-                &ctx.token,
-                ctx.public_host.as_ref().map(DashboardPublicHost::as_str),
-            )
+        // Authenticate before reading any payload: a request with a body, or any
+        // POST, costs nothing until its bearer token is checked.
+        if (length > 0 || head.starts_with("POST "))
+            && let Err(refusal) = ctx.authenticate(&head)
         {
-            if let Some(retry_after) = record_failed_auth(&ctx.settings) {
-                let mut reply = v1::error("429 Too Many Requests", "failed_auth_rate_limited");
-                reply.retry_after = Some(retry_after);
-                return Ok(reply);
-            }
-            return Ok(error("401 Unauthorized", "authentication_required"));
+            return Ok(refusal_reply(refusal));
         }
         while bytes.len() < end + length {
             if started.elapsed() > Duration::from_secs(5) {
@@ -684,19 +599,7 @@ fn handle(mut stream: TcpStream, ctx: &Ctx) {
         ) {
             return Ok(v1::poll_events(&head, ctx));
         }
-        Ok(dispatch_source_with(
-            &head,
-            &bytes[end..],
-            &ctx.token,
-            &ctx.view,
-            ctx.public_host.as_ref().map(DashboardPublicHost::as_str),
-            ctx.history.as_ref(),
-            &ctx.settings,
-            ctx.features.as_ref(),
-            ctx.equity.as_ref(),
-            ctx.instrument_catalog.as_ref(),
-            ctx.archive.as_deref(),
-        ))
+        Ok(ctx.respond(&head, &bytes[end..]))
     })()
     .unwrap_or_else(|(): ()| error("400 Bad Request", "request_unavailable"));
     if !streaming {
@@ -771,6 +674,45 @@ mod tests {
         assert!(reply.ends_with("{\"error\":\"busy\"}"));
     }
     #[test]
+    fn unauthenticated_requests_with_a_body_are_refused_before_the_body_is_read() {
+        let sender = worker_pool(Arc::new(Ctx {
+            token: "fixture".into(),
+            public_host: None,
+            view: view(),
+            history: None,
+            features: None,
+            equity: None,
+            instrument_catalog: None,
+            archive: None,
+            streams: Arc::new(AtomicUsize::new(0)),
+            price_batches: Arc::default(),
+            event_feed: None,
+            settings: DashboardSettings::default(),
+        }))
+        .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        for method in ["GET", "PUT", "DELETE"] {
+            let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            enqueue(&sender, listener.accept().unwrap().0);
+            client
+                .write_all(
+                    format!(
+                        "{method} /api/v1/health HTTP/1.1\r\nHost: 127.0.0.1:8771\r\nContent-Length: 1000000\r\n\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+            let started = Instant::now();
+            let mut reply = String::new();
+            client.read_to_string(&mut reply).unwrap();
+            assert!(reply.starts_with("HTTP/1.1 401"), "{method}: {reply}");
+            assert!(started.elapsed() < Duration::from_millis(500), "{method}");
+        }
+    }
+    #[test]
     fn assets_revalidate_and_gzip_without_caching_private_json() {
         fn decoded(reply: &Response) -> Vec<u8> {
             let mut body = Vec::new();
@@ -834,24 +776,12 @@ mod tests {
             gzip_min_bytes: 1_048_576,
             ..DashboardSettings::default()
         };
-        let asset = dispatch_source(
-            &head("GET /app.js", ""),
-            b"",
-            "fixture",
-            &v,
-            None,
-            None,
-            &settings,
-        );
+        let ctx = Ctx::new("fixture".into(), None, v.clone(), settings);
+        let asset = ctx.respond(&head("GET /app.js", ""), b"");
         assert_eq!(asset.cache, "no-cache");
-        let api = dispatch_source(
+        let api = ctx.respond(
             &head("GET /api/v1/health", "Accept-Encoding: gzip\r\n"),
             b"",
-            "fixture",
-            &v,
-            None,
-            None,
-            &settings,
         );
         assert!(api.encoding.is_none());
     }

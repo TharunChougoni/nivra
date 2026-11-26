@@ -36,19 +36,15 @@ pub(crate) fn error(code: &'static str, reason: &str) -> Response {
         serde_json::json!({"v":1,"error":reason}).to_string(),
     )
 }
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch(
     route: std::result::Result<Route, &'static str>,
     head: &str,
-    _body: &[u8],
-    view: &Arc<Mutex<serde_json::Value>>,
-    settings: &DashboardSettings,
+    ctx: &Ctx,
     session_root: Option<&Path>,
-    features: Option<&Arc<Mutex<FeatureStore>>>,
-    equity: Option<&Arc<Mutex<EquitySeries>>>,
-    instrument_catalog: Option<&Arc<Mutex<Option<crate::runtime::instrument_display::Catalog>>>>,
-    archive: Option<&ArchiveReader>,
 ) -> Response {
+    let (view, settings) = (&ctx.view, &ctx.settings);
+    let (features, equity) = (ctx.features.as_ref(), ctx.equity.as_ref());
+    let (instrument_catalog, archive) = (ctx.instrument_catalog.as_ref(), ctx.archive.as_deref());
     match route {
         Ok(Route::Meta) => meta(head, view, settings, archive),
         Ok(Route::Summary) => summary(head, view, session_root),

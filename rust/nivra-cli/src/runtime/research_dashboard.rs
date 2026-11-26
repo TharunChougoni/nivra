@@ -34,12 +34,9 @@ pub fn entry(token_file: &Path, config: Option<&Path>) -> ExitCode {
 
         let archive = config.as_ref().and_then(|c| c.market_archive.clone());
 
-        web::start_research(
-            token.trim().to_owned(),
-            public_host,
-            view.clone(),
-            settings,
-            archive,
+        web::start(
+            web::Ctx::new(token.trim().to_owned(), public_host, view.clone(), settings)
+                .with_archive(archive),
         )?;
         tokio::runtime::Builder::new_current_thread()
             .enable_time()

@@ -413,15 +413,19 @@ impl<'a> Controller<'a> {
         let instrument_catalog = Arc::new(Mutex::new(None));
         let display_catalog_started = AtomicBool::new(false);
         web::start(
-            token,
-            c.dashboard_public_host.clone(),
-            Arc::clone(&view),
-            c.directory.join("model/live-stream.json"),
-            c.dashboard.clone(),
-            Some(Arc::clone(&feature_store)),
-            Some(Arc::clone(&equity_series)),
-            Some(Arc::clone(&instrument_catalog)),
-            c.market_archive.clone(),
+            web::Ctx::new(
+                token,
+                c.dashboard_public_host.clone(),
+                Arc::clone(&view),
+                c.dashboard.clone(),
+            )
+            .with_history(c.directory.join("model/live-stream.json"))
+            .with_series(
+                Arc::clone(&feature_store),
+                Arc::clone(&equity_series),
+                Arc::clone(&instrument_catalog),
+            )
+            .with_archive(c.market_archive.clone()),
         )?;
         let stopping = Arc::new(AtomicBool::new(false));
         signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&stopping))?;

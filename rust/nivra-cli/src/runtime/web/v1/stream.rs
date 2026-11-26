@@ -120,23 +120,8 @@ pub(crate) fn poll_source(
 }
 pub(crate) fn poll_events(head: &str, ctx: &Ctx) -> Response {
     let reply = (|| {
-        if !local_host(
-            head,
-            ctx.public_host.as_ref().map(DashboardPublicHost::as_str),
-        ) {
-            return error("403 Forbidden", "local_host_required");
-        }
-        if !authorized(
-            head,
-            &ctx.token,
-            ctx.public_host.as_ref().map(DashboardPublicHost::as_str),
-        ) {
-            if let Some(retry_after) = super::super::record_failed_auth(&ctx.settings) {
-                let mut reply = error("429 Too Many Requests", "failed_auth_rate_limited");
-                reply.retry_after = Some(retry_after);
-                return reply;
-            }
-            return error("401 Unauthorized", "authentication_required");
+        if let Err(refusal) = ctx.authenticate(head) {
+            return refusal_reply(refusal);
         }
         let Ok(Route::Events(query)) = router::parse(head.lines().next().unwrap_or_default())
         else {
@@ -328,26 +313,7 @@ pub(crate) fn start_sse(
     head: &str,
     ctx: Ctx,
 ) -> std::result::Result<(), (&'static str, &'static str, Option<u64>)> {
-    if !local_host(
-        head,
-        ctx.public_host.as_ref().map(DashboardPublicHost::as_str),
-    ) {
-        return Err(("403 Forbidden", "local_host_required", None));
-    }
-    if !authorized(
-        head,
-        &ctx.token,
-        ctx.public_host.as_ref().map(DashboardPublicHost::as_str),
-    ) {
-        if let Some(retry_after) = super::super::record_failed_auth(&ctx.settings) {
-            return Err((
-                "429 Too Many Requests",
-                "failed_auth_rate_limited",
-                Some(retry_after),
-            ));
-        }
-        return Err(("401 Unauthorized", "authentication_required", None));
-    }
+    ctx.authenticate(head)?;
     let Ok(Route::Events(query)) = router::parse(head.lines().next().unwrap_or_default()) else {
         return Err(("400 Bad Request", "event_query_invalid", None));
     };

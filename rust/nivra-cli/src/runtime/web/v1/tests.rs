@@ -67,17 +67,13 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
             "GET /api/v1/meta HTTP/1.1\r\nHost: 127.0.0.1:8771\r\nAuthorization: Bearer fixture\r\n{extra}\r\n"
         )
     };
-    let send = |head: &str| {
-        dispatch_source(
-            head,
-            b"",
-            "fixture",
-            &view,
-            None,
-            None,
-            &DashboardSettings::default(),
-        )
-    };
+    let ctx = Ctx::new(
+        "fixture".into(),
+        None,
+        view.clone(),
+        DashboardSettings::default(),
+    );
+    let send = |head: &str| ctx.respond(head, b"");
     let first = send(&request(""));
     assert_eq!(first.code, "200 OK");
     assert_eq!(first.cache, "private, no-cache");
@@ -441,21 +437,19 @@ fn series_projects_receipt_bars_and_equity_without_volume() {
             {"instrument_key":"NSE_EQ|INE00U801011","symbol":"FIXTURE2","segment":"NSE_EQ","series":"EQ","tick":"0.05","tick_unit":"INR"}
         ]
     })))));
+    let ctx = Ctx::new(
+        "fixture".into(),
+        None,
+        view.clone(),
+        DashboardSettings::default(),
+    )
+    .with_series(features.clone(), equity.clone(), catalog.clone());
     let send = |path: &str| {
-        dispatch_source_with(
+        ctx.respond(
             &format!(
                 "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:8771\r\nAuthorization: Bearer fixture\r\n\r\n"
             ),
             b"",
-            "fixture",
-            &view,
-            None,
-            None,
-            &DashboardSettings::default(),
-            Some(&features),
-            Some(&equity),
-            Some(&catalog),
-            None,
         )
     };
     let reply = send("/api/v1/instruments?limit=1");
@@ -1317,21 +1311,19 @@ fn archive_series_enforces_bounds_and_reports_unavailable_state() {
         "paper_only":true,"live_enabled":false,"account":"fixture-alias",
         "authorized_session":"2026-10-29","as_of_ms":1_760_000_000_000i64
     })));
-    let send = |path: &str, archive: Option<&ArchiveReader>| {
-        dispatch_source_with(
+    let send = |path: &str, archive: Option<MarketArchiveSettings>| {
+        Ctx::new(
+            "fixture".into(),
+            None,
+            view.clone(),
+            DashboardSettings::default(),
+        )
+        .with_archive(archive)
+        .respond(
             &format!(
                 "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:8771\r\nAuthorization: Bearer fixture\r\n\r\n"
             ),
             b"",
-            "fixture",
-            &view,
-            None,
-            None,
-            &DashboardSettings::default(),
-            None,
-            None,
-            None,
-            archive,
         )
     };
     for (path, reason) in [
@@ -1399,13 +1391,13 @@ fn archive_series_enforces_bounds_and_reports_unavailable_state() {
         assert_eq!(body["execution_authority"], false);
     }
 
-    let unreachable = ArchiveReader::new(MarketArchiveSettings {
+    let unreachable = MarketArchiveSettings {
         url: "postgresql://test@127.0.0.1:1/archive".into(),
         password_file: PathBuf::from("/nonexistent-archive-password"),
-    });
+    };
     let reply = send(
         "/api/v1/series?kind=archive-minute-bar&instrument=NSE_EQ%7CINE00U801010&from=1000&to=86400000",
-        Some(&unreachable),
+        Some(unreachable),
     );
     assert_eq!(reply.code, "200 OK");
     let body: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
@@ -1507,22 +1499,19 @@ fn archive_series_reads_five_day_minute_chart_under_200ms() -> crate::runtime::R
         "paper_only":true,"live_enabled":false,"account":"fixture-alias",
         "authorized_session":"2026-11-06","as_of_ms":to
     })));
-    let archive = ArchiveReader::new(settings);
+    let ctx = Ctx::new(
+        "fixture".into(),
+        None,
+        view.clone(),
+        DashboardSettings::default(),
+    )
+    .with_archive(Some(settings));
     let request = |path: &str| {
-        dispatch_source_with(
+        ctx.respond(
             &format!(
                 "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:8771\r\nAuthorization: Bearer fixture\r\n\r\n"
             ),
             b"",
-            "fixture",
-            &view,
-            None,
-            None,
-            &DashboardSettings::default(),
-            None,
-            None,
-            None,
-            Some(&archive),
         )
     };
 
