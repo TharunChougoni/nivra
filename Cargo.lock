@@ -1015,7 +1015,7 @@ dependencies = [
 
 [[package]]
 name = "nivra-cli"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1043,7 +1043,7 @@ dependencies = [
 
 [[package]]
 name = "nivra-core"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -1056,7 +1056,7 @@ dependencies = [
 
 [[package]]
 name = "nivra-research"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "chrono",
  "libc",
@@ -1072,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "nivra-sandbox"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "chrono",
  "libc",
@@ -1086,7 +1086,7 @@ dependencies = [
 
 [[package]]
 name = "nivra-store"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "chrono",
  "libc",
@@ -1103,7 +1103,7 @@ dependencies = [
 
 [[package]]
 name = "nivra-tools"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "chrono",
  "clap",

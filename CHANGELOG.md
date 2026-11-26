@@ -1,5 +1,86 @@
 # Source snapshot
 
+## 0.14.0 — 2026-11-27
+
+A cleanup release. Market data lives only in the TimescaleDB archive, the
+research lane evaluates only strategies, and about 34,000 lines of retired
+code are gone.
+
+### Upgrade an installed paper host
+
+1. Stop the book with the open-book sequence in
+   [operations](docs/OPERATIONS.md#change-the-planner-policy) before you
+   switch binaries.
+2. Remove `history_directory`, `prior_config`, `keep_full_quote_bodies` and
+   `max_quote_body_bytes` from the paper config. A config that still has them
+   fails with `config_invalid`. Paper operation requires `market_archive`; run
+   `nivra archive init --config PAPER_CONFIG` if it is new.
+3. In the planner, remove `abi`, `replay`, `max_result_bytes`, `limits`,
+   `helper_path`, `unit_open_files`, `execution` and `observation` from
+   `research_tools.candidate_compute`, and any `archived_feature_snapshots`
+   dataset. Add `candidate_compute.strategy` to keep the `backtest` tools (see
+   [research](docs/RESEARCH.md#in-the-research-lane)). Check it with
+   `nivra planner config-check`, then run `config-apply` and `resume`.
+4. Check that the book stores `initial_allocation`:
+   `sqlite3 PAPER_BOOK "SELECT json_extract(body,'$.initial_allocation') FROM state WHERE id=1"`.
+   If it prints nothing, start a fresh paper book.
+5. Replay registered library strategies with this build. Entries from older
+   builds report `strategy_adapter_changed` until a new replay accepts them.
+6. Optional: shrink closed books with
+   `nivra archive import-book --rewrite --config PAPER_CONFIG BOOK_DIR`.
+   Queued ranker jobs and experiment-lifecycle tables from older builds are no
+   longer read; the [research guide](docs/RESEARCH.md#in-the-research-lane)
+   lists the tables you can drop.
+
+### Added
+
+- `backtest` with an `archive_bars` dataset runs one strategy over years of
+  daily or minute NSE bars as a research job, with separate training and test
+  results. The archive-window replay is configurable up to 60 days
+  (`max_archive_window_days`).
+- A pinned, read-only Python research environment (numpy, pandas, scipy,
+  statsmodels, scikit-learn) for sandboxed strategies: `nivra research-env
+  build|verify` and the planner's `research_env` block.
+- 15 bar strategies and 8 action strategies under `strategies/`, with
+  `nivra-tools bar-bench` and a leaderboard on 13 months of NSE data in
+  `strategies/BENCHMARK.md`. Most lose money after costs.
+- The pi agent loads research skills from `agent/skills/` and the book
+  workspace's `skills/`.
+- Dashboard charts read past sessions and multi-day history from the archive.
+
+### Fixed
+
+- A paper buy that adds to a held position no longer drops its stop, target
+  and time exit.
+- A protective exit blocked by thin bid depth sets health to
+  `held_exit_depth_insufficient` on every pass instead of failing silently
+  (#49).
+- The dashboard checks the bearer token before it reads a request body.
+- Quote receipts are staged durably before the book writes their archive
+  reference. Future-dated quote observations are excluded. Journal time
+  bounds apply before the row limit. Download exclusions match coverage.
+- Strategy replays count a tape date only when the strategy ran that day.
+- A leftover `planned-restart.next` file after a crash no longer blocks the
+  planned-restart notice.
+- Dashboard: daily axes show IST dates, zoom resets when the instrument or
+  range changes, series reads retry after an error, archived sessions no
+  longer show today's realized P&L, and the response cache is bounded.
+
+### Removed
+
+- Ranker candidate backtests, prospective observation, cross-session
+  continuation and the experiment lifecycle ledger, with the
+  `candidate-supervise`, `experiment-lifecycle` and `scorer-compare` commands
+  and the `cost_aware_momentum` ranker.
+- The `orchestrator`, `strategy-scorer`, `protection-gap`, `service-review`,
+  `loopback-tunnel-text`, `novel-evaluate`, `memory-check`,
+  `protection-timings` and `protection-diagnostics` commands and their
+  library code.
+- Dashboard routes `/api/v1/positions`, `/orders` and `/tools`, and the
+  observation, measurement and continuation panels.
+- Offline quote compaction, the LTPC frame database, the original-install
+  config chain and the single-instrument book format.
+
 ## 0.13.1 — 2026-11-26
 
 Publishes the 0.13.0 changes below. The 0.13.0 tag failed the release-link
