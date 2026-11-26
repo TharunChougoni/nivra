@@ -1017,7 +1017,6 @@ dependencies = [
 name = "nivra-cli"
 version = "0.14.0"
 dependencies = [
- "base64 0.22.1",
  "chrono",
  "clap",
  "csv",
@@ -1093,7 +1092,6 @@ dependencies = [
  "nivra-core",
  "postgres",
  "rusqlite",
- "rustix",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -1112,7 +1110,6 @@ dependencies = [
  "nivra-research",
  "nivra-sandbox",
  "nivra-store",
- "postgres",
  "serde",
  "serde_json",
  "sha2 0.11.0",

@@ -452,7 +452,7 @@ fn update_decision_verifies_and_defers_then_activates_or_rolls_back() {
     );
     assert!(host.restarts.is_empty() && host.stops == 0);
     assert!(valid_remote("github-nivra:TharunChougoni/nivra.git"));
-    assert!(!valid_remote("github-ind-sadr:TharunChougoni/nivra.git"));
+    assert!(!valid_remote("other-github:TharunChougoni/nivra.git"));
     assert!(!valid_remote("https://github.com/TharunChougoni/nivra.git"));
     assert!(!valid_remote("github-nivra:Tharun Chougoni/nivra.git"));
     // A tag whose CI assets are not yet published: the timer defers cleanly.

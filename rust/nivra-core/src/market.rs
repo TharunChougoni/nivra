@@ -1,7 +1,6 @@
 //! Immutable domain contracts and receipt/freshness checks, without provider I/O.
 //!
-//! Structural validity is not tradability or authenticated provenance. A future
-//! trusted archive adapter must rederive the snapshot from exact original bytes.
+//! These contracts validate structure and freshness. The market archive owns provenance.
 
 use crate::{
     finance::{FinancialError, Price},
@@ -23,36 +22,22 @@ pub const MAX_FINANCIAL_AGE_MICROS: i64 = MAX_FINANCIAL_AGE.as_micros() as i64;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarketError {
     InvalidInstrument,
-    InvalidBar,
     InvalidQuote,
     InvalidSnapshot,
     InvalidContinuousSession,
     InvalidCalendar,
     CalendarCoverageMissing,
-    InstrumentMismatch,
-    InvalidSourceIdentity,
-    InvalidReceipt,
-    ReceiptMismatch,
-    FutureOrStaleReceipt,
-    FutureOrStaleQuote,
 }
 
 impl fmt::Display for MarketError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::InvalidInstrument => "invalid_instrument_contract",
-            Self::InvalidBar => "invalid_bar_contract",
             Self::InvalidQuote => "invalid_quote_contract",
             Self::InvalidSnapshot => "invalid_snapshot_contract",
             Self::InvalidContinuousSession => "invalid_continuous_session",
             Self::InvalidCalendar => "invalid_calendar_contract",
             Self::CalendarCoverageMissing => "calendar_coverage_missing",
-            Self::InstrumentMismatch => "instrument_identity_mismatch",
-            Self::InvalidSourceIdentity => "invalid_source_identity",
-            Self::InvalidReceipt => "invalid_archive_receipt",
-            Self::ReceiptMismatch => "archive_receipt_mismatch",
-            Self::FutureOrStaleReceipt => "future_or_stale_archive_receipt",
-            Self::FutureOrStaleQuote => "future_or_stale_quote",
         })
     }
 }
@@ -67,55 +52,6 @@ macro_rules! validated_record {
             }
         }
     };
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct BarFields {
-    instrument_key: String,
-    timestamp: Timestamp,
-    available_at: Timestamp,
-    open: Price,
-    high: Price,
-    low: Price,
-    close: Price,
-    volume: u64,
-}
-
-/// Interval-independent OHLC evidence. Validity does not certify an instrument,
-/// calendar, completed interval, source, or executable bid/ask liquidity.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
-pub struct Bar(BarFields);
-impl TryFrom<BarFields> for Bar {
-    type Error = MarketError;
-    fn try_from(value: BarFields) -> Result<Self, MarketError> {
-        if value.low > value.open.min(value.close)
-            || value.high < value.open.max(value.close)
-            || value.available_at <= value.timestamp
-        {
-            return Err(MarketError::InvalidBar);
-        }
-        Ok(Self(value))
-    }
-}
-validated_record!(Bar, BarFields);
-impl Bar {
-    pub fn instrument_key(&self) -> &str {
-        &self.0.instrument_key
-    }
-    pub fn timestamp(&self) -> Timestamp {
-        self.0.timestamp
-    }
-    pub fn available_at(&self) -> Timestamp {
-        self.0.available_at
-    }
-    pub fn ohlc(&self) -> [Price; 4] {
-        [self.0.open, self.0.high, self.0.low, self.0.close]
-    }
-    pub fn volume(&self) -> u64 {
-        self.0.volume
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -570,114 +506,6 @@ impl OptionCatalog {
     }
 }
 
-/// Explicit instrument metadata reference row for display. Unknown fields are null, never guessed.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct InstrumentRef {
-    pub key: String,
-    pub exchange: String,
-    pub segment: String,
-    pub kind: InstrumentKind,
-    pub symbol: String,
-    pub underlying: Option<String>,
-    pub expiry: Option<ExchangeDate>,
-    pub strike: Option<Price>,
-    pub lot_size: u64,
-    pub tick: Price,
-}
-
-impl InstrumentRef {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        key: impl Into<String>,
-        exchange: impl Into<String>,
-        segment: impl Into<String>,
-        kind: InstrumentKind,
-        symbol: impl Into<String>,
-        underlying: Option<String>,
-        expiry: Option<ExchangeDate>,
-        strike: Option<Price>,
-        lot_size: u64,
-        tick: Price,
-    ) -> Result<Self, MarketError> {
-        if lot_size == 0 {
-            return Err(MarketError::InvalidInstrument);
-        }
-        Ok(Self {
-            key: key.into(),
-            exchange: exchange.into(),
-            segment: segment.into(),
-            kind,
-            symbol: symbol.into(),
-            underlying,
-            expiry,
-            strike,
-            lot_size,
-            tick,
-        })
-    }
-}
-
-/// Lot-aware quantity model for Indian exchange display views.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-pub struct LotQuantity {
-    pub lots: u64,
-    pub lot_size: u64,
-    pub total_units: u64,
-}
-
-impl LotQuantity {}
-
-/// Instrument margin representation for display views only.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct InstrumentMargin {
-    pub instrument_key: String,
-    pub span_margin: Option<crate::finance::Amount>,
-    pub exposure_margin: Option<crate::finance::Amount>,
-    pub total_margin: crate::finance::Amount,
-    pub display_only: bool,
-}
-
-impl InstrumentMargin {}
-
-/// Strike row within an F&O option chain view.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct FoChainStrike {
-    pub strike: Price,
-    pub call: Option<InstrumentRef>,
-    pub put: Option<InstrumentRef>,
-}
-
-/// F&O chain view model for display only. Derivatives execution remains locked out.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct FoChainView {
-    pub underlying: String,
-    pub expiry: ExchangeDate,
-    pub spot_price: Option<Price>,
-    pub futures: Vec<InstrumentRef>,
-    pub strikes: Vec<FoChainStrike>,
-    pub display_only: bool,
-}
-
-impl FoChainView {
-    pub fn new(
-        underlying: impl Into<String>,
-        expiry: ExchangeDate,
-        spot_price: Option<Price>,
-        futures: Vec<InstrumentRef>,
-        strikes: Vec<FoChainStrike>,
-    ) -> Self {
-        Self {
-            underlying: underlying.into(),
-            expiry,
-            spot_price,
-            futures,
-            strikes,
-            display_only: true,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct QuoteFields {
@@ -762,24 +590,6 @@ impl TryFrom<SnapshotFields> for Snapshot {
     }
 }
 validated_record!(Snapshot, SnapshotFields);
-
-impl Snapshot {
-    pub fn snapshot_id(&self) -> &str {
-        &self.0.snapshot_id
-    }
-    pub fn captured_at(&self) -> Timestamp {
-        self.0.captured_at
-    }
-    pub fn payload_hash(&self) -> &str {
-        &self.0.payload_hash
-    }
-    pub fn quotes(&self) -> &[Quote] {
-        &self.0.quotes
-    }
-    pub fn source(&self) -> &str {
-        &self.0.source
-    }
-}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -896,116 +706,5 @@ impl Calendar {
         Ok(self
             .hours(now.ist_date())?
             .is_some_and(|(opening, closing)| opening <= time && time < closing))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct AccountSourceFields {
-    broker: String,
-    account_alias: String,
-    archive_source: String,
-    quote_source: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
-pub struct AccountSource(AccountSourceFields);
-
-impl TryFrom<AccountSourceFields> for AccountSource {
-    type Error = MarketError;
-    fn try_from(value: AccountSourceFields) -> Result<Self, MarketError> {
-        if [
-            &value.broker,
-            &value.account_alias,
-            &value.archive_source,
-            &value.quote_source,
-        ]
-        .iter()
-        .any(|field| field.trim().is_empty() || field.len() > 256)
-        {
-            return Err(MarketError::InvalidSourceIdentity);
-        }
-        Ok(Self(value))
-    }
-}
-validated_record!(AccountSource, AccountSourceFields);
-
-impl AccountSource {
-    pub fn broker(&self) -> &str {
-        &self.0.broker
-    }
-    pub fn archive_source(&self) -> &str {
-        &self.0.archive_source
-    }
-    pub fn quote_source(&self) -> &str {
-        &self.0.quote_source
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct ArchivedQuoteReceiptFields {
-    capture_id: String,
-    identity: AccountSource,
-    requested_at: Timestamp,
-    received_at: Timestamp,
-    normalized_snapshot: Snapshot,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(transparent)]
-pub struct ArchivedQuoteReceipt(ArchivedQuoteReceiptFields);
-
-impl ArchivedQuoteReceipt {
-    pub fn snapshot(&self) -> &Snapshot {
-        &self.0.normalized_snapshot
-    }
-}
-
-impl TryFrom<ArchivedQuoteReceiptFields> for ArchivedQuoteReceipt {
-    type Error = MarketError;
-    fn try_from(value: ArchivedQuoteReceiptFields) -> Result<Self, MarketError> {
-        let hash = |value: &str| {
-            value.len() == 64
-                && value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        };
-        if !hash(&value.capture_id)
-            || !hash(value.normalized_snapshot.payload_hash())
-            || value.normalized_snapshot.snapshot_id().is_empty()
-            || value.requested_at > value.received_at
-            || value.normalized_snapshot.captured_at() != value.received_at
-            || value.normalized_snapshot.source() != value.identity.quote_source()
-            || value.normalized_snapshot.quotes().is_empty()
-            || value
-                .normalized_snapshot
-                .quotes()
-                .iter()
-                .any(|quote| quote.received_at() != value.received_at)
-        {
-            return Err(MarketError::InvalidReceipt);
-        }
-        Ok(Self(value))
-    }
-}
-validated_record!(ArchivedQuoteReceipt, ArchivedQuoteReceiptFields);
-
-#[derive(Debug, Clone)]
-pub struct ReceiptBoundSnapshot {
-    snapshot: Snapshot,
-    receipt: ArchivedQuoteReceipt,
-}
-
-impl ReceiptBoundSnapshot {
-    pub fn snapshot(&self) -> &Snapshot {
-        &self.snapshot
-    }
-    pub fn received_at(&self) -> Timestamp {
-        self.receipt.0.received_at
-    }
-    pub fn capture_id(&self) -> &str {
-        &self.receipt.0.capture_id
     }
 }

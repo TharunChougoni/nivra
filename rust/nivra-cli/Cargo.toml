@@ -23,7 +23,6 @@ nivra-store = { path = "../nivra-store" }
 nivra-research = { path = "../nivra-research" }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 flate2 = "1"
-base64 = "=0.22.1"
 csv = "1"
 fs2 = "0.4"
 prost = "0.14"

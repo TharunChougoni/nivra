@@ -1,5 +1,4 @@
 //! Append-only, offline strategy source library. Never open a trading book here.
-use nivra_core::regime::Regime;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -81,29 +80,6 @@ pub struct RunResult {
     pub metrics: Value,
     pub recorded_at_ms: i64,
 }
-/// One immutable batch of regime evidence. Sample count must be positive.
-pub struct RegimeResult {
-    pub strategy_id: i64,
-    pub version: i64,
-    pub regime: Regime,
-    pub source: String,
-    pub sample_count: i64,
-    /// Same metric object contract as RunResult.
-    pub metrics: Value,
-    pub recorded_at_ms: i64,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct RegimePerformance {
-    pub strategy_id: i64,
-    pub version: i64,
-    pub regime: String,
-    pub source: String,
-    pub sample_count: i64,
-    /// Summed trades/P&L, sample-weighted expectancy, largest batch drawdown.
-    pub metrics: Value,
-}
-
 pub struct Library {
     connection: Connection,
     limits: LibraryLimits,
@@ -167,24 +143,6 @@ impl Library {
             tx.pragma_update(None, "user_version", 1)?;
         } else if id != APPLICATION_ID || !matches!(version, 1 | 2) {
             return Err(Error::WrongDatabase);
-        }
-        if version < 2 {
-            tx.execute_batch("CREATE TABLE regime_results(
-                id INTEGER PRIMARY KEY,
-                strategy_id INTEGER NOT NULL,
-                version INTEGER NOT NULL,
-                regime TEXT NOT NULL,
-                source TEXT NOT NULL CHECK(source IN ('replay','shadow','paper')),
-                sample_count INTEGER NOT NULL CHECK(sample_count > 0),
-                metrics TEXT NOT NULL CHECK(json_valid(metrics)),
-                recorded_at_ms INTEGER NOT NULL,
-                FOREIGN KEY(strategy_id, version) REFERENCES versions(strategy_id, version));
-                CREATE INDEX regime_results_lookup ON regime_results(strategy_id,version,regime,source);
-                CREATE TRIGGER regime_results_no_UPDATE BEFORE UPDATE ON regime_results
-                BEGIN SELECT RAISE(ABORT, 'append only'); END;
-                CREATE TRIGGER regime_results_no_DELETE BEFORE DELETE ON regime_results
-                BEGIN SELECT RAISE(ABORT, 'append only'); END;")?;
-            tx.pragma_update(None, "user_version", 2)?;
         }
         tx.commit()?;
         connection.pragma_update(None, "foreign_keys", true)?;
@@ -255,70 +213,6 @@ impl Library {
             params![result.sha256, result.run_kind, result.session_date, result.regime, result.metrics.to_string(), result.recorded_at_ms])?;
         Ok(())
     }
-    /// Append typed regime evidence without modifying the legacy results history.
-    pub fn record_regime_result(&self, result: &RegimeResult) -> Result<()> {
-        let metrics = result.metrics.to_string();
-        if metrics.len() > self.limits.max_metrics_bytes {
-            return Err(Error::SizeLimit);
-        }
-        if result.strategy_id <= 0
-            || result.version <= 0
-            || result.sample_count <= 0
-            || !valid_kind(&result.source)
-            || result.recorded_at_ms < 0
-            || !valid_metrics(&result.metrics)
-        {
-            return Err(Error::InvalidInput);
-        }
-        self.connection.execute(
-            "INSERT INTO regime_results(strategy_id,version,regime,source,sample_count,metrics,recorded_at_ms)
-             VALUES(?1,?2,?3,?4,?5,?6,?7)",
-            params![result.strategy_id, result.version, result.regime.label(), result.source,
-                result.sample_count, metrics, result.recorded_at_ms],
-        )?;
-        Ok(())
-    }
-
-    /// Aggregate each exact strategy version, regime and source independently.
-    /// Batch drawdown maxima are not a reconstructed equity-curve drawdown.
-    /// A v1 read-only library has no regime evidence and returns an empty set.
-    pub fn regime_performance(&self) -> Result<Vec<RegimePerformance>> {
-        let version: i64 = self
-            .connection
-            .pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version == 1 {
-            return Ok(Vec::new());
-        }
-        let mut stmt = self.connection.prepare(
-            "SELECT strategy_id,version,regime,source,SUM(sample_count),
-             SUM(json_extract(metrics,'$.trades')),
-             SUM(json_extract(metrics,'$.net_pnl_after_costs')),
-             SUM(json_extract(metrics,'$.expectancy') * CAST(sample_count AS REAL)) / SUM(sample_count),
-             MAX(json_extract(metrics,'$.max_drawdown'))
-             FROM regime_results GROUP BY strategy_id,version,regime,source
-             ORDER BY strategy_id,version,regime,source")?;
-        let rows = stmt.query_map([], |r| {
-            let trades: i64 = r.get(5)?;
-            let pnl: f64 = r.get(6)?;
-            let expectancy: f64 = r.get(7)?;
-            let drawdown: f64 = r.get(8)?;
-            if [pnl, expectancy, drawdown].iter().any(|v| !v.is_finite()) {
-                return Err(rusqlite::Error::InvalidQuery);
-            }
-            Ok(RegimePerformance {
-                strategy_id: r.get(0)?,
-                version: r.get(1)?,
-                regime: r.get(2)?,
-                source: r.get(3)?,
-                sample_count: r.get(4)?,
-                metrics: serde_json::json!({"trades":trades,"net_pnl_after_costs":pnl,
-                    "expectancy":expectancy,"max_drawdown":drawdown}),
-            })
-        })?;
-        rows.collect::<std::result::Result<_, _>>()
-            .map_err(Into::into)
-    }
-
     /// Read all candidate identities and their immutable evaluation history.
     pub fn all_versions_with_results(&self) -> Result<Vec<(String, String, Vec<RunResult>)>> {
         let mut stmt = self.connection.prepare(
@@ -735,122 +629,6 @@ mod tests {
             assert!(db.connection.execute(sql, []).is_err());
         }
     }
-    #[test]
-    fn regime_evidence_migrates_aggregates_and_reads_without_writes() {
-        use nivra_core::regime::{Breadth, Trend, Volatility};
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("library.sqlite");
-        let mut db = Library::open(&path).unwrap();
-        let first = add(&mut db, "a", "first").unwrap();
-        let second = add(&mut db, "a", "second").unwrap();
-        let legacy = RunResult {
-            sha256: first.sha256.clone(),
-            run_kind: "paper".into(),
-            session_date: "2026-10-23".into(),
-            regime: Some("legacy".into()),
-            metrics: json!({"trades":2,"net_pnl_after_costs":4,"expectancy":2,"max_drawdown":3}),
-            recorded_at_ms: 1,
-        };
-        db.record_result(&legacy).unwrap();
-        // Recreate the exact prior schema: only the new table/index/triggers are removed.
-        db.connection
-            .execute_batch("DROP TABLE regime_results; PRAGMA user_version=1;")
-            .unwrap();
-        drop(db);
-        let old = Library::open_read_only(&path).unwrap();
-        assert!(old.regime_performance().unwrap().is_empty());
-        assert_eq!(
-            old.results(&first.sha256, None, None).unwrap(),
-            vec![legacy.clone()]
-        );
-        assert_eq!(
-            old.connection
-                .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
-                .unwrap(),
-            1
-        );
-        drop(old);
-        let db = Library::open(&path).unwrap();
-        assert_eq!(
-            db.connection
-                .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
-                .unwrap(),
-            2
-        );
-        assert_eq!(db.results(&first.sha256, None, None).unwrap(), vec![legacy]);
-        let mut result = RegimeResult {
-            strategy_id: first.strategy_id,
-            version: first.version,
-            regime: Regime::Known {
-                trend: Trend::Up,
-                volatility: Volatility::Normal,
-                breadth: Breadth::Strong,
-                gap_day: false,
-            },
-            source: "replay".into(),
-            sample_count: 2,
-            metrics: json!({"trades":2,"net_pnl_after_costs":4,"expectancy":2,"max_drawdown":3}),
-            recorded_at_ms: 2,
-        };
-        db.record_regime_result(&result).unwrap();
-        result.sample_count = 6;
-        result.metrics =
-            json!({"trades":3,"net_pnl_after_costs":-6,"expectancy":-1,"max_drawdown":5});
-        db.record_regime_result(&result).unwrap();
-        let aggregate = db.regime_performance().unwrap();
-        assert_eq!(aggregate.len(), 1);
-        assert_eq!(aggregate[0].sample_count, 8);
-        assert_eq!(aggregate[0].regime, result.regime.label());
-        assert_eq!(
-            aggregate[0].metrics,
-            json!({"trades":5,"net_pnl_after_costs":-2.0,"expectancy":-0.25,"max_drawdown":5.0})
-        );
-        result.source = "shadow".into();
-        db.record_regime_result(&result).unwrap();
-        result.source = "paper".into();
-        db.record_regime_result(&result).unwrap();
-        result.regime = Regime::Unknown;
-        db.record_regime_result(&result).unwrap();
-        result.version = second.version;
-        db.record_regime_result(&result).unwrap();
-        assert_eq!(db.regime_performance().unwrap().len(), 5);
-        result.version = 999;
-        assert_eq!(db.record_regime_result(&result), Err(Error::Storage));
-        result.version = first.version;
-        result.sample_count = 0;
-        assert_eq!(db.record_regime_result(&result), Err(Error::InvalidInput));
-        result.sample_count = 1;
-        result.source = "live".into();
-        assert_eq!(db.record_regime_result(&result), Err(Error::InvalidInput));
-        result.source = "paper".into();
-        result.metrics = json!({"trades":-1});
-        assert_eq!(db.record_regime_result(&result), Err(Error::InvalidInput));
-        result.metrics =
-            json!({"trades":0,"net_pnl_after_costs":0,"expectancy":0,"max_drawdown":0});
-        for sql in [
-            "DELETE FROM regime_results",
-            "UPDATE regime_results SET sample_count=1",
-        ] {
-            assert!(db.connection.execute(sql, []).is_err());
-        }
-        let expected = db.regime_performance().unwrap();
-        drop(db);
-        let db = Library::open_read_only(&path).unwrap();
-        assert_eq!(db.regime_performance().unwrap(), expected);
-        assert_eq!(db.record_regime_result(&result), Err(Error::Storage));
-        drop(db);
-        let db = Library::open_with_limits(
-            &path,
-            LibraryLimits {
-                max_metrics_bytes: 2,
-                ..LibraryLimits::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(db.record_regime_result(&result), Err(Error::SizeLimit));
-        assert_eq!(db.regime_performance().unwrap(), expected);
-    }
-
     #[test]
     fn limits_and_database_identity_fail_closed() {
         let limits: LibraryLimits = serde_json::from_str("{\"max_body_bytes\":4}").unwrap();
