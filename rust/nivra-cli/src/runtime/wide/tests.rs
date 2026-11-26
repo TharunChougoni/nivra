@@ -4899,7 +4899,7 @@ fn archive_capture_replays_the_same_session_as_sqlite() -> Result<()> {
         drop(legacy_db);
         let bytes = fs::read(&book_path)?;
         for inserted in [1, 0] {
-            let result = market_archive::import_book(&mut archive_db, &legacy.directory)?;
+            let result = market_archive::import_book(&mut archive_db, &legacy.directory, false)?;
             assert_eq!(result["inserted"], inserted);
             assert_eq!(result["verified"], expected_receipts + 1 - inserted);
             assert_eq!(fs::read(&book_path)?, bytes);
@@ -4912,7 +4912,7 @@ fn archive_capture_replays_the_same_session_as_sqlite() -> Result<()> {
         )?;
         drop(changed);
         assert_eq!(
-            market_archive::import_book(&mut archive_db, &legacy.directory)
+            market_archive::import_book(&mut archive_db, &legacy.directory, false)
                 .unwrap_err()
                 .to_string(),
             "archive_receipt_conflict"

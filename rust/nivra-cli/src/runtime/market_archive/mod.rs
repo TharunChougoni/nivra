@@ -6,6 +6,9 @@ use std::{
     process::ExitCode,
 };
 
+mod book;
+#[cfg(test)]
+pub(super) use book::import as import_book;
 pub(super) mod capture;
 mod history;
 #[cfg(test)]
@@ -47,6 +50,9 @@ pub(crate) enum Command {
         #[command(flatten)]
         options: Options,
         book_dir: PathBuf,
+        /// Replace verified legacy quote bodies with archive references.
+        #[arg(long)]
+        rewrite: bool,
     },
 }
 
@@ -77,44 +83,6 @@ pub(crate) fn connect(archive: &MarketArchiveSettings) -> Result<ArchiveClient> 
     market_archive::connect(&archive.url, password)
 }
 
-pub(super) fn import_book(db: &mut ArchiveClient, path: &Path) -> Result<serde_json::Value> {
-    let book = super::open_book_immutable(&path.join("paper.sqlite"))?;
-    let (binding, state): (String, String) =
-        book.query_row("SELECT binding, body FROM state WHERE id=1", [], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?;
-    let portfolio: nivra_core::execution::Portfolio = serde_json::from_str(&state)?;
-    if !portfolio.closed {
-        return Err("archive_import_requires_closed_book".into());
-    }
-    let mut stmt = book.prepare(
-        "SELECT id, at, receipt, body FROM ticks
-         WHERE event IN ('wide_quotes','scanner_metadata','research_quotes') ORDER BY id",
-    )?;
-    let mut rows = stmt.query([])?;
-    let mut counts = [0, 0, 0];
-    while let Some(row) = rows.next()? {
-        let raw: String = row.get(3)?;
-        let value: serde_json::Value = serde_json::from_str(&raw)?;
-        if value["kind"] == "compacted_quote_receipt" {
-            counts[2] += 1;
-            continue;
-        }
-        let receipt = row
-            .get::<_, Option<i64>>(2)?
-            .ok_or("archive_receipt_time_invalid")?;
-        let raw = nivra_store::market_archive::QuoteBodies::read(db, raw, Some(receipt))?;
-        let batch = normalize::capture_quotes(&raw)?;
-        if batch.receipt.received_ms != receipt {
-            return Err("archive_receipt_conflict".into());
-        }
-        let inserted =
-            market_archive::import_quotes(db, &batch, &binding, row.get(0)?, row.get(1)?)?;
-        counts[usize::from(!inserted)] += 1;
-    }
-    Ok(serde_json::json!({"inserted":counts[0], "verified":counts[1], "compacted":counts[2]}))
-}
-
 fn run(command: Command) -> Result<()> {
     match command {
         Command::Init(options) => {
@@ -142,9 +110,13 @@ fn run(command: Command) -> Result<()> {
             let config = read_config(&options.config)?;
             history::export(&config, &directory, start, end)?;
         }
-        Command::ImportBook { options, book_dir } => {
+        Command::ImportBook {
+            options,
+            book_dir,
+            rewrite,
+        } => {
             let mut db = connect_from_config(&options.config)?;
-            println!("{}", import_book(&mut db, &book_dir)?);
+            println!("{}", book::import(&mut db, &book_dir, rewrite)?);
         }
     }
     Ok(())

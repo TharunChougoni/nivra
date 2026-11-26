@@ -13,8 +13,7 @@ pub use history::{
 };
 pub use postgres::Client as ArchiveClient;
 pub use reader::{
-    ArchivedTickCheck, QuoteBodies, quote_receipt_bodies, quote_receipt_ids, quote_reference,
-    quote_watermark, verify_book_receipts,
+    QuoteBodies, quote_receipt_bodies, quote_receipt_ids, quote_reference, quote_watermark,
 };
 pub use writer::{
     CandleBar, CandleBatch, CandleUnit, FailedAttempt, QuoteBatch, QuoteObservation, QuotePurpose,

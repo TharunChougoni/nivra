@@ -143,8 +143,9 @@ that paper config with `--archive-config`.
 
 To copy original quotes from a closed, checkpointed book, run
 `nivra archive import-book --config PAPER_CONFIG BOOK_DIR`. The command
-opens the book without modifying it. It verifies identical receipts on
-repeat runs and refuses a changed receipt for an already imported tick.
+verifies identical receipts on repeat runs and refuses a changed receipt
+for an already imported tick. Add `--rewrite` to replace verified inline
+receipts with archive references and reclaim SQLite space.
 The summary counts compacted legacy rows whose original body is unavailable.
 
 ### Research quote tape

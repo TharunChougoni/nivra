@@ -2,10 +2,7 @@ use super::{ArchiveClient, Result};
 use postgres::types::Type;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{
-    collections::{BTreeMap, HashMap},
-    fmt::Write,
-};
+use std::{collections::BTreeMap, fmt::Write};
 
 const REFERENCE_KIND: &str = "market_archive_quote";
 const MAX_QUOTE_BODY_BYTES: usize = 4_000_256;
@@ -214,72 +211,4 @@ impl QuoteBodies {
                 .ok_or("archive_quote_body_missing")?,
         )
     }
-}
-
-pub struct ArchivedTickCheck {
-    pub tick_id: i64,
-    pub event_ms: i64,
-    pub receipt_ms: i64,
-    pub sha256: [u8; 32],
-}
-
-/// Confirm that each candidate book tick has a matching quote receipt in the archive.
-pub fn verify_book_receipts(
-    db: &mut ArchiveClient,
-    binding: Option<&str>,
-    ticks: &[ArchivedTickCheck],
-) -> Result<Vec<bool>> {
-    const CHUNK_SIZE: usize = 512;
-    if ticks.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut tx = db.build_transaction().read_only(true).start()?;
-    let mut verified = Vec::with_capacity(ticks.len());
-    for chunk in ticks.chunks(CHUNK_SIZE) {
-        let mut imported: HashMap<i64, (i64, i16, i64, [u8; 32])> = HashMap::new();
-        if let Some(binding) = binding {
-            let tick_ids: Vec<i64> = chunk.iter().map(|tick| tick.tick_id).collect();
-            for row in tx.query(
-                "SELECT b.tick_id, b.event_ms, r.kind, r.received_ms, r.sha256
-                 FROM book_quote_imports b
-                 JOIN receipts r ON r.id = b.receipt_id
-                 WHERE b.book_binding = $1 AND b.tick_id = ANY($2)",
-                &[&binding, &tick_ids],
-            )? {
-                let sha256: [u8; 32] = row.get::<_, &[u8]>(4).try_into()?;
-                imported.insert(row.get(0), (row.get(1), row.get(2), row.get(3), sha256));
-            }
-        }
-        let unimported_hashes: Vec<&[u8]> = chunk
-            .iter()
-            .filter(|tick| !imported.contains_key(&tick.tick_id))
-            .map(|tick| tick.sha256.as_slice())
-            .collect();
-        let mut by_sha: HashMap<[u8; 32], i64> = HashMap::new();
-        if !unimported_hashes.is_empty() {
-            for row in tx.query(
-                "SELECT sha256, received_ms
-                 FROM receipts
-                 WHERE kind = 1 AND sha256 = ANY($1)",
-                &[&unimported_hashes],
-            )? {
-                let sha256: [u8; 32] = row.get::<_, &[u8]>(0).try_into()?;
-                by_sha.insert(sha256, row.get(1));
-            }
-        }
-        for tick in chunk {
-            let ok =
-                if let Some((event_ms, kind, received_ms, sha256)) = imported.get(&tick.tick_id) {
-                    *event_ms == tick.event_ms
-                        && *kind == 1
-                        && *received_ms == tick.receipt_ms
-                        && *sha256 == tick.sha256
-                } else {
-                    by_sha.get(&tick.sha256) == Some(&tick.receipt_ms)
-                };
-            verified.push(ok);
-        }
-    }
-    tx.commit()?;
-    Ok(verified)
 }
