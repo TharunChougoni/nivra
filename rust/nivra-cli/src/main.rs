@@ -51,8 +51,6 @@ enum StrategyLabCommand {
 enum Command {
     /// Prepare a fresh current-policy paper installation; never starts trading.
     Setup(runtime::setup::Args),
-    /// Compare recorded rankings offline in the bounded Python sandbox.
-    ScorerCompare(nivra_cli::scorer_compare::Args),
     /// Offline pipeline inspection, replay and policy-gated notes.
     Orchestrator {
         #[arg(long)]
@@ -529,13 +527,6 @@ fn main() -> ExitCode {
             orchestrator_handle(&workspace, config.as_deref(), command),
             "orchestrator_failed: check offline configuration, policy and recorded evidence",
         ),
-        Command::ScorerCompare(args) => match nivra_cli::scorer_compare::run(args) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => {
-                eprintln!("scorer_compare_failed: {error}");
-                ExitCode::FAILURE
-            }
-        },
         Command::StrategyScorer { command } => match nivra_cli::strategy_scorer::run(command) {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => {

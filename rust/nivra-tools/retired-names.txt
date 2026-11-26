@@ -77,7 +77,7 @@
 2	scorer	packaging/rust/scanner-discovery.fragment.json
 7	scorer	rust/nivra-cli/src/candidate_execution.rs
 2	scorer	rust/nivra-cli/src/lib.rs
-10	scorer	rust/nivra-cli/src/main.rs
+5	scorer	rust/nivra-cli/src/main.rs
 5	scorer	rust/nivra-cli/src/runtime/agent/tests.rs
 3	scorer	rust/nivra-cli/src/runtime/discovery/projection.rs
 16	scorer	rust/nivra-cli/src/runtime/discovery/settings.rs
@@ -108,10 +108,9 @@
 25	scorer	rust/nivra-cli/src/runtime/wide/shadow.rs
 34	scorer	rust/nivra-cli/src/runtime/wide/tests.rs
 7	scorer	rust/nivra-cli/src/runtime/workspace/mod.rs
-59	scorer	rust/nivra-cli/src/scorer_compare.rs
+37	scorer	rust/nivra-cli/src/scorer_compare.rs
 2	scorer	rust/nivra-cli/src/strategy_lab.rs
 35	scorer	rust/nivra-cli/src/strategy_scorer.rs
-6	scorer	rust/nivra-cli/tests/scorer_compare_cli.rs
 6	scorer	rust/nivra-core/src/strategy.rs
 4	scorer	rust/nivra-research/src/bubblewrap.rs
 5	scorer	rust/nivra-research/src/strategy_sandbox.rs
