@@ -29,6 +29,7 @@ pub mod retention;
 pub mod rollover;
 pub(crate) mod setup;
 pub(crate) mod strategy;
+pub(crate) mod strategy_library;
 mod strategy_results;
 pub mod subscription_plan;
 mod transcript;

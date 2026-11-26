@@ -8,8 +8,9 @@ A strategy is one of two kinds of Python script:
 - A **ranker** scores scanner prospects. The top prospects become the
   candidates the decision lane sees. It cannot buy, sell, size or exit.
 - An **action strategy** (`strategy_actions_v1`) returns buys, sells and exit
-  revisions. Today it runs only in an after-cost replay. Acceptance and a paper
-  executor are the next steps. See [direction](DIRECTION.md).
+  revisions. Today it runs in an after-cost replay, and an accepted version is
+  registered in the action-strategy library. A paper executor is the next
+  step. See [direction](DIRECTION.md).
 
 | Stage | What runs today | Where |
 | --- | --- | --- |
@@ -17,6 +18,7 @@ A strategy is one of two kinds of Python script:
 | Test | The sandbox runs the ranker on inline feature rows | [Rankers](#rankers) |
 | Evaluate | Recorded replay with forward marks and declared costs | [Replay and evaluation](#replay-and-evaluation) |
 | Replay actions | An action strategy trades a recorded quote tape after costs | [Action strategies](#action-strategies) |
+| Accept | An accepted replay registers the action strategy with no operator step | [Acceptance and the library](#acceptance-and-the-library) |
 | Register | An operator copies a reviewed script into the strategy library | [Registering a ranker](#registering-a-ranker) |
 | Select | The scanner ranks with a library version, or falls back to the built-in ranking | [Live ranking selection](#live-ranking-selection) |
 | Analyse | Pre-registered analyses run in a contained worker | [Registered research jobs](#registered-research-jobs) |
@@ -189,7 +191,8 @@ In the research lane, enable `candidate_compute.strategy`:
 Then `backtest` takes `strategy: true`. It replays `source` with `params` over
 the selection window of the current session's tape, with the book's capital,
 costs and exit policy. It returns the summary and the report hash at once.
-The report is kept as `model/strategy-replays/<sha256>.json` in the book.
+The report is kept as `model/strategy-replays/<sha256>.json` in the book,
+and the result's `acceptance` gives the verdict described below.
 
 The replay runs on the lane worker that also runs decision turns, so it is
 bounded. It stops before the next strategy call when it passes `max_wall_ms`
@@ -197,6 +200,53 @@ bounded. It stops before the next strategy call when it passes `max_wall_ms`
 a decision turn is waiting, with `strategy_replay_preempted`. A stopped replay
 keeps no report. It returns `strategy_calls` and `last_at_ms`, so retry with a
 narrower `selection_from_ms` and `selection_to_ms`.
+
+### Acceptance and the library
+
+When the research `backtest` finishes a strategy replay, deterministic code
+checks the stored report. It refuses a report whose bytes do not hash to
+`report_sha256` (`report_hash_mismatch`), that cannot be read
+(`report_invalid`), that is not `strategy_actions_v1` version 1
+(`report_abi_unsupported`), that is not `paper_only`
+(`report_not_paper_only`), or whose source does not hash to `source_sha256`
+(`source_hash_mismatch`). It then lists every bar the report misses. The
+planner config's optional `strategy_acceptance` block sets the bars:
+
+| Field | Default | Rejected with |
+| --- | --- | --- |
+| `min_trades` | 10 closed trades | `too_few_trades` |
+| `min_net_pnl` | `"0"`. Net P&L after costs must be above it | `net_pnl_too_low` |
+| `max_drawdown_bps` | 300 bps of the replay capital | `drawdown_too_deep` |
+| `min_tape_dates` | 1 session date | `too_few_tape_dates` |
+| `max_failure_bps` | 100 bps of strategy calls | `too_many_strategy_failures` |
+
+A report that still holds a position at the end of the tape is rejected with
+`open_positions_at_end`, because its net P&L counts closed trades only. The
+drawdown bar is a fraction of capital, so it keeps its meaning when the paper
+capital changes. `min_net_pnl` cannot be below zero.
+
+The result returns `{"verdict":"rejected","reasons":[...]}` or
+`{"verdict":"accepted","strategy_id":...,"registration":"registered"}`, with
+the thresholds used. An accepted strategy is registered with no operator step.
+The library sits beside the dated session books, at
+`<sessions_root>/strategy-library/`, so no session archive holds it:
+
+| Path | Contents |
+| --- | --- |
+| `entries/<strategy_id>.json` | Source and report hashes, `params`, author lane, model and turn, summary, tape dates, verdict and thresholds |
+| `sources/<source_sha256>.py` | The exact source bytes |
+| `reports/<report_sha256>.json` | The accepted replay report |
+| `controls.json` | The owner's pin, disable, enable and rollback log |
+
+`strategy_id` is the SHA-256 of the canonical `{abi, source_sha256, params}`.
+Entries are never rewritten: registering the same source and `params` again
+returns the first entry unchanged. Each read verifies every hash. The active
+version is the pinned one when it is eligible, else the newest eligible one.
+To pin, disable or roll back a version, see
+[operations](OPERATIONS.md#manage-action-strategies).
+
+This library is separate from the ranker library below. The ranker selector
+does not read it.
 
 ## Replay and evaluation
 

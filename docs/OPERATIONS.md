@@ -203,6 +203,28 @@ To switch a lane model, change `provider` and `id` in the lane's `model` block
 and sign in to the provider in the application's pi directory. To roll back,
 point `planner_config` at the previous file. Apply either change as above.
 
+## Manage action strategies
+
+Accepted research strategies register themselves (see
+[research](RESEARCH.md#acceptance-and-the-library)). These commands read the
+runtime config only to find the library. They never open a book, a broker or a
+credential, and they work with the controller running:
+
+```sh
+nivra strategy --config PAPER_CONFIG list
+nivra strategy --config PAPER_CONFIG show STRATEGY_ID
+nivra strategy --config PAPER_CONFIG pin STRATEGY_ID
+nivra strategy --config PAPER_CONFIG unpin
+nivra strategy --config PAPER_CONFIG disable STRATEGY_ID
+nivra strategy --config PAPER_CONFIG enable STRATEGY_ID
+nivra strategy --config PAPER_CONFIG rollback [--to STRATEGY_ID]
+```
+
+An id can be a unique prefix of at least 8 characters. Each change appends to
+`controls.json` and prints the new active version; entries never change.
+`rollback` disables the active version and pins the eligible version
+registered just before it, or `--to`. A disabled version cannot be pinned.
+
 ## Change paper costs
 
 The runtime config needs a complete `paper_costs` object. See

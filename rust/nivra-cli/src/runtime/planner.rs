@@ -130,6 +130,9 @@ pub(crate) struct PlannerConfig {
     /// Frozen exit behaviour. Absent keeps the historical execute/liquidate path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_policy: Option<nivra_core::execution::ExitPolicy>,
+    /// Research strategy acceptance thresholds. Absent uses the defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy_acceptance: Option<super::strategy_library::acceptance::Thresholds>,
 }
 /// Operational allowances do not change the frozen trading policy. Shadow-only
 /// selector diagnostics remain excluded; live ranking participates in the policy.
@@ -162,6 +165,7 @@ impl Default for PlannerConfig {
             agent: None,
             decision_evidence: None,
             exit_policy: None,
+            strategy_acceptance: None,
         }
     }
 }
@@ -274,6 +278,9 @@ impl PlannerConfig {
         }
         if let Some(web_tools) = &c.web_tools {
             web_tools.validate()?;
+        }
+        if let Some(thresholds) = &c.strategy_acceptance {
+            thresholds.validate()?;
         }
         Ok(c)
     }

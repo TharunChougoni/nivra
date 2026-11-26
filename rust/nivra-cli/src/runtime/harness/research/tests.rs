@@ -674,6 +674,20 @@ print(json.dumps({"actions":a}))"#;
     )
     .unwrap();
     assert_eq!(digest(&kept), sha);
+    // One losing trade misses the default bars; the model is told why and
+    // nothing is registered.
+    assert_eq!(done["acceptance"]["verdict"], "rejected", "{done}");
+    assert_eq!(
+        done["acceptance"]["reasons"],
+        json!(["too_few_trades", "net_pnl_too_low"])
+    );
+    assert!(
+        !c.sessions_root
+            .as_ref()
+            .unwrap()
+            .join("strategy-library")
+            .exists()
+    );
     assert_eq!(submit(&cfg)["report_sha256"], sha);
 }
 

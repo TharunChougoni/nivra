@@ -45,7 +45,7 @@ Tracked in [#44](https://github.com/TharunChougoni/nivra/issues/44):
 2. Done: research after the close every day, and the quote tape it needs (#39).
 3. Done: the strategy contract with entry and exit rules, and its after-cost
    replay (#40).
-4. Add the deterministic acceptance check and automatic registration (#41).
+4. Done: the deterministic acceptance check and automatic registration (#41).
 5. Add the strategy executor to the paper controller (#42).
 6. Move the decision lane to supervision, and remove the gate from cash entries (#43).
 

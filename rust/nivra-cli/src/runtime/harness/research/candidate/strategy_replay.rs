@@ -1,7 +1,7 @@
 use super::*;
 use crate::runtime::strategy::{self, replay};
-use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use crate::runtime::strategy_library::{self, Author, Library, acceptance};
+use std::os::unix::fs::DirBuilderExt;
 
 /// `backtest` with `strategy: true`: replay the source as a
 /// `strategy_actions_v1` strategy over the selection window of this session's
@@ -11,6 +11,7 @@ pub(super) fn strategy_backtest(
     c: &Config,
     cfg: &PlannerConfig,
     candidate: &CandidateComputeSettings,
+    author: Author,
     args: &CandidateSubmitArgs,
     now: i64,
     preempted: &dyn Fn() -> bool,
@@ -99,19 +100,20 @@ pub(super) fn strategy_backtest(
         .mode(0o700)
         .create(&directory)?;
     // Content-addressed: an existing file already holds these exact bytes.
-    match fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(directory.join(format!("{report_sha256}.json")))
-    {
-        Ok(mut file) => {
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error.into()),
-    }
+    let name = format!("{report_sha256}.json");
+    strategy_library::write_new(&directory, &name, &bytes)?;
+    // Acceptance reads the stored bytes, so a damaged file cannot register.
+    let stored = crate::read_bounded(&directory.join(&name), 32 * 1024 * 1024)
+        .map_err(|_| "strategy_replay_report_unreadable")?;
+    let acceptance = accept_and_register(
+        c,
+        cfg,
+        &stored,
+        &report_sha256,
+        args.source.as_bytes(),
+        author,
+        now,
+    );
     Ok(json!({
         "status":"completed",
         "abi":strategy::ABI,
@@ -124,6 +126,44 @@ pub(super) fn strategy_backtest(
         "action_outcomes":report["action_outcomes"],
         "strategy_failures":report["strategy_failures"],
         "trades":report["trades"].as_array().map(|t| t.iter().take(50).collect::<Vec<_>>()),
+        "acceptance":acceptance,
         "paper_only":true
     }))
+}
+
+/// Run the acceptance check and register an accepted strategy. The verdict
+/// goes back to the model; a registration failure is reported, never hidden.
+fn accept_and_register(
+    c: &Config,
+    cfg: &PlannerConfig,
+    report: &[u8],
+    report_sha256: &str,
+    source: &[u8],
+    author: Author,
+    now: i64,
+) -> Value {
+    let thresholds = cfg.strategy_acceptance.clone().unwrap_or_default();
+    let accepted = match acceptance::accept(report, report_sha256, source, &thresholds) {
+        Ok(accepted) => accepted,
+        Err(reasons) => {
+            return json!({"verdict":"rejected","reasons":reasons,"thresholds":thresholds});
+        }
+    };
+    let registered = strategy_library::root(c)
+        .map(Library::at)
+        .and_then(|library| library.register(&accepted, author, now));
+    match registered {
+        Ok(registration) => json!({
+            "verdict":"accepted",
+            "strategy_id":registration.entry.strategy_id,
+            "registration":if registration.created { "registered" } else { "already_registered" },
+            "thresholds":thresholds
+        }),
+        Err(error) => json!({
+            "verdict":"accepted",
+            "registration":"failed",
+            "reason":crate::runtime::failure_code(error.as_ref()),
+            "thresholds":thresholds
+        }),
+    }
 }

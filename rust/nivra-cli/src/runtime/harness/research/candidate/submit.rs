@@ -769,7 +769,21 @@ pub(crate) fn candidate_submit_preemptible(
         return Ok(not_dispatched("candidate_parent_invalid"));
     }
     if args.strategy == Some(true) {
-        return super::strategy_replay::strategy_backtest(c, cfg, candidate, &args, now, preempted);
+        return super::strategy_replay::strategy_backtest(
+            c,
+            cfg,
+            candidate,
+            crate::runtime::strategy_library::Author {
+                lane: "research".into(),
+                model: Some(model_id.to_owned()),
+                model_revision: Some(model_revision),
+                turn_id: Some(parent_turn_id.to_owned()),
+                session: Some(c.session),
+            },
+            &args,
+            now,
+            preempted,
+        );
     }
     // Optional reviewed after-cost cash replay. The capability is host policy;
     // a request without the grant is refused before any artifact or task row.

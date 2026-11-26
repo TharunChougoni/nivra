@@ -88,6 +88,14 @@ enum Command {
         #[command(subcommand)]
         command: runtime::planner::Command,
     },
+    /// Paper strategy library: list, show, pin, disable or roll back a version.
+    Strategy {
+        /// The paper runtime config; the library sits beside its session books.
+        #[arg(long)]
+        config: PathBuf,
+        #[command(subcommand)]
+        command: runtime::strategy_library::Command,
+    },
     /// Manage dashboard authentication token; never starts trading.
     DashboardToken {
         #[command(subcommand)]
@@ -563,6 +571,7 @@ fn main() -> ExitCode {
             }
         },
         Command::Planner { command } => runtime::planner::entry(command),
+        Command::Strategy { config, command } => runtime::strategy_library::entry(&config, command),
         Command::Alert {
             config,
             test,
