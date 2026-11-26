@@ -278,19 +278,6 @@ pub fn candidate_cohort_key(
         .as_bytes(),
     )
 }
-/// Registered input allowance identity. Domain-prefixed so a registered input
-/// and a candidate input never share one allowance; total session admission
-/// still counts the union of both tables.
-pub fn registered_trial_input_key(
-    code_sha256: &str,
-    runtime_sha256: &str,
-    input_sha256: &str,
-) -> String {
-    sha256_hex(
-        format!("registered-trial-input-v1\0{code_sha256}\0{runtime_sha256}\0{input_sha256}")
-            .as_bytes(),
-    )
-}
 /// Immutable candidate version identity. It is distinct from the queue task
 /// identity even though both bind the same content and parent.
 pub fn candidate_version_id(

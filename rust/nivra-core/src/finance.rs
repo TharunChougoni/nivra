@@ -5,7 +5,7 @@
 //! they do not silently use Decimal's rounding/saturating arithmetic. Python's
 //! broader Decimal range and contextual rounding are not claimed compatible.
 
-use crate::market::{Instrument, InstrumentKind, Segment};
+use crate::market::Segment;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::{collections::BTreeMap, error::Error, fmt, str::FromStr};
@@ -451,24 +451,6 @@ impl FeeSchedule {
         match segment {
             Segment::NseEq => Some(&self.cash),
             segment => self.by_segment.get(&segment),
-        }
-    }
-
-    /// Fee lookup for a single instrument identity.
-    pub fn for_instrument(
-        &self,
-        instrument: &Instrument,
-    ) -> Result<&FeeArithmetic, FinancialError> {
-        let segment = instrument
-            .segment()
-            .or_else(|| (instrument.kind() == InstrumentKind::Cash).then_some(Segment::NseEq));
-        match segment {
-            Some(Segment::NseEq) => Ok(&self.cash),
-            Some(segment) => self
-                .by_segment
-                .get(&segment)
-                .ok_or(FinancialError::InvalidCostScope),
-            None => Err(FinancialError::InvalidCostScope),
         }
     }
 

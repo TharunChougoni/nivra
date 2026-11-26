@@ -8,7 +8,6 @@ pub mod native;
 pub mod prefilter;
 pub mod regime;
 pub mod release;
-pub mod resources;
 pub mod time;
 
 pub mod book_phase;
@@ -17,16 +16,8 @@ pub mod execution;
 
 pub mod discovery;
 
-pub mod protection_gap;
-
-pub mod service_review;
-
-pub mod research_acceptance;
-
 pub mod redecision;
 pub mod replay;
-
-pub mod postclose;
 
 pub mod daily_research;
 

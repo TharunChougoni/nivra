@@ -138,69 +138,13 @@ impl ReceivedObject {
     pub fn object(&self) -> &Value {
         &self.0
     }
-    pub fn validated_decision(&self) -> bool {
-        false
-    }
 }
 impl fmt::Debug for ReceivedObject {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("ReceivedObject(unvalidated, redacted)")
     }
 }
-pub fn structured(raw: &[u8], model: &str) -> Result<ReceivedObject, Error> {
-    if !exact_id(model) {
-        return Err(Error::OutputInvalid);
-    }
-    let body = decode(raw).map_err(|_| Error::OutputInvalid)?;
-    if body.get("status").and_then(Value::as_str) != Some("completed")
-        || body.get("model").and_then(Value::as_str) != Some(model)
-        || body.get("error").is_some_and(|v| !v.is_null())
-        || body.get("incomplete_details").is_some_and(|v| !v.is_null())
-    {
-        return Err(Error::OutputInvalid);
-    }
-    let output = body
-        .get("output")
-        .and_then(Value::as_array)
-        .filter(|r| (1..=128).contains(&r.len()))
-        .ok_or(Error::OutputInvalid)?;
-    let mut result = None;
-    for item in output {
-        if !item.is_object() {
-            return Err(Error::OutputInvalid);
-        }
-        if item.get("type").and_then(Value::as_str) == Some("reasoning") {
-            continue;
-        }
-        if item.get("type").and_then(Value::as_str) != Some("message")
-            || item.get("role").and_then(Value::as_str) != Some("assistant")
-            || item.get("status").and_then(Value::as_str) != Some("completed")
-            || result.is_some()
-        {
-            return Err(Error::OutputInvalid);
-        }
-        let content = item
-            .get("content")
-            .and_then(Value::as_array)
-            .filter(|a| a.len() == 1)
-            .ok_or(Error::OutputInvalid)?;
-        if content[0].get("type").and_then(Value::as_str) != Some("output_text") {
-            return Err(Error::OutputInvalid);
-        }
-        let text = content[0]
-            .get("text")
-            .and_then(Value::as_str)
-            .ok_or(Error::OutputInvalid)?;
-        result = Some(decode(text.as_bytes()).map_err(|_| Error::OutputInvalid)?);
-    }
-    result.map(ReceivedObject).ok_or(Error::OutputInvalid)
-}
 
-#[derive(Clone, Copy)]
-pub enum ResponseKind<'a> {
-    Catalog,
-    Trading { exact_model: &'a str },
-}
 pub enum ParsedResponse {
     Catalog(Vec<String>),
     Received(ReceivedObject),
@@ -209,51 +153,4 @@ impl fmt::Debug for ParsedResponse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("ParsedResponse(redacted, no decision authority)")
     }
-}
-/// A transport must separately deny redirects/cookies/env auth and enforce deadlines,
-/// original grants/leases/journals and bounded streaming before invoking this parser.
-pub fn parse_http(
-    status: u16,
-    content_type: Option<&str>,
-    encoding: Option<&str>,
-    raw: &[u8],
-    kind: ResponseKind<'_>,
-) -> Result<ParsedResponse, Error> {
-    validate_http_headers(status, content_type, encoding)?;
-    match kind {
-        ResponseKind::Catalog => catalog(raw).map(ParsedResponse::Catalog),
-        ResponseKind::Trading { exact_model } => {
-            structured(raw, exact_model).map(ParsedResponse::Received)
-        }
-    }
-}
-
-/// Header admission before consuming a response stream.
-pub fn validate_http_headers(
-    status: u16,
-    content_type: Option<&str>,
-    encoding: Option<&str>,
-) -> Result<(), Error> {
-    if status != 200 {
-        return Err(match status {
-            401 => Error::AuthFailed,
-            403 => Error::NotEntitled,
-            429 => Error::RateLimited,
-            _ => Error::ProviderFailed,
-        });
-    }
-    if !encoding
-        .unwrap_or("identity")
-        .eq_ignore_ascii_case("identity")
-        || !content_type
-            .unwrap_or("")
-            .split(';')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .eq_ignore_ascii_case("application/json")
-    {
-        return Err(Error::OutputInvalid);
-    }
-    Ok(())
 }

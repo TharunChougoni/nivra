@@ -301,20 +301,6 @@ fn paper_costs_are_required_and_validated() {
         schedule.for_segment(nivra_core::market::Segment::NseIndex),
         None
     );
-    let cash_instrument: nivra_core::market::Instrument =
-        serde_json::from_value(serde_json::json!({
-            "key": "NSE_EQ|INF204KB14I2", "symbol": "NIFTYBEES", "kind": "cash",
-            "lot_size": 1, "tick_size": "0.01", "version": "fixture-v1"
-        }))
-        .unwrap();
-    assert_eq!(schedule.for_instrument(&cash_instrument).unwrap(), &cash);
-    let fo_instrument: nivra_core::market::Instrument = serde_json::from_value(serde_json::json!({
-        "key": "NSE_FO|NIFTY26NOVFUT", "symbol": "NIFTY26NOVFUT", "kind": "future",
-        "lot_size": 50, "tick_size": "0.05", "version": "fixture-v1",
-        "expiry": "2026-11-26", "underlying": "NIFTY", "segment": "NSE_FO"
-    }))
-    .unwrap();
-    assert_eq!(schedule.for_instrument(&fo_instrument).unwrap(), &fo);
     let encoded = serde_json::to_value(&schedule).unwrap();
     assert_eq!(encoded["by_segment"]["NSE_FO"]["slippage_bps"], "10");
     assert_eq!(

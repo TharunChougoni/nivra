@@ -542,7 +542,6 @@ mod tests {
     }
     #[test]
     fn bounded_events_preserve_identity_freshness_and_deduplication() {
-        crate::postclose::behavioral_assertions();
         let p = EventPolicy {
             price_move_bps: Some(100),
             volume_step_units: Some(10),

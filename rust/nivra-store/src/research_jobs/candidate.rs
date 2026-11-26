@@ -642,18 +642,6 @@ pub fn enqueue_candidate_bounded(
     Ok(CandidateAdmission::Admitted(Box::new(record)))
 }
 
-pub fn enqueue_candidate(
-    db: &mut Connection,
-    job_spec: &Spec,
-    task_spec: &CandidateTaskV1,
-    now: i64,
-) -> Result<CandidateTaskRecord> {
-    match enqueue_candidate_bounded(db, job_spec, task_spec, &[], now, None)? {
-        CandidateAdmission::Admitted(record) => Ok(*record),
-        CandidateAdmission::Deferred { .. } => Err(Error::Capacity),
-    }
-}
-
 pub fn load_candidate(
     db: &mut Connection,
     task_id: &str,
@@ -667,41 +655,6 @@ pub fn load_candidate(
     let result = candidate_tx(&tx, task_id, revision)?.ok_or(Error::Missing);
     tx.commit().map_err(|_| Error::Storage)?;
     result
-}
-
-pub fn latest_candidate(db: &mut Connection, task_id: &str) -> Result<Option<CandidateTaskRecord>> {
-    if !valid_hash(task_id) {
-        return Err(Error::Invalid);
-    }
-    let tx = db.transaction().map_err(|_| Error::Storage)?;
-    if !candidate_tables_exist(&tx)? {
-        tx.rollback().map_err(|_| Error::Storage)?;
-        return Ok(None);
-    }
-    let revision: Option<u32> = tx
-        .query_row(
-            "SELECT max(revision) FROM candidate_tasks WHERE task_id=?",
-            [task_id],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|_| Error::Storage)?
-        .flatten();
-    let result = revision
-        .map(|revision| candidate_tx(&tx, task_id, revision))
-        .transpose()?
-        .flatten();
-    tx.commit().map_err(|_| Error::Storage)?;
-    Ok(result)
-}
-
-pub fn list_candidates(
-    db: &mut Connection,
-    session: &str,
-    parent_turn_id: Option<&str>,
-    limit: usize,
-) -> Result<Vec<CandidateTaskRecord>> {
-    list_candidates_page(db, session, parent_turn_id, None, limit)
 }
 
 pub fn list_candidates_page(
@@ -730,54 +683,6 @@ pub fn list_candidates_page(
                 session,
                 parent_turn_id,
                 parent_turn_id,
-                after.map(|c| c.created_at_ms),
-                after.map_or(0, |c| c.created_at_ms),
-                after.map(|c| c.created_at_ms),
-                after.map(|c| c.task_id.as_str()),
-                after.map(|c| c.task_id.as_str()),
-                after.map(|c| c.revision),
-                limit as i64
-            ],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .map_err(|_| Error::Storage)?
-        .collect::<std::result::Result<_, _>>()
-        .map_err(|_| Error::Storage)?;
-    drop(statement);
-    let records = ids
-        .into_iter()
-        .map(|(id, revision)| candidate_tx(&tx, &id, revision)?.ok_or(Error::Missing))
-        .collect::<Result<Vec<_>>>()?;
-    tx.commit().map_err(|_| Error::Storage)?;
-    Ok(records)
-}
-
-/// Page candidate rows newest-first. The controller uses this for the true
-/// newest-N projection; paging oldest-first and reversing a bounded prefix is
-/// not the same thing once the queue exceeds the page bound.
-pub fn list_candidates_desc_page(
-    db: &mut Connection,
-    session: &str,
-    after: Option<&TaskCursor>,
-    limit: usize,
-) -> Result<Vec<CandidateTaskRecord>> {
-    if chrono::NaiveDate::parse_from_str(session, "%Y-%m-%d").is_err()
-        || !(1..=100).contains(&limit)
-    {
-        return Err(Error::Invalid);
-    }
-    let tx = db.transaction().map_err(|_| Error::Storage)?;
-    if !candidate_tables_exist(&tx)? {
-        tx.rollback().map_err(|_| Error::Storage)?;
-        return Ok(Vec::new());
-    }
-    let mut statement = tx.prepare(
-        "SELECT task_id,revision FROM candidate_tasks WHERE session=? AND (? IS NULL OR created_ms<? OR (created_ms=? AND (task_id<? OR (task_id=? AND revision<?)))) ORDER BY created_ms DESC,task_id DESC,revision DESC LIMIT ?",
-    ).map_err(|_| Error::Storage)?;
-    let ids: Vec<(String, u32)> = statement
-        .query_map(
-            params![
-                session,
                 after.map(|c| c.created_at_ms),
                 after.map_or(0, |c| c.created_at_ms),
                 after.map(|c| c.created_at_ms),
@@ -900,31 +805,6 @@ pub fn candidate_requires_migration(db: &Connection) -> Result<bool> {
         )
         .map_err(|_| Error::Storage)?;
     Ok(legacy > 0)
-}
-
-pub fn candidate_for_job(db: &mut Connection, job_id: &str) -> Result<Option<CandidateTaskRecord>> {
-    if !valid_hash(job_id) {
-        return Err(Error::Invalid);
-    }
-    let tx = db.transaction().map_err(|_| Error::Storage)?;
-    if !candidate_tables_exist(&tx)? {
-        tx.rollback().map_err(|_| Error::Storage)?;
-        return Ok(None);
-    }
-    let key: Option<(String, u32)> = tx
-        .query_row(
-            "SELECT task_id,revision FROM candidate_tasks WHERE job_id=?",
-            [job_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()
-        .map_err(|_| Error::Storage)?;
-    let result = key
-        .map(|(id, revision)| candidate_tx(&tx, &id, revision))
-        .transpose()?
-        .flatten();
-    tx.commit().map_err(|_| Error::Storage)?;
-    Ok(result)
 }
 
 pub fn cancel_candidate(

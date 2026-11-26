@@ -65,12 +65,6 @@ impl MarketReadJournal {
     pub fn windows(&self) -> &[ReadWindow] {
         &self.windows
     }
-    pub fn permits_reset(&self) -> bool {
-        false
-    }
-    pub fn allowance_authority(&self) -> bool {
-        false
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

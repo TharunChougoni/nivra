@@ -69,7 +69,7 @@ fn fee_increments_round_up_only_across_the_exact_boundary() {
 
     // Per-segment lookup: cash keeps its schedule; a non-cash segment needs its
     // own configured entry and never borrows the cash 5/7 bps policy.
-    use nivra_core::market::{Instrument, Segment};
+    use nivra_core::market::Segment;
     let cash = fees("0.01", "5", "7", "5", Some("0.01"));
     let fo = fees("0.01", "0", "0", "10", Some("0.05"));
     let schedule = FeeSchedule::new(cash.clone()).with_segment(Segment::NseFo, fo.clone());
@@ -77,34 +77,6 @@ fn fee_increments_round_up_only_across_the_exact_boundary() {
     assert_eq!(schedule.for_segment(Segment::NseEq), Some(&cash));
     assert_eq!(schedule.for_segment(Segment::NseFo), Some(&fo));
     assert_eq!(schedule.for_segment(Segment::NseIndex), None);
-    let cash_instrument: Instrument = serde_json::from_value(serde_json::json!({
-        "key": "NSE_EQ|INF204KB14I2", "symbol": "NIFTYBEES", "kind": "cash",
-        "lot_size": 1, "tick_size": "0.01", "version": "fixture-v1"
-    }))
-    .unwrap();
-    let fo_instrument: Instrument = serde_json::from_value(serde_json::json!({
-        "key": "NSE_FO|NIFTY26NOVFUT", "symbol": "NIFTY26NOVFUT", "kind": "future",
-        "lot_size": 50, "tick_size": "0.05", "version": "fixture-v1",
-        "expiry": "2026-11-26", "underlying": "NIFTY", "segment": "NSE_FO"
-    }))
-    .unwrap();
-    let index_instrument: Instrument = serde_json::from_value(serde_json::json!({
-        "key": "NSE_INDEX|Nifty 50", "symbol": "NIFTY", "kind": "index",
-        "lot_size": 1, "tick_size": "0.05", "version": "fixture-v1"
-    }))
-    .unwrap();
-    assert_eq!(schedule.for_instrument(&cash_instrument).unwrap(), &cash);
-    assert_eq!(schedule.for_instrument(&fo_instrument).unwrap(), &fo);
-    assert_eq!(
-        schedule.for_instrument(&index_instrument),
-        Err(FinancialError::InvalidCostScope)
-    );
-    // Missing FO schedule fails closed instead of reusing cash bps.
-    let cash_only = FeeSchedule::new(cash);
-    assert_eq!(
-        cash_only.for_instrument(&fo_instrument),
-        Err(FinancialError::InvalidCostScope)
-    );
     let encoded = serde_json::to_value(&schedule).unwrap();
     assert_eq!(encoded["by_segment"]["NSE_FO"]["buy_bps"], "0");
     assert_eq!(

@@ -4,7 +4,7 @@
 //! trusted archive adapter must rederive the snapshot from exact original bytes.
 
 use crate::{
-    finance::{CashOrderGrid, FinancialError, Price},
+    finance::{FinancialError, Price},
     time::{ExchangeDate, LocalTime, Timestamp},
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
@@ -173,28 +173,6 @@ impl Segment {
     }
 }
 
-/// Contract terms attached to an instrument identity.
-///
-/// Cash uses lot 1 and multiplier 1; derivatives carry the real lot, tick,
-/// expiry, strike, option type and (later) freeze quantity. This is a view of
-/// the single `Instrument` record, not a parallel instrument model.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ContractSpec {
-    pub lot_size: u64,
-    pub qty_multiplier: u64,
-    pub tick: Price,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expiry: Option<ExchangeDate>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub strike: Option<Price>,
-    /// `Call` or `Put` only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub option: Option<InstrumentKind>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub freeze_quantity: Option<u64>,
-}
-
 /// Named exchange session calendar. Phase 0 wires only the NSE cash session;
 /// CDS and MCX exist as names with documented hours and are not activated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -343,19 +321,6 @@ impl Instrument {
     pub fn qty_multiplier(&self) -> u64 {
         self.0.qty_multiplier
     }
-    /// Single-record view of the contract terms; no second instrument struct.
-    pub fn contract_spec(&self) -> ContractSpec {
-        ContractSpec {
-            lot_size: self.0.lot_size,
-            qty_multiplier: self.0.qty_multiplier,
-            tick: self.0.tick_size,
-            expiry: self.0.expiry,
-            strike: self.0.strike,
-            option: matches!(self.0.kind, InstrumentKind::Call | InstrumentKind::Put)
-                .then_some(self.0.kind),
-            freeze_quantity: None,
-        }
-    }
     pub fn synthetic(&self) -> bool {
         self.0.synthetic
     }
@@ -370,16 +335,6 @@ impl Instrument {
     }
     pub fn is_derivative(&self) -> bool {
         self.kind().is_derivative()
-    }
-    pub fn validate_order(&self, units: i64, price: Price) -> Result<(), FinancialError> {
-        if self.kind() == InstrumentKind::Index {
-            return Err(FinancialError::InvalidOrderGrid);
-        }
-        CashOrderGrid::new(self.lot_size(), self.tick_size())?.validate(units, price)
-    }
-    /// Single admission gate for the paper book; see [`PaperMandate`].
-    pub fn validate_paper_execution(&self) -> Result<(), FinancialError> {
-        PaperMandate::CashEquity.admit(self)
     }
 }
 
@@ -661,25 +616,6 @@ impl InstrumentRef {
             tick,
         })
     }
-
-    pub fn from_instrument(
-        instrument: &Instrument,
-        exchange: impl Into<String>,
-        segment: impl Into<String>,
-    ) -> Self {
-        Self {
-            key: instrument.key().to_owned(),
-            exchange: exchange.into(),
-            segment: segment.into(),
-            kind: instrument.kind(),
-            symbol: instrument.symbol().to_owned(),
-            underlying: instrument.underlying().map(str::to_owned),
-            expiry: instrument.expiry(),
-            strike: instrument.strike(),
-            lot_size: instrument.lot_size(),
-            tick: instrument.tick_size(),
-        }
-    }
 }
 
 /// Lot-aware quantity model for Indian exchange display views.
@@ -690,32 +626,7 @@ pub struct LotQuantity {
     pub total_units: u64,
 }
 
-impl LotQuantity {
-    pub fn from_lots(lots: u64, lot_size: u64) -> Result<Self, FinancialError> {
-        if lot_size == 0 {
-            return Err(FinancialError::InvalidOrderGrid);
-        }
-        let total_units = lots
-            .checked_mul(lot_size)
-            .ok_or(FinancialError::InvalidOrderGrid)?;
-        Ok(Self {
-            lots,
-            lot_size,
-            total_units,
-        })
-    }
-
-    pub fn from_units(units: u64, lot_size: u64) -> Result<Self, FinancialError> {
-        if lot_size == 0 || !units.is_multiple_of(lot_size) {
-            return Err(FinancialError::InvalidOrderGrid);
-        }
-        Ok(Self {
-            lots: units / lot_size,
-            lot_size,
-            total_units: units,
-        })
-    }
-}
+impl LotQuantity {}
 
 /// Instrument margin representation for display views only.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -727,22 +638,7 @@ pub struct InstrumentMargin {
     pub display_only: bool,
 }
 
-impl InstrumentMargin {
-    pub fn new_display(
-        instrument_key: impl Into<String>,
-        span: Option<crate::finance::Amount>,
-        exposure: Option<crate::finance::Amount>,
-        total: crate::finance::Amount,
-    ) -> Self {
-        Self {
-            instrument_key: instrument_key.into(),
-            span_margin: span,
-            exposure_margin: exposure,
-            total_margin: total,
-            display_only: true,
-        }
-    }
-}
+impl InstrumentMargin {}
 
 /// Strike row within an F&O option chain view.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -810,28 +706,6 @@ impl TryFrom<QuoteFields> for Quote {
 validated_record!(Quote, QuoteFields);
 
 impl Quote {
-    /// Construct a quote after source-specific parsers have checked provenance,
-    /// freshness and price units. This enforces only the domain quote invariant.
-    pub fn from_parts(
-        instrument: Instrument,
-        bid: Price,
-        ask: Price,
-        bid_units: u64,
-        ask_units: u64,
-        source_at: Timestamp,
-        received_at: Timestamp,
-    ) -> Result<Self, MarketError> {
-        Self::try_from(QuoteFields {
-            instrument,
-            bid,
-            ask,
-            bid_units,
-            ask_units,
-            source_at,
-            received_at,
-        })
-    }
-
     pub fn instrument(&self) -> &Instrument {
         &self.0.instrument
     }
@@ -904,22 +778,6 @@ impl Snapshot {
     }
     pub fn source(&self) -> &str {
         &self.0.source
-    }
-
-    /// Bind to a supplied archive projection. Actual body/hash rederivation and
-    /// archive continuity are mandatory separate trusted-adapter obligations.
-    pub fn bind_receipt(
-        &self,
-        receipt: &ArchivedQuoteReceipt,
-        expected: &AccountSource,
-    ) -> Result<ReceiptBoundSnapshot, MarketError> {
-        if &receipt.0.identity != expected || self != &receipt.0.normalized_snapshot {
-            return Err(MarketError::ReceiptMismatch);
-        }
-        Ok(ReceiptBoundSnapshot {
-            snapshot: self.clone(),
-            receipt: receipt.clone(),
-        })
     }
 }
 
@@ -1039,31 +897,6 @@ impl Calendar {
             .hours(now.ist_date())?
             .is_some_and(|(opening, closing)| opening <= time && time < closing))
     }
-
-    pub fn require_identity(&self, key: &str, version: &str) -> Result<(), MarketError> {
-        if self.0.continuous_session.as_ref().is_some_and(|binding| {
-            binding.0.instrument_key != key || binding.0.instrument_version != version
-        }) {
-            return Err(MarketError::InstrumentMismatch);
-        }
-        Ok(())
-    }
-
-    pub fn require_instrument(&self, instrument: &Instrument) -> Result<(), MarketError> {
-        self.require_identity(instrument.key(), instrument.version())
-    }
-
-    pub fn require_key(&self, key: &str) -> Result<(), MarketError> {
-        if self
-            .0
-            .continuous_session
-            .as_ref()
-            .is_some_and(|binding| binding.0.instrument_key != key)
-        {
-            return Err(MarketError::InstrumentMismatch);
-        }
-        Ok(())
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -1174,18 +1007,5 @@ impl ReceiptBoundSnapshot {
     }
     pub fn capture_id(&self) -> &str {
         &self.receipt.0.capture_id
-    }
-
-    pub fn check_fresh(&self, now: Timestamp) -> Result<(), MarketError> {
-        if !now
-            .elapsed_micros_since(self.received_at())
-            .is_ok_and(|age| (0..=MAX_FINANCIAL_AGE_MICROS).contains(&age))
-        {
-            return Err(MarketError::FutureOrStaleReceipt);
-        }
-        if self.snapshot.quotes().iter().any(|quote| !quote.fresh(now)) {
-            return Err(MarketError::FutureOrStaleQuote);
-        }
-        Ok(())
     }
 }

@@ -1272,19 +1272,6 @@ impl Scanner {
             .filter_map(|(_, key, _)| universe.iter().find(|i| &i.key == key).cloned())
             .collect()
     }
-    pub fn market_allows(
-        now: i64,
-        instrument: &Instrument,
-        quote: &Quote,
-        row: &serde_json::Value,
-    ) -> bool {
-        let mut check = Self::default();
-        check.observe(now, instrument, quote, row).is_ok()
-            && check
-                .samples
-                .get(&instrument.key)
-                .is_some_and(|sample| sample.reason == "eligible_no_signal")
-    }
 }
 
 /// Prospect screens only. Held-position protection never uses these gates.

@@ -1,5 +1,4 @@
 //! Offline libraries shared by the nivra binaries; no session activation or provider client.
-pub mod orchestrator;
 
 pub mod dashboard_host;
 pub mod event_feed;
@@ -13,7 +12,6 @@ pub mod strategy_lab;
 
 pub mod strategy_archive;
 pub mod strategy_pipeline;
-pub mod strategy_scorer;
 
 pub mod strategy_approval;
 

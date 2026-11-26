@@ -3,7 +3,6 @@
 pub mod archive_bars;
 pub mod bubblewrap;
 pub mod drill;
-pub mod strategy_sandbox;
 pub mod worker;
 use nivra_store::research_jobs::{self as jobs, Spec, State};
 use rig_core::tool::PortableTool;

@@ -1,7 +1,6 @@
 //! Offline Python scoring only. Never starts sessions or selects a runtime strategy.
 pub mod env;
 pub mod library;
-pub mod orchestrator_policy;
 pub mod selector;
 pub mod stream;
 use nivra_core::strategy::{FeatureSnapshot, ScanSnapshot, StrategySpec, evaluate};
@@ -277,10 +276,6 @@ impl BwrapLeaderReceipt {
             waited: false,
             advisory: true,
         }
-    }
-    /// Local diagnostic only. Never use this to release a durable lease.
-    pub fn advisory_ok(&self) -> bool {
-        self.version == 2 && self.started && self.leader_reaped && self.waited && self.advisory
     }
 }
 #[derive(Clone, Debug)]

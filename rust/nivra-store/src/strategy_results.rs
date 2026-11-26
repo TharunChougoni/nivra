@@ -883,33 +883,6 @@ impl ResultsDb {
         }
         Ok(p)
     }
-    pub fn require_approved_scorer(
-        &self,
-        id: &str,
-        spec_hash: &str,
-        min_shadow_days: u32,
-    ) -> Result<(), String> {
-        let proposal = self.load_proposal(id)?;
-        if proposal.source_hash != spec_hash
-            || proposal.scorer.is_none()
-            || !(1..=365).contains(&min_shadow_days)
-        {
-            return Err("strategy_scorer_source_invalid".into());
-        }
-        let approved:bool = self.connection.query_row("SELECT EXISTS(SELECT 1 FROM proposals p JOIN approvals a ON a.proposal_id=p.id WHERE p.id=?1 AND p.replay_passed=1 AND p.shadow_days>=?2 AND a.approver='Tharun' AND a.between_sessions=1 AND length(a.approval_ref)>0)",params![id,min_shadow_days],|r|r.get(0)).map_err(|_|err())?;
-        if !approved {
-            return Err("strategy_champion_approval_required".into());
-        }
-        let policy: String = self
-            .connection
-            .query_row(
-                "SELECT policy FROM approvals WHERE proposal_id=?1 AND policy IS NOT NULL ORDER BY id DESC LIMIT 1",
-                [id],
-                |r| r.get(0),
-            )
-            .map_err(|_| err())?;
-        self.require_promotion_policy(id, &serde_json::from_str(&policy).map_err(|_| err())?)
-    }
     /// Runtime admission is tied to the exact immutable champion specification.
     pub fn require_approved(&self, spec_hash: &str, min_shadow_days: u32) -> Result<(), String> {
         if spec_hash.len() != 64 || !(1..=365).contains(&min_shadow_days) {

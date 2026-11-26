@@ -386,18 +386,6 @@ impl FeatureStore {
             .collect()
     }
 
-    /// Unannualised population standard deviation; absent without any returns.
-    pub fn realised_vol(&self, key: &str, n: usize) -> Option<f64> {
-        let returns = self.last_n_returns(key, n);
-        if returns.is_empty() {
-            return None;
-        }
-        let mean = returns.iter().sum::<f64>() / returns.len() as f64;
-        Some(
-            (returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / returns.len() as f64).sqrt(),
-        )
-    }
-
     /// Chronological cross-sectional medians for completed minutes. Completion
     /// means a valid receipt in a later minute has been observed anywhere in the
     /// store. Results reflect currently retained bars; zero contributors is invalid
@@ -513,8 +501,6 @@ mod tests {
         assert_eq!(store.bars("a").unwrap().len(), 3);
         assert_eq!(store.bars("a").unwrap()[0].start_minute(), 556);
         assert!((store.last_n_returns("a", 10)[0] - 0.1).abs() < 1e-12);
-        assert_eq!(store.realised_vol("a", 1), Some(0.0));
-        assert_eq!(store.realised_vol("a", 0), None);
         assert!(store.observe("a", f64::NAN, receipt(558, 1)).is_err());
         assert!(
             store
@@ -579,7 +565,6 @@ mod tests {
         let medians = store.market_minute_returns(2);
         assert_eq!(medians.len(), 2);
         assert!((medians[1] - 0.15).abs() < 1e-12);
-        assert!((store.realised_vol("a", 2).unwrap()).abs() < 1e-12);
         store.observe("c", 140.0, receipt(558, 0)).unwrap();
         store.observe("a", 140.0, receipt(559, 0)).unwrap();
         assert_eq!(store.last_n_returns("c", 10).len(), 1);
@@ -661,14 +646,9 @@ mod tests {
             ]
         );
         assert_eq!(
-            store.realised_vol("RELIANCE", 10).map(f64::to_bits),
-            Some(4571071041135585007)
-        );
-        assert_eq!(
             to_bits(store.last_n_returns("TCS", 10)),
             vec![4566764028552465920]
         );
-        assert_eq!(store.realised_vol("TCS", 10).map(f64::to_bits), Some(0));
         assert_eq!(
             to_bits(store.last_n_returns("INFY", 10)),
             vec![
@@ -676,10 +656,6 @@ mod tests {
                 4625391109771299668,
                 4618056730706676008
             ]
-        );
-        assert_eq!(
-            store.realised_vol("INFY", 10).map(f64::to_bits),
-            Some(4618395365599292865)
         );
         assert_eq!(
             to_bits(store.market_minute_returns(2)),

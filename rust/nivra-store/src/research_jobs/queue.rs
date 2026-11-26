@@ -252,28 +252,6 @@ pub fn record_termination(
     tx.commit().map_err(|_| Error::Storage)?;
     Ok(job)
 }
-pub fn retry_compute(db: &mut Connection, id: &str, now: i64) -> Result<Job> {
-    if now < 0 {
-        return Err(Error::Invalid);
-    }
-    let tx = immediate(db)?;
-    let old = read(&tx, id)?.ok_or(Error::Missing)?;
-    if old.state != State::Terminated || !old.spec.retry_safe_compute {
-        return Err(Error::State);
-    }
-    if old.attempts >= old.spec.max_attempts {
-        return Err(Error::Attempts);
-    }
-    tx.execute(
-        "UPDATE jobs SET state='Pending',lease=NULL,until_ms=NULL WHERE id=?",
-        [id],
-    )
-    .map_err(|_| Error::Storage)?;
-    event(&tx, id, "explicit_compute_retry", now, old.attempts)?;
-    let job = read(&tx, id)?.ok_or(Error::Missing)?;
-    tx.commit().map_err(|_| Error::Storage)?;
-    Ok(job)
-}
 pub fn complete(db: &mut Connection, id: &str, lease: &str, result: &str, now: i64) -> Result<Job> {
     complete_with_clock(db, id, lease, result, || now)
 }
