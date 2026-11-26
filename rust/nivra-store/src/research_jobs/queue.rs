@@ -1,5 +1,4 @@
 //! The single-slot job queue: enqueue, claim, lease expiry, cancel, completion.
-use super::candidate::{operator_cancel_recorded, termination_cause};
 use super::*;
 
 pub fn initialize(db: &mut Connection) -> Result<()> {
@@ -300,73 +299,6 @@ pub fn complete_with_clock(
     tx.commit().map_err(|_| Error::Storage)?;
     Ok(job)
 }
-/// Complete a claimed attempt from an authentic result produced before the
-/// compute deadline. The result time proves the compute finished in bounds; the
-/// durable event is still recorded at the real acceptance time. Never backdate
-/// the database event by feeding the result time as `now`.
-///
-/// Race ordering is explicit and transactional:
-/// - an operator cancel receipt recorded before this transaction always wins;
-/// - a host expiry cleanup that only set `CancelRequested` (no cancel receipt)
-///   does not erase a timely result;
-/// - a `Terminated` row may still reconcile a timely result unless its recorded
-///   stop cause was an operator cancel.
-pub fn complete_reconciled(
-    db: &mut Connection,
-    id: &str,
-    lease: &str,
-    result: &str,
-    result_at_ms: i64,
-    now: i64,
-) -> Result<Job> {
-    if !valid_hash(lease) || !valid_hash(result) || result_at_ms < 0 || now < result_at_ms {
-        return Err(Error::Invalid);
-    }
-    let tx = immediate(db)?;
-    let old = read(&tx, id)?.ok_or(Error::Missing)?;
-    if old.lease.as_deref() != Some(lease) {
-        return Err(Error::Lease);
-    }
-    if old.state == State::Succeeded {
-        return if old.result_hash.as_deref() == Some(result) {
-            Ok(old)
-        } else {
-            Err(Error::Collision)
-        };
-    }
-    if operator_cancel_recorded(&tx, id)? {
-        return Err(Error::State);
-    }
-    if !matches!(
-        old.state,
-        State::Running | State::Unknown | State::CancelRequested | State::Terminated
-    ) {
-        return Err(Error::State);
-    }
-    if old.state == State::Terminated
-        && termination_cause(&tx, id, old.attempts)? == Some(CandidateStopCause::OperatorCancel)
-    {
-        return Err(Error::State);
-    }
-    let until = old.until.ok_or(Error::State)?;
-    let started = until.saturating_sub(i64::from(old.spec.wall_millis));
-    if result_at_ms < started || result_at_ms >= until {
-        return Err(Error::Lease);
-    }
-    let changed = tx
-        .execute(
-            "UPDATE jobs SET state='Succeeded',result=? WHERE id=? AND state IN ('Running','Unknown','CancelRequested','Terminated')",
-            params![result, id],
-        )
-        .map_err(|_| Error::Storage)?;
-    if changed != 1 {
-        return Err(Error::State);
-    }
-    event(&tx, id, "completed_reconciled", now, old.attempts)?;
-    let job = read(&tx, id)?.ok_or(Error::Missing)?;
-    tx.commit().map_err(|_| Error::Storage)?;
-    Ok(job)
-}
 pub(super) fn read(tx: &Transaction<'_>, id: &str) -> Result<Option<Job>> {
     if !valid_hash(id) {
         return Err(Error::Invalid);
@@ -441,22 +373,11 @@ pub(super) fn read(tx: &Transaction<'_>, id: &str) -> Result<Option<Job>> {
     }
     if state == State::Terminated || (state == State::Cancelled && lease.is_some()) {
         let receipt:Option<String>=tx.query_row("SELECT event FROM job_events WHERE job=? AND attempt=? AND event LIKE 'terminated:%' ORDER BY seq DESC LIMIT 1",params![id,attempts],|r|r.get(0)).optional().map_err(|_|Error::Storage)?;
-        let parsed = receipt.as_deref().and_then(|value| {
-            let value = value.strip_prefix("terminated:")?;
-            match value.split_once(':') {
-                Some((cause, hash)) => Some((CandidateStopCause::parse(cause), hash)),
-                None => Some((None, value)),
-            }
-        });
-        let Some((cause, hash)) = parsed else {
-            return Err(Error::Invalid);
-        };
-        if !valid_hash(hash) {
-            return Err(Error::Invalid);
-        }
-        // Candidate rows written by this build always carry the typed stop
-        // cause; the registered worker keeps its historical receipt-only label.
-        if spec.capability == SpecCapability::CandidateSource && cause.is_none() {
+        if !receipt
+            .as_deref()
+            .and_then(|value| value.strip_prefix("terminated:"))
+            .is_some_and(valid_hash)
+        {
             return Err(Error::Invalid);
         }
     }

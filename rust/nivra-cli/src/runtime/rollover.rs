@@ -741,13 +741,6 @@ pub(super) fn verify_carry(c: &Config, value: &Value) -> Result<()> {
     verify_carry_with(c, value, false)
 }
 
-/// Strict predecessor verification for cross-session continuation. A source
-/// book with a non-empty WAL is refused: an immutable read would be stale and a
-/// normal WAL read would create predecessor sidecars.
-pub(super) fn verify_carry_immutable(c: &Config, value: &Value) -> Result<()> {
-    verify_carry_with(c, value, true)
-}
-
 fn verify_carry_with(c: &Config, value: &Value, immutable: bool) -> Result<()> {
     if value["destination_binding"] != book_binding(c)? {
         return Err("carry_destination_binding_changed".into());

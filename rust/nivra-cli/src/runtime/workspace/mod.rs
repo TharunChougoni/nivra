@@ -340,10 +340,12 @@ pub(crate) fn parse_tool(name: &str, args: Value) -> Result<WorkspaceOp> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn execute(book: &Path, settings: &WorkspaceSettings, op: WorkspaceOp) -> Result<Value> {
     execute_scoped(book, settings, WorkspaceScope::Decision, op)
 }
 
+#[cfg(test)]
 pub(crate) fn execute_scoped(
     book: &Path,
     settings: &WorkspaceSettings,

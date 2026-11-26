@@ -17,7 +17,7 @@ use super::{Config, Result, rollover};
 use acceptance::Accepted;
 use chrono::NaiveDate;
 use fs2::FileExt;
-use nivra_cli::candidate_execution::{artifact_bytes, artifact_sha256};
+use nivra_cli::canonical_json::{bytes as artifact_bytes, sha256 as artifact_sha256};
 use nivra_core::replay::digest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

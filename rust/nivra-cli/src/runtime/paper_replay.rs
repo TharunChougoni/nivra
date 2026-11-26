@@ -9,8 +9,6 @@ mod export;
 pub(crate) use export::*;
 mod receipts;
 pub(crate) use receipts::*;
-mod tape;
-pub(crate) use tape::*;
 
 /// Export the sealed session's scanner features, or with `tape` its quote
 /// tape for research replays, restricted to `keys` when any are given.

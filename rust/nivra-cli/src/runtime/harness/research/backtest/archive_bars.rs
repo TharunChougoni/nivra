@@ -33,6 +33,22 @@ fn runtime_image() -> Result<Vec<u8>> {
     crate::read_bounded(&path, RUNTIME_LIMIT).map_err(|_| "archive_bars_worker_unavailable".into())
 }
 
+fn ensure_private_dir(path: &Path) -> std::result::Result<(), &'static str> {
+    use std::os::unix::fs::PermissionsExt;
+    match fs::create_dir(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(_) => return Err("archive_bars_inputs_unavailable"),
+    }
+    let meta = fs::symlink_metadata(path).map_err(|_| "archive_bars_inputs_unavailable")?;
+    if !meta.is_dir() || meta.file_type().is_symlink() {
+        return Err("archive_bars_inputs_invalid");
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .map_err(|_| "archive_bars_inputs_unavailable")?;
+    Ok(())
+}
+
 fn inputs_dir(authority: &Path) -> PathBuf {
     authority.join("archive-bar-inputs")
 }
@@ -44,23 +60,13 @@ pub(super) fn enqueue(
     settings: &ResearchSettings,
     candidate: &CandidateComputeSettings,
     model_id: &str,
-    model_revision: u64,
     parent_turn_id: &str,
-    args: &CandidateSubmitArgs,
-    windows: jobs::CandidateWindows,
+    args: &BacktestArgs,
+    windows: jobs::BacktestWindows,
     mut window: BarWindow,
     now: i64,
-    owner_evidence: Option<jobs::OwnerEvidence>,
 ) -> Result<Value> {
-    if !candidate.strategy.as_ref().is_some_and(|s| s.enabled) || args.strategy != Some(true) {
-        return Ok(not_dispatched("candidate_archive_strategy_required"));
-    }
-    if args.execution.is_some()
-        || args.parent_ref.is_some()
-        || args.parent_task_id.is_some()
-        || args.archive_daily_window.is_some()
-        || args.as_of_receipt_id.is_some()
-    {
+    if args.archive_daily_window.is_some() || args.as_of_receipt_id.is_some() {
         return Ok(not_dispatched("candidate_strategy_args_conflict"));
     }
     let Some(archive) = &c.market_archive else {
@@ -114,8 +120,7 @@ pub(super) fn enqueue(
         if !task_state_terminal(prior.status) {
             if prior.spec.parent_turn_id == parent_turn_id
                 && prior.spec.model_id == model_id
-                && prior.spec.model_revision == model_revision
-                && prior.spec.owner_evidence == owner_evidence
+                && prior.spec.owner_evidence.is_none()
                 && prior.spec.policy_sha256 == policy_sha256
                 && prior.spec.goal == args.hypothesis
                 && prior.spec.registered_analysis.dataset_id == args.dataset_id
@@ -180,9 +185,9 @@ pub(super) fn enqueue(
         book_binding: binding,
         policy_sha256,
         model_id: model_id.to_owned(),
-        model_revision,
+        model_revision: 0,
         goal: args.hypothesis.clone(),
-        owner_evidence,
+        owner_evidence: None,
         registered_analysis: jobs::RegisteredAnalysis {
             analysis_id: ABI.into(),
             dataset_id: args.dataset_id.clone(),
@@ -198,7 +203,7 @@ pub(super) fn enqueue(
             .ok_or("research_task_ttl_invalid")?,
     };
     let directory = inputs_dir(&authority);
-    super::launch::ensure_private_dir(&directory)?;
+    ensure_private_dir(&directory)?;
     crate::runtime::strategy_library::write_new(&directory, &job.script_hash, code)?;
     crate::runtime::strategy_library::write_new(&directory, &job.input_hash, &input)?;
     match jobs::enqueue_scoped_bounded(

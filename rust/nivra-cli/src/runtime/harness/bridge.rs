@@ -175,39 +175,24 @@ impl<'a> Bridge<'a> {
             },
             Tool::CandidateSubmit(args) => {
                 let preempt = self.grant.preempt;
-                candidate(research::candidate_submit_preemptible(
+                candidate(research::backtest_submit(
                     c,
                     cfg,
                     model,
-                    0,
                     turn,
                     args,
                     now,
-                    None,
                     &|| preempt.load(std::sync::atomic::Ordering::Acquire),
                 ))?
             }
             Tool::CandidateStatus(task_id, revision) => {
-                candidate(research::candidate_status(c, cfg, &task_id, revision, now))?
+                candidate(research::backtest_status(c, cfg, &task_id, revision))?
             }
-            Tool::CandidateResult(task_id, revision, reference) => candidate(match reference {
-                Some(raw) => {
-                    let reference: Value = serde_json::from_str(&raw)
-                        .map_err(|_| "harness_owner_research_args_invalid")?;
-                    research::candidate_result_for_observation_ref(c, cfg, &reference, now)
-                }
-                None => research::candidate_result(
-                    c,
-                    cfg,
-                    task_id
-                        .as_deref()
-                        .ok_or("harness_owner_research_args_invalid")?,
-                    revision.ok_or("harness_owner_research_args_invalid")?,
-                    now,
-                ),
-            })?,
+            Tool::CandidateResult(task_id, revision) => {
+                candidate(research::backtest_result(c, cfg, &task_id, revision))?
+            }
             Tool::CandidateCancel(task_id, revision) => {
-                candidate(research::candidate_cancel(c, cfg, &task_id, revision, now))?
+                candidate(research::backtest_cancel(c, cfg, &task_id, revision, now))?
             }
             Tool::QuoteCapture(keys, from_ms, to_ms) => {
                 research_quote_capture(c, cfg, keys, from_ms, to_ms, now)?

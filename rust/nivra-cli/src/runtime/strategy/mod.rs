@@ -343,7 +343,7 @@ pub(crate) fn replay_entry(
             &|| None,
         )?
         .map_err(|stopped| stopped.reason)?;
-        let bytes = nivra_cli::candidate_execution::artifact_bytes(&report)?;
+        let bytes = nivra_cli::canonical_json::bytes(&report)?;
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)

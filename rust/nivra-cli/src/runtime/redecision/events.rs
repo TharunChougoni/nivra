@@ -13,31 +13,6 @@ pub(crate) fn enqueue_research_event(
     status: &str,
     observed_ms: i64,
 ) -> Result<()> {
-    enqueue_research_event_kind(
-        db,
-        c,
-        task_id,
-        revision,
-        result_sha256,
-        status,
-        observed_ms,
-        "registered",
-    )
-}
-
-/// Terminal event with an explicit task capability. The owner must use the
-/// candidate tools for a candidate receipt, never the registered alias.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn enqueue_research_event_kind(
-    db: &Connection,
-    c: &Config,
-    task_id: &str,
-    revision: u32,
-    result_sha256: Option<&str>,
-    status: &str,
-    observed_ms: i64,
-    task_kind: &str,
-) -> Result<()> {
     let binding = book_binding(c)?;
     let valid_id = task_id.len() == 64
         && task_id
@@ -56,7 +31,6 @@ pub(crate) fn enqueue_research_event_kind(
         || !result_matches_status
         || observed_ms < 0
         || !matches!(status, "succeeded" | "terminated" | "cancelled" | "refused")
-        || !matches!(task_kind, "registered" | "candidate")
     {
         return Err("planner_owner_research_event_invalid".into());
     }
@@ -73,7 +47,7 @@ pub(crate) fn enqueue_research_event_kind(
         "research_task":{
             "task_id":task_id,
             "revision":revision,
-            "kind":task_kind,
+            "kind":"registered",
             "status":status,
             "result_sha256":result_sha256,
         }

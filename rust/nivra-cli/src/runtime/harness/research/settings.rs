@@ -1,6 +1,5 @@
 use super::*;
-use nivra_cli::scorer_compare::ScorerReplaySettings;
-use nivra_sandbox::ScorerSandboxConfig;
+use nivra_sandbox::SandboxConfig;
 
 pub(crate) const DEFAULT_TASK_TTL_MS: u64 = 6 * 60 * 60 * 1000;
 pub(crate) const DEFAULT_TERMINATION_GRACE_MS: u64 = 30_000;
@@ -76,38 +75,6 @@ pub(crate) enum CandidateDatasetKind {
     },
     ArchiveBars(nivra_store::market_archive::BarWindow),
 }
-/// Reviewed opt-in after-cost cash replay over the existing action-tape engine.
-/// Omission preserves every historical policy byte and advertises no execution
-/// argument. Enabling it is a host policy decision, never a per-candidate human
-/// approval; the model still declares the research sizing, holding and costs.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct CandidateExecutionSettings {
-    pub enabled: bool,
-    pub abi: String,
-    pub max_quote_events: usize,
-    pub max_observations: usize,
-    pub max_tape_bytes: u64,
-    pub max_entries: u32,
-    pub max_capital: nivra_core::finance::Amount,
-    pub max_cost_stress: u32,
-}
-impl CandidateExecutionSettings {
-    pub(crate) fn validate(&self) -> std::result::Result<(), &'static str> {
-        if self.abi != "cash_quote_action_tape_v1"
-            || !(1..=10_000).contains(&self.max_quote_events)
-            || !(1..=100_000).contains(&self.max_observations)
-            || !(1..=16 * 1024 * 1024).contains(&self.max_tape_bytes)
-            || !(1..=5_000).contains(&self.max_entries)
-            || self.max_capital <= nivra_core::finance::Amount::ZERO
-            || self.max_cost_stress > 4
-        {
-            return Err("candidate_execution_invalid");
-        }
-        Ok(())
-    }
-}
-/// Opt-in after-cost strategy backtests with the book's capital and costs.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CandidateStrategySettings {
@@ -149,85 +116,24 @@ impl CandidateStrategySettings {
         Ok(())
     }
 }
-/// Reviewed opt-in policy for one prospective-observation attempt. It reuses
-/// the existing candidate queue, helper, owned unit and caps; the only new
-/// authority is a virtual research quote that can never enter the paper book.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct CandidateObservationSettings {
-    pub enabled: bool,
-    pub abi: String,
-    pub max_quotes: usize,
-    pub max_quote_events: usize,
-    pub max_observations: usize,
-    pub max_tape_bytes: u64,
-    pub max_capital: nivra_core::finance::Amount,
-    pub max_units: u64,
-    pub max_holding_ms: i64,
-    pub max_decision_delay_ms: i64,
-}
-impl CandidateObservationSettings {
-    pub(crate) fn validate(&self) -> std::result::Result<(), &'static str> {
-        if self.abi != "observation_single_entry_v1"
-            || !(1..=10_000).contains(&self.max_quotes)
-            || !(1..=10_000).contains(&self.max_quote_events)
-            || !(1..=100_000).contains(&self.max_observations)
-            || !(1..=16 * 1024 * 1024).contains(&self.max_tape_bytes)
-            || self.max_capital <= nivra_core::finance::Amount::ZERO
-            || !(1..=1_000_000).contains(&self.max_units)
-            || !(1..=86_400_000).contains(&self.max_holding_ms)
-            || !(0..=60_000).contains(&self.max_decision_delay_ms)
-        {
-            return Err("candidate_observation_invalid");
-        }
-        Ok(())
-    }
-}
-/// Reviewed opt-in policy for hostile score-only source. The first supported
-/// ABI is a ranking diagnostic over frozen current-session features; it never
-/// authorizes promotion, activation, fills, fees or cash replay.
+/// The `backtest` tool's policy. `unit_*` caps bound an archive bar job.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CandidateComputeSettings {
     pub enabled: bool,
-    pub abi: String,
-    pub sandbox: ScorerSandboxConfig,
-    pub replay: ScorerReplaySettings,
+    pub sandbox: SandboxConfig,
     pub max_source_bytes: u32,
     pub max_params_bytes: u32,
-    pub max_result_bytes: u32,
     pub wall_millis: u32,
-    pub limits: ResourceLimits,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub helper_path: Option<PathBuf>,
     #[serde(default = "default_unit_tasks")]
     pub unit_tasks: u32,
     #[serde(default = "default_unit_memory_bytes")]
     pub unit_memory_bytes: u64,
-    #[serde(default = "default_unit_open_files")]
-    pub unit_open_files: u64,
-    #[serde(
-        default = "default_unit_cpu_millis",
-        skip_serializing_if = "is_zero_u32"
-    )]
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub unit_cpu_millis: u32,
-    #[serde(
-        default = "default_unit_wall_millis",
-        skip_serializing_if = "is_zero_u32"
-    )]
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub unit_wall_millis: u32,
     pub datasets: Vec<CandidateDataset>,
-    /// Optional after-cost cash replay. Omitted from serialized policy bytes
-    /// when absent so existing configurations and candidate task bytes do not
-    /// change.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub execution: Option<CandidateExecutionSettings>,
-    /// Optional prospective-observation capability. Omitted from serialized
-    /// policy bytes when absent so historical policy hashes are unchanged.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub observation: Option<CandidateObservationSettings>,
-    /// Optional `strategy_actions_v1` replay. Omitted when absent, so existing
-    /// policy bytes do not change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strategy: Option<CandidateStrategySettings>,
 }
@@ -237,89 +143,25 @@ fn default_unit_tasks() -> u32 {
 fn default_unit_memory_bytes() -> u64 {
     512 * 1024 * 1024
 }
-fn default_unit_open_files() -> u64 {
-    128
-}
-fn default_unit_cpu_millis() -> u32 {
-    0
-}
-fn default_unit_wall_millis() -> u32 {
-    0
-}
 fn is_zero_u32(value: &u32) -> bool {
     *value == 0
 }
 impl CandidateComputeSettings {
-    pub(crate) fn unit_policy_projection(&self) -> Value {
-        json!({
-            "version":1,
-            "helper_abi":"candidate_helper_v1",
-            "proof_abi":"candidate_unit_proof_v1",
-            "unit_tasks":self.unit_tasks,
-            "unit_memory_bytes":self.unit_memory_bytes,
-            "unit_cpu_millis":if self.unit_cpu_millis == 0 {self.wall_millis} else {self.unit_cpu_millis},
-            "unit_wall_millis":if self.unit_wall_millis == 0 {self.wall_millis} else {self.unit_wall_millis},
-            "unit_open_files":self.unit_open_files,
-            "max_result_bytes":self.max_result_bytes,
-            "restart":"no",
-            "payload_max_processes":self.sandbox.max_processes,
-            "payload_max_open_files":self.sandbox.max_open_files,
-            "kill_mode":"control-group"
-        })
-    }
     pub(crate) fn validate(&self) -> std::result::Result<(), &'static str> {
         self.sandbox
             .validate()
             .map_err(|_| "candidate_sandbox_invalid")?;
-        if let Some(observation) = &self.observation {
-            observation.validate()?;
-        }
         if let Some(strategy) = &self.strategy {
             strategy.validate()?;
         }
-        self.replay
-            .validate()
-            .map_err(|_| "candidate_replay_invalid")?;
-        // systemd accepts at most two decimal places. A quota below 0.01% has
-        // no exact representation; rounding it up would exceed the declared CPU
-        // budget, so the configuration is unsupported and refused.
-        let unit_cpu_millis = if self.unit_cpu_millis == 0 {
-            self.wall_millis
-        } else {
-            self.unit_cpu_millis
-        };
-        let unit_wall_millis = if self.unit_wall_millis == 0 {
-            self.wall_millis
-        } else {
-            self.unit_wall_millis
-        };
-        if u64::from(unit_cpu_millis).saturating_mul(10_000) < u64::from(unit_wall_millis) {
-            return Err("candidate_compute_invalid");
-        }
-        if self.abi != "scorer_replay_v1"
-            || self.sandbox.network
-            || self.replay.horizons_minutes.len() != 1
-            || self.replay.max_snapshots > 60
-            || self.replay.lookback_samples != 20
-            || self.replay.max_age_ms > 2_000
+        if self.sandbox.network
             || self.sandbox.max_output_bytes > 65_536
             || self.max_source_bytes == 0
             || self.max_source_bytes > 262_144
             || self.max_params_bytes == 0
             || self.max_params_bytes > 65_536
-            || self.max_result_bytes < jobs::CANDIDATE_RESULT_MIN_BYTES
-            || self.max_result_bytes > jobs::CANDIDATE_RESULT_MAX_BYTES
             || !(1_000..=600_000).contains(&self.wall_millis)
             || self.sandbox.wall_ms > u64::from(self.wall_millis)
-            || self.limits.cpu_millis == 0
-            || self.limits.cpu_millis > self.wall_millis
-            || self.limits.tasks != 1
-            || self
-                .helper_path
-                .as_ref()
-                .is_some_and(|path| !path.is_absolute())
-            || self.limits.workspace_bytes != 1_048_576
-            || self.limits.file_bytes != 65_536
             || !(8..=256).contains(&self.unit_tasks)
             || self.unit_memory_bytes
                 < self
@@ -328,8 +170,6 @@ impl CandidateComputeSettings {
                     .saturating_mul(1024 * 1024)
                     .saturating_add(64 * 1024 * 1024)
             || self.unit_memory_bytes > 4 * 1024 * 1024 * 1024
-            || self.unit_open_files < self.sandbox.max_open_files.saturating_add(16)
-            || self.unit_open_files > 4096
             || (self.unit_cpu_millis != 0 && self.unit_cpu_millis > self.wall_millis)
             || (self.unit_wall_millis != 0
                 && (self.unit_wall_millis < self.sandbox.wall_ms as u32
@@ -369,12 +209,6 @@ impl CandidateComputeSettings {
                 && !window.validate()
             {
                 return Err("candidate_dataset_invalid");
-            }
-        }
-        if let Some(execution) = &self.execution {
-            execution.validate()?;
-            if execution.enabled && !self.enabled {
-                return Err("candidate_execution_invalid");
             }
         }
         Ok(())
@@ -584,86 +418,6 @@ pub(crate) fn open_queue(
     Ok(db)
 }
 
-/// Strictly read-only predecessor queue access for cross-session continuation.
-/// It verifies the same ownership pin/anchor and file identity but never opens
-/// or locks the predecessor lock file, so the original queue's bytes, rows,
-/// permissions and WAL/journal state cannot be touched.
-pub(crate) fn open_queue_for_carry_read_only(
-    settings: &ResearchSettings,
-    authority: &Path,
-) -> Result<Connection> {
-    settings.validate()?;
-    if !authority.is_absolute() || !settings.queue.is_file() {
-        return Err("research_queue_unavailable".into());
-    }
-    let pin = settings.queue.with_extension("identity.json");
-    let anchor = authority.join(format!(
-        "research-queue-{}.json",
-        digest(settings.queue.as_os_str().as_encoded_bytes())
-    ));
-    let metadata = fs::symlink_metadata(&settings.queue)?;
-    let identity: Value = serde_json::from_slice(
-        &crate::read_bounded(&pin, 4096).map_err(|_| "research_queue_identity_invalid")?,
-    )?;
-    let bound: Value = serde_json::from_slice(
-        &crate::read_bounded(&anchor, 4096).map_err(|_| "research_original_binding_missing")?,
-    )?;
-    if !metadata.is_file()
-        || metadata.nlink() != 1
-        || metadata.mode() & 0o777 != 0o600
-        || identity["device"] != metadata.dev()
-        || identity["inode"] != metadata.ino()
-        || bound != identity
-    {
-        return Err("research_queue_identity_changed".into());
-    }
-    let db = Connection::open_with_flags(
-        &settings.queue,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
-            | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
-    )?;
-    db.busy_timeout(Duration::from_millis(50))?;
-    db.pragma_update(None, "query_only", true)?;
-    Ok(db)
-}
-
-/// Strictly read-only CLOSED predecessor queue access. It verifies the same
-/// ownership pin/anchor and file identity, refuses a non-empty WAL and opens
-/// with `immutable=1`, so no predecessor `-wal`/`-shm`/lock sidecar is created
-/// and no uncheckpointed row is silently read.
-pub(crate) fn open_queue_for_carry_immutable(
-    settings: &ResearchSettings,
-    authority: &Path,
-) -> Result<Connection> {
-    settings.validate()?;
-    if !authority.is_absolute() || !settings.queue.is_file() {
-        return Err("research_queue_unavailable".into());
-    }
-    let pin = settings.queue.with_extension("identity.json");
-    let anchor = authority.join(format!(
-        "research-queue-{}.json",
-        digest(settings.queue.as_os_str().as_encoded_bytes())
-    ));
-    let metadata = fs::symlink_metadata(&settings.queue)?;
-    let identity: Value = serde_json::from_slice(
-        &crate::read_bounded(&pin, 4096).map_err(|_| "research_queue_identity_invalid")?,
-    )?;
-    let bound: Value = serde_json::from_slice(
-        &crate::read_bounded(&anchor, 4096).map_err(|_| "research_original_binding_missing")?,
-    )?;
-    if !metadata.is_file()
-        || metadata.nlink() != 1
-        || metadata.mode() & 0o777 != 0o600
-        || identity["device"] != metadata.dev()
-        || identity["inode"] != metadata.ino()
-        || bound != identity
-    {
-        return Err("research_queue_identity_changed".into());
-    }
-    super::super::super::open_queue_immutable(&settings.queue)
-}
-
 pub(crate) fn register_reviewed_locked(
     settings: &ResearchSettings,
     authority: &Path,
@@ -837,21 +591,10 @@ pub(crate) fn status(settings: &ResearchSettings) -> Value {
     let mut candidate_configured_unverified = false;
     let candidate_compute = settings.candidate_compute.as_ref().map(|candidate| {
         let enabled = candidate.enabled && settings.admission_limits.is_some();
-        let unit = if enabled {
-            if !candidate.sandbox.python_path.is_file()
-                || !candidate.sandbox.bwrap_path.is_file()
-            {
-                json!("candidate_sandbox_unavailable")
-            } else if let Err(code) =
-                nivra_research::bubblewrap::candidate_stage_ready(&settings.stage_root)
-            {
-                json!(code)
-            } else {
-                match nivra_research::bubblewrap::candidate_readiness() {
-                    Ok(()) => Value::Null,
-                    Err(code) => json!(code),
-                }
-            }
+        let unit = if enabled
+            && (!candidate.sandbox.python_path.is_file() || !candidate.sandbox.bwrap_path.is_file())
+        {
+            json!("candidate_sandbox_unavailable")
         } else {
             Value::Null
         };
@@ -862,34 +605,15 @@ pub(crate) fn status(settings: &ResearchSettings) -> Value {
         if ready {
             candidate_configured_unverified = true;
         }
-        let mut body = json!({
+        json!({
             "status":if ready {"configured"} else if enabled {"blocked"} else {"disabled"},
             "reason":if ready {Value::Null} else if enabled {unit} else {json!("candidate_compute_disabled")},
-            "readiness_scope":nivra_research::bubblewrap::CANDIDATE_READINESS_SCOPE,
             "runtime_verified":false,
             "host_qualified":false,
-            "abi":candidate.abi,
             "network":candidate.sandbox.network,
-            "unit_policy":candidate.unit_policy_projection(),
             "datasets":candidate.datasets.iter().map(|dataset| json!(dataset.dataset_id)).collect::<Vec<_>>(),
             "activation_authorized":false
-        });
-        if let Some(execution) = &candidate.execution {
-            body["execution"] = json!({
-                "status":if execution.enabled {"enabled"} else {"disabled"},
-                "abi":execution.abi,
-                "max_quote_events":execution.max_quote_events,
-                "max_observations":execution.max_observations,
-                "max_tape_bytes":execution.max_tape_bytes,
-                "max_entries":execution.max_entries,
-                "max_capital":execution.max_capital,
-                "max_cost_stress":execution.max_cost_stress,
-                "runtime_verified":false,
-                "host_qualified":false,
-                "activation_authorized":false
-            });
-        }
-        body
+        })
     });
     json!({
         "status":if blocked {"blocked"} else if candidate_configured_unverified {"configured"} else {"ready"},

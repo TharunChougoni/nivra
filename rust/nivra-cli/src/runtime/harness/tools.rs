@@ -61,148 +61,119 @@ fn research_task_tool_definitions() -> Vec<Value> {
     ]
 }
 
-pub(super) fn owner_candidate_tool_definitions(
-    execution: bool,
-    observation: bool,
-    parent_ref: bool,
+/// `backtest` and its job tools, shaped by the configured datasets.
+pub(super) fn backtest_tool_definitions(
+    backtest: &research::CandidateComputeSettings,
 ) -> Vec<Value> {
     let task = || json!({"task_id":{"type":"string","minLength":64,"maxLength":64,"pattern":"^[a-f0-9]{64}$"},"revision":{"type":"integer","minimum":1,"maximum":u32::MAX}});
-    let result_task = || {
-        if observation {
-            // The reviewed observation capability admits EXACTLY ONE selector:
-            // a complete legacy pair, or one exact source-observation ref. The
-            // legacy fields stay present but nullable so strict JSON can carry
-            // all three keys; the runtime rejects a mixed/partial call.
-            let mut properties = task();
-            properties["task_id"] = json!({
-                "type":["string","null"],
-                "minLength":64,
-                "maxLength":64,
-                "pattern":"^[a-f0-9]{64}$"
-            });
-            properties["revision"] = json!({
-                "type":["integer","null"],
-                "minimum":1,
-                "maximum":u32::MAX
-            });
-            properties["observation_ref"] = json!({
-                "type":["string","null"],
-                "minLength":2,
-                "maxLength":65536
-            });
-            (
-                properties,
-                json!(["task_id", "revision", "observation_ref"]),
-            )
-        } else {
-            // Default: EXACT historical bytes. No new argument is advertised.
-            (task(), json!(["task_id", "revision"]))
-        }
-    };
+    let mut dataset_ids: Vec<_> = backtest
+        .datasets
+        .iter()
+        .map(|dataset| dataset.dataset_id.as_str())
+        .collect();
+    if !dataset_ids.contains(&research::ARCHIVE_BARS_DATASET_ID) {
+        dataset_ids.push(research::ARCHIVE_BARS_DATASET_ID);
+    }
+    let windows: Vec<_> = backtest
+        .datasets
+        .iter()
+        .filter_map(|dataset| match dataset.kind {
+            research::CandidateDatasetKind::ArchiveWindow {
+                from_session,
+                to_session,
+            } => Some(format!(
+                "{} ({} through {}, inclusive)",
+                dataset.dataset_id, from_session, to_session
+            )),
+            _ => None,
+        })
+        .collect();
     let mut properties = json!({
         "task_key":{"type":"string","minLength":1,"maxLength":48,"pattern":"^[a-zA-Z0-9_-]+$"},
         "hypothesis":{"type":"string","minLength":1,"maxLength":1024},
         "source":{"type":"string","minLength":1,"maxLength":262144},
         "params":{"type":"string","minLength":2,"maxLength":65536},
-        "dataset_id":{"type":"string","minLength":1,"maxLength":64},
+        "dataset_id":{"type":"string","minLength":1,"maxLength":64,"enum":dataset_ids},
         "training_from_ms":{"type":"integer","minimum":0},
         "training_to_ms":{"type":"integer","minimum":0},
         "selection_from_ms":{"type":"integer","minimum":0},
         "selection_to_ms":{"type":"integer","minimum":0},
-        "horizon_minutes":{"type":"integer","minimum":1,"maximum":1440},
-        "parent_task_id":{"type":["string","null"],"minLength":64,"maxLength":64,"pattern":"^[a-f0-9]{64}$"}
+        "archive_bars":{
+            "type":["object","null"],"additionalProperties":false,
+            "description":"With dataset_id=archive_bars, choose a closed historical date range. Use day bars for years or minute bars for intraday patterns across many sessions. Returns a job. Implement on_bars(at_ms, split, bars, params, state); each row is [key, open_paise, high_paise, low_paise, close_paise, volume]. Return [row_index, units] pairs (positive units enter long, zero exits). Fills use the next observed open plus costs. Train/test boundaries use the training and selection timestamps.",
+            "properties":{
+                "unit":{"type":"string","enum":["day","minute"]},
+                "from":{"type":"string","description":"First IST session date, YYYY-MM-DD, inclusive."},
+                "to":{"type":"string","description":"Last IST session date, YYYY-MM-DD, inclusive."},
+                "instruments":{"type":["array","null"],"items":{"type":"string"},"description":"Optional NSE_EQ instrument keys. Null for the archived cash universe."}
+            },
+            "required":["unit","from","to","instruments"]
+        }
     });
-    let mut required = json!([
-        "task_key",
-        "hypothesis",
-        "source",
-        "params",
-        "dataset_id",
-        "training_from_ms",
-        "training_to_ms",
-        "selection_from_ms",
-        "selection_to_ms",
-        "horizon_minutes",
-        "parent_task_id"
-    ]);
-    let description = if execution {
-        "Queue one immutable candidate version for asynchronous replay in the existing no-network sandbox. Source runs only through the reviewed scorer ABI over registered feature snapshots; it cannot read host paths, use the network, spend trading capital, promote or activate a strategy. The optional execution argument is a JSON-object string that additionally requests the reviewed after-cost cash replay over the frozen current-session quote tape; it declares research sizing, holding, capital and costs only and never authorizes a broker order; its parameters.hypothesis must equal the submit hypothesis and its windows must equal the submit windows. A changed task_key content needs an explicit parent_task_id. This call acknowledges durable queueing, not execution."
-    } else {
-        "Queue one immutable score-only candidate version for asynchronous replay in the existing no-network sandbox. Source runs only through the reviewed scorer ABI over registered feature snapshots; it cannot read host paths, use the network, spend trading capital, promote or activate a strategy. A changed task_key content needs an explicit parent_task_id. This call acknowledges durable queueing, not execution."
-    };
-    if execution {
-        properties["execution"] = json!({"type":["string","null"],"minLength":2,"maxLength":65536});
-        required
-            .as_array_mut()
-            .expect("candidate required array")
-            .push(json!("execution"));
+    if !windows.is_empty() {
+        properties["dataset_id"]["description"] = json!(format!(
+            "Archive windows for strategy replay: {}",
+            windows.join(", ")
+        ));
+        properties["archive_daily_window"] = json!({
+            "type":["object","null"], "additionalProperties":false,
+            "description":"Optional slice on each archive session in IST minutes after midnight. The start is inclusive and the end is exclusive. For 09:30 to 10:30 use 570 and 630.",
+            "properties":{
+                "from_minute":{"type":"integer","minimum":0,"maximum":1439},
+                "to_minute":{"type":"integer","minimum":1,"maximum":1440}
+            },
+            "required":["from_minute","to_minute"]
+        });
+        properties["as_of_receipt_id"] = json!({
+            "type":["integer","null"],"minimum":0,
+            "description":"Optional archive receipt watermark from tape.archive_window.as_of_receipt_id. Null pins the latest committed quote receipt."
+        });
     }
-    if observation {
-        properties["observation"] =
-            json!({"type":["string","null"],"minLength":2,"maxLength":65536});
-        required
-            .as_array_mut()
-            .expect("candidate required array")
-            .push(json!("observation"));
-    }
-    if parent_ref {
-        properties["parent_ref"] =
-            json!({"type":["string","null"],"minLength":2,"maxLength":65536});
-        required
-            .as_array_mut()
-            .expect("candidate required array")
-            .push(json!("parent_ref"));
-    }
+    // Strict schemas require every property; optional ones are nullable.
+    let required: Vec<_> = properties
+        .as_object()
+        .map(|object| object.keys().cloned().collect())
+        .unwrap_or_default();
     vec![
-        function("candidate_submit", description, properties, required),
+        function(
+            "candidate_submit",
+            "Backtest one Python strategy after costs in the no-network sandbox. A quote-tape dataset (the current session or an archive window) replays strategy_actions_v1 over recorded depth receipts and returns the report immediately; an accepted replay registers the strategy in the paper library. Cover at least three sessions for acceptance and use archive_daily_window to fit the tape budget. archive_bars runs an archive_bars_v1 strategy over years of archived bars as a job: poll backtest_status and read backtest_result. Nothing here places an order.",
+            properties,
+            json!(required),
+        ),
         function(
             "candidate_status",
-            "Read one durable candidate revision and its lifecycle bridge. This does not start or retry work.",
+            "Read one archive bar job revision. This does not start or retry work.",
             task(),
             json!(["task_id", "revision"]),
         ),
-        {
-            let (properties, required) = result_task();
-            function(
-                "candidate_result",
-                "Read the verified result for one candidate revision. Archive bar jobs report after-cost training and test summaries and a report hash. Ranker jobs report ranking diagnostics.",
-                properties,
-                required,
-            )
-        },
+        function(
+            "candidate_result",
+            "Read the verified report of one archive bar job: after-cost training and test summaries and the report hash.",
+            task(),
+            json!(["task_id", "revision"]),
+        ),
         function(
             "candidate_cancel",
-            "Request cancellation of one candidate revision. A running snapshot is bounded and finishes before cleanup; this is not an immediate kill.",
+            "Request cancellation of one archive bar job revision. This is a durable request, not an immediate kill.",
             task(),
             json!(["task_id", "revision"]),
         ),
     ]
 }
 
-fn candidate_execution_enabled(cfg: &PlannerConfig) -> bool {
+fn enabled_backtest(cfg: &PlannerConfig) -> Option<&research::CandidateComputeSettings> {
     cfg.research_tools
         .as_ref()
+        .filter(|settings| settings.admission_limits.is_some())
         .and_then(|settings| settings.candidate_compute.as_ref())
-        .and_then(|candidate| candidate.execution.as_ref())
-        .is_some_and(|execution| execution.enabled)
-}
-
-fn candidate_observation_enabled(cfg: &PlannerConfig) -> bool {
-    cfg.research_tools
-        .as_ref()
-        .and_then(|settings| settings.candidate_compute.as_ref())
-        .and_then(|candidate| candidate.observation.as_ref())
-        .is_some_and(|observation| observation.enabled)
+        .filter(|backtest| {
+            backtest.enabled && backtest.strategy.as_ref().is_some_and(|s| s.enabled)
+        })
 }
 
 pub(super) fn candidate_tools_enabled(cfg: &PlannerConfig) -> bool {
-    cfg.research_tools.as_ref().is_some_and(|settings| {
-        settings.admission_limits.is_some()
-            && settings
-                .candidate_compute
-                .as_ref()
-                .is_some_and(|candidate| candidate.enabled)
-    })
+    enabled_backtest(cfg).is_some()
 }
 
 /// The tools a lane grant adds to the data tools.
@@ -210,13 +181,6 @@ pub(crate) fn granted_tool_definitions(owner: GrantedTools) -> Vec<Value> {
     let mut tools = Vec::new();
     if owner.research {
         tools.extend(research_task_tool_definitions());
-    }
-    if owner.candidate {
-        tools.extend(owner_candidate_tool_definitions(
-            owner.candidate_execution,
-            owner.candidate_observation,
-            owner.candidate_parent_ref,
-        ));
     }
     if owner.workspace {
         if owner.research_turn {
@@ -309,18 +273,8 @@ pub(super) struct ResearchEnqueueArgs {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ResearchTaskArgs {
-    /// Legacy same-session selector. Nullable only for the explicitly gated
-    /// `candidate_result` source-observation mode; every other caller requires
-    /// both fields.
-    #[serde(default)]
-    task_id: Option<String>,
-    #[serde(default)]
-    revision: Option<u32>,
-    /// Explicit source-observation episode selector. Present only for
-    /// `candidate_result` when the reviewed observation capability is enabled;
-    /// omission keeps every historical tool argument byte unchanged.
-    #[serde(default)]
-    observation_ref: Option<String>,
+    task_id: String,
+    revision: u32,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -367,9 +321,9 @@ pub(super) enum Tool {
     ResearchTaskStatus(String, u32),
     ResearchTaskResult(String, u32),
     ResearchTaskCancel(String, u32),
-    CandidateSubmit(research::CandidateSubmitArgs),
+    CandidateSubmit(research::BacktestArgs),
     CandidateStatus(String, u32),
-    CandidateResult(Option<String>, Option<u32>, Option<String>),
+    CandidateResult(String, u32),
     CandidateCancel(String, u32),
     QuoteCapture(Vec<String>, i64, i64),
     ResearchRequest(ResearchRequestArgs),
@@ -539,71 +493,26 @@ pub(super) fn checked_call_with(
             }
             Tool::ResearchEnqueue(a)
         }
-        "research_task_status" | "research_task_result" | "research_task_cancel" => {
-            let a: ResearchTaskArgs = serde_json::from_value(args)?;
-            if a.observation_ref.is_some() {
-                return Err("harness_owner_research_args_invalid".into());
-            }
-            let (Some(task_id), Some(revision)) = (a.task_id, a.revision) else {
-                return Err("harness_owner_research_task_id_invalid".into());
-            };
+        "research_task_status"
+        | "research_task_result"
+        | "research_task_cancel"
+        | "candidate_status"
+        | "candidate_result"
+        | "candidate_cancel" => {
+            let ResearchTaskArgs { task_id, revision } = serde_json::from_value(args)?;
             if !task_id_ok(&task_id) || revision == 0 {
                 return Err("harness_owner_research_task_id_invalid".into());
             }
             match name {
                 "research_task_status" => Tool::ResearchTaskStatus(task_id, revision),
                 "research_task_result" => Tool::ResearchTaskResult(task_id, revision),
-                _ => Tool::ResearchTaskCancel(task_id, revision),
+                "research_task_cancel" => Tool::ResearchTaskCancel(task_id, revision),
+                "candidate_status" => Tool::CandidateStatus(task_id, revision),
+                "candidate_result" => Tool::CandidateResult(task_id, revision),
+                _ => Tool::CandidateCancel(task_id, revision),
             }
         }
-        "candidate_submit" => {
-            let a: research::CandidateSubmitArgs = serde_json::from_value(args)?;
-            Tool::CandidateSubmit(a)
-        }
-        "candidate_status" | "candidate_result" | "candidate_cancel" => {
-            let a: ResearchTaskArgs = serde_json::from_value(args)?;
-            if name != "candidate_result" && a.observation_ref.is_some() {
-                return Err("harness_owner_research_args_invalid".into());
-            }
-            // EXACTLY ONE selector mode, decided by FIELD PRESENCE. Source mode
-            // is legal ONLY when BOTH legacy fields are absent; legacy mode is
-            // legal ONLY when BOTH are present and the ref is absent. A partial
-            // pair, a full pair plus a ref, or any non-null legacy field beside
-            // a ref is refused instead of silently ignoring the extra selector.
-            let has_task = a.task_id.is_some();
-            let has_revision = a.revision.is_some();
-            let has_ref = a.observation_ref.is_some();
-            let legacy = has_task && has_revision && !has_ref;
-            let source = !has_task && !has_revision && has_ref;
-            if !legacy && !source {
-                return Err("harness_owner_research_args_invalid".into());
-            }
-            if legacy {
-                let (Some(task_id), Some(revision)) = (a.task_id.clone(), a.revision) else {
-                    return Err("harness_owner_research_args_invalid".into());
-                };
-                if !task_id_ok(&task_id) || revision == 0 {
-                    return Err("harness_owner_research_task_id_invalid".into());
-                }
-                match name {
-                    "candidate_status" => Tool::CandidateStatus(task_id, revision),
-                    "candidate_cancel" => Tool::CandidateCancel(task_id, revision),
-                    _ => Tool::CandidateResult(Some(task_id), Some(revision), None),
-                }
-            } else {
-                let Some(raw) = &a.observation_ref else {
-                    return Err("harness_owner_research_args_invalid".into());
-                };
-                let reference: Value =
-                    serde_json::from_str(raw).map_err(|_| "harness_owner_research_args_invalid")?;
-                let parsed: research::SourceObservationRefV1 = serde_json::from_value(reference)
-                    .map_err(|_| "harness_owner_research_args_invalid")?;
-                if !parsed.validate() {
-                    return Err("harness_owner_research_args_invalid".into());
-                }
-                Tool::CandidateResult(None, None, a.observation_ref)
-            }
-        }
+        "candidate_submit" => Tool::CandidateSubmit(serde_json::from_value(args)?),
         "request_research" => Tool::ResearchRequest(serde_json::from_value(args)?),
         "research_quote_capture" => {
             let a: QuoteCaptureArgs = serde_json::from_value(args)?;
@@ -635,7 +544,6 @@ pub(crate) fn bridge_definitions(cfg: &PlannerConfig, lane_requests: bool) -> Re
     if cfg.decision_evidence.is_none() {
         tools.retain(|tool| tool["name"] != "get_intraday_context");
     }
-    let candidate = candidate_tools_enabled(cfg);
     let web = cfg.web_tools.as_ref().filter(|web| web.enabled);
     let analysis = cfg.research_tools.is_some();
     let owner = GrantedTools {
@@ -643,10 +551,6 @@ pub(crate) fn bridge_definitions(cfg: &PlannerConfig, lane_requests: bool) -> Re
         research: analysis || lane_requests,
         research_turn: false,
         quote_capture: quote_capture(cfg).is_some(),
-        candidate,
-        candidate_execution: candidate && candidate_execution_enabled(cfg),
-        candidate_observation: candidate && candidate_observation_enabled(cfg),
-        candidate_parent_ref: candidate,
         workspace: cfg
             .workspace
             .as_ref()
@@ -658,85 +562,8 @@ pub(crate) fn bridge_definitions(cfg: &PlannerConfig, lane_requests: bool) -> Re
     };
     tools.extend(granted_tool_definitions(owner));
     tools.retain(|tool| analysis || tool["name"] != "research_task_enqueue");
-    if let Some(candidate) = cfg
-        .research_tools
-        .as_ref()
-        .and_then(|research| research.candidate_compute.as_ref())
-        .filter(|candidate| candidate.enabled)
-        && let Some(submit) = tools
-            .iter_mut()
-            .find(|tool| tool["name"] == "candidate_submit")
-    {
-        let bars_available = candidate.strategy.as_ref().is_some_and(|s| s.enabled);
-        let mut dataset_ids: Vec<_> = candidate
-            .datasets
-            .iter()
-            .map(|dataset| dataset.dataset_id.as_str())
-            .collect();
-        if bars_available && !dataset_ids.contains(&research::ARCHIVE_BARS_DATASET_ID) {
-            dataset_ids.push(research::ARCHIVE_BARS_DATASET_ID);
-        }
-        submit["parameters"]["properties"]["dataset_id"]["enum"] = json!(dataset_ids);
-        if bars_available {
-            submit["description"] = json!(format!(
-                "{} Use archive_bars for years of regime coverage. Poll backtest_status and read backtest_result. Use archive_window for recent intraday fill realism.",
-                submit["description"].as_str().unwrap_or_default()
-            ));
-            submit["parameters"]["properties"]["archive_bars"] = json!({
-                "type":["object","null"],"additionalProperties":false,
-                "description":"With strategy=true and dataset_id=archive_bars, choose a closed historical date range. Use day bars for years or minute bars for intraday patterns across many sessions. Returns a job. Implement on_bars(at_ms, split, bars, params, state); each row is [key, open_paise, high_paise, low_paise, close_paise, volume]. Return [row_index, units] pairs (positive units enter long, zero exits). Fills use the next observed open plus costs. Train/test boundaries use the training and selection timestamps. horizon_minutes is unused for bars.",
-                "properties":{
-                    "unit":{"type":"string","enum":["day","minute"]},
-                    "from":{"type":"string","description":"First IST session date, YYYY-MM-DD, inclusive."},
-                    "to":{"type":"string","description":"Last IST session date, YYYY-MM-DD, inclusive."},
-                    "instruments":{"type":["array","null"],"items":{"type":"string"},"description":"Optional NSE_EQ instrument keys. Omit for the archived cash universe."}
-                },
-                "required":["unit","from","to"]
-            });
-        }
-        if candidate.strategy.as_ref().is_some_and(|s| s.enabled) {
-            let properties = &mut submit["parameters"]["properties"];
-            properties["strategy"] = json!({
-                "type":["boolean","null"],
-                "description":"true selects a strategy backtest. With archive_window, strategy_actions_v1 replays recent quote receipts after costs and returns immediately. Cover at least three sessions for strategy acceptance and use archive_daily_window to fit the tape budget. With archive_bars, an archive_bars_v1 Python strategy runs as a research job and yields bar-level evidence for training and test. Use the configured horizon_minutes for quote replay."
-            });
-            let windows: Vec<_> = candidate
-                .datasets
-                .iter()
-                .filter_map(|dataset| match dataset.kind {
-                    research::CandidateDatasetKind::ArchiveWindow {
-                        from_session,
-                        to_session,
-                    } => Some(format!(
-                        "{} ({} through {}, inclusive)",
-                        dataset.dataset_id, from_session, to_session
-                    )),
-                    _ => None,
-                })
-                .collect();
-            if !windows.is_empty() {
-                properties["dataset_id"]["description"] = json!(format!(
-                    "Archive windows for strategy replay: {}",
-                    windows.join(", ")
-                ));
-                properties["archive_daily_window"] = json!({
-                    "type":["object","null"], "additionalProperties":false,
-                    "description":"Optional slice on each archive session in IST minutes after midnight. The start is inclusive and the end is exclusive. For 09:30 to 10:30 use 570 and 630.",
-                    "properties":{
-                        "from_minute":{"type":"integer","minimum":0,"maximum":1439},
-                        "to_minute":{"type":"integer","minimum":1,"maximum":1440}
-                    },
-                    "required":["from_minute","to_minute"]
-                });
-                properties["as_of_receipt_id"] = json!({
-                    "type":["integer","null"],"minimum":0,
-                    "description":"Optional archive receipt watermark from tape.archive_window.as_of_receipt_id. Omit it to pin the latest committed quote receipt."
-                });
-            }
-            if let Some(required) = submit["parameters"]["required"].as_array_mut() {
-                required.push(json!("strategy"));
-            }
-        }
+    if let Some(backtest) = enabled_backtest(cfg) {
+        tools.extend(backtest_tool_definitions(backtest));
     }
     Ok(tools)
 }

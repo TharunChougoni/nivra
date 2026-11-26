@@ -311,17 +311,6 @@ pub(crate) fn open_book_immutable(path: &Path) -> Result<Connection> {
     open_sqlite_immutable(path, "source_book_wal_uncheckpointed")
 }
 
-/// Read a CLOSED predecessor research queue immutably. No lock file, schema,
-/// row or sidecar is created or touched.
-pub(crate) fn open_queue_immutable(path: &Path) -> Result<Connection> {
-    open_sqlite_immutable(path, "research_queue_wal_uncheckpointed")
-}
-
-/// Read a CLOSED predecessor lifecycle ledger immutably.
-pub(crate) fn open_ledger_immutable(path: &Path) -> Result<Connection> {
-    open_sqlite_immutable(path, "source_lifecycle_wal_uncheckpointed")
-}
-
 /// Read the CURRENT live paper book read-only. Unlike a predecessor book this
 /// supports a non-empty WAL (the controller may hold it open), but it still
 /// never creates a schema, row, plan or order and never applies a quote.

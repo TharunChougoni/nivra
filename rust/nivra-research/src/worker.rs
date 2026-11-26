@@ -65,73 +65,6 @@ pub enum SandboxPoll {
         output: Vec<u8>,
     },
 }
-/// Immutable intent receipt for one candidate attempt. It is written after the
-/// queue claim and before the physical owned unit starts, so a crash can never
-/// leave a running slot without its original recovery manifest.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CandidateLaunch {
-    pub version: u32,
-    pub job_id: String,
-    pub lease: String,
-    pub task_id: String,
-    pub revision: u32,
-    pub candidate_id: String,
-    pub lifecycle_candidate_id: String,
-    pub source_sha256: String,
-    pub params_sha256: String,
-    pub dataset_id: String,
-    pub dataset_hash: String,
-    pub abi: String,
-    pub runtime_binding: jobs::CandidateRuntimeBinding,
-    pub sandbox: jobs::CandidateSandboxPolicy,
-    pub unit_policy: jobs::CandidateUnitPolicy,
-    pub limits: jobs::ResourceCaps,
-    pub replay_json: String,
-    pub stage_dir: String,
-    pub helper_path: String,
-    pub python_path: String,
-    pub bwrap_path: String,
-    pub unit: String,
-    pub machine: String,
-    pub started_ms: i64,
-    pub deadline_ms: i64,
-    pub task_deadline_ms: i64,
-    /// Present only for an execution task. The helper reads the frozen
-    /// execution artifacts from the private stage directory after the scorer
-    /// replay; the Python sandbox never receives them.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub execution: Option<jobs::CandidateExecutionBinding>,
-    /// Present only for a prospective-observation task. The helper reads only
-    /// the frozen snapshot/quote/spec artifacts after the scorer completes; it
-    /// never reads an exit quote or the live paper book.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub observation: Option<jobs::ObservationTargetV1>,
-}
-/// Typed release proof for the original owned candidate unit. It is grounded in
-/// the unit manager's own state plus the kernel-tracked cgroup membership file,
-/// never in an observed PID or process group. `cgroup_absent` is the truthful
-/// variant where systemd has already unloaded the unit and reports no control
-/// group; a non-empty control group with a missing/unreadable events file is
-/// ambiguous and must not produce a proof.
-/// Properties observed from the original unit before it is unloaded. A fast
-/// exit may leave some values unset; `properties_observed` records whether the
-/// complete policy surface was actually read.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CandidateUnitObservation {
-    pub memory_max: Option<u64>,
-    pub memory_swap_max: Option<u64>,
-    pub cpu_quota_usec: Option<u64>,
-    pub tasks_max: Option<u64>,
-    pub runtime_max_usec: Option<u64>,
-    pub limit_nofile: Option<u64>,
-    pub kill_mode: Option<String>,
-    pub no_new_privileges: Option<bool>,
-    pub timeout_stop_usec: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub restart: Option<String>,
-}
 /// One shared integer source for the systemd CPU quota. `hundredths` is the
 /// percentage rounded down to the two decimal places systemd accepts; the
 /// command formats that value and the proof compares the same value converted
@@ -149,182 +82,6 @@ pub fn quota_usec(cpu_millis: u32, wall_millis: u32) -> Option<u64> {
     quota_hundredths(cpu_millis, wall_millis)?.checked_mul(100)
 }
 
-impl CandidateUnitObservation {
-    /// Strict match used when the unit's complete property surface was actually
-    /// observed. A missing value never silently matches.
-    pub fn matches(&self, policy: &jobs::CandidateUnitPolicy) -> bool {
-        let expected_cpu = quota_usec(policy.unit_cpu_millis, policy.unit_wall_millis);
-        let expected_runtime = u64::from(policy.unit_wall_millis).checked_mul(1000);
-        self.memory_max == Some(policy.unit_memory_bytes)
-            && self.memory_swap_max == Some(0)
-            && expected_cpu.is_some_and(|expected| self.cpu_quota_usec == Some(expected))
-            && self.tasks_max == Some(u64::from(policy.unit_tasks))
-            && expected_runtime.is_some_and(|expected| self.runtime_max_usec == Some(expected))
-            && self.limit_nofile == Some(policy.unit_open_files)
-            && self.kill_mode.as_deref() == Some(policy.kill_mode.as_str())
-            && self.no_new_privileges == Some(true)
-            && self.timeout_stop_usec == Some(2_000_000)
-            && self.restart.as_deref() == Some(policy.restart.as_str())
-    }
-    /// Partial observations may be retained for an already-unloaded unit, but
-    /// every value that was read must still match the recorded policy. This
-    /// never invents a property or claims the unit was fully qualified.
-    pub fn consistent(&self, policy: &jobs::CandidateUnitPolicy) -> bool {
-        let expected_cpu = quota_usec(policy.unit_cpu_millis, policy.unit_wall_millis);
-        let expected_runtime = u64::from(policy.unit_wall_millis).checked_mul(1000);
-        self.memory_max
-            .is_none_or(|value| value == policy.unit_memory_bytes)
-            && self.memory_swap_max.is_none_or(|value| value == 0)
-            && self
-                .cpu_quota_usec
-                .is_none_or(|value| expected_cpu == Some(value))
-            && self
-                .tasks_max
-                .is_none_or(|value| value == u64::from(policy.unit_tasks))
-            && self
-                .runtime_max_usec
-                .is_none_or(|value| expected_runtime == Some(value))
-            && self
-                .limit_nofile
-                .is_none_or(|value| value == policy.unit_open_files)
-            && self
-                .kill_mode
-                .as_deref()
-                .is_none_or(|value| value == policy.kill_mode)
-            && self.no_new_privileges.is_none_or(|value| value)
-            && self
-                .timeout_stop_usec
-                .is_none_or(|value| value == 2_000_000)
-            && self
-                .restart
-                .as_deref()
-                .is_none_or(|value| value == policy.restart)
-    }
-    pub fn complete(&self) -> bool {
-        self.memory_max.is_some()
-            && self.memory_swap_max.is_some()
-            && self.cpu_quota_usec.is_some()
-            && self.tasks_max.is_some()
-            && self.runtime_max_usec.is_some()
-            && self.limit_nofile.is_some()
-            && self.kill_mode.is_some()
-            && self.no_new_privileges.is_some()
-            && self.timeout_stop_usec.is_some()
-            && self.restart.is_some()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.memory_max.is_none()
-            && self.memory_swap_max.is_none()
-            && self.cpu_quota_usec.is_none()
-            && self.tasks_max.is_none()
-            && self.runtime_max_usec.is_none()
-            && self.limit_nofile.is_none()
-            && self.kill_mode.is_none()
-            && self.no_new_privileges.is_none()
-            && self.timeout_stop_usec.is_none()
-            && self.restart.is_none()
-    }
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CandidateUnitProof {
-    pub version: u32,
-    pub unit: String,
-    pub lease: String,
-    pub machine: String,
-    pub policy_sha256: String,
-    pub active_state: String,
-    pub main_pid: u64,
-    pub tasks_current: u64,
-    pub tasks_present: bool,
-    pub control_group: String,
-    pub cgroup_absent: bool,
-    pub cgroup_events: String,
-    pub cgroup_events_sha256: String,
-    pub exit_code: i32,
-    pub checked_at_ms: i64,
-    pub observation: CandidateUnitObservation,
-    pub properties_observed: bool,
-    pub proof_origin: String,
-    pub proof_sha256: String,
-}
-impl CandidateUnitProof {
-    pub fn canonical(&self) -> Result<Vec<u8>> {
-        let mut copy = self.clone();
-        copy.proof_sha256.clear();
-        canonical(&copy)
-    }
-    pub fn hash(&self) -> Result<String> {
-        Ok(hash(&self.canonical()?))
-    }
-    pub fn verify_hash(&self) -> bool {
-        is_hash(&self.proof_sha256) && self.hash().is_ok_and(|hash| hash == self.proof_sha256)
-    }
-    pub fn verify(&self, launch: &CandidateLaunch) -> bool {
-        let unit = candidate_unit_name(&launch.lease);
-        let observation_ok = if self.cgroup_absent {
-            // An unloaded unit may legitimately have no readable property
-            // surface. Never invent values; retain only what was actually read
-            // and keep `properties_observed` false unless the surface was
-            // complete.
-            (self.observation.is_empty() || self.observation.consistent(&launch.unit_policy))
-                && self.properties_observed == self.observation.complete()
-        } else {
-            // A loaded control group must prove the actual bound properties,
-            // not merely the absence of observations.
-            self.properties_observed && self.observation.matches(&launch.unit_policy)
-        };
-        self.version == 1
-            && Some(self.unit.as_str()) == unit.as_deref()
-            && self.unit == launch.unit
-            && self.lease == launch.lease
-            && self.machine == launch.machine
-            && self.policy_sha256 == launch.unit_policy.policy_sha256()
-            && matches!(self.active_state.as_str(), "inactive" | "failed")
-            && self.main_pid == 0
-            && self.tasks_current == 0
-            && (self.tasks_present || self.cgroup_absent)
-            && self.checked_at_ms >= launch.started_ms
-            && self.exit_code >= 0
-            && observation_ok
-            && self.verify_hash()
-            && if self.cgroup_absent {
-                self.control_group.is_empty()
-                    && self.cgroup_events.is_empty()
-                    && self.cgroup_events_sha256 == hash(b"")
-            } else {
-                !self.control_group.is_empty()
-                    && self.cgroup_events.contains("populated 0")
-                    && self.cgroup_events_sha256 == hash(self.cgroup_events.as_bytes())
-            }
-    }
-}
-pub fn candidate_unit_name(lease: &str) -> Option<String> {
-    is_hash(lease).then(|| format!("nivra-candidate-{lease}"))
-}
-pub struct CandidateUnitExited {
-    pub proof: CandidateUnitProof,
-    pub exit_code: i32,
-    pub result: Vec<u8>,
-}
-pub enum CandidateUnitPoll {
-    Running,
-    Exited(Box<CandidateUnitExited>),
-}
-/// Trusted owned-unit capability boundary for one candidate attempt. The
-/// controller passes only the immutable launch receipt; it never supplies a
-/// model-selected program, shell, path list, PID or process group.
-pub trait CandidateUnitRunner {
-    fn start(&mut self, launch: &CandidateLaunch) -> std::result::Result<(), RunnerError>;
-    fn poll(
-        &mut self,
-        launch: &CandidateLaunch,
-    ) -> std::result::Result<CandidateUnitPoll, RunnerError>;
-    fn terminate(
-        &mut self,
-        launch: &CandidateLaunch,
-    ) -> std::result::Result<CandidateUnitProof, RunnerError>;
-}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunnerError {
     Unsupported,
@@ -397,9 +154,6 @@ fn alias(s: &str) -> bool {
 }
 impl RegisteredRun {
     fn validate(&self) -> Result<String> {
-        if self.spec.capability == jobs::SpecCapability::CandidateSource {
-            return Err(Error::Registration);
-        }
         if self.code.is_empty()
             || self.code.len() > 262144
             || self.runtime.is_empty()
@@ -461,9 +215,7 @@ fn receipt_kind(kind: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
-/// Host-side receipt writer for the shared queue. Registered workers use the
-/// launch/stopped/result kinds through their own path; candidate execution
-/// records its own launch and sandbox-cleanup evidence here.
+/// Host-side receipt writer for the shared queue.
 pub fn save_receipt(
     db: &Connection,
     job_id: &str,
@@ -730,7 +482,7 @@ pub fn start_one(
     runner: &mut impl SandboxRunner,
     clock: impl Fn() -> i64,
 ) -> Result<Worker> {
-    if !is_hash(lease) || registered.spec.capability == jobs::SpecCapability::CandidateSource {
+    if !is_hash(lease) {
         return Err(Error::Registration);
     }
     let prior = jobs::load(db, &registered.spec.id).map_err(|_| Error::Queue)?;
@@ -1416,7 +1168,7 @@ mod tests {
                 policy_sha256: "2".repeat(64),
                 model_id: "gpt-6.1-sol".into(),
                 model_revision: 3,
-                goal: "Evaluate the registered candidate on the development split".into(),
+                goal: "Evaluate the registered analysis on the development split".into(),
                 registered_analysis: jobs::RegisteredAnalysis {
                     analysis_id: "registered-analysis".into(),
                     dataset_id: "development-v1".into(),
@@ -1463,7 +1215,6 @@ mod tests {
     }
     #[test]
     fn registered_worker_retains_uncertain_slots_and_imports_only_bound_results() {
-        crate::bubblewrap::candidate_pure_contract();
         let lease = "c".repeat(64);
         let task_id = jobs::scoped_task_id(&"1".repeat(64), "2026-10-31", "shadow-check");
         let (mut scoped_db, scoped_registration, _) = setup();

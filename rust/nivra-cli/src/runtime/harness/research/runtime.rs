@@ -1,21 +1,11 @@
 use super::*;
-use std::sync::atomic::{AtomicBool, Ordering};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ResearchTaskKind {
-    Registered,
-    Candidate,
-}
-
-/// Typed launch gate. Both kinds are gated by the book's own state. Registered
-/// work additionally waits for a pending owner decision, so research never
-/// delays or displaces a queued trading decision. Neither waits for an idle
-/// model worker: a busy scorer, aside, review or supervisor turn does not
-/// starve research (#236).
+/// Typed launch gate, read from the book's own state. Research waits for a
+/// pending owner decision, so it never delays or displaces a queued trading
+/// decision. It does not wait for an idle model worker (#236).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ResearchLaunch {
     pub registered: bool,
-    pub candidate: bool,
     pub reason: &'static str,
 }
 
@@ -31,11 +21,11 @@ pub(crate) struct LaunchBook {
 
 impl ResearchLaunch {
     pub(crate) fn for_book(book: LaunchBook) -> Self {
-        let runnable = !book.halted && !book.stopped;
-        let usable = runnable && !book.context_unavailable;
         Self {
-            registered: usable && !book.decision_pending,
-            candidate: usable,
+            registered: !book.halted
+                && !book.stopped
+                && !book.context_unavailable
+                && !book.decision_pending,
             reason: if book.context_unavailable {
                 "controller_session_end_unavailable"
             } else if book.halted {
@@ -54,153 +44,34 @@ impl ResearchLaunch {
 /// One process-local waiter for the sole durable queue slot. Dropping it does
 /// not cancel a job; its database row and worker receipts remain authoritative.
 pub(crate) type ActiveResearch = (
-    ResearchTaskKind,
     String,
     u32,
-    Arc<AtomicBool>,
     std::sync::mpsc::Receiver<std::result::Result<(), &'static str>>,
 );
-
-#[derive(Default)]
-pub(super) struct ArchiveEvidence {
-    pending: Option<std::sync::mpsc::Receiver<ArchiveUpdate>>,
-    snapshot: Option<Evidence>,
-    started_ms: Option<i64>,
-    maturing: bool,
-}
-
-struct Evidence {
-    observation: Value,
-    lifecycle: Option<Value>,
-}
-
-enum ArchiveUpdate {
-    Matured(Value),
-    Snapshot(Evidence),
-}
 
 #[derive(Default)]
 pub(crate) struct ResearchRuntime {
     pub(crate) active: Option<ActiveResearch>,
     pub(crate) terminal_cursor: Option<jobs::TaskCursor>,
-    pub(crate) candidate_terminal_cursor: Option<jobs::TaskCursor>,
-    pub(crate) blocked: Option<(ResearchTaskKind, String, u32, &'static str)>,
-    pub(crate) last_mature_ms: Option<i64>,
-    pub(crate) lifecycle: Option<Value>,
-    pub(super) archive_evidence: ArchiveEvidence,
+    pub(crate) blocked: Option<(String, u32, &'static str)>,
 }
 
 impl ResearchRuntime {
-    pub(crate) fn archive_maturing(&self) -> bool {
-        self.archive_evidence.maturing
-    }
-
-    pub(crate) fn archive_observation(&self) -> Option<&Value> {
-        self.archive_evidence
-            .snapshot
-            .as_ref()
-            .map(|snapshot| &snapshot.observation)
-    }
-
-    pub(crate) fn archive_lifecycle(&self) -> Option<&Value> {
-        self.archive_evidence.snapshot.as_ref()?.lifecycle.as_ref()
-    }
-
-    pub(crate) fn reset_archive_evidence(&mut self) {
-        self.archive_evidence = ArchiveEvidence::default();
-        self.last_mature_ms = None;
-    }
-
-    fn poll_archive_evidence(&mut self) {
-        let Some(receiver) = self.archive_evidence.pending.as_ref() else {
-            return;
-        };
-        loop {
-            match receiver.try_recv() {
-                Ok(ArchiveUpdate::Matured(status)) => {
-                    self.lifecycle = Some(status);
-                    self.archive_evidence.maturing = false;
-                }
-                Ok(ArchiveUpdate::Snapshot(snapshot)) => {
-                    self.archive_evidence.snapshot = Some(snapshot);
-                    break;
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => return,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    if self.archive_evidence.maturing {
-                        self.lifecycle = Some(
-                            json!({"status":"error","reason":"candidate_maturation_unavailable"}),
-                        );
-                    }
-                    self.archive_evidence.snapshot = None;
-                    break;
-                }
-            }
-        }
-        self.archive_evidence.maturing = false;
-        self.archive_evidence.pending = None;
-    }
-
-    fn refresh_archive_evidence(
-        &mut self,
-        c: &Config,
-        cfg: &PlannerConfig,
-        now: i64,
-        mature: bool,
-    ) -> Result<()> {
-        if self.archive_evidence.pending.is_some()
-            || !mature
-                && self
-                    .archive_evidence
-                    .started_ms
-                    .is_some_and(|last| now.saturating_sub(last) < 2_000)
-        {
-            return Ok(());
-        }
-        let (tx, rx) = std::sync::mpsc::channel();
-        let (c, cfg) = (c.clone(), cfg.clone());
-        std::thread::Builder::new()
-            .name("archive-research".into())
-            .spawn(move || {
-                if mature
-                    && tx
-                        .send(ArchiveUpdate::Matured(maturation_status(&c, &cfg, now)))
-                        .is_err()
-                {
-                    return;
-                }
-                let observation = super::candidate::observation_status(&c, &cfg, now);
-                let lifecycle = super::candidate::checked_lifecycle_library(&c, &cfg, now).ok();
-                let _ = tx.send(ArchiveUpdate::Snapshot(Evidence {
-                    observation,
-                    lifecycle,
-                }));
-            })?;
-        self.archive_evidence.started_ms = Some(now);
-        self.archive_evidence.pending = Some(rx);
-        self.archive_evidence.maturing = mature;
-        if mature {
-            self.last_mature_ms = Some(now);
-        }
-        Ok(())
-    }
-
     pub(crate) fn observe_channel(&mut self) {
-        let Some((kind, task_id, revision, _, receiver)) = self.active.as_ref() else {
+        let Some((task_id, revision, receiver)) = self.active.as_ref() else {
             return;
         };
-        let kind = *kind;
         let task_id = task_id.clone();
         let revision = *revision;
         match receiver.try_recv() {
             Ok(Ok(())) => self.active = None,
             Ok(Err(reason)) => {
                 self.active = None;
-                self.blocked = Some((kind, task_id, revision, reason));
+                self.blocked = Some((task_id, revision, reason));
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.active = None;
-                self.blocked = Some((kind, task_id, revision, "research_worker_channel_lost"));
+                self.blocked = Some((task_id, revision, "research_worker_channel_lost"));
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
         }
@@ -208,28 +79,19 @@ impl ResearchRuntime {
 
     pub(crate) fn clear_blocked_if_terminal(
         &mut self,
-        kind: ResearchTaskKind,
         task_id: &str,
         revision: u32,
         state: jobs::TaskState,
     ) {
         if task_state_terminal(state)
-            && self.blocked.as_ref().is_some_and(
-                |(blocked_kind, blocked_id, blocked_revision, _)| {
-                    *blocked_kind == kind && blocked_id == task_id && *blocked_revision == revision
-                },
-            )
+            && self
+                .blocked
+                .as_ref()
+                .is_some_and(|(blocked_id, blocked_revision, _)| {
+                    blocked_id == task_id && *blocked_revision == revision
+                })
         {
             self.blocked = None;
-        }
-    }
-
-    fn active_candidate_cancel(&self) -> Option<(String, u32, Arc<AtomicBool>)> {
-        match &self.active {
-            Some((ResearchTaskKind::Candidate, task_id, revision, cancel, _)) => {
-                Some((task_id.clone(), *revision, Arc::clone(cancel)))
-            }
-            _ => None,
         }
     }
 }
@@ -376,160 +238,8 @@ pub(crate) fn drive_task(
     result.map_err(|_| "research_worker_failed")
 }
 
-#[allow(clippy::large_enum_variant)]
-#[derive(Clone)]
-pub(crate) enum ActiveChoice {
-    Registered(jobs::TaskRecord),
-    Candidate(jobs::CandidateTaskRecord),
-}
-
-fn state_priority(state: jobs::TaskState) -> u8 {
-    match state {
-        jobs::TaskState::Running => 0,
-        jobs::TaskState::Unknown => 1,
-        jobs::TaskState::CancelRequested => 2,
-        _ => 3,
-    }
-}
-
-fn older(registered: &jobs::TaskRecord, candidate: &jobs::CandidateTaskRecord) -> bool {
-    candidate.spec.created_at_ms < registered.spec.created_at_ms
-        || (candidate.spec.created_at_ms == registered.spec.created_at_ms
-            && (candidate.spec.task_id.as_str(), candidate.spec.revision)
-                < (registered.spec.task_id.as_str(), registered.spec.revision))
-}
-
-fn pending_eligible_registered(
-    task: &jobs::TaskRecord,
-    launch: ResearchLaunch,
-    binding: &str,
-    session: &str,
-    now: i64,
-) -> bool {
-    now >= task.spec.expires_at_ms
-        || (launch.registered && task.spec.book_binding == binding && task.spec.session == session)
-}
-
-fn pending_eligible_candidate(
-    task: &jobs::CandidateTaskRecord,
-    launch: ResearchLaunch,
-    binding: &str,
-    session: &str,
-    now: i64,
-) -> bool {
-    now >= task.spec.expires_at_ms
-        || (launch.candidate && task.spec.book_binding == binding && task.spec.session == session)
-}
-
-/// Pick the oldest eligible Pending task when no live attempt occupies the
-/// original queue slot. A live Running/Unknown/CancelRequested attempt is never
-/// skipped, and no attempt is killed to make room. The caller supplies a paged
-/// scan of Pending candidates so an ineligible predecessor on an old book
-/// binding cannot starve a newer launchable row.
-pub(crate) fn choose_active(
-    registered: Option<jobs::TaskRecord>,
-    candidates: Vec<jobs::CandidateTaskRecord>,
-    launch: ResearchLaunch,
-    binding: &str,
-    session: &str,
-    now: i64,
-) -> Option<ActiveChoice> {
-    let live_candidate = candidates
-        .iter()
-        .find(|candidate| candidate.status != jobs::TaskState::Pending)
-        .cloned();
-    let registered_live = registered
-        .as_ref()
-        .filter(|registered| registered.status != jobs::TaskState::Pending);
-    if let Some(candidate) = live_candidate {
-        if let Some(registered) = registered_live {
-            let registered_priority = state_priority(registered.status);
-            let candidate_priority = state_priority(candidate.status);
-            if candidate_priority < registered_priority
-                || (candidate_priority == registered_priority && older(registered, &candidate))
-            {
-                return Some(ActiveChoice::Candidate(candidate));
-            }
-            return Some(ActiveChoice::Registered(registered.clone()));
-        }
-        return Some(ActiveChoice::Candidate(candidate));
-    }
-    if let Some(registered) = registered_live {
-        return Some(ActiveChoice::Registered(registered.clone()));
-    }
-    let mut best: Option<((i64, String, u32), ActiveChoice)> = None;
-    if let Some(registered) = registered.as_ref()
-        && pending_eligible_registered(registered, launch, binding, session, now)
-    {
-        best = Some((
-            (
-                registered.spec.created_at_ms,
-                registered.spec.task_id.clone(),
-                registered.spec.revision,
-            ),
-            ActiveChoice::Registered(registered.clone()),
-        ));
-    }
-    for candidate in &candidates {
-        if !pending_eligible_candidate(candidate, launch, binding, session, now) {
-            continue;
-        }
-        let key = (
-            candidate.spec.created_at_ms,
-            candidate.spec.task_id.clone(),
-            candidate.spec.revision,
-        );
-        if best.as_ref().is_none_or(|(current, _)| key < *current) {
-            best = Some((key, ActiveChoice::Candidate(candidate.clone())));
-        }
-    }
-    best.map(|(_, choice)| choice).or_else(|| {
-        // No launchable row: retain the oldest ineligible predecessor without
-        // launching or mutating it, so the caller can report it truthfully.
-        candidates
-            .into_iter()
-            .next()
-            .map(ActiveChoice::Candidate)
-            .or_else(|| registered.map(ActiveChoice::Registered))
-    })
-}
-
-fn pending_candidate_scan(queue: &mut Connection) -> Result<Vec<jobs::CandidateTaskRecord>> {
-    let mut rows = Vec::new();
-    let mut cursor: Option<jobs::TaskCursor> = None;
-    for _ in 0..10 {
-        let page = jobs::pending_candidates_page(queue, cursor.as_ref(), 100)
-            .map_err(|_| "candidate_task_state_unavailable")?;
-        let count = page.len();
-        rows.extend(page);
-        if count < 100 || rows.len() >= 1000 {
-            break;
-        }
-        cursor = rows.last().map(|row| jobs::TaskCursor {
-            created_at_ms: row.spec.created_at_ms,
-            task_id: row.spec.task_id.clone(),
-            revision: row.spec.revision,
-        });
-    }
-    if let Some(live) =
-        jobs::active_candidate(queue).map_err(|_| "candidate_task_state_unavailable")?
-        && live.status != jobs::TaskState::Pending
-    {
-        rows.insert(0, live);
-    }
-    Ok(rows)
-}
-
-/// The in-process flag carries operator-cancel intent only. Task TTL and unit
-/// wall expiry are derived by the driver from the immutable launch deadline, so
-/// an expiry can never be mislabelled as a human cancellation.
-pub(crate) fn candidate_operator_cancel(record: &jobs::CandidateTaskRecord) -> bool {
-    record.status == jobs::TaskState::CancelRequested && record.cancel_receipt.is_some()
-}
-
 /// Low-priority controller tick: terminal events are deduped by the owner
-/// ledger. Registered launch keeps the old owner/model-worker gate; candidate
-/// launch uses the typed book gate and never recovers an ambiguous attempt.
+/// ledger, and at most one task runs at a time.
 pub(crate) fn tick_tasks(
     db: &mut Connection,
     c: &Config,
@@ -538,53 +248,14 @@ pub(crate) fn tick_tasks(
     runtime: &mut ResearchRuntime,
     now: i64,
 ) -> Result<Value> {
-    let stage_root = cfg
-        .research_tools
-        .as_ref()
-        .map(|settings| settings.stage_root.clone())
-        .unwrap_or_default();
-    tick_tasks_with_runner(db, c, cfg, launch, runtime, now, move || {
-        Box::new(bubblewrap::CandidateRunner::new(stage_root.clone()))
-    })
-}
-
-fn maturation_status(c: &Config, cfg: &PlannerConfig, now: i64) -> Value {
-    match mature_candidates(c, cfg, now) {
-        Ok(value) => json!({"status":"ok","maturation":value["status"]}),
-        Err(_) => json!({"status":"error","reason":"candidate_maturation_unavailable"}),
-    }
-}
-
-/// Testable variant of [`tick_tasks`] with an explicit owned-unit runner
-/// factory. Production uses [`bubblewrap::CandidateRunner`]; tests use a fake
-/// that never invokes systemd.
-pub(crate) fn tick_tasks_with_runner(
-    db: &mut Connection,
-    c: &Config,
-    cfg: &PlannerConfig,
-    launch: ResearchLaunch,
-    runtime: &mut ResearchRuntime,
-    now: i64,
-    mut runner_for: impl FnMut() -> Box<dyn worker::CandidateUnitRunner + Send> + Send + 'static,
-) -> Result<Value> {
     let Some(settings) = cfg.research_tools.as_ref() else {
         return Ok(json!({"status":"disabled"}));
     };
-    runtime.poll_archive_evidence();
-    if runtime.archive_maturing() {
-        return Ok(json!({"status":"maturing","lifecycle":runtime.lifecycle}));
-    }
     let binding = book_binding(c)?;
     runtime.observe_channel();
     let Ok(mut queue) = open_queue(settings, &c.directory.join("model"), false) else {
         return Ok(json!({"status":"unavailable"}));
     };
-    if let Some((task_id, revision, cancel)) = runtime.active_candidate_cancel()
-        && let Ok(active) = jobs::load_candidate(&mut queue, &task_id, revision)
-        && candidate_operator_cancel(&active)
-    {
-        cancel.store(true, Ordering::Relaxed);
-    }
     // Repeating this scan is safe: terminal event identity is stable per task
     // revision, so a crash between completion and ledger insertion is repaired.
     let terminal = jobs::list_scoped_page(
@@ -633,288 +304,65 @@ pub(crate) fn tick_tasks_with_runner(
         )?;
     }
     for row in &terminal {
-        runtime.clear_blocked_if_terminal(
-            ResearchTaskKind::Registered,
-            &row.spec.task_id,
-            row.spec.revision,
-            row.status,
-        );
-    }
-    let candidate_terminal = jobs::list_candidates_page(
-        &mut queue,
-        &c.session.to_string(),
-        None,
-        runtime.candidate_terminal_cursor.as_ref(),
-        100,
-    )
-    .map_err(|_| "candidate_task_state_unavailable")?;
-    runtime.candidate_terminal_cursor = candidate_terminal
-        .last()
-        .filter(|_| candidate_terminal.len() == 100)
-        .map(|row| jobs::TaskCursor {
-            created_at_ms: row.spec.created_at_ms,
-            task_id: row.spec.task_id.clone(),
-            revision: row.spec.revision,
-        });
-    for row in candidate_terminal
-        .iter()
-        .filter(|row| row.spec.book_binding == binding && row.status == jobs::TaskState::Succeeded)
-    {
-        if reconcile_candidate(c, cfg, &mut queue, row).is_err() {
-            runtime.lifecycle = Some(
-                json!({"status":"error","reason":"candidate_lifecycle_unavailable","task_id":row.spec.task_id,"revision":row.spec.revision}),
-            );
-        }
-    }
-    // A later TTL/deadline termination can race an already-produced timely
-    // result. Retry that narrow terminal case from the original stop proof
-    // before emitting a termination event; the full payload check stays in
-    // `reconcile_candidate_attempt`.
-    let late_ready = candidate_terminal
-        .iter()
-        .filter(|row| {
-            row.spec.book_binding == binding
-                && row.status == jobs::TaskState::Terminated
-                && candidate_late_result_ready(&queue, row)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut late_completed = Vec::new();
-    for row in &late_ready {
-        let mut runner = runner_for();
-        if let Ok(value) =
-            reconcile_candidate_attempt(settings, &mut queue, row, &mut *runner, millis)
-            && value["status"] == "reconciled"
-        {
-            late_completed.push(row.spec.task_id.clone());
-        }
-    }
-    for row in candidate_terminal.iter().filter(|row| {
-        row.spec.book_binding == binding
-            && !late_completed.iter().any(|id| id == &row.spec.task_id)
-            && matches!(
-                row.status,
-                jobs::TaskState::Succeeded
-                    | jobs::TaskState::Terminated
-                    | jobs::TaskState::Cancelled
-                    | jobs::TaskState::Refused
-            )
-    }) {
-        let status = task_state_name(row.status);
-        let terminal_at_ms = row
-            .terminal_at_ms
-            .ok_or("candidate_terminal_time_missing")?;
-        super::super::super::redecision::enqueue_research_event_kind(
-            db,
-            c,
-            &row.spec.task_id,
-            row.spec.revision,
-            row.job.result_hash.as_deref(),
-            status,
-            terminal_at_ms,
-            "candidate",
-        )?;
-        runtime.clear_blocked_if_terminal(
-            ResearchTaskKind::Candidate,
-            &row.spec.task_id,
-            row.spec.revision,
-            row.status,
-        );
-    }
-    let mature_due = runtime.active.is_none()
-        && runtime
-            .last_mature_ms
-            .is_none_or(|last| now.saturating_sub(last) >= 60_000);
-    if c.market_archive.is_some() {
-        runtime.refresh_archive_evidence(c, cfg, now, mature_due)?;
-        if runtime.archive_maturing() {
-            return Ok(json!({"status":"maturing","lifecycle":runtime.lifecycle}));
-        }
-    } else if mature_due {
-        runtime.last_mature_ms = Some(now);
-        runtime.lifecycle = Some(maturation_status(c, cfg, now));
+        runtime.clear_blocked_if_terminal(&row.spec.task_id, row.spec.revision, row.status);
     }
     if runtime.active.is_some() {
-        return Ok(json!({"status":"running","lifecycle":runtime.lifecycle}));
+        return Ok(json!({"status":"running"}));
     }
-    let registered =
-        jobs::active_scoped(&mut queue).map_err(|_| "research_task_state_unavailable")?;
-    let candidates = pending_candidate_scan(&mut queue)?;
-    let Some(choice) = choose_active(
-        registered,
-        candidates,
-        launch,
-        &binding,
-        &c.session.to_string(),
-        now,
-    ) else {
-        return Ok(json!({"status":"idle","lifecycle":runtime.lifecycle}));
+    let Some(task) =
+        jobs::active_scoped(&mut queue).map_err(|_| "research_task_state_unavailable")?
+    else {
+        return Ok(json!({"status":"idle"}));
     };
-    match choice {
-        ActiveChoice::Registered(task) => {
-            if let Some((kind, blocked_id, blocked_revision, reason)) = &runtime.blocked
-                && *kind == ResearchTaskKind::Registered
-                && blocked_id == &task.spec.task_id
-                && *blocked_revision == task.spec.revision
-            {
-                return Ok(
-                    json!({"status":"reconciliation_required","task_id":blocked_id,"revision":blocked_revision,"reason":reason}),
-                );
-            }
-            if task.status == jobs::TaskState::Pending && now >= task.spec.expires_at_ms {
-                jobs::refuse_unstarted(
-                    &mut queue,
-                    &task.spec.task_id,
-                    task.spec.revision,
-                    jobs::RefusalReason::DeadlineExpiredBeforeStart,
-                    now,
-                )
-                .map_err(|_| "research_task_refusal_failed")?;
-                return Ok(
-                    json!({"status":"refused_expired","task_id":task.spec.task_id,"revision":task.spec.revision}),
-                );
-            }
-            // A predecessor task keeps its original queue row, lease and authority.
-            // The successor may read it; it must not refuse, recover or launch it.
-            if task.spec.book_binding != binding || task.spec.session != c.session.to_string() {
-                return Ok(json!({
-                    "status":"predecessor_retained",
-                    "task_id":task.spec.task_id,
-                    "revision":task.spec.revision,
-                    "task_status":task_state_name(task.status),
-                    "action":"none"
-                }));
-            }
-            if task.status == jobs::TaskState::Pending && !launch.registered {
-                return Ok(json!({"status":"deferred_owner_work","reason":launch.reason}));
-            }
-            let task_id = task.spec.task_id.clone();
-            let revision = task.spec.revision;
-            let (sender, receiver) = std::sync::mpsc::channel();
-            let settings = settings.clone();
-            let authority = c.directory.join("model");
-            thread::Builder::new()
-                .name("nivra-research-owner".into())
-                .spawn(move || {
-                    let result = drive_task(settings, authority, task_id, revision);
-                    let _ = sender.send(result);
-                })
-                .map_err(|_| "research_worker_unavailable")?;
-            runtime.active = Some((
-                ResearchTaskKind::Registered,
-                task.spec.task_id,
-                task.spec.revision,
-                Arc::new(AtomicBool::new(false)),
-                receiver,
-            ));
-            Ok(
-                json!({"status":"started","kind":"registered","task_id":runtime.active.as_ref().map(|v|v.1.as_str()),"revision":runtime.active.as_ref().map(|v|v.2),"lifecycle":runtime.lifecycle}),
-            )
-        }
-        ActiveChoice::Candidate(task) => {
-            if task.status != jobs::TaskState::Pending {
-                if runtime.active.is_none() {
-                    let mut runner = runner_for();
-                    match reconcile_candidate_attempt(
-                        settings,
-                        &mut queue,
-                        &task,
-                        &mut *runner,
-                        millis,
-                    ) {
-                        Ok(value) => return Ok(value),
-                        Err(_) => {
-                            return Ok(json!({
-                                "status":"candidate_recovery_required",
-                                "task_id":task.spec.task_id,
-                                "revision":task.spec.revision,
-                                "task_status":task_state_name(task.status),
-                                "action":"none",
-                                "reason":"ambiguous_candidate_attempt_retains_lease_no_replay",
-                                "lifecycle":runtime.lifecycle
-                            }));
-                        }
-                    }
-                }
-                return Ok(json!({
-                    "status":"candidate_recovery_required",
-                    "task_id":task.spec.task_id,
-                    "revision":task.spec.revision,
-                    "task_status":task_state_name(task.status),
-                    "action":"none",
-                    "reason":"ambiguous_candidate_attempt_retains_lease_no_replay",
-                    "lifecycle":runtime.lifecycle
-                }));
-            }
-            if let Some((kind, blocked_id, blocked_revision, reason)) = &runtime.blocked
-                && *kind == ResearchTaskKind::Candidate
-                && blocked_id == &task.spec.task_id
-                && *blocked_revision == task.spec.revision
-            {
-                return Ok(
-                    json!({"status":"reconciliation_required","task_id":blocked_id,"revision":blocked_revision,"reason":reason}),
-                );
-            }
-            if now >= task.spec.expires_at_ms {
-                jobs::refuse_unstarted_candidate(
-                    &mut queue,
-                    &task.spec.task_id,
-                    task.spec.revision,
-                    jobs::RefusalReason::DeadlineExpiredBeforeStart,
-                    now,
-                )
-                .map_err(|_| "candidate_task_refusal_failed")?;
-                return Ok(
-                    json!({"status":"refused_expired","task_id":task.spec.task_id,"revision":task.spec.revision}),
-                );
-            }
-            if task.spec.book_binding != binding || task.spec.session != c.session.to_string() {
-                return Ok(json!({
-                    "status":"predecessor_retained",
-                    "task_id":task.spec.task_id,
-                    "revision":task.spec.revision,
-                    "task_status":task_state_name(task.status),
-                    "action":"none"
-                }));
-            }
-            if !launch.candidate {
-                return Ok(
-                    json!({"status":"deferred_candidate_book_unavailable","reason":launch.reason}),
-                );
-            }
-            let task_id = task.spec.task_id.clone();
-            let revision = task.spec.revision;
-            let (sender, receiver) = std::sync::mpsc::channel();
-            let settings = settings.clone();
-            let authority = c.directory.join("model");
-            let cancel = Arc::new(AtomicBool::new(false));
-            let driver_cancel = Arc::clone(&cancel);
-            let mut runner = runner_for();
-            thread::Builder::new()
-                .name("nivra-research-candidate".into())
-                .spawn(move || {
-                    let result = drive_candidate_with_unit(
-                        settings,
-                        authority,
-                        task_id,
-                        revision,
-                        driver_cancel,
-                        millis,
-                        &mut *runner,
-                    );
-                    let _ = sender.send(result);
-                })
-                .map_err(|_| "candidate_worker_unavailable")?;
-            runtime.active = Some((
-                ResearchTaskKind::Candidate,
-                task.spec.task_id,
-                task.spec.revision,
-                cancel,
-                receiver,
-            ));
-            Ok(
-                json!({"status":"started","kind":"candidate","task_id":runtime.active.as_ref().map(|v|v.1.as_str()),"revision":runtime.active.as_ref().map(|v|v.2),"lifecycle":runtime.lifecycle}),
-            )
-        }
+    if let Some((blocked_id, blocked_revision, reason)) = &runtime.blocked
+        && blocked_id == &task.spec.task_id
+        && *blocked_revision == task.spec.revision
+    {
+        return Ok(
+            json!({"status":"reconciliation_required","task_id":blocked_id,"revision":blocked_revision,"reason":reason}),
+        );
     }
+    if task.status == jobs::TaskState::Pending && now >= task.spec.expires_at_ms {
+        jobs::refuse_unstarted(
+            &mut queue,
+            &task.spec.task_id,
+            task.spec.revision,
+            jobs::RefusalReason::DeadlineExpiredBeforeStart,
+            now,
+        )
+        .map_err(|_| "research_task_refusal_failed")?;
+        return Ok(
+            json!({"status":"refused_expired","task_id":task.spec.task_id,"revision":task.spec.revision}),
+        );
+    }
+    // A predecessor task keeps its original queue row, lease and authority.
+    // The successor may read it; it must not refuse, recover or launch it.
+    if task.spec.book_binding != binding || task.spec.session != c.session.to_string() {
+        return Ok(json!({
+            "status":"predecessor_retained",
+            "task_id":task.spec.task_id,
+            "revision":task.spec.revision,
+            "task_status":task_state_name(task.status),
+            "action":"none"
+        }));
+    }
+    if task.status == jobs::TaskState::Pending && !launch.registered {
+        return Ok(json!({"status":"deferred_owner_work","reason":launch.reason}));
+    }
+    let task_id = task.spec.task_id.clone();
+    let revision = task.spec.revision;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let settings = settings.clone();
+    let authority = c.directory.join("model");
+    thread::Builder::new()
+        .name("nivra-research-owner".into())
+        .spawn(move || {
+            let result = drive_task(settings, authority, task_id, revision);
+            let _ = sender.send(result);
+        })
+        .map_err(|_| "research_worker_unavailable")?;
+    let started =
+        json!({"status":"started","task_id":task.spec.task_id,"revision":task.spec.revision});
+    runtime.active = Some((task.spec.task_id, task.spec.revision, receiver));
+    Ok(started)
 }

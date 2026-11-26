@@ -7,7 +7,7 @@ use nivra_core::{
 use nivra_sandbox::{SandboxConfig, stream::Stream};
 use nivra_store::{
     market_archive::{self, ArchiveClient, Bar, BarWindow},
-    research_jobs::{CandidateWindows, SpecCapability},
+    research_jobs::{BacktestWindows, SpecCapability},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -29,7 +29,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[serde(deny_unknown_fields)]
 pub struct Request {
     pub window: BarWindow,
-    pub splits: CandidateWindows,
+    pub splits: BacktestWindows,
     pub capital: Amount,
     pub costs: FeeArithmetic,
     pub params: Value,
@@ -354,7 +354,7 @@ struct Report<'a> {
     to: chrono::NaiveDate,
     requested_instruments: Option<usize>,
     instrument_filter_sha256: String,
-    splits: &'a CandidateWindows,
+    splits: &'a BacktestWindows,
     source_sha256: String,
     params_sha256: String,
     input_bars_sha256: String,

@@ -179,43 +179,33 @@ fn all_tools(dir: &std::path::Path) -> (Config, planner::PlannerConfig) {
         }),
         candidate_compute: Some(CandidateComputeSettings {
             enabled: true,
-            abi: "scorer_replay_v1".into(),
-            sandbox: nivra_sandbox::ScorerSandboxConfig {
+            sandbox: nivra_sandbox::SandboxConfig {
                 wall_ms: 2_000,
-                ..Default::default()
-            },
-            replay: nivra_cli::scorer_compare::ScorerReplaySettings {
-                max_snapshots: 10,
-                min_valid_snapshots: 1,
-                horizons_minutes: vec![5],
-                top_n: 2,
-                max_age_ms: 2_000,
-                lookback_samples: 20,
                 ..Default::default()
             },
             max_source_bytes: 262_144,
             max_params_bytes: 65_536,
-            max_result_bytes: 1_048_576,
             wall_millis: 120_000,
-            limits: nivra_research::worker::ResourceLimits {
-                cpu_millis: 120_000,
-                tasks: 1,
-                workspace_bytes: 1_048_576,
-                file_bytes: 65_536,
-            },
-            helper_path: None,
             unit_tasks: 16,
             unit_memory_bytes: 512 * 1024 * 1024,
-            unit_open_files: 128,
             unit_cpu_millis: 0,
             unit_wall_millis: 0,
             datasets: vec![CandidateDataset {
                 dataset_id: "current_session_features_v1".into(),
                 kind: CandidateDatasetKind::CurrentSessionFeatures,
             }],
-            execution: None,
-            observation: None,
-            strategy: None,
+            strategy: Some(
+                crate::runtime::harness::research::CandidateStrategySettings {
+                    enabled: true,
+                    abi: "strategy_actions_v1".into(),
+                    max_quote_events: 100,
+                    max_observations: 1_000,
+                    max_tape_bytes: 1_048_576,
+                    max_wall_ms: 20_000,
+                    max_archive_window_days:
+                        crate::runtime::harness::research::default_archive_window_days(),
+                },
+            ),
         }),
         registrations: Vec::new(),
     });
@@ -315,7 +305,7 @@ fn args(name: &str) -> Value {
         "backtest" => {
             json!({"task_key":"cand-1","hypothesis":"momentum","source":"def score(f):\n    return 0\n",
             "params":"{}","dataset_id":"current_session_features_v1","training_from_ms":0,"training_to_ms":1,
-            "selection_from_ms":2,"selection_to_ms":3,"horizon_minutes":5,"parent_task_id":null,"parent_ref":null})
+            "selection_from_ms":2,"selection_to_ms":3})
         }
         "list" => json!({"path":null}),
         "read" => json!({"path":"notes/brief.md"}),
@@ -1193,7 +1183,7 @@ fn pi_paper_config_refuses_retired_model_keys() {
 #[test]
 fn decision_lane_supervises_strategies_and_refuses_cash_buys_while_active() {
     use crate::runtime::strategy_library::{Author, Library, acceptance};
-    use nivra_cli::candidate_execution::artifact_bytes;
+    use nivra_cli::canonical_json::bytes as artifact_bytes;
     use nivra_core::execution::{ExitIntent, Instrument, Position};
     use nivra_core::finance::{FeeSchedule, Price};
     use nivra_core::market::{InstrumentKind, OptionCatalog, OptionContract, Segment};

@@ -6,7 +6,7 @@ use nivra_research::archive_bars::{ABI, Request, Trace, run_traced};
 use nivra_sandbox::SandboxConfig;
 use nivra_store::{
     market_archive::{self, BarUnit, BarWindow, ist_midnight},
-    research_jobs::CandidateWindows,
+    research_jobs::BacktestWindows,
 };
 use serde_json::{Value, json};
 use std::{
@@ -148,7 +148,7 @@ fn request(options: &Options, costs: &FeeArithmetic, params: Value) -> Result<Re
             to: options.to,
             instruments: None,
         },
-        splits: CandidateWindows {
+        splits: BacktestWindows {
             training_from_ms: day(options.from),
             training_to_ms: day(options.test_from) - 1,
             selection_from_ms: day(options.test_from),

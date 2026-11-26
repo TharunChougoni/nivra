@@ -5,7 +5,7 @@ pub mod event_feed;
 pub mod lock;
 
 pub mod archive_reconcile;
-pub mod candidate_execution;
+pub mod canonical_json;
 pub mod catalog_measure;
 pub mod strategy_actions;
 pub mod strategy_lab;
@@ -16,5 +16,3 @@ pub mod strategy_pipeline;
 pub mod strategy_approval;
 
 pub mod strategy_report;
-
-pub mod scorer_compare;

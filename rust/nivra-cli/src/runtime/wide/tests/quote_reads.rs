@@ -716,15 +716,18 @@ fn archive_capture_replays_the_same_session_as_sqlite() -> Result<()> {
     };
     assert_eq!(query(&archived)?, query(&legacy)?);
     let replay = |c: &Config| {
-        paper_replay::execution_tape_bounded(
+        paper_replay::execution_tape_bounded_with_stop(
             c.quote_source(),
             c.session,
             Some(c.previous_session),
             c.allocation().unwrap(),
-            6,
-            2_000,
-            2_000_000,
+            paper_replay::TapeLimits {
+                max_quote_events: 6,
+                max_observations: 2_000,
+                max_tape_bytes: 2_000_000,
+            },
             last,
+            &|| None,
         )
     };
     let archived_tape = replay(&archived)?;

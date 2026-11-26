@@ -30,7 +30,7 @@ fn register(library: &Library, source: &[u8], params: Value, edit: fn(&mut Value
         "parameters": {"version": 1, "top_n": 20, "params": params},
     });
     edit(&mut report);
-    let report = nivra_cli::candidate_execution::artifact_bytes(&report).unwrap();
+    let report = nivra_cli::canonical_json::bytes(&report).unwrap();
     let accepted = acceptance::Accepted {
         report: &report,
         report_sha256: digest(&report),

@@ -194,8 +194,8 @@ impl Controller<'_> {
         {
             self.display_catalog_status = status;
         }
-        let (research_library, experiment_lifecycle) = self.research_views(now);
-        // One completion sample owns as_of_ms, the heartbeat and both research
+        let research_library = self.research_library();
+        // One completion sample owns as_of_ms, the heartbeat and research
         // projections. Request time in the dashboard API never renews it.
         let completed_at_ms = millis();
         self.loop_generation = self
@@ -215,7 +215,7 @@ impl Controller<'_> {
             c.idle_poll_interval_ms
         };
         let research_context_status = research_context_status(research_context_unavailable);
-        let mut v_json = serde_json::json!({"research_library":research_library,"experiment_lifecycle":experiment_lifecycle,"instrument_display":self.display_catalog_status,"paper_only":true,"live_enabled":LIVE_ENABLED,"account":c.account,"authorized_session":c.session,"next_session_config":c.next_sessions(day)?,"policy":self.p.policy,"model_led":self.p.model_led,"strategy_decision":rollover::published_decision(c),"status":status,"as_of_ms":completed_at_ms,"universe_size":self.universe.as_ref().map(|u|u.instruments.len()),"universe_exclusions":self.universe.as_ref().map(|u|&u.exclusions),"security_ready":self.universe.is_some(),"scanned_count":scanned_count,"pending_count":self.universe.as_ref().map(|u|u.instruments.len().saturating_sub(scanned_count as usize)),"market_feed":self.feed_health,"oldest_scan_age_ms":oldest,"screen_reasons":reasons,"discovery":discovery_status,"ranking":self.scan.ranking.iter().take(10).collect::<Vec<_>>(),"capital":self.p.allocation()?,"planner":self.planner_status,"nifty_options":self.option_status,"research_tasks":self.research_tasks_status,"activity_attribution":owner_activity,"retention":self.retention_status,"readiness":self.readiness_status,"history_preparation":self.history_status,"model_initialization":initialization,"model_status":"model-led","entry_status":entry_status,"realised_net_pnl_by_fill":self.p.realised_net_pnl(),"portfolio":self.p,"read_failure_reason":self.read_failure,"fee_policy":format!("SIMULATION_ONLY: {}", serde_json::to_string(&self.p.costs.clone().ok_or("paper_costs_required")?)?),"updater":updater_status});
+        let mut v_json = serde_json::json!({"research_library":research_library,"instrument_display":self.display_catalog_status,"paper_only":true,"live_enabled":LIVE_ENABLED,"account":c.account,"authorized_session":c.session,"next_session_config":c.next_sessions(day)?,"policy":self.p.policy,"model_led":self.p.model_led,"strategy_decision":rollover::published_decision(c),"status":status,"as_of_ms":completed_at_ms,"universe_size":self.universe.as_ref().map(|u|u.instruments.len()),"universe_exclusions":self.universe.as_ref().map(|u|&u.exclusions),"security_ready":self.universe.is_some(),"scanned_count":scanned_count,"pending_count":self.universe.as_ref().map(|u|u.instruments.len().saturating_sub(scanned_count as usize)),"market_feed":self.feed_health,"oldest_scan_age_ms":oldest,"screen_reasons":reasons,"discovery":discovery_status,"ranking":self.scan.ranking.iter().take(10).collect::<Vec<_>>(),"capital":self.p.allocation()?,"planner":self.planner_status,"nifty_options":self.option_status,"research_tasks":self.research_tasks_status,"activity_attribution":owner_activity,"retention":self.retention_status,"readiness":self.readiness_status,"history_preparation":self.history_status,"model_initialization":initialization,"model_status":"model-led","entry_status":entry_status,"realised_net_pnl_by_fill":self.p.realised_net_pnl(),"portfolio":self.p,"read_failure_reason":self.read_failure,"fee_policy":format!("SIMULATION_ONLY: {}", serde_json::to_string(&self.p.costs.clone().ok_or("paper_costs_required")?)?),"updater":updater_status});
         if let Some(agent) = &self.agent {
             v_json["agent"] = agent.status();
         }
@@ -239,32 +239,11 @@ impl Controller<'_> {
         Ok(interval_ms)
     }
 
-    /// Research library and experiment lifecycle projections.
-    pub(super) fn research_views(
-        &self,
-        now: i64,
-    ) -> (Option<serde_json::Value>, serde_json::Value) {
-        let c = &self.config;
-        let research_library = self.event_config.as_ref().map(|cfg|
-            super::super::super::experiment_ledger::research::library(c, cfg)
+    fn research_library(&self) -> Option<serde_json::Value> {
+        self.event_config.as_ref().map(|cfg|
+            super::super::super::experiment_ledger::research::library(&self.config, cfg)
                 .unwrap_or_else(|_| serde_json::json!({"status":"unavailable","reason":"original_research_library_unavailable","items":[],"activation_authorized":false}))
-        );
-        let experiment_lifecycle = self.event_config
-            .as_ref()
-            .and_then(|cfg| {
-                if c.market_archive.is_some() && cfg.research_tools.is_some() {
-                    self.research_worker.archive_lifecycle().cloned()
-                } else {
-                    super::super::super::harness::research::checked_lifecycle_library(c, cfg, now).ok()
-                }
-            })
-            .unwrap_or_else(|| serde_json::json!({"status":"unavailable","reason":"experiment_lifecycle_unavailable","items":[],"activation_authorized":false}));
-        let research_library =
-            super::super::super::experiment_ledger::lifecycle::merge_into_library(
-                research_library,
-                &experiment_lifecycle,
-            );
-        (research_library, experiment_lifecycle)
+        )
     }
 
     pub(super) fn operational_health(

@@ -9,7 +9,7 @@ use std::os::unix::fs::DirBuilderExt;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-/// `backtest` with `strategy: true`: replay the source as a
+/// `backtest` over a quote tape: replay the source as a
 /// `strategy_actions_v1` strategy over a frozen quote tape with the book's
 /// capital, costs and exit policy. The
 /// report is kept by content hash under `model/strategy-replays/`.
@@ -18,7 +18,7 @@ pub(super) fn strategy_backtest(
     cfg: &PlannerConfig,
     candidate: &CandidateComputeSettings,
     author: Author,
-    args: &CandidateSubmitArgs,
+    args: &BacktestArgs,
     now: i64,
     preempted: &dyn Fn() -> bool,
 ) -> Result<Value> {
@@ -27,9 +27,6 @@ pub(super) fn strategy_backtest(
         return Ok(not_dispatched("candidate_strategy_disabled"));
     };
     settings.validate()?;
-    if args.execution.is_some() || args.parent_ref.is_some() {
-        return Ok(not_dispatched("candidate_strategy_args_conflict"));
-    }
     let dataset = candidate
         .datasets
         .iter()
@@ -93,7 +90,7 @@ pub(super) fn strategy_backtest(
     let Some(tape) = tape else {
         return Ok(json!({
             "status":"not_dispatched",
-            "reason":"candidate_execution_quotes_unavailable",
+            "reason":"strategy_replay_quotes_unavailable",
             "tape":{"archive_window":archive}
         }));
     };
@@ -135,7 +132,7 @@ pub(super) fn strategy_backtest(
         report["tape"]["archive_window"] = json!(archive);
         report["tape"]["events_sha256"] = json!(tape.events_sha256);
     }
-    let bytes = nivra_cli::candidate_execution::artifact_bytes(&report)?;
+    let bytes = nivra_cli::canonical_json::bytes(&report)?;
     let report_sha256 = digest(&bytes);
     let directory = c.directory.join("model").join("strategy-replays");
     fs::DirBuilder::new()
@@ -219,7 +216,7 @@ fn build_tape(
                 None => execution_tape_bounded_with_stop(
                     c.quote_source(),
                     c.session,
-                    candidate_previous_trading_session(&c),
+                    previous_trading_session(&c),
                     capital,
                     limits,
                     now,

@@ -1,5 +1,4 @@
 //! Scoped research tasks (registered analyses and archive bar jobs).
-use super::candidate::candidate_tables_exist;
 use super::queue::{enqueue_tx, event, immediate, read};
 use super::*;
 
@@ -236,22 +235,7 @@ pub fn enqueue_scoped_bounded(
             "SELECT count(*),coalesce(sum(json_extract(body,'$.registered_analysis.code_sha256')=?3 AND json_extract(body,'$.registered_analysis.runtime_sha256')=?4 AND json_extract(body,'$.registered_analysis.input_sha256')=?5),0) FROM scoped_tasks WHERE session=?1 AND json_extract(body,'$.book_binding')=?2",
             params![task_spec.session, task_spec.book_binding, task_spec.registered_analysis.code_sha256, task_spec.registered_analysis.runtime_sha256, task_spec.registered_analysis.input_sha256],
             |r| Ok((r.get(0)?,r.get(1)?))).map_err(|_| Error::Storage)?;
-        // Session admission counts both task families. Per-input admission is
-        // family-scoped: a registered input key is domain-prefixed and never
-        // matches a candidate input key, so no cross-domain same-input query is
-        // meaningful here.
-        let candidate_total: u32 = if candidate_tables_exist(&tx)? {
-            tx.query_row(
-                "SELECT count(*) FROM candidate_tasks WHERE session=?1 AND json_extract(body,'$.book_binding')=?2",
-                params![task_spec.session, task_spec.book_binding],
-                |r| r.get(0),
-            )
-            .map_err(|_| Error::Storage)?
-        } else {
-            0
-        };
-        let total = registered_total.saturating_add(candidate_total);
-        let same = registered_same;
+        let (total, same) = (registered_total, registered_same);
         let deferred = if total >= limits.max_session_trials {
             Some(("research_session_compute_budget_exhausted", total))
         } else if same >= limits.max_trials_per_input {

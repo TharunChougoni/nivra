@@ -1,10 +1,9 @@
-//! Append-only experiment trials. A successful scorer process is execution
+//! Append-only experiment trials. A successful research job is execution
 //! evidence only; this ledger never records that as an edge.
 use super::*;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-pub(crate) mod lifecycle;
 pub(crate) mod research;
 
 const SCHEMA: &str = "
@@ -18,31 +17,6 @@ CREATE TABLE IF NOT EXISTS experiment_trial_events(
   trial_id TEXT NOT NULL,
   event TEXT NOT NULL,
   at_ms INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS experiment_lifecycle_specs(
-  candidate_id TEXT PRIMARY KEY,
-  body TEXT NOT NULL,
-  recorded_at_ms INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS experiment_lifecycle_events(
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  candidate_id TEXT NOT NULL,
-  from_state TEXT,
-  to_state TEXT NOT NULL,
-  event TEXT NOT NULL,
-  evidence_sha256 TEXT NOT NULL,
-  at_ms INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS experiment_lifecycle_state(
-  candidate_id TEXT PRIMARY KEY,
-  state TEXT NOT NULL,
-  projection TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS experiment_continuations(
-  continuation_id TEXT PRIMARY KEY,
-  body TEXT NOT NULL,
-  recorded_at_ms INTEGER NOT NULL
 );";
 
 pub(super) fn file_path(directory: &std::path::Path) -> std::path::PathBuf {

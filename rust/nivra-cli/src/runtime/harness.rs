@@ -14,10 +14,8 @@ mod bundle;
 use bundle::*;
 pub(crate) mod research;
 pub(crate) use research::{
-    LaunchBook, ResearchLaunch, ResearchRuntime, ResearchSettings,
-    helper_entry as research_candidate_helper, observation_status as research_observation_status,
-    status as research_status, tick_tasks as research_tick_tasks,
-    validate_files as validate_research_files,
+    LaunchBook, ResearchLaunch, ResearchRuntime, ResearchSettings, status as research_status,
+    tick_tasks as research_tick_tasks, validate_files as validate_research_files,
 };
 fn skip_false(value: &bool) -> bool {
     !*value
@@ -34,21 +32,6 @@ pub(crate) struct GrantedTools {
     /// unless the reviewed quote-capture setting is enabled.
     #[serde(default, skip_serializing_if = "skip_false")]
     pub quote_capture: bool,
-    #[serde(default, skip_serializing_if = "skip_false")]
-    pub candidate: bool,
-    /// Advertise the optional execution-spec argument only when the reviewed
-    /// execution capability is enabled. Omitted from serialized frames when
-    /// false so archived request bytes stay unchanged.
-    #[serde(default, skip_serializing_if = "skip_false")]
-    pub candidate_execution: bool,
-    /// Advertise the optional prospective-observation argument only when the
-    /// reviewed observation capability is enabled.
-    #[serde(default, skip_serializing_if = "skip_false")]
-    pub candidate_observation: bool,
-    /// Advertise the optional typed cross-session parent reference only when
-    /// the candidate capability is enabled.
-    #[serde(default, skip_serializing_if = "skip_false")]
-    pub candidate_parent_ref: bool,
     pub workspace: bool,
     /// Config-gated orchestrator web tools (#222). Omitted from serialized
     /// frames unless enabled so archived request bytes stay unchanged. The two

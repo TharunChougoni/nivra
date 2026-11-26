@@ -468,11 +468,6 @@ pub(super) fn persist(
     Ok(())
 }
 
-/// Tick event for controller research-observation receipts. They are kept apart
-/// from trading `wide_quotes` so retention never compacts the original receipt a
-/// later session re-derives an observation from (#240).
-pub(crate) const RESEARCH_QUOTES_EVENT: &str = "research_quotes";
-
 /// Tick event for a stretch the research quote tape could not cover: top-K
 /// names a full depth batch left out, or a feed fallback that paused the
 /// depth read. No receipt is invented for it.

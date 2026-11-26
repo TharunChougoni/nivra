@@ -10,16 +10,11 @@ use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::os::unix::fs::DirBuilderExt;
 
-mod candidate;
-mod carry;
-mod continuation;
-mod measure;
+mod backtest;
 mod runtime;
 mod settings;
 mod tasks;
-pub(crate) use candidate::*;
-pub(crate) use carry::*;
-pub(crate) use continuation::*;
+pub(crate) use backtest::*;
 pub(crate) use runtime::*;
 pub(crate) use settings::*;
 pub(crate) use tasks::*;

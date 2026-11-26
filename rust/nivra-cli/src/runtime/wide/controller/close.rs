@@ -100,13 +100,6 @@ impl Controller<'_> {
                 Ok(status) => status,
                 Err(_) => serde_json::json!({"status":"unavailable"}),
             };
-            status["observation"] = if c.market_archive.is_some() && cfg.research_tools.is_some() {
-                self.research_worker.archive_observation().cloned().unwrap_or_else(|| {
-                    serde_json::json!({"status":"unavailable","reason":"archive_research_view_pending"})
-                })
-            } else {
-                harness::research_observation_status(c, cfg, now)
-            };
             if research_context_unavailable {
                 status["context"] = research_context_status(true);
             }
@@ -115,9 +108,6 @@ impl Controller<'_> {
     }
 
     pub(super) fn rollover(&mut self, t: Now) -> Result<Advance> {
-        if self.research_worker.archive_maturing() {
-            return Ok(Advance::Idle("research_maturation_in_progress"));
-        }
         let Now { now, day, .. } = t;
         let c = &self.config;
         match rollover::advance_pi(c, now) {
@@ -172,7 +162,6 @@ impl Controller<'_> {
         self.stale_seen = false;
         self.rollover_seen = false;
         self.archive = Some(start_archive(&next)?);
-        self.research_worker.reset_archive_evidence();
         self.config = next;
         self.history_attempt = HistoryAttempts::load(&self.config)?;
         self.last_history_check = 0;

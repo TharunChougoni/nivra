@@ -342,7 +342,7 @@ mod tests {
         )
         .unwrap();
         drop(db);
-        let bounded = super::candidate_quotes_window_with(
+        let bounded = super::candidate_quotes(
             c.quote_source(),
             c.session,
             &keys,
@@ -350,9 +350,6 @@ mod tests {
             open + 9_000,
             1,
             open + 16_000,
-            &[QuotePurposeV1::Protection],
-            true,
-            false,
         )
         .unwrap();
         assert_eq!(bounded["quotes"][0]["receipt_ms"], open + 8_000);

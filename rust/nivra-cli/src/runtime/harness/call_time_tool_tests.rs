@@ -61,78 +61,20 @@ fn data_and_granted_tool_schemas_use_configured_limits() {
     // optional arguments are nullable instead (#123).
     let owner = granted_tool_definitions(GrantedTools {
         research: true,
-        candidate: true,
-        candidate_execution: false,
         workspace: true,
         web: true,
         web_search: true,
         web_news: true,
         research_request: true,
         quote_capture: true,
-        candidate_observation: true,
-        candidate_parent_ref: true,
         ..Default::default()
     });
-    // Config-gated orchestrator web tools (#222) are advertised only for the
-    // enabled capabilities, and only on the supervisor/owner role.
-    let candidate_submit = owner
-        .iter()
-        .find(|tool| tool["name"] == "candidate_submit")
-        .unwrap();
-    assert_eq!(
-        candidate_submit["parameters"]["properties"]["parent_task_id"]["type"],
-        json!(["string", "null"])
-    );
-    assert!(
-        candidate_submit["parameters"]["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("parent_task_id"))
-    );
-    assert_eq!(
-        candidate_submit["parameters"]["properties"]["params"]["type"],
-        "string"
-    );
-    // The execution argument is advertised only when the reviewed capability
-    // is enabled; the disabled schema keeps its historical bytes.
-    assert!(
-        candidate_submit["parameters"]["properties"]
-            .get("execution")
-            .is_none()
-    );
-    assert!(
-        !candidate_submit["parameters"]["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("execution"))
-    );
-    let execution_owner = granted_tool_definitions(GrantedTools {
-        research: true,
-        candidate: true,
-        candidate_execution: true,
-        ..GrantedTools::default()
-    });
-    let execution_submit = execution_owner
-        .iter()
-        .find(|tool| tool["name"] == "candidate_submit")
-        .unwrap();
-    assert_eq!(
-        execution_submit["parameters"]["properties"]["execution"]["type"],
-        json!(["string", "null"])
-    );
-    assert!(
-        execution_submit["parameters"]["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("execution"))
-    );
-    // A research turn gets only candidate and workspace list/read/write plus
+    // A research turn gets only workspace list/read/write plus
     // the optional archived-receipt quote reader. It never gets TradePlan,
     // market/financial/web/policy, workspace_run/install or registered-analysis
     // enqueue, and review remains tool-less.
     let research_turn = granted_tool_definitions(GrantedTools {
         research_turn: true,
-        candidate: true,
         workspace: true,
         quote_capture: true,
         ..Default::default()
@@ -142,10 +84,6 @@ fn data_and_granted_tool_schemas_use_configured_limits() {
         .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
         .collect::<Vec<_>>();
     for name in [
-        "candidate_submit",
-        "candidate_status",
-        "candidate_result",
-        "candidate_cancel",
         "workspace_list",
         "workspace_read",
         "workspace_write",
@@ -239,7 +177,15 @@ fn data_and_granted_tool_schemas_use_configured_limits() {
         run["parameters"]["properties"]["input_path"]["type"],
         json!(["string", "null"])
     );
-    for tool in digest.iter().chain(owner.iter()) {
+    let backtest = backtest_tool_definitions(&serde_json::from_value(json!({
+        "enabled":true,"sandbox":{},"max_source_bytes":1024,"max_params_bytes":1024,"wall_millis":2000,
+        "datasets":[{"dataset_id":"recent","kind":{"archive_window":{"from_session":"2026-11-20","to_session":"2026-11-25"}}}]
+    })).unwrap());
+    assert_eq!(
+        backtest[0]["parameters"]["properties"]["dataset_id"]["enum"],
+        json!(["recent", "archive_bars"])
+    );
+    for tool in digest.iter().chain(owner.iter()).chain(backtest.iter()) {
         strict_schema(&tool["parameters"]);
         if tool["strict"] != true {
             continue;

@@ -90,8 +90,8 @@ fn fixture_strategy_replays_with_hand_checked_fills_and_fees() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        nivra_cli::candidate_execution::artifact_bytes(&report).unwrap(),
-        nivra_cli::candidate_execution::artifact_bytes(&again).unwrap()
+        nivra_cli::canonical_json::bytes(&report).unwrap(),
+        nivra_cli::canonical_json::bytes(&again).unwrap()
     );
 }
 

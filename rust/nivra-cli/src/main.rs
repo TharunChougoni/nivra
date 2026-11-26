@@ -50,16 +50,6 @@ enum Command {
         #[command(subcommand)]
         command: StrategyLabCommand,
     },
-    /// Offline experiment lifecycle: admit, ingest workspace scores, and persist transitions.
-    ExperimentLifecycle {
-        #[arg(long)]
-        book: PathBuf,
-        #[arg(long)]
-        request: PathBuf,
-        /// New report file; existing reports are never replaced.
-        #[arg(long)]
-        output: PathBuf,
-    },
     /// Opt-in model planner preview; never trades.
     Planner {
         #[command(subcommand)]
@@ -166,11 +156,6 @@ enum Command {
         keys: Vec<String>,
     },
     Update(update::Args),
-    /// Hidden fixed candidate helper. Runs only inside an owned systemd unit.
-    #[command(hide = true)]
-    CandidateSupervise {
-        launch: PathBuf,
-    },
     /// Offline pi agent check: one decision turn, its research request and the
     /// next decision turn against the scripted fake provider; never trades.
     AgentCheck(runtime::agent::check::Args),
@@ -354,20 +339,6 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::ExperimentLifecycle {
-            book,
-            request,
-            output,
-        } => match runtime::experiment_ledger::lifecycle::entry(&book, &request, &output) {
-            Ok(report) => {
-                println!("{report}");
-                ExitCode::SUCCESS
-            }
-            Err(error) => {
-                eprintln!("experiment_lifecycle_refused: {error}");
-                ExitCode::FAILURE
-            }
-        },
         Command::Planner { command } => runtime::planner::entry(command),
         Command::Strategy { config, command } => runtime::strategy_library::entry(&config, command),
         Command::Alert {
@@ -420,15 +391,6 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Update(args) => update::entry(args),
-        Command::CandidateSupervise { launch } => {
-            match runtime::harness::research_candidate_helper(&launch) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => {
-                    eprintln!("candidate helper failed: {error}");
-                    ExitCode::FAILURE
-                }
-            }
-        }
         Command::AgentCheck(args) => runtime::agent::check::run(args),
         Command::AgentTurn(args) => runtime::agent::turn_cli::run(args),
         Command::AgentShadowReport(args) => runtime::agent::shadow_report::run(args),
