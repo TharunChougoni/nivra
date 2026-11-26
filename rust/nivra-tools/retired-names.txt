@@ -99,7 +99,7 @@
 6	scorer	rust/nivra-cli/src/runtime/harness/research/settings.rs
 12	scorer	rust/nivra-cli/src/runtime/harness/research/tests.rs
 2	scorer	rust/nivra-cli/src/runtime/harness/tools.rs
-25	scorer	rust/nivra-cli/src/runtime/paper_replay/receipts.rs
+24	scorer	rust/nivra-cli/src/runtime/paper_replay/receipts.rs
 3	scorer	rust/nivra-cli/src/runtime/strategy_results.rs
 2	scorer	rust/nivra-cli/src/runtime/web/v2/src/research-panels.test.tsx
 2	scorer	rust/nivra-cli/src/runtime/web/v2/src/research.ts

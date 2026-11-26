@@ -1,5 +1,10 @@
 # Source snapshot
 
+## 0.13.1 — 2026-11-26
+
+Publishes the 0.13.0 changes below. The 0.13.0 tag failed the release-link
+check and was never published.
+
 ## 0.13.0 — 2026-11-26
 
 **Strategy acceptance now defaults to three tape dates.** Configure an
