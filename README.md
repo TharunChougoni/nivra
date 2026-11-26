@@ -28,6 +28,9 @@ is off or no strategy is active, the decision lane plans each trade. See
   the trigger engine, and executes validated paper actions.
 - **Model lanes** (pi agent, TypeScript): decision, gate, research and review
   turns, each with its own budget and tools.
+- **Market archive**: TimescaleDB keeps the original candle and quote
+  receipts across sessions. Candle history, pre-open preparation, daily
+  research and past-session charts read from it.
 - **Execution gate**: identity, cash after fees, held units, and an original
   quote receipt no more than **two seconds** old. No ambiguous retries and no
   broker failover.
@@ -38,7 +41,9 @@ is off or no strategy is active, the decision lane plans each trade. See
 ## Quick start
 
 Requirements: Linux x86_64 and Rust 1.95.0 (pinned). Node 22.19 or later runs
-the pi agent. Node 24 builds the dashboard.
+the pi agent. Node 24 builds the dashboard. A paper book that needs candle
+history, pre-open preparation, daily research or past-session charts also
+needs a PostgreSQL database with the TimescaleDB extension.
 
 ```sh
 git clone https://github.com/TharunChougoni/nivra.git
@@ -61,7 +66,7 @@ contributors and agents are in [AGENTS.md](AGENTS.md).
 | Path | Responsibility |
 | --- | --- |
 | `rust/nivra-core` | Decimal finance, fees, instruments and calendar, quotes, paper execution, replay |
-| `rust/nivra-store` | SQLite ledger and durable journals |
+| `rust/nivra-store` | SQLite ledger, durable journals and the TimescaleDB market archive |
 | `rust/nivra-cli` | Controller, scanner, agent lanes, history, dashboard, recovery, updater |
 | `rust/nivra-research` | Research jobs, leases and sandbox worker |
 | `rust/nivra-sandbox` | Strategy sandbox and replay containment |

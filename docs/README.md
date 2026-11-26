@@ -1,6 +1,6 @@
 # Documentation
 
-These guides describe the code on `main`. The planned design is in
+These guides describe the code on `main`. The design and its rationale are in
 [direction](DIRECTION.md). Future work is tracked in
 [GitHub Issues](https://github.com/TharunChougoni/nivra/issues).
 
@@ -13,7 +13,7 @@ These guides describe the code on `main`. The planned design is in
 | [Research](RESEARCH.md) | Write, sandbox, replay and register strategies |
 | [Operations](OPERATIONS.md) | Set up, run, stop, resume, roll over, update and recover a paper book |
 | [Configuration](../packaging/rust/CONFIGURATION.md) | Fill in the paper config templates |
-| [Market data](MARKET_DATA.md) | Understand the Upstox feed, index context and history download |
+| [Market data](MARKET_DATA.md) | Understand the Upstox feed, index context, the TimescaleDB archive and history download |
 | [Dashboard](DASHBOARD.md) | Use the read-only dashboard and its API |
 | [Development](DEVELOPMENT.md) | Build, run the gate, keep builds fast and release |
 | [Testing](TESTING.md) | Follow the test rules and the test budget |

@@ -5,6 +5,10 @@
   "calendar_source": "NSE/CMTR/71775",
   "directory": "${ORIGINAL_BOOK_DIRECTORY}",
   "sessions_root": "${ORIGINAL_SESSIONS_ROOT}",
+  "market_archive": {
+    "url": "postgresql://nivra@127.0.0.1/nivra_market",
+    "password_file": "/REVIEWED/APP_ARCHIVE_PASSWORD"
+  },
   "planner_config": "${CONFIG_DIR}/planner.json",
   "token_file": "/REVIEWED/APP_MARKET_GRANT",
   "dashboard_token_file": "/REVIEWED/APP_DASHBOARD_GRANT",

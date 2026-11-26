@@ -1,9 +1,8 @@
 # Direction: algorithms first, models as researchers
 
-Nivra is moving from per-trade model decisions to **model-written algorithms
-that code executes**. This page describes the target design and why. The
-[issues](https://github.com/TharunChougoni/nivra/issues) track each step. Until
-a step lands, the other guides describe what the code does today.
+Nivra runs **model-written algorithms that code executes**. This page describes
+that design and why. The [issues](https://github.com/TharunChougoni/nivra/issues)
+track each step.
 
 ## Why
 
@@ -22,7 +21,7 @@ can apply that kind of rule instantly and consistently, and a backtest after
 costs can check it. A model judging each trade, about a minute behind the
 signal, adds cost and noise without an edge we can measure.
 
-## Target design
+## Design
 
 | Part | Role |
 | --- | --- |
@@ -30,7 +29,7 @@ signal, adds cost and noise without an edge we can measure.
 | Acceptance | A deterministic after-cost replay accepts or rejects a strategy and registers accepted versions, hash-pinned, in the strategy library. Paper trading does not need a multi-day shadow period first. |
 | Strategy executor | The paper controller runs the active strategy on every scan. It sends that strategy's actions through the same execution gate as model plans: identity, cash, fees and quotes no more than 2 s old. |
 | Decision lane | Supervises. It picks the active strategy at the open and when the regime changes, and handles what rules cannot: Nifty options, exceptions and held positions in unusual states. |
-| Gate lane | Removed from the cash entry path once the executor handles entries. |
+| Gate lane | Bypassed on cash entries whenever a registered strategy is active; the executor handles them. |
 | Review lane | Reviews the day after the seal and leaves an agenda for research. |
 
 Deterministic code still owns validation, credentials, cash and fees, fills and
@@ -38,16 +37,16 @@ protection. Paper only: nothing here enables live orders.
 
 ## Order of work
 
-Tracked in [#44](https://github.com/TharunChougoni/nivra/issues/44):
+All six steps landed. Tracked in [#44](https://github.com/TharunChougoni/nivra/issues/44):
 
-1. Done: exact refusal reasons (#28, execution part), cost rates in the brief
+1. Exact refusal reasons (#28, execution part), cost rates in the brief
    (#37), and the option spot source (#38).
-2. Done: research after the close every day, and the quote tape it needs (#39).
-3. Done: the strategy contract with entry and exit rules, and its after-cost
+2. Research after the close every day, and the quote tape it needs (#39).
+3. The strategy contract with entry and exit rules, and its after-cost
    replay (#40).
-4. Done: the deterministic acceptance check and automatic registration (#41).
-5. Done: the strategy executor in the paper controller (#42).
-6. Done: decision lane supervision and gate removal on cash entries (#43).
+4. The deterministic acceptance check and automatic registration (#41).
+5. The strategy executor in the paper controller (#42).
+6. Decision lane supervision and gate bypass on cash entries (#43).
 
 Capital stays at ₹5,000 for paper trading. Costs are proportional (brokerage
 percentages are below a ₹20 cap at this order size), so the bar is to beat
