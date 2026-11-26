@@ -560,14 +560,16 @@ impl Portfolio {
             self.cash.checked_add(n.checked_sub(fee)?)?
         };
         if buy {
-            let (units, price) = if let Some(p) = self.positions.get(&i.key) {
-                if p.instrument != *i {
-                    return Err("buy_identity_changed".into());
-                }
-                combined_entry(p.units, p.entry, units, price)?
-            } else {
-                (units, price)
-            };
+            let (units, price, exit_intent, decision_id) =
+                if let Some(p) = self.positions.get(&i.key) {
+                    if p.instrument != *i {
+                        return Err("buy_identity_changed".into());
+                    }
+                    let (units, price) = combined_entry(p.units, p.entry, units, price)?;
+                    (units, price, p.exit_intent.clone(), p.decision_id.clone())
+                } else {
+                    (units, price, None, None)
+                };
             self.positions.insert(
                 i.key.clone(),
                 Position {
@@ -576,8 +578,8 @@ impl Portfolio {
                     entry: price,
                     mark: q.bid,
                     marked_at: q.source.min(q.receipt),
-                    exit_intent: None,
-                    decision_id: None,
+                    exit_intent,
+                    decision_id,
                 },
             );
         } else {
@@ -1612,5 +1614,58 @@ mod execution_settings_tests {
                 .target
         };
         assert_eq!(revised, Some(Price::try_from(a("130")).unwrap()));
+    }
+
+    #[test]
+    fn adding_to_a_position_without_new_exits_keeps_its_protection() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-16T10:00:00+05:30")
+            .unwrap()
+            .timestamp_millis();
+        let price = |v: &str| Price::try_from(a(v)).unwrap();
+        let instrument = Instrument {
+            key: "NSE_EQ|A".into(),
+            symbol: "A".into(),
+            series: "EQ".into(),
+            tick: price("0.05"),
+        };
+        let quote = Quote {
+            bid: price("100"),
+            ask: price("100"),
+            bid_units: 10,
+            ask_units: 10,
+            source: now,
+            receipt: now,
+        };
+        let mut book = Portfolio::with_capital(a("5000"));
+        book.costs = Some(
+            serde_json::from_str(include_str!(
+                "../../../fixtures/test-legacy-paper-costs.json"
+            ))
+            .unwrap(),
+        );
+        let protected = ExitIntent {
+            target: Some(price("110")),
+            stop: Some(price("90")),
+            time: None,
+        };
+        let buy = |book: &mut Portfolio, exit: ExitIntent, decision: &str| {
+            book.execute_plan(
+                now,
+                &instrument,
+                &quote,
+                true,
+                1,
+                price("200"),
+                exit,
+                decision,
+            )
+            .unwrap()
+            .unwrap()
+        };
+        buy(&mut book, protected.clone(), "d1");
+        buy(&mut book, ExitIntent::default(), "d2");
+        let held = &book.positions[&instrument.key];
+        assert_eq!(held.units, 2);
+        assert_eq!(held.exit_intent, Some(protected));
     }
 }
