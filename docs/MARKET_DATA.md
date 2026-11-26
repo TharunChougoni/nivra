@@ -92,11 +92,8 @@ heartbeat or message within `scan_activity_timeout_ms`. REST samples use
 `max_scan_age_ms` instead. An invalid price, such as `ltp` 0 before the first
 trade, skips that instrument.
 
-The feed worker records each received binary frame and its original receipt
-time in the session's `market-feed.sqlite`. The archive preserves frames
-before the scanner combines updates and batches disk commits. A forced
-process exit can lose the pending batch. A write error puts the feed into
-fallback. REST quote storage depends on the [market archive](#market-archive).
+The feed worker keeps LTPC screening prices in memory. The market archive
+stores REST quote receipts and their original receipt times.
 
 Main `market_feed` settings:
 

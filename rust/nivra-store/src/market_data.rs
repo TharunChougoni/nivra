@@ -1,4 +1,4 @@
-//! Append-only provider evidence and shared history pacing in additive databases.
+//! Shared pacing and cooldown for provider history reads.
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::{fs, io, os::unix::fs::OpenOptionsExt, path::Path, time::Duration};
 
@@ -68,25 +68,4 @@ pub fn cool_down_history(db: &Connection, scope: &str, until: i64) -> rusqlite::
         params![until, scope],
     )?;
     Ok(())
-}
-
-pub fn init_feed(db: &Connection) -> rusqlite::Result<()> {
-    db.execute_batch(
-        "CREATE TABLE IF NOT EXISTS upstox_ltpc_frames (
-            id INTEGER PRIMARY KEY,
-            received_ms INTEGER NOT NULL, protobuf BLOB NOT NULL
-        );",
-    )
-}
-
-pub fn record_feed_frames(db: &mut Connection, frames: &[(i64, Vec<u8>)]) -> rusqlite::Result<()> {
-    let tx = db.transaction()?;
-    {
-        let mut insert =
-            tx.prepare("INSERT INTO upstox_ltpc_frames(received_ms, protobuf) VALUES (?,?)")?;
-        for (receipt, frame) in frames {
-            insert.execute(params![receipt, frame])?;
-        }
-    }
-    tx.commit()
 }
