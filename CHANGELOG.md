@@ -1,6 +1,6 @@
 # Source snapshot
 
-## Unreleased
+## 0.13.0 — 2026-11-26
 
 **Strategy acceptance now defaults to three tape dates.** Configure an
 `archive_window` dataset and replay strategies across at least three
