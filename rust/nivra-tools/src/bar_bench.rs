@@ -345,3 +345,135 @@ fn json_report(options: &Options, entries: &[Entry]) -> Value {
 pub fn parse_unit(text: &str) -> std::result::Result<BarUnit, String> {
     serde_json::from_value(json!(text)).map_err(|_| "expected day or minute".into())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    /// Buys on the first bar of each split and sells on the third, so each
+    /// split closes one trade on a rising fixture.
+    const STRATEGY: &str = r#"def on_bars(at_ms, split, bars, params, state):
+    n = state[split] = state.get(split, 0) + 1
+    if n == 1:
+        return [[0, params["units"]]]
+    if n == 3:
+        return [[0, 0]]
+    return []
+"#;
+
+    #[test]
+    #[ignore = "requires NIVRA_ARCHIVE_TEST_URL (a Postgres server it may create a database on) and bubblewrap"]
+    fn bench_ranks_a_strategy_over_a_fixture_archive() -> Result<()> {
+        let url = std::env::var("NIVRA_ARCHIVE_TEST_URL")?;
+        let (scheme, rest) = url.split_once("://").ok_or("fixture_url")?;
+        let (auth, host_db) = rest.rsplit_once('@').ok_or("fixture_url")?;
+        let (user, password) = auth.split_once(':').ok_or("fixture_url")?;
+        let host = host_db.split_once('/').map_or(host_db, |(host, _)| host);
+        let admin_url = format!("{scheme}://{user}@{host_db}");
+        let database = format!("bar_bench_fixture_{}", std::process::id());
+        let fixture_url = format!("{scheme}://{user}@{host}/{database}");
+        let mut admin = market_archive::connect(&admin_url, password).map_err(|e| e.to_string())?;
+        admin.batch_execute(&format!("DROP DATABASE IF EXISTS {database}"))?;
+        admin.batch_execute(&format!("CREATE DATABASE {database}"))?;
+        let outcome = (|| -> Result<()> {
+            let mut db =
+                market_archive::connect(&fixture_url, password).map_err(|e| e.to_string())?;
+            market_archive::init(&mut db).map_err(|e| e.to_string())?;
+            let receipt: i64 = db
+                .query_one(
+                    "INSERT INTO receipts(kind, requested_ms, received_ms, sha256, body)
+                     VALUES (2, 0, 0, $1, $1) RETURNING id",
+                    &[&vec![0u8; 32]],
+                )?
+                .get(0);
+            // Ten weekdays from 2024-01-01; the open rises 1 rupee a day.
+            db.execute(
+                "INSERT INTO instruments(key) VALUES ('NSE_EQ|BENCH-FIXTURE')",
+                &[],
+            )?;
+            let inserted = db.execute(
+                "INSERT INTO daily_bars(instrument_id, day, o, h, l, c, volume, oi, receipt_id)
+                 SELECT i.id, d::date, 10000 + n * 100, 10000 + n * 100 + 80,
+                        10000 + n * 100 - 20, 10000 + n * 100 + 50, 1000, 0, $1
+                 FROM generate_series(0, 9) n
+                 CROSS JOIN LATERAL (SELECT DATE '2024-01-01' + n + 2 * (n / 5) AS d) days
+                 CROSS JOIN instruments i",
+                &[&receipt],
+            )?;
+            assert_eq!(inserted, 10);
+            drop(db);
+
+            let dir = tempfile::tempdir()?;
+            let strategies = dir.path().join("strategies");
+            fs::create_dir(&strategies)?;
+            fs::write(strategies.join("fixture_round_trip.py"), STRATEGY)?;
+            fs::write(
+                strategies.join("fixture_round_trip.params.json"),
+                r#"{"abi":"archive_bars_v1","unit":"day","params":{"units":10}}"#,
+            )?;
+            // An action strategy params file is not a bar strategy.
+            fs::write(
+                strategies.join("other.params.json"),
+                r#"{"version":1,"params":{}}"#,
+            )?;
+            let password_file = dir.path().join("password");
+            fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(0o600)
+                .open(&password_file)
+                .and_then(|mut f| std::io::Write::write_all(&mut f, password.as_bytes()))?;
+            let costs = dir.path().join("costs.json");
+            fs::write(
+                &costs,
+                r#"{"per_order":"1","buy_bps":"0","sell_bps":"0","slippage_bps":"0","rounding_increment":"0.01"}"#,
+            )?;
+            let output = dir.path().join("leaderboard.md");
+            let options = Options {
+                archive_url: fixture_url.clone(),
+                password_file,
+                strategies,
+                only: Vec::new(),
+                unit: BarUnit::Day,
+                from: "2024-01-01".parse()?,
+                test_from: "2024-01-08".parse()?,
+                to: "2024-01-12".parse()?,
+                capital: Amount::from_integer(10_000),
+                costs,
+                budget: Duration::from_secs(60),
+                jobs: 2,
+                output: output.clone(),
+                json: None,
+            };
+            let entries = run(&options)?;
+            assert_eq!(entries.len(), 1);
+            let [train, test] = entries[0].result.clone()?;
+            // Test: the Jan 8 buy fills at the Jan 9 open, 106 plus the one
+            // paise allowance; the Jan 10 sell fills at the Jan 11 open, 108
+            // minus one paise. Ten units, one rupee per fill.
+            assert_eq!(test.trades, 1);
+            assert_eq!(test.fills, 2);
+            assert!((test.realized - 17.8).abs() < 1e-9, "{test:?}");
+            assert!((test.fees - 2.0).abs() < 1e-9, "{test:?}");
+            assert!(
+                (test.turnover - (1060.1 + 1079.9) / 10_000.0).abs() < 1e-9,
+                "{test:?}"
+            );
+            assert!(test.return_pct > 0.0 && test.sharpe != 0.0, "{test:?}");
+            assert_eq!(train.trades, 1);
+            assert!(train.max_drawdown_pct >= 0.0);
+            let table = fs::read_to_string(&output)?;
+            assert!(
+                table.contains("Training 2024-01-01 to 2024-01-07, test 2024-01-08 to 2024-01-12")
+            );
+            assert!(
+                table.contains("| `fixture_round_trip` | +0.18% |"),
+                "{table}"
+            );
+            Ok(())
+        })();
+        admin.batch_execute(&format!("DROP DATABASE IF EXISTS {database} WITH (FORCE)"))?;
+        outcome
+    }
+}
