@@ -121,7 +121,10 @@ healthy pi planner reports `model_roles_unknown`.
 
 To catch up missing daily history by hand, run
 `nivra history-backfill --config PAPER_CONFIG`. Add `--check-only` to report
-coverage without calling the provider. See [market data](MARKET_DATA.md).
+coverage without calling the provider. For an overnight pass, run with
+`--upcoming` after midnight IST and before the regular preparation window.
+This uses the current frozen universe and the shared read quota while the
+controller stays running. See [market data](MARKET_DATA.md).
 
 ## Start and stop
 

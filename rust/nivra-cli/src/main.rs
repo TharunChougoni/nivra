@@ -165,6 +165,9 @@ enum Command {
         /// Prepare the dated cash universe from public sources before checking or downloading.
         #[arg(long)]
         prepare_universe: bool,
+        /// Use the upcoming reviewed session and the current frozen universe.
+        #[arg(long, conflicts_with = "prepare_universe")]
+        upcoming: bool,
     },
     /// Export historical scanner features from the sealed paper book.
     ScannerArchive {
@@ -583,7 +586,13 @@ fn main() -> ExitCode {
             config,
             check_only,
             prepare_universe,
-        } => runtime::history_download::backfill_entry(&config, check_only, prepare_universe),
+            upcoming,
+        } => runtime::history_download::backfill_entry(
+            &config,
+            check_only,
+            prepare_universe,
+            upcoming,
+        ),
         Command::ScannerArchive {
             config,
             output,

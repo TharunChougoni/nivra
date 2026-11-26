@@ -73,6 +73,9 @@ pub(crate) fn download_controlled(
     lock.try_lock_exclusive()
         .map_err(|_| "history_download_locked")?;
     let _lock = AdvisoryLock::new(lock);
+    let archive = market_data::open(&output.join("candles.sqlite"))
+        .map_err(|_| "history_archive_unavailable")?;
+    market_data::init_candles(&archive).map_err(|_| "history_archive_unavailable")?;
     // Discover old window layouts once. Coverage is the validated request range,
     // including empty responses; candle dates do not certify calendar completeness.
     let mut existing = BTreeMap::<(String, String), Vec<(NaiveDate, NaiveDate)>>::new();
@@ -81,6 +84,9 @@ pub(crate) fn download_controlled(
         .map(|instrument| instrument.key.as_str())
         .collect();
     for entry in fs::read_dir(output)? {
+        if let Some(control) = control {
+            control.check()?;
+        }
         let entry = entry?;
         let name = entry.file_name();
         let Some(name) = name.to_str().filter(|name| name.ends_with(".receipt.json")) else {
@@ -205,11 +211,14 @@ pub(crate) fn download_controlled(
                         Ok(v) => v,
                         Err(error) => {
                             let code = failure_code(error.as_ref());
+                            let retry_at = error
+                                .downcast_ref::<data::RateLimited>()
+                                .and_then(|limit| limit.retry_at_ms);
                             // Retain redacted per-range failures independently of the
                             // mutable pass projection, including aborted passes (#35).
                             let diagnostic = serde_json::to_vec(&json!({
                                 "key":instrument.key,"unit":unit,"start":from,"end":to,
-                                "recorded_ms":clock(),"failure":code
+                                "recorded_ms":clock(),"failure":code,"retry_at_ms":retry_at
                             }))?;
                             let failure_path =
                                 output.join(format!("{id}-{}.failure.json", digest(&diagnostic)));
@@ -252,6 +261,24 @@ pub(crate) fn download_controlled(
                     return Err("history_receipt_binding".into());
                 }
                 let rows = candles(&receipt)?;
+                if !market_data::record_candle_receipt(
+                    &archive,
+                    market_data::CandleReceipt {
+                        range_id: &id,
+                        instrument_key: &receipt.key,
+                        unit: &receipt.unit,
+                        start: &receipt.start.to_string(),
+                        end: &receipt.end.to_string(),
+                        requested_ms: receipt.requested_ms,
+                        received_ms: receipt.received_ms,
+                        body_sha256: &receipt.body_sha256,
+                        body: &receipt.body,
+                    },
+                )
+                .map_err(|_| "history_archive_unavailable")?
+                {
+                    return Err("history_archive_receipt_conflict".into());
+                }
                 // Operational coverage consumes validated original receipts,
                 // not derived replay artifacts. Never rebuild an old shard as
                 // a prerequisite for acquiring missing candles.
@@ -345,12 +372,7 @@ pub(crate) fn prepare_daily(
     end: NaiveDate,
     control: PreparationControl,
 ) -> Result<usize> {
-    let mut provider = Provider {
-        client: data::Client::new(&config.market_data_transport)?,
-        config,
-        control: Some(control.clone()),
-        receipts_only: true,
-    };
+    let mut provider = Provider::new(config, Some(control.clone()), true)?;
     download_controlled(
         &mut provider,
         millis,

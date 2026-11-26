@@ -115,6 +115,8 @@ pub struct CoverageReport {
     pub missing_sessions: BTreeMap<String, Vec<NaiveDate>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_at_ms: Option<i64>,
 }
 
 fn base_report(
@@ -137,6 +139,7 @@ fn base_report(
         retryable_missing_bars: required_bars,
         missing_sessions: BTreeMap::new(),
         failure: None,
+        retry_at_ms: None,
     }
 }
 
@@ -529,6 +532,9 @@ pub(crate) fn apply_run_outcome(
         Err(error) => {
             report.status = CoverageStatus::Failed;
             report.failure = Some(preparation_failure_code(error.as_ref()));
+            report.retry_at_ms = error
+                .downcast_ref::<data::RateLimited>()
+                .and_then(|limit| limit.retry_at_ms);
         }
     }
     report

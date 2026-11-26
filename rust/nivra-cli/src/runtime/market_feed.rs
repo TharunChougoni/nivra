@@ -4,12 +4,14 @@ use nivra_core::{
     execution::{Instrument, Scanner},
     finance::Price,
 };
+use nivra_store::market_data;
 use prost::Message;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     net::{TcpStream, ToSocketAddrs},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    time::Instant,
 };
 use tungstenite::{Message as WsMessage, WebSocket, stream::MaybeTlsStream};
 
@@ -292,6 +294,33 @@ struct Network {
     client: data::Client,
     config: Config,
     socket: Option<WebSocket<MaybeTlsStream<TcpStream>>>,
+    archive: Option<FrameArchive>,
+}
+struct FrameArchive {
+    db: Connection,
+    pending: Vec<(i64, Vec<u8>)>,
+    last_flush: Instant,
+}
+impl FrameArchive {
+    fn new(path: &Path) -> Result<Self> {
+        let db = market_data::open(path).map_err(|_| "feed_archive_unavailable")?;
+        market_data::init_feed(&db).map_err(|_| "feed_archive_unavailable")?;
+        Ok(Self {
+            db,
+            pending: Vec::new(),
+            last_flush: Instant::now(),
+        })
+    }
+
+    fn flush(&mut self) -> std::result::Result<(), &'static str> {
+        if !self.pending.is_empty() {
+            market_data::record_feed_frames(&mut self.db, &self.pending)
+                .map_err(|_| "feed_archive_unavailable")?;
+            self.pending.clear();
+        }
+        self.last_flush = Instant::now();
+        Ok(())
+    }
 }
 impl Transport for Network {
     fn revision(&self) -> std::result::Result<String, &'static str> {
@@ -302,6 +331,15 @@ impl Transport for Network {
     fn connect(&mut self, keys: &[String]) -> std::result::Result<(), &'static str> {
         // A new single-use URL is authorized on every attempt. Never retain/log it.
         self.close();
+        match &mut self.archive {
+            Some(archive) => archive.flush()?,
+            None => {
+                self.archive = Some(
+                    FrameArchive::new(&self.config.directory.join("market-feed.sqlite"))
+                        .map_err(|_| "feed_archive_unavailable")?,
+                );
+            }
+        }
         let token =
             data::application_token(&self.config).map_err(|_| "feed_credential_unavailable")?;
         data::reserve(&self.config, millis())
@@ -383,9 +421,19 @@ impl Transport for Network {
         Ok(())
     }
     fn poll(&mut self) -> std::result::Result<Poll, &'static str> {
+        let archive = self.archive.as_mut().ok_or("feed_archive_unavailable")?;
+        // Bound the pending batch without taking the screening cache or paper DB locks.
+        if archive.pending.len() >= 16 || archive.last_flush.elapsed() >= Duration::from_millis(250)
+        {
+            archive.flush()?;
+        }
         let socket = self.socket.as_mut().ok_or("feed_disconnected")?;
         match socket.read() {
-            Ok(WsMessage::Binary(bytes)) => Ok(Poll::Data(bytes.to_vec(), millis())),
+            Ok(WsMessage::Binary(bytes)) => {
+                let receipt = millis();
+                archive.pending.push((receipt, bytes.to_vec()));
+                Ok(Poll::Data(bytes.to_vec(), receipt))
+            }
             Ok(WsMessage::Ping(_)) => {
                 socket.flush().map_err(|_| "feed_heartbeat_failed")?;
                 Ok(Poll::Heartbeat)
@@ -681,6 +729,7 @@ impl Worker {
             client: data::Client::new(&c.market_data_transport)?,
             config: c.clone(),
             socket: None,
+            archive: None,
         };
         let cancel = cancelled.clone();
         let handle = thread::Builder::new()
@@ -694,6 +743,11 @@ impl Worker {
                     ));
                 }
                 network.close();
+                if let Some(archive) = &mut network.archive
+                    && let Err(reason) = archive.flush()
+                {
+                    eprintln!("market_feed_archive_flush_failed reason={reason}");
+                }
             })?;
         Ok(Self {
             cache,
@@ -862,6 +916,23 @@ mod tests {
             .step_by(2)
             .map(|n| u8::from_str_radix(&hex[n..n + 2], 16).unwrap())
             .collect::<Vec<_>>();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("market-feed.sqlite");
+        let mut archive = FrameArchive::new(&path).unwrap();
+        archive.pending.push((1001, bytes.clone()));
+        archive.pending.push((1001, vec![0xff]));
+        archive.flush().unwrap();
+        drop(archive);
+        let db = Connection::open(path).unwrap();
+        let mut query = db
+            .prepare("SELECT received_ms, protobuf FROM upstox_ltpc_frames ORDER BY id")
+            .unwrap();
+        let frames: Vec<(i64, Vec<u8>)> = query
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(frames, vec![(1001, bytes.clone()), (1001, vec![0xff])]);
         let points = decode(&bytes, 1001, 0, &allowed).unwrap().points;
         assert_eq!(points[&keys[0]].price, Price::parse("100").unwrap());
         assert_eq!(

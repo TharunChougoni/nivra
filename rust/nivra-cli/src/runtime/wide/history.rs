@@ -124,7 +124,25 @@ impl HistoryAttempts {
             Some("FAILED") => Some(c.history_preparation_failed_retry_ms.max(1)),
             _ => None,
         };
-        self.retry_at = delay.map(|delay| now.saturating_add(delay));
+        self.retry_at = delay.map(|mut delay| {
+            if matches!(
+                report["failure"].as_str(),
+                Some(data::RATE_LIMITED | data::RATE_LIMIT_COOLDOWN)
+            ) {
+                let rate_limit_attempts = self
+                    .records
+                    .iter()
+                    .rev()
+                    .take_while(|record| {
+                        record.report["failure"].as_str() == Some(data::RATE_LIMITED)
+                    })
+                    .count();
+                let backoff = if rate_limit_attempts >= 2 { 2 } else { 1 };
+                delay = delay.max(history_download::RATE_LIMIT_RETRY_MS * backoff);
+            }
+            now.saturating_add(delay)
+                .max(report["retry_at_ms"].as_i64().unwrap_or(now))
+        });
         self.save(c)
     }
     /// Operator recovery needs distinct bounded refusals for a missing,

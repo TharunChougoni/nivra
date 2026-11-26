@@ -18,6 +18,10 @@ Nivra caps reads at 45 per second, 450 per minute and 1,800 per 30 minutes.
 These caps are 90% of the
 [published Upstox limits](https://upstox.com/developer/api-documentation/rate-limiting/).
 A failed request still uses its reservation. Feed pushes use no reservation.
+History starts are spaced at least 1.25 seconds apart, or at most 1,440
+per 30 minutes from pacing alone. The shared read cap and configured headroom
+still apply. This is Nivra's starting pace. Upstox can throttle below its
+published limits.
 
 One REST quote request carries at most `quote_keys.max_keys` keys (default and
 maximum 200). `market_feed.rest_batch_size` (default and maximum 200) sets the
@@ -59,6 +63,12 @@ An LTPC price stays eligible for screening while the connection has had a
 heartbeat or message within `scan_activity_timeout_ms`. REST samples use
 `max_scan_age_ms` instead. An invalid price, such as `ltp` 0 before the first
 trade, skips that instrument.
+
+The feed worker records each received binary frame and its original receipt
+time in the session's `market-feed.sqlite`. The archive preserves frames
+before the scanner combines updates and batches disk commits. A forced
+process exit can lose the pending batch. A write error puts the feed into
+fallback. REST quote receipts are recorded in the session's `paper.sqlite`.
 
 Main `market_feed` settings:
 
@@ -152,6 +162,10 @@ the range ends yesterday in IST and covers the twelve months before it.
 Each request range has an immutable receipt. A rerun in the same directory
 reuses valid receipts and requests only missing ranges. A corrupt receipt
 stops the run. Never overwrite receipts or reset the journal to force a rerun.
+New and reused validated receipts are also saved in the output directory's
+`candles.sqlite`. Each row keeps the original response body, range, hash
+and receipt clocks, including successful empty responses. Older receipts
+are added when a download revisits their ranges.
 
 History reads leave headroom for other readers:
 `history_download.reserve_second_reads` (default 2),
@@ -168,9 +182,15 @@ nivra history-backfill --config PAPER_CONFIG
 ```
 
 Backfill uses receipts-only mode and the reviewed NSE calendar. It requests
-only missing trading-session spans. To check coverage without a provider call,
-add `--check-only`. It succeeds only when every required bar is present. For
-a new config whose universe is not frozen yet, add `--prepare-universe`.
+only missing trading-session spans. Add `--check-only` to verify every
+required bar without a provider call. For a new config whose universe is
+not frozen yet, add `--prepare-universe`.
+
+After midnight IST, `history-backfill --config PAPER_CONFIG --upcoming`
+can prepare the upcoming reviewed session from the current frozen universe,
+even before the session pointer advances. It takes the same history directory
+lock as pre-open preparation. Start it early enough to finish before that
+window. A 2,760-instrument pass takes at least 57 minutes at the default pace.
 
 With `history_preparation_enabled`, the controller runs the same acquisition
 before the open. It reports coverage as `READY`, `PARTIAL` or `BLOCKED`, and
@@ -182,8 +202,13 @@ provider returned for that instrument, which may not be published yet). A
 `PARTIAL` pass stops retrying for the session when it has zero
 `retryable_missing_bars`, no fetch failures and at least one ready instrument. A
 pass with no ready instrument cannot be admitted, so it keeps a bounded attempt
-booked instead of parking the session. Transient fetch failures such as HTTP 429
-also keep the bounded retry schedule. It skips at most
+booked instead of parking the session. HTTP 429 ends the pass on its first
+occurrence. A private sidecar beside the original read journal prevents
+history callers from sending requests during the cooldown, including after a
+restart. The cooldown is at least 10 minutes and honors longer
+`Retry-After` values. After consecutive rate-limited attempts, the controller
+waits at least 20 minutes. The existing cutoff and attempt limit still apply.
+For other transient fetch errors, preparation skips at most
 `history_preparation_max_fetch_failures` (default 25) instruments
 whose fetch fails. A manual download fails on the first error.
 

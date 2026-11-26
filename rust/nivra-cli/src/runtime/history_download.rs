@@ -3,6 +3,7 @@ use super::*;
 use chrono::{Days, Months};
 use nivra_cli::lock::AdvisoryLock;
 use nivra_core::{execution::Instrument, finance::Amount};
+use nivra_store::market_data;
 use serde_json::Value;
 // Workspace feature unification can enable serde_json/preserve_order. History
 // bytes must retain the sorted object layout used by existing archives.
@@ -56,19 +57,81 @@ pub(crate) trait Transport {
 /// Only transient provider reads may be skipped. Identity, credentials, quota,
 /// receipt validation and journal failures must stop the pass immediately (#45).
 fn transient_fetch_failure(code: &str) -> bool {
-    matches!(
-        code,
-        "http_timeout" | "read_only_http_failed" | "http_429_rate_limited"
-    ) || code
-        .strip_prefix("http_")
-        .and_then(|s| s.parse::<u16>().ok())
-        .is_some_and(|status| (500..600).contains(&status))
+    matches!(code, "http_timeout" | "read_only_http_failed")
+        || code
+            .strip_prefix("http_")
+            .and_then(|s| s.parse::<u16>().ok())
+            .is_some_and(|status| (500..600).contains(&status))
 }
 struct Provider<'a> {
     client: data::Client,
     config: &'a Config,
     control: Option<PreparationControl>,
     receipts_only: bool,
+    pacing: Connection,
+}
+const READ_INTERVAL_MS: i64 = 1250;
+pub(super) const RATE_LIMIT_RETRY_MS: i64 = 10 * 60_000;
+impl<'a> Provider<'a> {
+    fn new(
+        config: &'a Config,
+        control: Option<PreparationControl>,
+        receipts_only: bool,
+    ) -> Result<Self> {
+        let mut path = config.read_journal.as_os_str().to_owned();
+        path.push(format!(
+            ".history-{}-{}.sqlite",
+            config.read_journal_device, config.read_journal_inode
+        ));
+        let pacing =
+            market_data::open(Path::new(&path)).map_err(|_| "history_pacing_unavailable")?;
+        market_data::init_history_pacing(&pacing).map_err(|_| "history_pacing_unavailable")?;
+        Ok(Self {
+            client: data::Client::new(&config.market_data_transport)?,
+            config,
+            control,
+            receipts_only,
+            pacing,
+        })
+    }
+
+    fn wait(&self, duration: Duration) -> Result<()> {
+        if let Some(control) = &self.control {
+            control.sleep(duration)
+        } else {
+            thread::sleep(duration);
+            Ok(())
+        }
+    }
+
+    fn pace(&mut self) -> Result<()> {
+        loop {
+            if let Some(control) = &self.control {
+                control.check()?;
+            }
+            let now = millis();
+            let Some((next, cooldown)) = market_data::pace_history(
+                &mut self.pacing,
+                &self.config.read_scope,
+                now,
+                READ_INTERVAL_MS,
+            )
+            .map_err(|_| "history_pacing_unavailable")?
+            else {
+                return Ok(());
+            };
+            if cooldown > now {
+                return Err(data::RateLimited {
+                    retry_at_ms: Some(cooldown),
+                    provider_response: false,
+                }
+                .into());
+            }
+            self.wait(Duration::from_millis(
+                next.saturating_sub(now).min(READ_INTERVAL_MS) as u64,
+            ))?;
+        }
+    }
 }
 impl Transport for Provider<'_> {
     fn receipts_only(&self) -> bool {
@@ -95,22 +158,27 @@ impl Transport for Provider<'_> {
         // A denied shared-journal reservation has not sent an HTTP request.
         // Wait without resetting caps; HTTP failures are never retried here.
         for _ in 0..=self.config.history_download.quota_wait_max_attempts {
-            if let Some(control) = &self.control {
-                control.check()?;
-            }
+            self.pace()?;
             match self.client.historical(self.config, key, unit, start, end) {
                 Err(error) if failure_code(error.as_ref()).starts_with("read_quota_wait_per_") => {
-                    if let Some(control) = &self.control {
-                        control.sleep(Duration::from_millis(
-                            self.config.history_download.quota_wait_poll_ms,
-                        ))?;
-                    } else {
-                        thread::sleep(Duration::from_millis(
-                            self.config.history_download.quota_wait_poll_ms,
-                        ))
-                    }
+                    self.wait(Duration::from_millis(
+                        self.config.history_download.quota_wait_poll_ms,
+                    ))?;
                 }
-                result => return result,
+                result => {
+                    if let Err(error) = &result
+                        && let Some(limit) = error.downcast_ref::<data::RateLimited>()
+                    {
+                        let minimum = millis().saturating_add(RATE_LIMIT_RETRY_MS);
+                        market_data::cool_down_history(
+                            &self.pacing,
+                            &self.config.read_scope,
+                            limit.retry_at_ms.unwrap_or(minimum).max(minimum),
+                        )
+                        .map_err(|_| "history_pacing_unavailable")?;
+                    }
+                    return result;
+                }
             }
         }
         Err("history_shared_quota_wait_timeout".into())
@@ -134,11 +202,14 @@ impl PreparationControl {
     }
     fn sleep(&self, duration: Duration) -> Result<()> {
         let until = Instant::now() + duration;
-        while Instant::now() < until {
+        loop {
             self.check()?;
-            thread::sleep((until - Instant::now()).min(Duration::from_millis(100)));
+            let remaining = until.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(());
+            }
+            thread::sleep(remaining.min(Duration::from_millis(100)));
         }
-        self.check()
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -327,7 +398,12 @@ pub(crate) use download::*;
 /// Explicit manual acquisition is separate from the automatic pre-open window.
 /// Use the same reviewed-session gap coalescing and original quota, without
 /// relaxing the automatic worker's deadline or creating any financial state.
-pub fn backfill_entry(path: &Path, check_only: bool, prepare_universe: bool) -> ExitCode {
+pub fn backfill_entry(
+    path: &Path,
+    check_only: bool,
+    prepare_universe: bool,
+    upcoming: bool,
+) -> ExitCode {
     let result = (|| -> Result<bool> {
         let c: Config = serde_json::from_slice(
             &crate::read_bounded(path, 32768).map_err(|_| "history_config")?,
@@ -339,11 +415,16 @@ pub fn backfill_entry(path: &Path, check_only: bool, prepare_universe: bool) -> 
         } else {
             wide::history_instruments(&c)?
         };
+        let mut target = c.clone();
+        if upcoming {
+            (target.session, target.previous_session) =
+                c.next_sessions(local(millis()).date_naive())?;
+        }
         let session_clock =
-            chrono::DateTime::parse_from_rfc3339(&format!("{}T00:00:00+05:30", c.session))?
+            chrono::DateTime::parse_from_rfc3339(&format!("{}T00:00:00+05:30", target.session))?
                 .timestamp_millis();
         let request = wide::preparation_request(
-            &c,
+            &target,
             &instruments,
             session_clock,
             super::preparation::PreparationWindow::PreOpen,
@@ -377,12 +458,7 @@ pub fn backfill_entry(path: &Path, check_only: bool, prepare_universe: bool) -> 
             .required_sessions
             .first()
             .ok_or("history_required_sessions_missing")?;
-        let mut provider = Provider {
-            client: data::Client::new(&c.market_data_transport)?,
-            config: &c,
-            control: None,
-            receipts_only: true,
-        };
+        let mut provider = Provider::new(&c, None, true)?;
         download_controlled(
             &mut provider,
             millis,
@@ -426,12 +502,7 @@ pub fn entry(
         c.validate()?;
         data::verify_journal(&c)?;
         let instruments = wide::history_instruments(&c)?;
-        let mut provider = Provider {
-            client: data::Client::new(&c.market_data_transport)?,
-            config: &c,
-            control: None,
-            receipts_only,
-        };
+        let mut provider = Provider::new(&c, None, receipts_only)?;
         download(
             &mut provider,
             millis,

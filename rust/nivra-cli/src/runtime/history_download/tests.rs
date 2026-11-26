@@ -88,6 +88,16 @@ fn unavailable_history_does_not_block_other_instruments_or_retry() {
         .unwrap();
     }
     assert_eq!(transport.0, 2);
+    let db = Connection::open(d.path().join("candles.sqlite")).unwrap();
+    let (count, received, body): (i64, i64, String) = db
+        .query_row(
+            "SELECT count(*), received_ms, body FROM candle_receipts",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!((count, received), (1, now()));
+    assert!(body.contains("2026-10-16T00:00:00+05:30"));
     assert_eq!(
         fs::read_dir(d.path())
             .unwrap()
@@ -333,8 +343,9 @@ fn daily_only_plan_reuses_receipts_across_interval_choices() {
         }
         let originals: Vec<_> = fs::read_dir(dir.path())
             .unwrap()
-            .map(|entry| {
-                let path = entry.unwrap().path();
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.file_name().unwrap() != "candles.sqlite")
+            .map(|path| {
                 let bytes = fs::read(&path).unwrap();
                 (path, bytes)
             })
@@ -764,8 +775,9 @@ fn daily_only_plan_reuses_receipts_across_interval_choices() {
     .unwrap();
     let originals: Vec<_> = fs::read_dir(prep_dir.path())
         .unwrap()
-        .map(|e| {
-            let path = e.unwrap().path();
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.file_name().unwrap() != "candles.sqlite")
+        .map(|path| {
             let bytes = fs::read(&path).unwrap();
             (path, bytes)
         })
@@ -875,6 +887,7 @@ fn resume_preserves_receipts_and_produces_consumable_evidence_shards() {
     let entries: Vec<_> = fs::read_dir(dir.path())
         .unwrap()
         .map(|p| p.unwrap().path())
+        .filter(|path| path.file_name().unwrap() != "candles.sqlite")
         .collect();
     let before: Vec<_> = entries.iter().map(|p| fs::read(p).unwrap()).collect();
     run(&mut t).unwrap();
@@ -1077,11 +1090,7 @@ fn preparation_skips_a_bounded_number_of_failed_instruments_and_continues() {
         );
         let transient = matches!(
             code,
-            "http_timeout"
-                | "read_only_http_failed"
-                | "http_500"
-                | "http_503"
-                | "http_429_rate_limited"
+            "http_timeout" | "read_only_http_failed" | "http_500" | "http_503"
         );
         assert_eq!(result.is_ok(), transient, "{code}");
         assert_eq!(t.calls, if transient { 3 } else { 1 }, "{code}");
@@ -1258,7 +1267,11 @@ fn pre_open_preparation_separates_empty_gaps_from_rate_limit_and_zero_ready() {
             match self.mode {
                 Mode::ThrottleSubset { limit } if key.ends_with('3') && self.throttled < limit => {
                     self.throttled += 1;
-                    return Err(Fail::new("http_429_rate_limited").into());
+                    return Err(data::RateLimited {
+                        retry_at_ms: Some(900_000),
+                        provider_response: true,
+                    }
+                    .into());
                 }
                 Mode::ThrottleAll => {
                     return Err(Fail::new("http_429_rate_limited").into());
@@ -1379,8 +1392,8 @@ fn pre_open_preparation_separates_empty_gaps_from_rate_limit_and_zero_ready() {
         "covered empty receipts must not be refetched"
     );
 
-    // 3. Rate-limited partial admission (HTTP 429 on subset): retryable gaps stay
-    // retryable, attempt schedules a retry, and pass 2 reuses cached receipts.
+    // 3. A 429 ends the pass. Coverage and immutable receipts survive, and the
+    // recorded retry respects the provider deadline.
     let rl_dir = tempfile::tempdir().unwrap();
     let mut t_rl = FakePrep {
         mode: Mode::ThrottleSubset { limit: 1 },
@@ -1404,21 +1417,19 @@ fn pre_open_preparation_separates_empty_gaps_from_rate_limit_and_zero_ready() {
         preparation::coverage_report(rl_dir.path(), &list, &sessions, target, previous),
         res,
     );
-    assert_eq!(report.status, CoverageStatus::Partial);
+    assert_eq!(report.status, CoverageStatus::Failed);
     assert_eq!(report.ready_instruments, 2);
     assert_eq!(report.covered_empty_bars, 0);
     assert_eq!(report.retryable_missing_bars, 21);
-    assert_eq!(
-        report.failure.as_deref(),
-        Some("history_fetch_failures_skipped:1")
-    );
+    assert_eq!(report.failure.as_deref(), Some("http_429_rate_limited"));
     let report_json = serde_json::to_value(&report).unwrap();
-    assert!(wide::history_admitted(&cfg, &report_json));
+    assert!(!wide::history_admitted(&cfg, &report_json));
     let mut attempts = HistoryAttempts::default();
     attempts.started(&cfg, 1_000).unwrap();
     attempts.completed(&cfg, 2_000, &report_json).unwrap();
-    assert_eq!(attempts.retry_at, Some(62_000));
-    assert!(attempts.due(&cfg, 62_000));
+    assert_eq!(attempts.retry_at, Some(900_000));
+    assert!(!HistoryAttempts::load(&cfg).unwrap().due(&cfg, 899_999));
+    assert!(attempts.due(&cfg, 900_000));
     let res2 = download_controlled(
         &mut t_rl,
         now,
@@ -1462,6 +1473,7 @@ fn pre_open_preparation_separates_empty_gaps_from_rate_limit_and_zero_ready() {
         failure_code(res.as_ref().unwrap_err().as_ref()),
         "http_429_rate_limited"
     );
+    assert_eq!(t_zero.calls, 1);
     let failed_report = preparation::apply_run_outcome(
         preparation::coverage_report(zero_dir.path(), &list, &sessions, target, previous),
         res,
@@ -1469,6 +1481,15 @@ fn pre_open_preparation_separates_empty_gaps_from_rate_limit_and_zero_ready() {
     assert_eq!(failed_report.status, CoverageStatus::Failed);
     assert_eq!(failed_report.ready_instruments, 0);
     assert_eq!(failed_report.retryable_missing_bars, 63);
+    attempts.started(&cfg, 900_000).unwrap();
+    attempts
+        .completed(
+            &cfg,
+            901_000,
+            &serde_json::to_value(&failed_report).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(attempts.retry_at, Some(2_101_000));
     assert!(!wide::history_admitted(
         &cfg,
         &serde_json::to_value(&failed_report).unwrap()

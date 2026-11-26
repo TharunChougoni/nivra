@@ -6,6 +6,35 @@ use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 const KEY: &str = "NSE_EQ|INF204KB14I2";
 pub(super) const HISTORY_RESPONSE_BYTES: u64 = 20_000_000;
+#[derive(Debug)]
+pub(super) struct RateLimited {
+    pub retry_at_ms: Option<i64>,
+    pub provider_response: bool,
+}
+pub(super) const RATE_LIMITED: &str = "http_429_rate_limited";
+pub(super) const RATE_LIMIT_COOLDOWN: &str = "history_rate_limit_cooldown";
+impl fmt::Display for RateLimited {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(if self.provider_response {
+            RATE_LIMITED
+        } else {
+            RATE_LIMIT_COOLDOWN
+        })
+    }
+}
+impl std::error::Error for RateLimited {}
+
+fn retry_after(value: &str, now: i64) -> Option<i64> {
+    let value = value.trim();
+    if !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()) {
+        let seconds = value.parse::<i64>().unwrap_or(i64::MAX);
+        return Some(now.saturating_add(seconds.saturating_mul(1000)));
+    }
+    DateTime::parse_from_rfc2822(value)
+        .ok()
+        .map(|date| date.timestamp_millis().max(now))
+}
+
 pub struct Client(ureq::Agent);
 impl Client {
     pub fn new(settings: &MarketDataTransportSettings) -> Result<Self> {
@@ -25,10 +54,29 @@ impl Client {
         if let Some(t) = token {
             req = req.header("Authorization", format!("Bearer {t}"));
         }
-        let mut response = match req.call() {
+        let mut response = match req.config().http_status_as_error(false).build().call() {
             Ok(response) => response,
             Err(error) => return Err(Fail::new(http_failure_code(&error)).into()),
         };
+        let status = response.status();
+        if status.as_u16() == 429 {
+            let now = millis();
+            let retry_at_ms = response
+                .headers()
+                .get("Retry-After")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| retry_after(value, now));
+            return Err(RateLimited {
+                retry_at_ms,
+                provider_response: true,
+            }
+            .into());
+        }
+        if status.is_client_error() || status.is_server_error() {
+            return Err(
+                Fail::new(http_failure_code(&ureq::Error::StatusCode(status.as_u16()))).into(),
+            );
+        }
         let mut bytes = vec![];
         response
             .body_mut()
@@ -228,7 +276,7 @@ pub(super) fn http_failure_code(error: &ureq::Error) -> String {
     match error {
         ureq::Error::StatusCode(401) => "http_401_unauthorized".into(),
         ureq::Error::StatusCode(403) => "http_403_forbidden".into(),
-        ureq::Error::StatusCode(429) => "http_429_rate_limited".into(),
+        ureq::Error::StatusCode(429) => RATE_LIMITED.into(),
         ureq::Error::StatusCode(code) => format!("http_{code}"),
         ureq::Error::Timeout(_) => "http_timeout".into(),
         _ => "read_only_http_failed".into(),
@@ -464,6 +512,12 @@ mod tests {
     }
     #[test]
     fn historical_request_contract_preserves_shared_quota() {
+        assert_eq!(retry_after("120", 1_000), Some(121_000));
+        assert_eq!(
+            retry_after("Thu, 01 Jan 1970 00:02:00 GMT", 0),
+            Some(120_000)
+        );
+        assert_eq!(retry_after("garbage", 0), None);
         let date = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
         let default = QuoteKeySettings::default();
         let url = historical_url(
@@ -569,6 +623,30 @@ mod tests {
         let metadata = fs::metadata(&c.read_journal).unwrap();
         c.read_journal_device = metadata.dev();
         c.read_journal_inode = metadata.ino();
+        let path = d.path().join("history-pacing.sqlite");
+        let mut first = nivra_store::market_data::open(&path).unwrap();
+        nivra_store::market_data::init_history_pacing(&first).unwrap();
+        use nivra_store::market_data::{cool_down_history, pace_history};
+        assert_eq!(
+            pace_history(&mut first, &c.read_scope, 1000, 1250).unwrap(),
+            None
+        );
+        let mut other = nivra_store::market_data::open(&path).unwrap();
+        assert_eq!(
+            pace_history(&mut other, &c.read_scope, 2249, 1250).unwrap(),
+            Some((2250, 0))
+        );
+        cool_down_history(&first, &c.read_scope, 10_000).unwrap();
+        cool_down_history(&other, &c.read_scope, 5_000).unwrap();
+        drop(first);
+        assert_eq!(
+            pace_history(&mut other, &c.read_scope, 9_999, 1250).unwrap(),
+            Some((2250, 10_000))
+        );
+        assert_eq!(
+            pace_history(&mut other, &c.read_scope, 10_000, 1250).unwrap(),
+            None
+        );
         c.history_download.reserve_half_hour_reads = 2;
         // Seed the original shared journal with older reservations outside the
         // short windows, but inside the 30-minute window.
