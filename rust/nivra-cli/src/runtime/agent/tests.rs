@@ -949,6 +949,64 @@ fn budgets_preemption_and_agent_exit_stop_turns() {
             "queue_state":"failed","queue_reason":"interrupted"})
     );
     drop(runner);
+    // A slow tool call must not block turn_timeout_ms or emit a stale tool_result after abort.
+    struct SlowHost;
+    impl super::client::ToolHost for SlowHost {
+        fn call(
+            &mut self,
+            _call_id: &str,
+            _name: &str,
+            _args: &Value,
+        ) -> std::result::Result<Value, String> {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            Ok(json!({"ok":true}))
+        }
+    }
+    let (mut slow_client, slow_peer) = connect(|peer| {
+        let (id, _) = peer.turn();
+        peer.send(
+            json!({"type":"tool_call","turn_id":id,"call_id":"slow-1","name":"quotes","args":{}}),
+        );
+        let abort = peer.recv();
+        assert_eq!(abort["type"], "abort");
+        assert_eq!(abort["reason"], "agent_turn_timeout");
+        peer.finish(&id, "aborted", "", 0, 0.0);
+        abort
+    });
+    let mut slow_req = super::client::TurnRequest {
+        id: "research-slow-timeout".into(),
+        lane: Lane::Research,
+        session: super::protocol::SessionRef {
+            date: c.session.to_string(),
+            dir: c.directory.display().to_string(),
+        },
+        model: settings.lane(Lane::Research).unwrap().model.clone(),
+        fallback: None,
+        trigger: json!({"kind":"agenda"}),
+        brief: json!({}),
+        tools: Vec::new(),
+        compact_at_tokens: None,
+    };
+    slow_req.tools.clear();
+    let slow_outcome = slow_client
+        .run_turn(
+            &slow_req,
+            &mut SlowHost,
+            &super::protocol::Usage::default(),
+            super::client::Allowance {
+                calls: 10,
+                cost_usd: 1.0,
+                max_tool_calls: 10,
+                timeout: std::time::Duration::from_millis(40),
+            },
+            &|| false,
+        )
+        .unwrap();
+    slow_peer.join().unwrap();
+    assert_eq!(slow_outcome.status, TurnStatus::Aborted);
+    assert_eq!(slow_outcome.error.as_deref(), Some("agent_turn_timeout"));
+    assert_eq!(slow_outcome.tool_calls.len(), 1);
+    let _ = slow_client.shutdown();
     // An agent that dies mid-turn ends the turn with an error, not a hang,
     // and what pi already reported stays charged.
     let (client, peer) = connect(|peer| {

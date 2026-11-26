@@ -47,6 +47,12 @@ pub(crate) struct QuoteEvidence {
     pub instruments: Vec<Instrument>,
     pub receipts: Vec<QuoteReceipt>,
 }
+const SNAPSHOT_UNAVAILABLE: &str = "scorer_snapshots_unavailable";
+
+fn snapshot_unavailable<E>(_: E) -> String {
+    SNAPSHOT_UNAVAILABLE.to_owned()
+}
+
 /// Quote receipts whose original source observation is at or before the host
 /// eligibility clock. A future row can never enter a candidate dataset or a
 /// maturation window.
@@ -57,7 +63,7 @@ pub(crate) fn quote_receipts_bounded(
     max_source_ms: i64,
 ) -> std::result::Result<QuoteEvidence, String> {
     if !source.is_absolute() || !(1..=10_000).contains(&max_rows) || max_source_ms < 0 {
-        return Err("scorer_snapshots_unavailable".into());
+        return Err(SNAPSHOT_UNAVAILABLE.into());
     }
     let instruments = session_universe(source, session)?;
     let db = open_quote_journal(source)?;
@@ -65,7 +71,7 @@ pub(crate) fn quote_receipts_bounded(
         .prepare(
             "SELECT at,receipt,body FROM ticks WHERE event IN ('wide_quotes','scanner_metadata') AND at<=?2 ORDER BY id DESC LIMIT ?1",
         )
-        .map_err(|_| "scorer_snapshots_unavailable".to_string())?;
+        .map_err(snapshot_unavailable)?;
     let rows = statement
         .query_map(rusqlite::params![max_rows as i64, max_source_ms], |row| {
             Ok((
@@ -74,10 +80,10 @@ pub(crate) fn quote_receipts_bounded(
                 row.get::<_, String>(2)?,
             ))
         })
-        .map_err(|_| "scorer_snapshots_unavailable".to_string())?;
+        .map_err(snapshot_unavailable)?;
     let mut reversed = Vec::new();
     for row in rows {
-        reversed.push(row.map_err(|_| "scorer_snapshots_unavailable".to_string())?);
+        reversed.push(row.map_err(snapshot_unavailable)?);
     }
     reversed.reverse();
     let index = instruments
@@ -95,7 +101,7 @@ pub(crate) fn quote_receipts_bounded(
         receipts.push(receipt);
     }
     if receipts.is_empty() {
-        return Err("scorer_snapshots_unavailable".into());
+        return Err(SNAPSHOT_UNAVAILABLE.into());
     }
     Ok(QuoteEvidence {
         instruments,
@@ -147,6 +153,18 @@ pub(super) fn archived_receipt(
     raw: &str,
     max_source_ms: i64,
 ) -> std::result::Result<QuoteReceipt, String> {
+    archived_receipt_filtered(index, at, receipt, raw, max_source_ms, None, false)
+}
+
+fn archived_receipt_filtered(
+    index: &BTreeMap<&str, &Instrument>,
+    at: i64,
+    receipt: Option<i64>,
+    raw: &str,
+    max_source_ms: i64,
+    only_keys: Option<&BTreeSet<String>>,
+    skip_research: bool,
+) -> std::result::Result<QuoteReceipt, String> {
     if raw.len() > 2_000_000 {
         return Err("scorer_snapshots_unavailable".into());
     }
@@ -161,6 +179,16 @@ pub(super) fn archived_receipt(
     {
         return Err("scorer_snapshots_receipt_binding".into());
     }
+    let kind = QuotePurposeV1::from_archive(archive["purpose"].as_str())
+        .ok_or("scorer_snapshots_purpose_unknown")?;
+    if skip_research && kind == QuotePurposeV1::ResearchObservation {
+        return Ok(QuoteReceipt {
+            at_ms: at,
+            receipt_ms: receipt,
+            kind,
+            observations: Vec::new(),
+        });
+    }
     let body: Value = serde_json::from_str(
         archive["body"]
             .as_str()
@@ -170,20 +198,21 @@ pub(super) fn archived_receipt(
     if body["status"] != "success" {
         return Err("scorer_snapshots_quote_status".into());
     }
-    let kind = QuotePurposeV1::from_archive(archive["purpose"].as_str())
-        .ok_or("scorer_snapshots_purpose_unknown")?;
-    // The ORIGINAL archived receipt SHA for every observation. It is never
-    // the whole-tape digest and never another key's SHA.
-    let archive_sha256 = nivra_core::replay::digest(raw.as_bytes());
-    let mut observations = Vec::new();
     let rows = body["data"]
         .as_object()
         .ok_or("scorer_snapshots_quote_rows")?;
+    // The ORIGINAL archived receipt SHA for every observation. It is never
+    // the whole-tape digest and never another key's SHA.
+    let mut archive_sha256: Option<String> = None;
+    let mut observations = Vec::new();
     for row in rows.values() {
-        let Some(instrument) = row["instrument_token"]
-            .as_str()
-            .and_then(|key| index.get(key))
-        else {
+        let Some(token) = row["instrument_token"].as_str() else {
+            continue;
+        };
+        if only_keys.is_some_and(|keys| !keys.contains(token)) {
+            continue;
+        }
+        let Some(instrument) = index.get(token) else {
             continue;
         };
         let Ok(quote) = data::parse_row(
@@ -202,10 +231,11 @@ pub(super) fn archived_receipt(
         ) else {
             continue;
         };
+        let sha = archive_sha256.get_or_insert_with(|| nivra_core::replay::digest(raw.as_bytes()));
         observations.push(json!({
             "key":instrument.key,"quote":quote,
             "lower_circuit_limit":lower.to_string(),"upper_circuit_limit":upper.to_string(),"volume":volume,
-            "archive_sha256":archive_sha256,
+            "archive_sha256":sha,
             "purpose":kind.archive_str()
         }));
     }
@@ -456,30 +486,51 @@ pub(crate) fn candidate_quotes(
     {
         return Err("candidate_quotes_invalid".into());
     }
-    let evidence = quote_receipts_bounded(source, session, 10_000, now)?;
-    let end_of_evidence_ms = evidence
-        .receipts
-        .last()
-        .map(|receipt| receipt.at_ms)
-        .unwrap_or(0);
+    let instruments = session_universe(source, session)?;
+    let db = open_quote_journal(source)?;
+    let end_of_evidence_ms: Option<i64> = db
+        .query_row(
+            "SELECT MAX(at) FROM ticks WHERE event IN ('wide_quotes','scanner_metadata') AND at<=?1",
+            rusqlite::params![now],
+            |row| row.get(0),
+        )
+        .map_err(snapshot_unavailable)?;
+    let Some(end_of_evidence_ms) = end_of_evidence_ms else {
+        return Err(SNAPSHOT_UNAVAILABLE.into());
+    };
+    let index = instruments
+        .iter()
+        .map(|instrument| (instrument.key.as_str(), instrument))
+        .collect::<BTreeMap<_, _>>();
+    let mut statement = db
+        .prepare(
+            "SELECT at,receipt,body FROM ticks WHERE event IN ('wide_quotes','scanner_metadata') AND at<=?1 AND (receipt IS NULL OR (receipt>=?2 AND receipt<=?3)) ORDER BY id ASC",
+        )
+        .map_err(snapshot_unavailable)?;
+    let mut rows = statement
+        .query(rusqlite::params![now, from_ms, to_ms])
+        .map_err(snapshot_unavailable)?;
     let mut quotes = Vec::new();
     let mut truncated = false;
-    for receipt in &evidence.receipts {
+    let mut previous = None;
+    while let Some(row) = rows.next().map_err(snapshot_unavailable)? {
+        let at = row.get::<_, i64>(0).map_err(snapshot_unavailable)?;
+        let receipt = row.get::<_, Option<i64>>(1).map_err(snapshot_unavailable)?;
+        let raw = row.get::<_, String>(2).map_err(snapshot_unavailable)?;
+        if previous.is_some_and(|prior| at <= prior) {
+            return Err("scorer_snapshots_chronology".into());
+        }
+        previous = Some(at);
+        let receipt = archived_receipt_filtered(&index, at, receipt, &raw, now, Some(keys), true)?;
         // Old lifecycle marks are protection/screen evidence only. A research
         // receipt is not a mark and is never substituted for one.
         if receipt.kind == QuotePurposeV1::ResearchObservation {
-            continue;
-        }
-        if receipt.receipt_ms < from_ms || receipt.receipt_ms > to_ms {
             continue;
         }
         for observation in &receipt.observations {
             let Some(key) = observation["key"].as_str() else {
                 continue;
             };
-            if !keys.contains(key) {
-                continue;
-            }
             if quotes.len() == max_rows {
                 truncated = true;
                 break;

@@ -129,6 +129,12 @@ pub(super) fn health_body(view: &serde_json::Value, now_ms: i64) -> serde_json::
     body["history_preparation"] = view["history_preparation"].clone();
     body["market_feed"] = view["market_feed"].clone();
     body["oldest_scan_age_ms"] = view["oldest_scan_age_ms"].clone();
+    if let Some(strategy_selection) = view
+        .get("discovery")
+        .and_then(|d| d.get("strategy_selection"))
+    {
+        body["strategy_selection"] = strategy_selection.clone();
+    }
     body["research_library"] = view["research_library"].clone();
     // Copy the controller's already-captured read-only projections verbatim.
     // This GET never samples a clock, reads the queue/state, recomputes the

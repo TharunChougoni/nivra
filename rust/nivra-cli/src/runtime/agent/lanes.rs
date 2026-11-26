@@ -156,7 +156,7 @@ pub(crate) struct LaneRunner<'a> {
     pub settings: &'a AgentSettings,
     pub c: &'a Config,
     pub cfg: &'a PlannerConfig,
-    pub clock: &'a dyn Fn() -> i64,
+    pub clock: &'a (dyn Fn() -> i64 + Send + Sync),
     /// Set while a decision turn waits; a running research or review turn yields.
     pub preempt: Arc<AtomicBool>,
     /// Overrides every lane's model, for offline checks against the fake provider.
@@ -316,7 +316,7 @@ impl<'a> LaneRunner<'a> {
         settings: &'a AgentSettings,
         c: &'a Config,
         cfg: &'a PlannerConfig,
-        clock: &'a dyn Fn() -> i64,
+        clock: &'a (dyn Fn() -> i64 + Send + Sync),
     ) -> Self {
         Self {
             agent,

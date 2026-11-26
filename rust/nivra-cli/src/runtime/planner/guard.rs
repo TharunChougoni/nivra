@@ -3,7 +3,7 @@ use super::*;
 pub(crate) struct CallGuard<'a> {
     pub(crate) book: &'a Config,
     pub(crate) policy: &'a PlannerConfig,
-    pub(crate) clock: &'a dyn Fn() -> i64,
+    pub(crate) clock: &'a (dyn Fn() -> i64 + Send + Sync),
 }
 
 impl CallGuard<'_> {

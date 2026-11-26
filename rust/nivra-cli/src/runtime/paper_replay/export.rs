@@ -297,5 +297,68 @@ mod tests {
             "quote_tape_output_unavailable",
             "an export never replaces an earlier one"
         );
+
+        let check_db = super::super::super::open_book(&c).unwrap();
+        let idx_count: i64 = check_db
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='index' AND name IN ('ticks_event_receipt_idx','ticks_event_at_idx')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx_count, 2);
+        drop(check_db);
+
+        let in_window = super::candidate_quotes(
+            &c.directory,
+            c.session,
+            &keys,
+            open + 8_000,
+            open + 8_000,
+            10,
+            open + 16_000,
+        )
+        .unwrap();
+        assert_eq!(in_window["coverage"], "quotes_present");
+        assert_eq!(in_window["end_of_evidence_ms"], open + 16_000);
+        assert_eq!(in_window["quotes"].as_array().unwrap().len(), 1);
+        assert_eq!(in_window["quotes"][0]["receipt_ms"], open + 8_000);
+
+        let capped = super::candidate_quotes(
+            &c.directory,
+            c.session,
+            &keys,
+            open,
+            open + 16_000,
+            1,
+            open + 16_000,
+        )
+        .unwrap();
+        assert_eq!(capped["truncated"], true);
+        assert_eq!(capped["quotes"].as_array().unwrap().len(), 1);
+
+        let missing = super::candidate_quotes(
+            &c.directory,
+            c.session,
+            &keys,
+            open + 2_000,
+            open + 3_000,
+            10,
+            open + 16_000,
+        )
+        .unwrap();
+        assert_eq!(missing["coverage"], "missing_quotes_in_window");
+
+        let ended = super::candidate_quotes(
+            &c.directory,
+            c.session,
+            &keys,
+            open + 20_000,
+            open + 30_000,
+            10,
+            open + 16_000,
+        )
+        .unwrap();
+        assert_eq!(ended["coverage"], "source_ended_before_window");
     }
 }

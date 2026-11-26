@@ -204,13 +204,13 @@ pub(crate) enum PlanAttempt {
     Refused { plan: Value, error: String },
 }
 
-type UsageCheckpoint<'a> = Box<dyn FnMut(&Usage) + 'a>;
+type UsageCheckpoint<'a> = Box<dyn FnMut(&Usage) + Send + 'a>;
 
 /// Serves one lane turn: the lane allowlist first, then the existing Rust
 /// validation and executor, or the existing plan validation for `plan`.
 pub(crate) struct LaneHost<'a> {
     pub lane: Lane,
-    pub clock: &'a dyn Fn() -> i64,
+    pub clock: &'a (dyn Fn() -> i64 + Send + Sync),
     pub bridge: Bridge<'a>,
     pub plan_inputs: Option<(&'a Portfolio, &'a [Instrument])>,
     pub plan: Option<PlanAttempt>,

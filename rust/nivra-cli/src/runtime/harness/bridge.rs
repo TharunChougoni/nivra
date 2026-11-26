@@ -10,7 +10,7 @@ pub(crate) fn failure_reason(error: &(dyn std::error::Error + 'static)) -> Strin
 
 /// The research requests one lane set posts and answers. Ids are the queue's
 /// message ids, which `research_status` and `research_result` also accept.
-pub(crate) trait LaneRequests {
+pub(crate) trait LaneRequests: Send + Sync {
     fn post(&self, turn_id: &str, question: &str, refs: Vec<String>, now: i64) -> Result<Value>;
     /// `None` when `id` is not a request of this lane set.
     fn status(&self, id: &str) -> Result<Option<Value>>;
@@ -34,7 +34,7 @@ pub(crate) struct Bridge<'a> {
     pub c: &'a Config,
     pub cfg: &'a PlannerConfig,
     pub bundle: &'a Value,
-    pub backend: &'a mut dyn Backend,
+    pub backend: &'a mut (dyn Backend + Send),
     pub guard: &'a CallGuard<'a>,
     pub archive: &'a Path,
     pub run_id: &'a str,
@@ -42,7 +42,7 @@ pub(crate) struct Bridge<'a> {
     definitions: Vec<Value>,
     limits: ToolsSettings,
     web_budget: super::web_tools::WebToolBudget,
-    web_transport: &'a mut dyn super::web_tools::Transport,
+    web_transport: &'a mut (dyn super::web_tools::Transport + Send),
     seen: BTreeSet<String>,
 }
 
@@ -52,12 +52,12 @@ impl<'a> Bridge<'a> {
         c: &'a Config,
         cfg: &'a PlannerConfig,
         bundle: &'a Value,
-        backend: &'a mut dyn Backend,
+        backend: &'a mut (dyn Backend + Send),
         guard: &'a CallGuard<'a>,
         archive: &'a Path,
         run_id: &'a str,
         grant: LaneGrant<'a>,
-        web_transport: &'a mut dyn super::web_tools::Transport,
+        web_transport: &'a mut (dyn super::web_tools::Transport + Send),
     ) -> Result<Self> {
         fs::DirBuilder::new()
             .mode(0o700)

@@ -139,6 +139,62 @@ fn shadow_inputs_use_receipt_minutes_and_skip_missing_references() {
         before
     );
 
+    // Metadata-only LTPC scans still populate regime_references when strategy_selection is enabled.
+    let mut meta_scan = Scanner::default();
+    let meta_rows = serde_json::from_value(serde_json::json!({
+        "row": {
+            "instrument_token": instrument.key,
+            "symbol": instrument.symbol,
+            "lower_circuit_limit": 90.0,
+            "upper_circuit_limit": 120.0,
+            "volume": 10_000,
+            "ohlc": {"open": 105.0, "close": 100.0}
+        }
+    }))
+    .unwrap();
+    scan_rest_rows(
+        &mut meta_scan,
+        std::slice::from_ref(&instrument),
+        &meta_rows,
+        now,
+        now,
+        2000,
+        true,
+        None,
+    )
+    .unwrap();
+    let mut selector_policy: super::planner::PlannerConfig =
+        serde_json::from_value(serde_json::json!({
+            "enabled": true,
+            "discovery": {
+                "max_scan_age_ms": 2000,
+                "max_prospects": 10,
+                "strategy_selection": {"enabled": true, "library_path": "/fixture/library"}
+            }
+        }))
+        .unwrap();
+    update_regime_references(&mut meta_scan, &meta_rows, now, Some(&selector_policy));
+    assert_eq!(
+        meta_scan.samples[&instrument.key].regime_references,
+        Some((
+            now,
+            Price::parse("100").unwrap(),
+            Price::parse("105").unwrap()
+        ))
+    );
+    meta_scan
+        .samples
+        .get_mut(&instrument.key)
+        .unwrap()
+        .regime_references = None;
+    selector_policy
+        .discovery
+        .as_mut()
+        .unwrap()
+        .strategy_selection = None;
+    update_regime_references(&mut meta_scan, &meta_rows, now, Some(&selector_policy));
+    assert_eq!(meta_scan.samples[&instrument.key].regime_references, None);
+
     // Non-tradeable index context reads the same feed points; it never enters
     // the cash universe, scanner screens or paper execution.
     let dir = tempfile::tempdir().unwrap();

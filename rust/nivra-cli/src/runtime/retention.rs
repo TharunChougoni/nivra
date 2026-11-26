@@ -935,7 +935,9 @@ mod tests {
         let db = rusqlite::Connection::open(&db_path).unwrap();
         db.execute_batch(
             "CREATE TABLE state(id INTEGER PRIMARY KEY CHECK(id=1), binding TEXT NOT NULL, body TEXT NOT NULL);
-             CREATE TABLE ticks(id INTEGER PRIMARY KEY, at INTEGER NOT NULL, receipt INTEGER, body TEXT, event TEXT NOT NULL);",
+             CREATE TABLE ticks(id INTEGER PRIMARY KEY, at INTEGER NOT NULL, receipt INTEGER, body TEXT, event TEXT NOT NULL);
+             CREATE INDEX IF NOT EXISTS ticks_event_receipt_idx ON ticks(event, receipt, id);
+             CREATE INDEX IF NOT EXISTS ticks_event_at_idx ON ticks(event, at, id);",
         )
         .unwrap();
         let book = "ORIGINAL-BOOK";

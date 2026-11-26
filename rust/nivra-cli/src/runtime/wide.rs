@@ -1312,6 +1312,40 @@ fn fetch_quote_rows(
     }))
 }
 
+fn update_regime_references(
+    scan: &mut Scanner,
+    rows: &serde_json::Map<String, serde_json::Value>,
+    receipt: i64,
+    event_config: Option<&planner::PlannerConfig>,
+) {
+    if !event_config.is_some_and(|cfg| {
+        cfg.runs_strategies()
+            || cfg
+                .discovery
+                .as_ref()
+                .and_then(|d| d.strategy_selection.as_ref())
+                .is_some_and(|s| s.enabled)
+    }) {
+        return;
+    }
+    for row in rows.values() {
+        if let Some(sample) = row["instrument_token"]
+            .as_str()
+            .and_then(|key| scan.samples.get_mut(key))
+        {
+            sample.regime_references = (|| {
+                let close =
+                    Price::try_from(nivra_core::execution::number(&row["ohlc"]["close"]).ok()?)
+                        .ok()?;
+                let open =
+                    Price::try_from(nivra_core::execution::number(&row["ohlc"]["open"]).ok()?)
+                        .ok()?;
+                Some((receipt, close, open))
+            })();
+        }
+    }
+}
+
 pub(super) fn read_scanner_metadata(
     client: &data::Client,
     c: &Config,
@@ -1353,6 +1387,7 @@ pub(super) fn read_scanner_metadata(
         )?;
         return Ok(Some("duplicate_quote".into()));
     }
+    update_regime_references(scan, &rows, receipt, event_config);
     let archive=serde_json::json!({"source":"upstox-readonly-v1","purpose":"scanner_metadata","requested_ms":requested,"received_ms":receipt,"body":raw}).to_string();
     persist(
         db,
@@ -1444,30 +1479,7 @@ pub(super) fn read_executable_quotes(
                 false,
                 Some(&mut store),
             )?;
-            if event_config
-                .and_then(|cfg| cfg.discovery.as_ref())
-                .and_then(|d| d.strategy_selection.as_ref())
-                .is_some_and(|s| s.enabled)
-            {
-                for row in rows.values() {
-                    if let Some(sample) = row["instrument_token"]
-                        .as_str()
-                        .and_then(|key| scan.samples.get_mut(key))
-                    {
-                        sample.regime_references = (|| {
-                            let close = Price::try_from(
-                                nivra_core::execution::number(&row["ohlc"]["close"]).ok()?,
-                            )
-                            .ok()?;
-                            let open = Price::try_from(
-                                nivra_core::execution::number(&row["ohlc"]["open"]).ok()?,
-                            )
-                            .ok()?;
-                            Some((receipt, close, open))
-                        })();
-                    }
-                }
-            }
+            update_regime_references(scan, &rows, receipt, event_config);
         }
         QuoteReadTarget::Held { depth_sink: None } | QuoteReadTarget::Plan => {}
     }

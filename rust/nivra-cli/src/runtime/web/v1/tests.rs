@@ -278,6 +278,36 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
     assert_eq!(health_body["research_tasks"], research_tasks);
     assert_eq!(health_body["controller_liveness"]["status"], "unknown");
     {
+        let selection_status = serde_json::json!({
+            "mode":"shadow","regime":"range/low_vol/strong/no_gap","reason":"NoEligibleCandidates"
+        });
+        let mut snapshot = view.lock().unwrap();
+        snapshot["discovery"] = serde_json::json!({
+            "fresh_count":1,"stale_count":0,"unseen_count":0,"eligible_count":1,"presented_count":0,
+            "oldest_fresh_age_ms":100,"max_scan_age_ms":180000,"unavailable_count":0,"unavailable_truncated":false,
+            "screen_reasons":{},"prospects":[],"selection":"default","limitations":"display",
+            "strategy_selection":selection_status
+        });
+    }
+    let health_with_sel: serde_json::Value =
+        serde_json::from_slice(&health("", &view).body).unwrap();
+    assert_eq!(
+        health_with_sel["strategy_selection"]["regime"],
+        "range/low_vol/strong/no_gap"
+    );
+    let scanner_with_sel: serde_json::Value =
+        serde_json::from_slice(&send(&request("").replace("/api/v1/meta", "/api/v1/scanner")).body)
+            .unwrap();
+    assert_eq!(
+        scanner_with_sel["strategy_selection"]["reason"],
+        "NoEligibleCandidates"
+    );
+    view.lock()
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("discovery");
+    {
         let mut snapshot = view.lock().unwrap();
         snapshot["as_of_ms"] = serde_json::json!(1);
         snapshot["status"] = serde_json::json!("scanning");

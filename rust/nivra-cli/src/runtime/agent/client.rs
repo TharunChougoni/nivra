@@ -17,7 +17,7 @@ const MAX_LINE_BYTES: usize = 8_000_000;
 const MAX_EVENTS: usize = 4_096;
 
 /// Runs one bridged tool call for the turn in progress.
-pub(crate) trait ToolHost {
+pub(crate) trait ToolHost: Send {
     fn call(
         &mut self,
         call_id: &str,
@@ -195,6 +195,26 @@ fn read_lines(reader: impl Read + Send + 'static) -> Receiver<std::io::Result<St
     receiver
 }
 
+fn abort_reason(
+    deadline: Instant,
+    spent: &Usage,
+    partial: &Usage,
+    allowance: Allowance,
+    preempt: &dyn Fn() -> bool,
+) -> Option<&'static str> {
+    let calls = spent.calls.saturating_add(partial.calls);
+    let cost_usd = spent.cost_usd + partial.cost_usd;
+    if Instant::now() >= deadline {
+        Some("agent_turn_timeout")
+    } else if calls >= allowance.calls || cost_usd >= allowance.cost_usd {
+        Some("agent_budget_exhausted")
+    } else if preempt() {
+        Some("agent_preempted")
+    } else {
+        None
+    }
+}
+
 impl AgentClient {
     /// Start the agent process. `extra` adds arguments such as an offline `--fake` script.
     pub(crate) fn spawn(settings: &AgentSettings, extra: &[std::ffi::OsString]) -> Result<Self> {
@@ -359,27 +379,17 @@ impl AgentClient {
             if aborted.is_some() && Instant::now() >= deadline {
                 return Err("agent_turn_unresponsive".into());
             }
-            let calls = spent.calls.saturating_add(partial.usage.calls);
-            let cost_usd = spent.cost_usd + partial.usage.cost_usd;
-            if aborted.is_none() {
-                let reason = if Instant::now() >= deadline {
-                    Some("agent_turn_timeout")
-                } else if calls >= allowance.calls || cost_usd >= allowance.cost_usd {
-                    Some("agent_budget_exhausted")
-                } else if preempt() {
-                    Some("agent_preempted")
-                } else {
-                    None
-                };
-                if let Some(reason) = reason {
-                    self.send(&ToAgent::Abort {
-                        v: VERSION,
-                        turn_id: &request.id,
-                        reason,
-                    })?;
-                    aborted = Some(reason);
-                    deadline = Instant::now() + ABORT_GRACE;
-                }
+            if aborted.is_none()
+                && let Some(reason) =
+                    abort_reason(deadline, spent, &partial.usage, allowance, preempt)
+            {
+                self.send(&ToAgent::Abort {
+                    v: VERSION,
+                    turn_id: &request.id,
+                    reason,
+                })?;
+                aborted = Some(reason);
+                deadline = Instant::now() + ABORT_GRACE;
             }
             let Some(message) = self.next(POLL)? else {
                 continue;
@@ -393,30 +403,88 @@ impl AgentClient {
                     ..
                 } if turn_id == request.id => {
                     let tool_started = Instant::now();
+                    let mut aborted_during_call = false;
                     let result = if aborted.is_some() {
                         Err("agent_turn_aborted".to_owned())
                     } else if partial.tool_calls.len() >= allowance.max_tool_calls {
                         Err("agent_tool_budget_exhausted".to_owned())
                     } else {
-                        host.call(&call_id, &name, &args)
+                        let host_ref: &mut dyn ToolHost = host;
+                        let writer = &mut self.writer;
+                        let mut abort_if_due = || -> Result<bool> {
+                            if aborted.is_none()
+                                && let Some(reason) = abort_reason(
+                                    deadline,
+                                    spent,
+                                    &partial.usage,
+                                    allowance,
+                                    preempt,
+                                )
+                            {
+                                let mut line = serde_json::to_vec(&ToAgent::Abort {
+                                    v: VERSION,
+                                    turn_id: &request.id,
+                                    reason,
+                                })?;
+                                line.push(b'\n');
+                                writer
+                                    .write_all(&line)
+                                    .and_then(|()| writer.flush())
+                                    .map_err(|_| "agent_exited")?;
+                                aborted = Some(reason);
+                                deadline = Instant::now() + ABORT_GRACE;
+                                return Ok(true);
+                            }
+                            Ok(false)
+                        };
+                        let call_id_ref = call_id.as_str();
+                        let name_ref = name.as_str();
+                        let args_ref = &args;
+                        let res: Result<std::result::Result<Value, String>> =
+                            std::thread::scope(|scope| {
+                                let (tx, rx) = channel();
+                                scope.spawn(move || {
+                                    let _ = tx.send(host_ref.call(call_id_ref, name_ref, args_ref));
+                                });
+                                loop {
+                                    match rx.recv_timeout(POLL) {
+                                        Ok(res) => break Ok(res),
+                                        Err(RecvTimeoutError::Timeout) => {
+                                            if abort_if_due()? {
+                                                aborted_during_call = true;
+                                            }
+                                        }
+                                        Err(RecvTimeoutError::Disconnected) => {
+                                            break Ok(Err("agent_tool_panicked".to_owned()));
+                                        }
+                                    }
+                                }
+                            });
+                        res?
                     };
-                    let (ok, output, error) = match &result {
-                        Ok(value) => (true, Some(value), None),
-                        Err(error) => (false, None, Some(error.as_str())),
+                    if !aborted_during_call {
+                        let (ok, output, error) = match &result {
+                            Ok(value) => (true, Some(value), None),
+                            Err(error) => (false, None, Some(error.as_str())),
+                        };
+                        self.send(&ToAgent::ToolResult {
+                            v: VERSION,
+                            turn_id: &request.id,
+                            call_id: &call_id,
+                            ok,
+                            output,
+                            error,
+                        })?;
+                    }
+                    let (ok, err) = match result {
+                        Ok(_) => (true, None),
+                        Err(e) => (false, Some(e)),
                     };
-                    self.send(&ToAgent::ToolResult {
-                        v: VERSION,
-                        turn_id: &request.id,
-                        call_id: &call_id,
-                        ok,
-                        output,
-                        error,
-                    })?;
                     partial.tool_calls.push(ToolCallRecord {
                         call_id,
                         name,
                         ok,
-                        error: result.err(),
+                        error: err,
                         duration_ms: tool_started.elapsed().as_millis(),
                     });
                 }

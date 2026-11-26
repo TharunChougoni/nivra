@@ -86,6 +86,9 @@ pub(crate) fn scanner(
         "price_batch_interval_ms":settings.price_batch_interval_ms
     });
     body["selection"] = discovery.get("selection").cloned().unwrap_or_default();
+    if let Some(strategy_selection) = discovery.get("strategy_selection") {
+        body["strategy_selection"] = strategy_selection.clone();
+    }
     body["limitations"] = discovery.get("limitations").cloned().unwrap_or_default();
     drop(view);
     json_reply(head, body)
