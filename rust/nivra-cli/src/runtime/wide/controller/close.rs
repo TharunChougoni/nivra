@@ -171,10 +171,8 @@ impl Controller<'_> {
         self.stale_since = None;
         self.stale_seen = false;
         self.rollover_seen = false;
-        self.archive = start_archive(&next)?;
-        if self.archive.is_some() {
-            self.research_worker.reset_archive_evidence();
-        }
+        self.archive = Some(start_archive(&next)?);
+        self.research_worker.reset_archive_evidence();
         self.config = next;
         self.history_attempt = HistoryAttempts::load(&self.config)?;
         self.last_history_check = 0;

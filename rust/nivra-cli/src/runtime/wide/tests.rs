@@ -4677,7 +4677,6 @@ fn archive_capture_replays_the_same_session_as_sqlite() -> Result<()> {
         .transpose()?;
     let mut submitted = 0;
     let mut last = base;
-    let mut executable_batches = 0;
     for i in 0..metadata_batches.max(screen_batches) {
         for (purpose, count) in [
             (
@@ -4722,7 +4721,6 @@ fn archive_capture_replays_the_same_session_as_sqlite() -> Result<()> {
                     Some(&writer),
                 )?;
             } else {
-                executable_batches += i64::from(executable);
                 commit_quotes_screened(
                     &mut old_book,
                     &legacy,
@@ -4748,13 +4746,11 @@ fn archive_capture_replays_the_same_session_as_sqlite() -> Result<()> {
                     Some(ArchivedQuote {
                         writer: &writer,
                         purpose,
-                        executable,
                     }),
                 )?;
             }
             submitted += 1;
-            // Keep the accelerated fixture below the live channel capacity.
-            // Compare committed row counts before admitting the next group.
+            // Wait for the archive between groups in the accelerated fixture.
             if submitted % 8 == 0
                 && let Some(db) = &mut pace_db
             {
@@ -4775,18 +4771,18 @@ fn archive_capture_replays_the_same_session_as_sqlite() -> Result<()> {
     }
     if metadata_batches == 3 {
         let deadline = Instant::now() + Duration::from_secs(20);
-        while !spool_path.is_file() {
-            assert!(
-                Instant::now() < deadline,
-                "writer did not spool while offline"
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        let spool = Connection::open(&spool_path)?;
+        let backlog = || {
+            spool.query_row("SELECT count(*) FROM batches", [], |row| {
+                row.get::<_, i64>(0)
+            })
+        };
+        assert_eq!(backlog()?, submitted);
         fs::rename(
             unavailable_password,
             &archived.market_archive.as_ref().unwrap().password_file,
         )?;
-        while spool_path.exists() {
+        while backlog()? != 0 {
             assert!(
                 Instant::now() < deadline,
                 "writer did not drain the spool on reconnect"
@@ -4842,11 +4838,12 @@ fn archive_capture_replays_the_same_session_as_sqlite() -> Result<()> {
     let legacy_tape = replay(&legacy)?;
     assert_eq!(archived_tape.events, legacy_tape.events);
     assert_eq!(archived_tape.manifest, legacy_tape.manifest);
-    assert_eq!(
-        new_book.query_row("SELECT count(*) FROM archive_protected_receipts", [], |r| r
-            .get::<_, i64>(0))?,
-        executable_batches
-    );
+    let references: i64 = new_book.query_row(
+        "SELECT count(*) FROM ticks WHERE json_extract(body,'$.kind')='market_archive_quote'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(references, expected_receipts);
     archived_p.closed = true;
     persist(
         &mut new_book,

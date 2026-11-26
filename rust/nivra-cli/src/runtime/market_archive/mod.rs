@@ -62,12 +62,7 @@ fn read_config(path: &Path) -> Result<Config> {
 }
 
 pub(super) fn open(config: &Config) -> Result<ArchiveClient> {
-    let archive = config
-        .market_archive
-        .as_ref()
-        .ok_or("archive_config_missing")?;
-    archive.validate()?;
-    connect(archive)
+    connect(config.archive_settings()?)
 }
 
 pub(crate) fn connect_from_config(path: &Path) -> Result<ArchiveClient> {

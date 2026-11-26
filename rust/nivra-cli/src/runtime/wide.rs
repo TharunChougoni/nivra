@@ -515,11 +515,18 @@ fn commit_quotes_screened(
     held_positions: bool,
     archive: Option<ArchivedQuote<'_>>,
 ) -> Result<()> {
+    let reference = archive
+        .map(|archive| -> Result<_> {
+            archive.writer.stage(&raw)?;
+            Ok(nivra_store::market_archive::quote_reference(
+                archive.purpose,
+                &raw,
+            ))
+        })
+        .transpose()?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let now = clock();
     let mut next = p.clone();
-    let mut executable = archive.as_ref().is_none_or(|archive| archive.executable)
-        || p.positions.keys().any(|key| quotes.contains_key(key));
     next.apply_at(c.session, now, quotes, &[])?;
     // Expiry is not cash rollover: only the held-position read carries every
     // open position, so only that read may flatten or halt an expiring option.
@@ -626,7 +633,6 @@ fn commit_quotes_screened(
                 let Some(q) = quotes.get(&action.instrument_key) else {
                     continue;
                 };
-                executable = true;
                 if matches!(action.side, planner::PlanSide::Buy)
                     && allowed_buys.is_some_and(|keys| !keys.contains(&action.instrument_key))
                 {
@@ -707,29 +713,16 @@ fn commit_quotes_screened(
         }
     };
     record_halt_transition(&tx, &next, now)?;
-    let reference = archive
-        .as_ref()
-        .filter(|_| !executable)
-        .map(|archive| nivra_store::market_archive::quote_reference(archive.purpose, &raw));
     tx.execute(
         "INSERT INTO ticks(at,receipt,body,event) VALUES(?,?,?,'wide_quotes')",
         rusqlite::params![now, receipt, reference.as_deref().unwrap_or(&raw)],
     )?;
-    if archive.is_some() && executable {
-        tx.execute(
-            "INSERT INTO archive_protected_receipts VALUES(?1)",
-            [tx.last_insert_rowid()],
-        )?;
-    }
     tx.execute(
         "INSERT INTO state VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
         rusqlite::params![book_binding(c)?, serde_json::to_string(&next)?],
     )?;
     tx.commit()?;
     *p = next;
-    if let Some(archive) = archive {
-        archive.writer.offer(raw.into_owned());
-    }
 
     let audit_result = (|| -> Result<()> {
         if let Some(plan) = &saved_plan {
@@ -1072,9 +1065,7 @@ pub(super) fn preparation_request(
     now: i64,
     window: preparation::PreparationWindow,
 ) -> Result<preparation::PreparationRequest> {
-    if c.market_archive.is_none() {
-        return Err("archive_config_missing".into());
-    }
+    c.archive_settings()?;
     let (session, previous) = c.next_sessions(local(now).date_naive())?;
     if session != c.session {
         return Err("history_preparation_session_mismatch".into());

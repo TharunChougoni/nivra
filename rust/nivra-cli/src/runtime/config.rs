@@ -823,6 +823,15 @@ impl Config {
         }
         Ok(schedule)
     }
+    pub(super) fn archive_settings(&self) -> Result<&MarketArchiveSettings> {
+        let archive = self
+            .market_archive
+            .as_ref()
+            .ok_or("archive_config_missing")?;
+        archive.validate()?;
+        Ok(archive)
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
         self.execution.validate()?;
         if let Some(archive) = &self.market_archive {

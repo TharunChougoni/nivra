@@ -25,6 +25,10 @@
     "slippage_bps": "5",
     "rounding_increment": "0.01"
   },
+  "market_archive": {
+    "url": "${MARKET_ARCHIVE_URL}",
+    "password_file": "${MARKET_ARCHIVE_PASSWORD_FILE}"
+  },
   "daily_history_sessions": 21,
   "history_preparation_enabled": true,
   "history_preparation_start_minute": 480,

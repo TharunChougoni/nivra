@@ -63,8 +63,8 @@ Authentication, quota and malformed-response failures stop a pass at once.
 
 ## Market archive
 
-Add this block to use history commands, pre-open preparation, or daily research.
-Use a dedicated PostgreSQL database with TimescaleDB available.
+Set this block before starting the paper controller or running archive-backed
+commands. Use a dedicated PostgreSQL database with TimescaleDB available.
 
 ```json
 {
@@ -87,6 +87,10 @@ the role lacks permission to create it. Run
 counts of instruments, receipts, observations, bars, and coverage.
 
 ## Compatibility
+
+Remove `history_directory`, `dashboard.retention.keep_full_quote_bodies`, and
+`dashboard.retention.max_quote_body_bytes` from installed configs. Import
+legacy history with `nivra archive import-history --config PAPER_JSON HISTORY_DIR`.
 
 A planner key outside the pi policy shape refuses with `planner_config_invalid`.
 Optional keys at their defaults are not serialized, so they leave a sealed

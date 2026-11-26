@@ -382,7 +382,6 @@ impl Controller<'_> {
                 &self.feature_store,
                 QuoteReadTarget::Depth {
                     scan: &mut self.scan,
-                    executable: self.strategy.is_some(),
                 },
                 self.archive.as_ref(),
             )?;
@@ -606,7 +605,6 @@ impl Controller<'_> {
                 &self.feature_store,
                 QuoteReadTarget::Depth {
                     scan: &mut self.scan,
-                    executable: self.strategy.is_some(),
                 },
                 self.archive.as_ref(),
             )?;

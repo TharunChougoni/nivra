@@ -7,20 +7,20 @@ use std::collections::VecDeque;
 use std::fs::{self, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const SPOOL_NAME: &str = "archive-spool.sqlite";
 const PAGE_BYTES: u32 = 4096;
 const SPOOL_PAGES: u32 = 64 * 1024 * 1024 / PAGE_BYTES;
-const QUEUE_CAPACITY: usize = 16;
 const RETRY_MS: i64 = 5_000;
 
 pub(in crate::runtime) struct Writer {
-    sender: Option<SyncSender<String>>,
+    wake: Option<SyncSender<()>>,
+    spool: Arc<Mutex<Spool>>,
     worker: Option<JoinHandle<()>>,
     dropped: Arc<AtomicU64>,
     prior_gaps: Receiver<NaiveDate>,
@@ -32,9 +32,13 @@ impl Writer {
         root: &Path,
         settings: MarketArchiveSettings,
     ) -> Result<Self> {
-        let spool = directory.join(SPOOL_NAME);
-        let root = root.to_owned();
-        let (sender, receiver) = mpsc::sync_channel(QUEUE_CAPACITY);
+        let path = directory.join(SPOOL_NAME);
+        let mut backlog = prior_spools(root);
+        backlog.retain(|prior| prior != &path);
+        let spool = Arc::new(Mutex::new(Spool::open(&path, SPOOL_PAGES)?));
+        fs::File::open(directory)?.sync_all()?;
+        let worker_spool = spool.clone();
+        let (wake, notified) = mpsc::sync_channel(1);
         let (report_prior, prior_gaps) = mpsc::channel();
         let dropped = Arc::new(AtomicU64::new(0));
         let worker_dropped = dropped.clone();
@@ -43,44 +47,53 @@ impl Writer {
             .spawn(move || {
                 let mut sink = ArchiveSink { settings, db: None };
                 let start = Instant::now();
-                let clock = || start.elapsed().as_millis() as i64;
-                let mut capture =
-                    Capture::new(spool, prior_spools(&root), SPOOL_PAGES, report_prior);
+                let mut retry_at = 0;
+                let mut capture = Capture {
+                    spool: worker_spool,
+                    prior: None,
+                    backlog,
+                    report_prior,
+                };
                 loop {
-                    let now = clock();
-                    // Limit each catch-up turn so the producer can keep sending
-                    // while a large spool is being replayed.
-                    capture.retry(now, &mut sink, &worker_dropped);
-                    match receiver.try_recv() {
-                        Ok(raw) => capture.submit(raw, now, &mut sink, &worker_dropped),
-                        Err(mpsc::TryRecvError::Disconnected) => break,
-                        Err(mpsc::TryRecvError::Empty) if capture.can_retry(now) => continue,
-                        Err(mpsc::TryRecvError::Empty) => {
-                            match receiver.recv_timeout(Duration::from_millis(250)) {
-                                Ok(raw) => capture.submit(raw, clock(), &mut sink, &worker_dropped),
-                                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                            }
+                    let now = start.elapsed().as_millis() as i64;
+                    if now >= retry_at {
+                        match capture.replay(&mut sink, &worker_dropped) {
+                            Ok(Replay::Progress) => continue,
+                            Ok(Replay::Empty) => {}
+                            Ok(Replay::Unavailable) | Err(_) => retry_at = now + RETRY_MS,
                         }
+                    }
+                    if let Err(mpsc::RecvTimeoutError::Disconnected) =
+                        notified.recv_timeout(Duration::from_millis(250))
+                    {
+                        break;
                     }
                 }
             })?;
         Ok(Self {
-            sender: Some(sender),
+            wake: Some(wake),
+            spool,
             worker: Some(worker),
             dropped,
             prior_gaps,
         })
     }
 
-    pub(in crate::runtime) fn offer(&self, raw: String) {
-        if self
-            .sender
-            .as_ref()
-            .is_none_or(|sender| sender.try_send(raw).is_err())
-        {
+    /// Commit the original bytes before the ledger can publish a reference.
+    /// The worker holds the spool lock only while it reads or deletes a row.
+    pub(in crate::runtime) fn stage(&self, raw: &str) -> Result<()> {
+        let Some(wake) = &self.wake else {
+            return Err("archive_capture_stopped".into());
+        };
+        let spool = self.spool.lock().map_err(|_| "archive_spool_unavailable")?;
+        if spool.push(raw).is_err() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
+            return Err("archive_spool_unavailable".into());
         }
+        if matches!(wake.try_send(()), Err(mpsc::TrySendError::Disconnected(()))) {
+            return Err("archive_capture_stopped".into());
+        }
+        Ok(())
     }
 
     pub(in crate::runtime) fn take_dropped(&self) -> u64 {
@@ -96,7 +109,7 @@ impl Writer {
     }
 
     pub(in crate::runtime) fn stop(&mut self) {
-        self.sender.take();
+        self.wake.take();
         if let Some(worker) = self.worker.take()
             && worker.join().is_err()
         {
@@ -217,121 +230,71 @@ impl Sink for ArchiveSink {
     }
 }
 
+enum Replay {
+    Progress,
+    Empty,
+    Unavailable,
+}
+
 struct Capture {
-    path: PathBuf,
-    spool: Option<Spool>,
+    spool: Arc<Mutex<Spool>>,
     prior: Option<Spool>,
     backlog: VecDeque<PathBuf>,
-    pages: u32,
-    retry_at: i64,
     report_prior: Sender<NaiveDate>,
 }
 
 impl Capture {
-    fn new(
-        path: PathBuf,
-        mut backlog: VecDeque<PathBuf>,
-        pages: u32,
-        report_prior: Sender<NaiveDate>,
-    ) -> Self {
-        backlog.retain(|prior| prior != &path);
-        if path.exists() {
-            backlog.push_back(path.clone());
-        }
-        Self {
-            path,
-            spool: None,
-            prior: None,
-            backlog,
-            pages,
-            retry_at: 0,
-            report_prior,
-        }
-    }
-
-    fn can_retry(&self, now: i64) -> bool {
-        !self.backlog.is_empty() && now >= self.retry_at
-    }
-
-    fn local(&mut self) -> Result<&Spool> {
-        if self.spool.is_none() {
-            self.spool = Some(Spool::open(&self.path, self.pages)?);
-        }
-        Ok(self.spool.as_ref().expect("local archive spool"))
-    }
-
-    fn submit(&mut self, raw: String, now: i64, sink: &mut impl Sink, dropped: &AtomicU64) {
-        if self.backlog.is_empty() && now >= self.retry_at {
-            match sink.write(&raw) {
-                WriteResult::Stored => return,
-                WriteResult::Invalid => {
-                    dropped.fetch_add(1, Ordering::Relaxed);
-                    return;
-                }
-                WriteResult::Unavailable => self.retry_at = now + RETRY_MS,
-            }
-        }
-        if self.local().and_then(|spool| spool.push(&raw)).is_err() {
-            dropped.fetch_add(1, Ordering::Relaxed);
-        } else if self.backlog.back() != Some(&self.path) {
-            self.backlog.push_back(self.path.clone());
-        }
-    }
-
-    fn retry(&mut self, now: i64, sink: &mut impl Sink, dropped: &AtomicU64) {
-        if !self.can_retry(now) {
-            return;
-        }
-        let result = self.replay(sink, dropped);
-        match result {
-            Ok(true) => {}
-            Ok(false) | Err(_) => self.retry_at = now + RETRY_MS,
-        }
-    }
-
-    fn replay(&mut self, sink: &mut impl Sink, dropped: &AtomicU64) -> Result<bool> {
-        let path = self.backlog.front().expect("pending archive spool").clone();
-        let local = path == self.path;
-        let spool = if local {
-            self.local()?
-        } else {
+    fn replay(&mut self, sink: &mut impl Sink, dropped: &AtomicU64) -> Result<Replay> {
+        if let Some(path) = self.backlog.front() {
             if self.prior.is_none() {
-                self.prior = Some(Spool::open(&path, self.pages)?);
+                self.prior = Some(Spool::open(path, SPOOL_PAGES)?);
             }
-            self.prior.as_ref().expect("prior archive spool")
-        };
-        let Some((id, raw)) = spool.first()? else {
-            self.backlog.pop_front();
-            if local {
-                self.spool = None;
-            } else {
+            let spool = self.prior.as_ref().expect("open prior archive spool");
+            let Some((id, raw)) = spool.first()? else {
                 self.prior = None;
+                fs::remove_file(path)?;
+                self.backlog.pop_front();
+                return Ok(Replay::Progress);
+            };
+            match sink.write(&raw) {
+                WriteResult::Unavailable => return Ok(Replay::Unavailable),
+                WriteResult::Stored => {}
+                WriteResult::Invalid => {
+                    record_prior_gap(path)?;
+                    if let Some(session) = path
+                        .parent()
+                        .and_then(Path::file_name)
+                        .and_then(|name| name.to_str())
+                        .and_then(|name| name.parse().ok())
+                    {
+                        let _ = self.report_prior.send(session);
+                    }
+                }
             }
-            fs::remove_file(path)?;
-            return Ok(true);
-        };
-        let invalid = match sink.write(&raw) {
-            WriteResult::Unavailable => return Ok(false),
-            WriteResult::Invalid => true,
-            WriteResult::Stored => false,
-        };
-        if invalid && !local {
-            record_prior_gap(&path)?;
+            spool.remove(id)?;
+            return Ok(Replay::Progress);
         }
-        spool.remove(id)?;
-        if invalid {
-            if local {
+
+        let first = self
+            .spool
+            .lock()
+            .map_err(|_| "archive_spool_unavailable")?
+            .first()?;
+        let Some((id, raw)) = first else {
+            return Ok(Replay::Empty);
+        };
+        match sink.write(&raw) {
+            WriteResult::Unavailable => return Ok(Replay::Unavailable),
+            WriteResult::Stored => {}
+            WriteResult::Invalid => {
                 dropped.fetch_add(1, Ordering::Relaxed);
-            } else if let Some(session) = path
-                .parent()
-                .and_then(Path::file_name)
-                .and_then(|name| name.to_str())
-                .and_then(|name| name.parse().ok())
-            {
-                let _ = self.report_prior.send(session);
             }
         }
-        Ok(true)
+        self.spool
+            .lock()
+            .map_err(|_| "archive_spool_unavailable")?
+            .remove(id)?;
+        Ok(Replay::Progress)
     }
 }
 
@@ -379,30 +342,36 @@ mod tests {
         let batches = ["a".repeat(3500), "b".repeat(3500), "c".repeat(9000)];
         let mut sink = FakeSink::default();
         let dropped = AtomicU64::new(0);
-        let mut now = 100;
-        let (report_prior, _) = mpsc::channel();
-        let mut capture = Capture::new(path.clone(), VecDeque::new(), 4, report_prior);
-        for batch in &batches {
-            capture.submit(batch.clone(), now, &mut sink, &dropped);
-        }
-        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+        let spool = Spool::open(&path, 4).unwrap();
+        spool.push(&batches[0]).unwrap();
+        spool.push(&batches[1]).unwrap();
+        assert!(spool.push(&batches[2]).is_err());
         assert!(fs::metadata(&path).unwrap().len() <= 4 * u64::from(PAGE_BYTES));
-        sink.online = true;
-        now += RETRY_MS - 1;
-        capture.retry(now, &mut sink, &dropped);
-        assert!(sink.committed.is_empty());
+        drop(spool);
 
-        // Restart with the same durable FIFO, then add another batch.
-        drop(capture);
         let (report_prior, _) = mpsc::channel();
-        let mut capture = Capture::new(path.clone(), VecDeque::new(), 4, report_prior);
-        now += 1;
-        capture.retry(now, &mut sink, &dropped);
-        capture.submit("later".into(), now, &mut sink, &dropped);
-        while capture.can_retry(now) {
-            capture.retry(now, &mut sink, &dropped);
-        }
+        let spool = Arc::new(Mutex::new(Spool::open(&path, 4).unwrap()));
+        let mut capture = Capture {
+            spool: spool.clone(),
+            prior: None,
+            backlog: VecDeque::new(),
+            report_prior,
+        };
+        assert!(matches!(
+            capture.replay(&mut sink, &dropped).unwrap(),
+            Replay::Unavailable
+        ));
+        sink.online = true;
+        assert!(matches!(
+            capture.replay(&mut sink, &dropped).unwrap(),
+            Replay::Progress
+        ));
+        spool.lock().unwrap().push("later").unwrap();
+        while matches!(
+            capture.replay(&mut sink, &dropped).unwrap(),
+            Replay::Progress
+        ) {}
         assert_eq!(sink.committed, [&batches[0], &batches[1], "later"]);
-        assert!(!path.exists());
+        assert!(spool.lock().unwrap().first().unwrap().is_none());
     }
 }

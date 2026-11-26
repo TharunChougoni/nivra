@@ -115,31 +115,24 @@ Set `market_archive.url` to a PostgreSQL URL without a password and
 `market_archive.password_file` to an absolute path to a private mode-0600 file.
 Run `nivra archive init --config PAPER_CONFIG` before starting the controller.
 
-With the archive configured, the controller sends REST quote batches to one
-background writer. Each database transaction stores the original envelope
-compressed with Zstandard and the normalized observations. If a provider row
-lacks valid fields, the archive keeps the original envelope and omits that
-row from the normalized observations. The book keeps SHA-256 references and
-the original event and receipt times for scanner metadata and screen-only
-reads. It keeps full receipts for protection, plan checks, and depth reads
-that can supply the strategy executor.
+The paper controller requires the archive. It stages each REST quote receipt
+in the session's `archive-spool.sqlite` before writing its SHA-256 reference
+to the paper book. The book records the original event and receipt times.
+A background writer stores the exact envelope compressed with Zstandard and
+writes the normalized observations in the same archive transaction. A provider
+row with invalid fields stays in the envelope and is skipped during
+normalization.
 
-During a database outage, the writer queues batches in
-`archive-spool.sqlite` in the session directory. The spool database is capped
-at 64 MiB per session, with a transient SQLite rollback journal. The writer
-replays the oldest batch first after reconnecting. It also recovers spools in
-earlier dated session directories under `sessions_root`. The in-memory
-channel has 16 slots. If the channel or spool cannot accept a batch, the
-controller records an `archive_gap` tick and emits an alert. A forced process
-exit can also lose batches still in memory.
+The spool holds up to 64 MiB per session, plus a transient SQLite rollback
+journal. If staging fails, the controller stops and records an `archive_gap`
+when it can still write to the book. The writer retries queued receipts in
+order and also drains spools under earlier dated session directories.
 
-Research quote queries, backtests, and tape exports read the archived bytes
-using the journal's original ordering and time bounds. A reference whose
-body is still queued or missing returns an error. Inline receipts remain
-readable from SQLite. The controller refreshes archive-backed research
-projections in the background. Use the same archive config when opening a
-book that contains references. For `strategy-lab source` and `strategy-lab tools`, pass
-that paper config with `--archive-config`.
+Research queries and tape exports use the book's time bounds and ordering to
+read from the archive. A receipt that is still queued or missing causes a
+read error. Use the same archive configuration when opening the book. Pass
+the paper configuration to `strategy-lab source` and `strategy-lab tools`
+with `--archive-config`.
 
 To copy original quotes from a closed, checkpointed book, run
 `nivra archive import-book --config PAPER_CONFIG BOOK_DIR`. The command
@@ -147,6 +140,7 @@ verifies identical receipts on repeat runs and refuses a changed receipt
 for an already imported tick. Add `--rewrite` to replace verified inline
 receipts with archive references and reclaim SQLite space.
 The summary counts compacted legacy rows whose original body is unavailable.
+With `--rewrite`, those rows become explicit gaps at their original times.
 
 ### Research quote tape
 

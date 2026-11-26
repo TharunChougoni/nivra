@@ -89,18 +89,12 @@ struct FetchedQuoteRows {
 pub(super) struct ArchivedQuote<'a> {
     pub(super) writer: &'a super::super::market_archive::capture::Writer,
     pub(super) purpose: &'a str,
-    pub(super) executable: bool,
 }
 
 pub(in crate::runtime) enum QuoteReadTarget<'a> {
-    Held {
-        depth_sink: Option<&'a mut Scanner>,
-    },
+    Held { depth_sink: Option<&'a mut Scanner> },
     Plan,
-    Depth {
-        scan: &'a mut Scanner,
-        executable: bool,
-    },
+    Depth { scan: &'a mut Scanner },
     Scan(&'a mut Scanner),
 }
 
@@ -140,7 +134,7 @@ fn fetch_quote_rows(
                 p,
                 millis(),
                 Some(receipt),
-                Some(&raw),
+                None,
                 "invalid_quote_json",
             )?;
             return Ok(Err("invalid_quote_json".into()));
@@ -156,7 +150,7 @@ fn fetch_quote_rows(
             p,
             millis(),
             Some(receipt),
-            Some(&raw),
+            None,
             "invalid_quote_status",
         )?;
         return Ok(Err("invalid_quote_status".into()));
@@ -171,7 +165,7 @@ fn fetch_quote_rows(
             p,
             millis(),
             Some(receipt),
-            Some(&raw),
+            None,
             "invalid_quote_data",
         )?;
         return Ok(Err("invalid_quote_data".into()));
@@ -260,7 +254,7 @@ pub(in crate::runtime) fn read_scanner_metadata(
             p,
             millis(),
             Some(receipt),
-            Some(&raw),
+            None,
             "duplicate_metadata_quote",
         )?;
         return Ok(Some("duplicate_quote".into()));
@@ -280,8 +274,15 @@ pub(super) fn persist_scanner_metadata(
     archive: String,
     writer: Option<&super::super::market_archive::capture::Writer>,
 ) -> Result<()> {
-    let reference =
-        writer.map(|_| nivra_store::market_archive::quote_reference("scanner_metadata", &archive));
+    let reference = writer
+        .map(|writer| -> Result<_> {
+            writer.stage(&archive)?;
+            Ok(nivra_store::market_archive::quote_reference(
+                "scanner_metadata",
+                &archive,
+            ))
+        })
+        .transpose()?;
     persist(
         db,
         c,
@@ -291,9 +292,6 @@ pub(super) fn persist_scanner_metadata(
         reference.as_deref().or(Some(&archive)),
         "scanner_metadata",
     )?;
-    if let Some(writer) = writer {
-        writer.offer(archive);
-    }
     Ok(())
 }
 
@@ -332,15 +330,7 @@ pub(in crate::runtime) fn read_executable_quotes(
             if event_config.is_some() {
                 block_data_failure(db, c, p);
             }
-            persist(
-                db,
-                c,
-                p,
-                millis(),
-                Some(receipt),
-                Some(&raw),
-                "duplicate_quote",
-            )?;
+            persist(db, c, p, millis(), Some(receipt), None, "duplicate_quote")?;
             return Ok(Some("duplicate_quote".into()));
         }
         if let Ok(q) = data::parse_row(row, receipt, &i.key, &i.symbol, i.tick) {
@@ -386,15 +376,6 @@ pub(in crate::runtime) fn read_executable_quotes(
         "execution_or_protection"
     };
     let held_positions = matches!(target, QuoteReadTarget::Held { .. });
-    let executable = matches!(
-        target,
-        QuoteReadTarget::Held { .. }
-            | QuoteReadTarget::Plan
-            | QuoteReadTarget::Depth {
-                executable: true,
-                ..
-            }
-    );
     let archive=serde_json::json!({"source":"upstox-readonly-v1","purpose":purpose,"requested_ms":requested,"received_ms":receipt,"body":raw}).to_string();
     let policy = event_config
         .and_then(|cfg| cfg.discovery.as_ref())
@@ -435,11 +416,7 @@ pub(in crate::runtime) fn read_executable_quotes(
         millis,
         Some(&allowed_buys),
         held_positions,
-        writer.map(|writer| ArchivedQuote {
-            writer,
-            purpose,
-            executable,
-        }),
+        writer.map(|writer| ArchivedQuote { writer, purpose }),
     )?;
     if !event_config.is_some_and(planner::PlannerConfig::uses_pi_paper)
         && let Ok(binding) = book_binding(c)

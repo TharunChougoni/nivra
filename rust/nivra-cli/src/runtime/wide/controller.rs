@@ -360,15 +360,17 @@ impl SessionEvidence {
     }
 }
 
-fn start_archive(c: &Config) -> Result<Option<capture::Writer>> {
-    c.market_archive
-        .clone()
-        .map(|settings| capture::Writer::start(&c.directory, &rollover::root(c)?, settings))
-        .transpose()
+fn start_archive(c: &Config) -> Result<capture::Writer> {
+    capture::Writer::start(
+        &c.directory,
+        &rollover::root(c)?,
+        c.archive_settings()?.clone(),
+    )
 }
 
 impl<'a> Controller<'a> {
     fn start(c: &Config, client: &'a data::Client) -> Result<Self> {
+        c.archive_settings()?;
         let _daily_lock = rollover::controller_lock(c)?;
         let config = c.clone();
         let policy = load_pi_policy(c);
@@ -458,7 +460,7 @@ impl<'a> Controller<'a> {
         let alerts = Alerts::start(c.alert_webhook_file.as_deref(), true);
         let reported = p.closed && c.directory.join("report.json").is_file();
         let history_attempt = HistoryAttempts::load(&config)?;
-        let archive = start_archive(c)?;
+        let archive = Some(start_archive(c)?);
         Ok(Self {
             client,
             volume_history_loaded: false,
