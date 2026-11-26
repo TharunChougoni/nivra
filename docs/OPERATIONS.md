@@ -128,6 +128,11 @@ controller stays running. See [market data](MARKET_DATA.md).
 
 ### Move an existing history folder to TimescaleDB
 
+Install the archive database first; see
+[market archive database](../packaging/rust/postgres/README.md). It listens on
+localhost only. Reach it from another machine through an SSH tunnel, for
+example `ssh -L 55433:127.0.0.1:5432 PAPER_HOST`.
+
 Add `market_archive` to the paper configuration. Keep the database password
 in the private file named by `password_file`. See
 [market archive configuration](../packaging/rust/CONFIGURATION.md#market-archive).
