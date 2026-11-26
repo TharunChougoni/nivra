@@ -348,9 +348,17 @@ Activation needs all of these:
   `update_rollback_config_incompatible`.
 
 Otherwise the updater defers with a reason such as `deferred_market_open` or
-`deferred_open_positions`. `--force-unwatched-window` accepts a short
-unwatched restart of an open book and records it. The same session continues.
-It never bypasses a halt, a hold or an integrity check.
+`deferred_open_positions`. A flat book that is not closed yet, while the NSE
+calendar says the session is not trading, defers as
+`deferred_open_book_outside_session`. This happens in the 09:00–09:15 IST
+pre-open and after 15:30.
+
+`--force-unwatched-window` accepts a short unwatched restart of an open book
+and records the reason. The same session continues. A flat open book is
+admitted anywhere in the blackout: as `market_open_flat` while the session
+trades, and as `outside_session_flat` in the pre-open or after 15:30. A book
+with positions or pending orders is admitted only as before. Force never
+bypasses a halt, a hold or an integrity check.
 
 To deploy to an operator-stopped book or inside the blackout:
 

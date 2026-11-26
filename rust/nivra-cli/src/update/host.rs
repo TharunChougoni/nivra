@@ -439,7 +439,8 @@ impl Host for RealHost {
         // calendar leaves the clock window in force (deferring).
         let calendar_closed =
             crate::runtime::market_closed(&self.paper, now.timestamp_millis()).unwrap_or(false);
-        let market = market_open(now) && !calendar_closed;
+        let blackout = market_open(now);
+        let market = blackout && !calendar_closed;
         if (open || pending) && book.halted {
             // A risk halt requires operator review; force never bypasses it.
             return Ok(Admission::Deferred("deferred_halted_book"));
@@ -488,11 +489,21 @@ impl Host for RealHost {
                 "deferred_market_open_book_not_flat"
             }));
         }
-        Ok(if book.flat_safe {
-            Admission::Safe
-        } else {
-            Admission::Deferred("deferred_book_not_flat")
-        })
+        if book.flat_safe {
+            return Ok(Admission::Safe);
+        }
+        if book.halted {
+            return Ok(Admission::Deferred("deferred_book_not_flat"));
+        }
+        // A flat, non-halted book that is not yet closed, while the calendar says
+        // the session is not trading: the 09:00-09:15 pre-open, the blackout tail
+        // after 15:30, or any calendar-closed blackout minute. Inside the blackout
+        // a reviewed forced activation takes the same bounded restart window as
+        // an in-session flat book (#32).
+        if blackout && force && !book.stopped_safe {
+            return Ok(Admission::Forced("outside_session_flat"));
+        }
+        Ok(Admission::Deferred("deferred_open_book_outside_session"))
     }
     fn smoke(&mut self, binary: &Path, tag: &str) -> Result<()> {
         let (code, body) = command(

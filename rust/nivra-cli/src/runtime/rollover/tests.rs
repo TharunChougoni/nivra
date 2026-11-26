@@ -610,6 +610,30 @@ fn updater_adopts_closed_carried_book_only_outside_market_hours() {
     flat.closed = true;
     rewrite_book(&c, &flat);
     assert!(update_safe(&path, session).unwrap());
+    // An open flat book in the 09:00-09:15 pre-open: the calendar is closed, so
+    // force takes the bounded restart window, and without force the refusal
+    // names the open book rather than claiming it is not flat (#32).
+    flat.closed = false;
+    rewrite_book(&c, &flat);
+    let mut host = crate::update::RealHost {
+        agent: ureq::Agent::new_with_defaults(),
+        current: PathBuf::new(),
+        token_file: PathBuf::new(),
+        remote: String::new(),
+        cache: PathBuf::new(),
+        paper: path.clone(),
+        now: Some(DateTime::parse_from_rfc3339("2026-10-19T09:05:00+05:30").unwrap()),
+        operator_stopped: false,
+    };
+    use crate::update::{Admission, Host};
+    assert_eq!(
+        host.guard(false),
+        Ok(Admission::Deferred("deferred_open_book_outside_session"))
+    );
+    assert_eq!(
+        host.guard(true),
+        Ok(Admission::Forced("outside_session_flat"))
+    );
     // An unsettled attempt defers even outside market hours.
     rewrite_book(&c, &book);
     let db = open_book(&c).unwrap();
