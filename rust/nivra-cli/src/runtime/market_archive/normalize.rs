@@ -74,7 +74,7 @@ fn quotes(raw: &str) -> Result<QuoteBatch<'_>> {
 
 /// Keep the exact body even when individual instruments lack normalizable
 /// fields. Replay applies its own receipt checks to the original bytes.
-pub(super) fn capture_quotes(raw: &str) -> Result<QuoteBatch<'_>> {
+pub(in crate::runtime) fn capture_quotes(raw: &str) -> Result<QuoteBatch<'_>> {
     quote_batch(raw, true)
 }
 

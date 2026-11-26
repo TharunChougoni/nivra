@@ -675,10 +675,44 @@ pub(crate) fn bridge_definitions(cfg: &PlannerConfig, lane_requests: bool) -> Re
                 .collect::<Vec<_>>()
         );
         if candidate.strategy.as_ref().is_some_and(|s| s.enabled) {
-            submit["parameters"]["properties"]["strategy"] = json!({
+            let properties = &mut submit["parameters"]["properties"];
+            properties["strategy"] = json!({
                 "type":["boolean","null"],
-                "description":"true runs source as a strategy_actions_v1 strategy (entry and exit actions) over the selection window of this session's quote tape, with the book's capital, costs and exit policy, and returns the after-cost replay report now. params is its params object; horizon_minutes is not used. A replay over the wall budget, or one a waiting decision turn preempts, stops with no report and says how far it got; retry with a narrower selection window. The result's acceptance says whether the replay met the acceptance bars; an accepted strategy is registered in the strategy library, and a rejected one lists every reason."
+                "description":"true replays a strategy_actions_v1 source after costs with the book's capital and exit policy, and returns a report immediately. Pick an archive_window dataset and set selection_from_ms and selection_to_ms to cover at least three NSE sessions for acceptance. Use archive_daily_window to fit the tape and wall limits. params goes to the strategy. Use the configured horizon_minutes value. A stopped replay keeps no report. The acceptance verdict says whether the library registered the strategy."
             });
+            let windows: Vec<_> = candidate
+                .datasets
+                .iter()
+                .filter_map(|dataset| match dataset.kind {
+                    research::CandidateDatasetKind::ArchiveWindow {
+                        from_session,
+                        to_session,
+                    } => Some(format!(
+                        "{} ({} through {}, inclusive)",
+                        dataset.dataset_id, from_session, to_session
+                    )),
+                    _ => None,
+                })
+                .collect();
+            if !windows.is_empty() {
+                properties["dataset_id"]["description"] = json!(format!(
+                    "Archive windows for strategy replay: {}",
+                    windows.join(", ")
+                ));
+                properties["archive_daily_window"] = json!({
+                    "type":["object","null"], "additionalProperties":false,
+                    "description":"Optional slice on each archive session in IST minutes after midnight. The start is inclusive and the end is exclusive. For 09:30 to 10:30 use 570 and 630.",
+                    "properties":{
+                        "from_minute":{"type":"integer","minimum":0,"maximum":1439},
+                        "to_minute":{"type":"integer","minimum":1,"maximum":1440}
+                    },
+                    "required":["from_minute","to_minute"]
+                });
+                properties["as_of_receipt_id"] = json!({
+                    "type":["integer","null"],"minimum":0,
+                    "description":"Optional archive receipt watermark from tape.archive_window.as_of_receipt_id. Omit it to pin the latest committed quote receipt."
+                });
+            }
             if let Some(required) = submit["parameters"]["required"].as_array_mut() {
                 required.push(json!("strategy"));
             }

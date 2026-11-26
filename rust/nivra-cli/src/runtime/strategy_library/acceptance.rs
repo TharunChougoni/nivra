@@ -6,7 +6,7 @@ use crate::runtime::strategy::ABI;
 use nivra_core::{finance::Amount, replay::digest};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The planner config's `strategy_acceptance` block. Absent means these
 /// defaults. Drawdown and failures are rates, so they scale with capital and
@@ -31,7 +31,7 @@ impl Default for Thresholds {
             min_trades: 10,
             min_net_pnl: Amount::ZERO,
             max_drawdown_bps: 300,
-            min_tape_dates: 1,
+            min_tape_dates: 3,
             max_failure_bps: 100,
         }
     }
@@ -69,7 +69,7 @@ pub(crate) enum Reason {
 
 #[derive(Deserialize)]
 struct Tape {
-    dates: Vec<String>,
+    dates: BTreeSet<String>,
     strategy_calls: u64,
 }
 #[derive(Deserialize)]
@@ -141,7 +141,7 @@ pub(crate) fn accept<'a>(
         source_sha256: parsed.source_sha256,
         params: parsed.parameters.params,
         summary: value["summary"].clone(),
-        tape_dates: parsed.tape.dates,
+        tape_dates: parsed.tape.dates.into_iter().collect(),
         thresholds: thresholds.clone(),
     })
 }

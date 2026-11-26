@@ -189,18 +189,47 @@ In the research lane, enable `candidate_compute.strategy`:
   "max_quote_events": 10000, "max_observations": 100000, "max_tape_bytes": 16777216}
 ```
 
-Then `backtest` takes `strategy: true`. It replays `source` with `params` over
-the selection window of the current session's tape, with the book's capital,
-costs and exit policy. It returns the summary and the report hash at once.
-The report is kept as `model/strategy-replays/<sha256>.json` in the book,
-and the result's `acceptance` gives the verdict described below.
+Register an archive window in `candidate_compute.datasets`. This example spans
+five trading sessions in the reviewed NSE calendar.
 
-The replay runs on the lane worker that also runs decision turns, so it is
-bounded. It stops before the next strategy call when it passes `max_wall_ms`
-(default 20,000, at most 120,000) with `strategy_replay_wall_budget`, or when
-a decision turn is waiting, with `strategy_replay_preempted`. A stopped replay
-keeps no report. It returns `strategy_calls` and `last_at_ms`, so retry with a
-narrower `selection_from_ms` and `selection_to_ms`.
+```json
+{"dataset_id":"november_window","kind":{"archive_window":{
+  "from_session":"2026-11-23","to_session":"2026-11-30"
+}}}
+```
+
+An archive window spans up to 14 calendar days, inclusive. The paper config
+must set `market_archive`. Keep each dated book's `wide-universe.json` for its
+frozen cash instrument metadata. The replay uses original receipt times and
+refuses a key whose instrument metadata changes within the tape.
+
+Call `backtest` with `strategy: true` and the archive dataset ID. Set
+`selection_from_ms` and `selection_to_ms` to cover at least three trading
+sessions. Use an optional `archive_daily_window` to replay the same slice on
+each date. For 09:30 to 10:30 IST, pass
+`{"from_minute":570,"to_minute":630}`. The start is inclusive and the end is
+exclusive. The tape contains the receipts inside both windows, including the
+receipts used for held exits. Without a daily slice, the full selected part of
+each date is eligible. Use a configured `current_session_features` dataset ID for
+a current-session diagnostic.
+
+The result reports the selected trading dates, dates with no archived screen
+or protection quotes, and the tape's `events_sha256`. For acceptance, a tape
+date counts when the strategy ran on a protection receipt that day. The
+archive reader pins the latest committed quote receipt ID before it reads the
+window. Pass `tape.archive_window.as_of_receipt_id` back as `as_of_receipt_id`
+on the same request to reproduce the tape after new batches arrive. Keep the
+same dated instrument metadata when reproducing a tape.
+
+The result includes the after-cost summary and acceptance verdict. The report
+is kept as `model/strategy-replays/<sha256>.json` in the book.
+
+The replay shares a worker with decision turns. Tape construction and
+strategy calls share `max_wall_ms` (default 20,000, maximum 120,000). A budget
+stop returns `strategy_replay_wall_budget`. A waiting decision turn returns
+`strategy_replay_preempted`. Both return progress without a report. If the
+request exceeds the quote-event, observation or byte cap, narrow the daily
+slice or selection window and retry.
 
 ### Acceptance and the library
 
@@ -218,7 +247,7 @@ planner config's optional `strategy_acceptance` block sets the bars:
 | `min_trades` | 10 closed trades | `too_few_trades` |
 | `min_net_pnl` | `"0"`. Net P&L after costs must be above it | `net_pnl_too_low` |
 | `max_drawdown_bps` | 300 bps of the replay capital | `drawdown_too_deep` |
-| `min_tape_dates` | 1 session date | `too_few_tape_dates` |
+| `min_tape_dates` | 3 distinct session dates | `too_few_tape_dates` |
 | `max_failure_bps` | 100 bps of strategy calls | `too_many_strategy_failures` |
 
 A report that still holds a position at the end of the tape is rejected with

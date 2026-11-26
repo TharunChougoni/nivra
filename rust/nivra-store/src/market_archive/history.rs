@@ -6,7 +6,10 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Serialize fetch passes sharing one archive. The connection owns the lock.
 pub fn lock_history_download(db: &mut Client) -> Result<()> {
     if !db
-        .query_one("SELECT pg_try_advisory_lock(6749301730906321427)", &[])?
+        .query_one(
+            "SELECT pg_try_advisory_lock($1)",
+            &[&super::HISTORY_DOWNLOAD_LOCK],
+        )?
         .get::<_, bool>(0)
     {
         return Err("history_download_locked".into());

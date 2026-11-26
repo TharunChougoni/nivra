@@ -60,17 +60,21 @@ separately recorded evidence.
 
 ### Market archive integration tests
 
-Start a disposable TimescaleDB container and run both ignored tests. The
+Start a disposable TimescaleDB container and run the ignored tests. The
 URL and password in these commands are for the disposable container.
 
 ```sh
-docker run -d --name nivra-archive-d -p 55433:5432 -e POSTGRES_PASSWORD=test timescale/timescaledb:latest-pg17
-docker exec nivra-archive-d pg_isready
-export NIVRA_ARCHIVE_TEST_URL=postgresql://postgres:test@127.0.0.1:55433/postgres
-cargo test -p nivra-store --test market_archive --locked -- --ignored --nocapture
-cargo test -p nivra-cli --bin nivra --locked archive_capture_replays_the_same_session_as_sqlite -- --ignored --nocapture
-docker rm -f nivra-archive-d
+docker run -d --name nivra-archive-f -p 55435:5432 -e POSTGRES_PASSWORD=test timescale/timescaledb:latest-pg17
+docker exec nivra-archive-f pg_isready
+export NIVRA_ARCHIVE_TEST_URL=postgresql://postgres:test@127.0.0.1:55435/postgres
+cargo test --workspace --locked -- --ignored --test-threads=1
+docker rm -f nivra-archive-f
 ```
 
 Set `NIVRA_ARCHIVE_SIZE_REPLAY=1` for the CLI test to replay 4,377 synthetic
 batches and print the two checkpointed book sizes.
+
+Set `NIVRA_ARCHIVE_WINDOW_PERF=1` and pass `--nocapture` to seed 22,000
+synthetic quote batches and time a one-hour tape slice across five sessions.
+The strategy replay integration test requires the same bubblewrap support
+as the research lane.

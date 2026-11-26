@@ -134,6 +134,36 @@ pub(crate) fn quote_receipts_bounded(
     max_rows: usize,
     max_source_ms: i64,
 ) -> std::result::Result<QuoteEvidence, String> {
+    let mut receipts = Vec::new();
+    let instruments = visit_quote_receipts(
+        source,
+        session,
+        max_rows,
+        max_source_ms,
+        &|| None,
+        |receipt| {
+            receipts.push(receipt);
+            Ok(())
+        },
+    )?;
+    if receipts.is_empty() {
+        return Err(SNAPSHOT_UNAVAILABLE.into());
+    }
+    Ok(QuoteEvidence {
+        instruments,
+        receipts,
+    })
+}
+
+fn visit_quote_receipts(
+    source: QuoteSource<'_>,
+    session: NaiveDate,
+    max_rows: usize,
+    max_source_ms: i64,
+    stop: &dyn Fn() -> Option<&'static str>,
+    mut visit: impl FnMut(QuoteReceipt) -> std::result::Result<(), String>,
+) -> std::result::Result<Vec<Instrument>, String> {
+    check_tape_stop(stop)?;
     if !source.directory.is_absolute() || !(1..=10_000).contains(&max_rows) || max_source_ms < 0 {
         return Err(SNAPSHOT_UNAVAILABLE.into());
     }
@@ -154,24 +184,18 @@ pub(crate) fn quote_receipts_bounded(
         .iter()
         .map(|instrument| (instrument.key.as_str(), instrument))
         .collect::<BTreeMap<_, _>>();
-    let mut receipts = Vec::new();
     let mut previous = None;
     for row in source.rows(rows) {
+        check_tape_stop(stop)?;
         let (at, receipt, raw) = row?;
         let receipt = archived_receipt(&index, at, receipt, &raw, max_source_ms)?;
         if previous.is_some_and(|prior| at <= prior) {
             return Err("scorer_snapshots_chronology".into());
         }
         previous = Some(at);
-        receipts.push(receipt);
+        visit(receipt)?;
     }
-    if receipts.is_empty() {
-        return Err(SNAPSHOT_UNAVAILABLE.into());
-    }
-    Ok(QuoteEvidence {
-        instruments,
-        receipts,
-    })
+    Ok(instruments)
 }
 
 pub(super) fn quote_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<QuoteRow> {
@@ -317,12 +341,6 @@ fn archived_receipt_filtered(
 }
 
 /// Frozen executable quote tape for the optional after-cost cash replay.
-///
-/// It is built from the same `quote_receipts_bounded` reader as the scorer
-/// dataset, so there is no second quote normalizer. Only receipts whose
-/// original source observation is at or before the submission clock enter the
-/// tape; a later exit quote is never fetched. Screen receipts stay in the tape
-/// as ranking-only evidence and the adapter refuses them for fills.
 pub(crate) struct ExecutionTape {
     pub manifest: Vec<u8>,
     pub events: Vec<u8>,
@@ -331,6 +349,19 @@ pub(crate) struct ExecutionTape {
     pub protection_receipts: usize,
     pub protection_observations: usize,
     pub screen_receipts: usize,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct TapeLimits {
+    pub max_quote_events: usize,
+    pub max_observations: usize,
+    pub max_tape_bytes: u64,
+}
+
+pub(super) fn check_tape_stop(
+    stop: &dyn Fn() -> Option<&'static str>,
+) -> std::result::Result<(), String> {
+    stop().map_or(Ok(()), |reason| Err(reason.into()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -344,113 +375,182 @@ pub(crate) fn execution_tape_bounded(
     max_tape_bytes: u64,
     now: i64,
 ) -> std::result::Result<ExecutionTape, String> {
-    if capital <= Amount::ZERO
-        || !(1..=10_000).contains(&max_quote_events)
-        || !(1..=100_000).contains(&max_observations)
-        || !(1..=16 * 1024 * 1024).contains(&max_tape_bytes)
-        || now < 0
-    {
-        return Err("candidate_execution_tape_invalid".into());
+    execution_tape_bounded_with_stop(
+        source,
+        session,
+        previous_session,
+        capital,
+        TapeLimits {
+            max_quote_events,
+            max_observations,
+            max_tape_bytes,
+        },
+        now,
+        &|| None,
+    )
+}
+
+pub(crate) fn execution_tape_bounded_with_stop(
+    source: QuoteSource<'_>,
+    session: NaiveDate,
+    previous_session: Option<NaiveDate>,
+    capital: Amount,
+    limits: TapeLimits,
+    now: i64,
+    stop: &dyn Fn() -> Option<&'static str>,
+) -> std::result::Result<ExecutionTape, String> {
+    let mut builder = ExecutionTapeBuilder::new(capital, limits)?;
+    let instruments = visit_quote_receipts(
+        source,
+        session,
+        limits.max_quote_events,
+        now,
+        stop,
+        |receipt| builder.push(receipt),
+    )?;
+    check_tape_stop(stop)?;
+    if builder.events.is_empty() {
+        return Err(SNAPSHOT_UNAVAILABLE.into());
     }
-    let evidence = quote_receipts_bounded(source, session, max_quote_events, now)?;
-    let mut events = Vec::new();
-    let mut observations = 0usize;
-    let mut protection_receipts = 0usize;
-    let mut protection_observations = 0usize;
-    let mut screen_receipts = 0usize;
-    let mut max_gap_ms = 0i64;
-    let mut previous_receipt_ms = None;
-    for receipt in &evidence.receipts {
-        // Research-observation receipts are virtual authority only. The
-        // historical protection tape skips them entirely instead of relabelling
-        // them as screening evidence.
+    builder.finish(
+        session,
+        previous_session,
+        instruments,
+        json!({
+            "source":"original_paper_quote_journal_read_only"
+        }),
+        true,
+    )
+}
+
+pub(super) struct ExecutionTapeBuilder {
+    capital: Amount,
+    limits: TapeLimits,
+    events: Vec<u8>,
+    observations: usize,
+    protection_receipts: usize,
+    protection_observations: usize,
+    screen_receipts: usize,
+    max_gap_ms: i64,
+    previous_receipt_ms: Option<i64>,
+}
+
+impl ExecutionTapeBuilder {
+    pub(super) fn new(capital: Amount, limits: TapeLimits) -> std::result::Result<Self, String> {
+        if capital <= Amount::ZERO
+            || !(1..=10_000).contains(&limits.max_quote_events)
+            || !(1..=100_000).contains(&limits.max_observations)
+            || !(1..=16 * 1024 * 1024).contains(&limits.max_tape_bytes)
+        {
+            return Err("candidate_execution_tape_invalid".into());
+        }
+        Ok(Self {
+            capital,
+            limits,
+            events: Vec::new(),
+            observations: 0,
+            protection_receipts: 0,
+            protection_observations: 0,
+            screen_receipts: 0,
+            max_gap_ms: 0,
+            previous_receipt_ms: None,
+        })
+    }
+
+    pub(super) fn push(&mut self, receipt: QuoteReceipt) -> std::result::Result<(), String> {
         if receipt.kind == QuotePurposeV1::ResearchObservation {
-            continue;
+            return Ok(());
         }
-        if let Some(previous) = previous_receipt_ms {
-            max_gap_ms = max_gap_ms.max(receipt.at_ms.saturating_sub(previous));
+        if let Some(previous) = self.previous_receipt_ms {
+            self.max_gap_ms = self.max_gap_ms.max(receipt.at_ms.saturating_sub(previous));
         }
-        previous_receipt_ms = Some(receipt.at_ms);
-        observations = observations
-            .checked_add(receipt.observations.len())
-            .ok_or("candidate_execution_tape_too_large")?;
-        if observations > max_observations {
+        self.previous_receipt_ms = Some(receipt.at_ms);
+        self.observations += receipt.observations.len();
+        if self.observations > self.limits.max_observations {
             return Err("candidate_execution_tape_too_large".into());
         }
         if receipt.kind == QuotePurposeV1::Protection {
-            protection_receipts = protection_receipts.saturating_add(1);
-            protection_observations =
-                protection_observations.saturating_add(receipt.observations.len());
+            self.protection_receipts += 1;
+            self.protection_observations += receipt.observations.len();
         } else {
-            screen_receipts = screen_receipts.saturating_add(1);
+            self.screen_receipts += 1;
         }
-        events.extend_from_slice(
-            serde_json::to_string(&json!({
+        serde_json::to_writer(
+            &mut self.events,
+            &json!({
                 "at":receipt.at_ms,
                 "available_at":receipt.receipt_ms,
                 "kind":receipt.kind.as_str(),
                 "observations":receipt.observations
-            }))
-            .map_err(|_| "candidate_execution_tape_invalid".to_string())?
-            .as_bytes(),
-        );
-        events.push(b'\n');
-        if events.len() as u64 > max_tape_bytes {
+            }),
+        )
+        .map_err(|_| "candidate_execution_tape_invalid".to_string())?;
+        self.events.push(b'\n');
+        if self.events.len() as u64 > self.limits.max_tape_bytes {
             return Err("candidate_execution_tape_too_large".into());
         }
+        Ok(())
     }
-    if protection_receipts == 0 || protection_observations == 0 {
-        return Err("candidate_execution_quotes_unavailable".into());
-    }
-    let events_sha256 = nivra_core::replay::digest(&events);
-    // The archive validator needs a strictly earlier date for this field, but
-    // the action engine never uses it. Prefer the caller's verified calendar
-    // walkback; otherwise keep a truthful calendar-day placeholder and mark the
-    // semantics instead of inventing a holiday-aware session.
-    let previous_session_verified = previous_session.is_some();
-    let previous_session = previous_session.unwrap_or(
-        session
-            .pred_opt()
-            .ok_or("candidate_execution_tape_invalid")?,
-    );
-    let manifest = json!({
-        "schema":1,
-        "session":session,
-        "previous_session":previous_session,
-        "capital":capital,
-        "universe":evidence.instruments,
-        "events_sha256":events_sha256,
-        "synthetic":false,
-        "max_observation_gap_ms":max_gap_ms.max(1),
-        "history_directory":null,
-        "paper_costs":null,
-        "provenance":{
-            "source":"original_paper_quote_journal_read_only",
-            "research_capital_assumption":true,
-            "research_costs_assumption":true,
-            "account_funds_claim":false,
-            "legacy_quote_purpose_unknown":0,
-            "protection_receipts":protection_receipts,
-            "screen_receipts":screen_receipts,
-            "previous_session_semantics":if previous_session_verified{"verified_calendar_trading_day"}else{"calendar_day_not_verified_trading_day"},
-            "max_observation_gap_ms_semantics":"observed_max_receipt_gap_not_an_engine_tolerance"
+
+    pub(super) fn finish(
+        self,
+        session: NaiveDate,
+        previous_session: Option<NaiveDate>,
+        instruments: Vec<Instrument>,
+        mut provenance: Value,
+        require_protection: bool,
+    ) -> std::result::Result<ExecutionTape, String> {
+        if require_protection && self.protection_observations == 0 {
+            return Err("candidate_execution_quotes_unavailable".into());
         }
-    });
-    let manifest = serde_json::to_vec(&manifest)
+        let events_sha256 = nivra_core::replay::digest(&self.events);
+        let previous_session_verified = previous_session.is_some();
+        let previous_session = previous_session.unwrap_or(
+            session
+                .pred_opt()
+                .ok_or("candidate_execution_tape_invalid")?,
+        );
+        provenance["research_capital_assumption"] = json!(true);
+        provenance["research_costs_assumption"] = json!(true);
+        provenance["account_funds_claim"] = json!(false);
+        provenance["legacy_quote_purpose_unknown"] = json!(0);
+        provenance["protection_receipts"] = json!(self.protection_receipts);
+        provenance["screen_receipts"] = json!(self.screen_receipts);
+        provenance["previous_session_semantics"] = json!(if previous_session_verified {
+            "verified_calendar_trading_day"
+        } else {
+            "calendar_day_not_verified_trading_day"
+        });
+        provenance["max_observation_gap_ms_semantics"] =
+            json!("observed_max_receipt_gap_not_an_engine_tolerance");
+        let manifest = serde_json::to_vec(&json!({
+            "schema":1,
+            "session":session,
+            "previous_session":previous_session,
+            "capital":self.capital,
+            "universe":instruments,
+            "events_sha256":events_sha256,
+            "synthetic":false,
+            "max_observation_gap_ms":self.max_gap_ms.max(1),
+            "history_directory":null,
+            "paper_costs":null,
+            "provenance":provenance
+        }))
         .map_err(|_| "candidate_execution_tape_invalid".to_string())?;
-    if manifest.len() > 512 * 1024 {
-        return Err("candidate_execution_tape_too_large".into());
+        if manifest.len() > 512 * 1024 {
+            return Err("candidate_execution_tape_too_large".into());
+        }
+        nivra_cli::strategy_archive::validate_archive(&manifest, &self.events)?;
+        Ok(ExecutionTape {
+            manifest_sha256: nivra_core::replay::digest(&manifest),
+            events_sha256,
+            manifest,
+            events: self.events,
+            protection_receipts: self.protection_receipts,
+            protection_observations: self.protection_observations,
+            screen_receipts: self.screen_receipts,
+        })
     }
-    nivra_cli::strategy_archive::validate_archive(&manifest, &events)?;
-    Ok(ExecutionTape {
-        manifest_sha256: nivra_core::replay::digest(&manifest),
-        events_sha256,
-        manifest,
-        events,
-        protection_receipts,
-        protection_observations,
-        screen_receipts,
-    })
 }
 
 /// Candidate freeze path: only quote receipts whose original source time is at

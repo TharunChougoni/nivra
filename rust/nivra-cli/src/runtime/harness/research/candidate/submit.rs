@@ -785,6 +785,9 @@ pub(crate) fn candidate_submit_preemptible(
             preempted,
         );
     }
+    if args.archive_daily_window.is_some() || args.as_of_receipt_id.is_some() {
+        return Ok(not_dispatched("candidate_archive_strategy_required"));
+    }
     // Optional reviewed after-cost cash replay. The capability is host policy;
     // a request without the grant is refused before any artifact or task row.
     let execution_settings = candidate

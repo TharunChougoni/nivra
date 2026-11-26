@@ -9,7 +9,9 @@ pub use history::{
     daily_instrument_keys, latest_daily_bars, lock_history_download,
 };
 pub use postgres::Client as ArchiveClient;
-pub use reader::{QuoteBodies, quote_reference};
+pub use reader::{
+    QuoteBodies, quote_receipt_bodies, quote_receipt_ids, quote_reference, quote_watermark,
+};
 pub use writer::{
     CandleBar, CandleBatch, CandleUnit, FailedAttempt, QuoteBatch, QuoteObservation, QuotePurpose,
     Receipt, import_candles, import_quotes, import_unavailable, write_candles,
@@ -24,6 +26,12 @@ use std::time::Duration;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const SCHEMA_VERSION: i32 = 1;
+
+/// Advisory lock keys. Each guards one thing, so a long holder of one never
+/// blocks another: schema init, a history download pass, quote id ordering.
+const INIT_LOCK: i64 = 6_749_301_730_906_321_426;
+pub(crate) const HISTORY_DOWNLOAD_LOCK: i64 = 6_749_301_730_906_321_427;
+pub(crate) const QUOTE_ORDER_LOCK: i64 = 6_749_301_730_906_321_428;
 
 fn connection_config(url: &str) -> Result<Config> {
     let invalid = "archive_url_invalid";
@@ -76,7 +84,7 @@ pub fn invalid_quote_write(error: &(dyn std::error::Error + 'static)) -> bool {
 pub fn init(db: &mut Client) -> Result<()> {
     let mut tx = db.transaction()?;
     // Serialize version checks and initial DDL across simultaneous commands.
-    tx.query_one("SELECT pg_advisory_xact_lock(6749301730906321426)", &[])?;
+    tx.query_one("SELECT pg_advisory_xact_lock($1)", &[&INIT_LOCK])?;
     tx.batch_execute(
         "CREATE TABLE IF NOT EXISTS schema_version (
             singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),

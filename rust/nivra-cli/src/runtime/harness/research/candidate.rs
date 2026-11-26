@@ -237,6 +237,10 @@ pub(crate) struct CandidateSubmitArgs {
     /// source as a `strategy_actions_v1` strategy now instead of queueing it.
     #[serde(default)]
     pub strategy: Option<bool>,
+    #[serde(default)]
+    pub archive_daily_window: Option<crate::runtime::paper_replay::DailyWindow>,
+    #[serde(default)]
+    pub as_of_receipt_id: Option<i64>,
 }
 
 /// The fixed helper's only result. It is advisory input to the controller: the

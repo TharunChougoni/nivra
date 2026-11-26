@@ -4,14 +4,14 @@ use super::*;
 const SOURCE: &[u8] = b"print('{\"actions\":[]}')\n";
 
 /// A report exactly at every default bound: 10 trades, net P&L just above
-/// zero, a 300 bps drawdown on 5,000 capital, one tape date and 1 failure in
+/// zero, a 300 bps drawdown on 5,000 capital, three tape dates and 1 failure in
 /// 100 calls.
 fn report(edit: impl FnOnce(&mut Value)) -> (Vec<u8>, String) {
     let mut value = json!({
         "abi":"strategy_actions_v1","report_version":1,"paper_only":true,
         "source_sha256":digest(SOURCE),"parameters":{"version":1,"params":{"n":1}},
         "capital":"5000",
-        "tape":{"dates":["2026-11-25"],"first_at_ms":1,"last_at_ms":2,"events":200,
+        "tape":{"dates":["2026-11-23","2026-11-25","2026-11-26"],"first_at_ms":1,"last_at_ms":2,"events":200,
                 "depth_events":100,"strategy_calls":100},
         "summary":{"trades":10,"wins":6,"win_rate":"0.6","net_pnl":"0.01","median_trade":"0.5",
                    "worst_drawdown":"150","fees":"9","turnover":"40000","ending_cash":"5000.01",
@@ -27,10 +27,6 @@ fn report(edit: impl FnOnce(&mut Value)) -> (Vec<u8>, String) {
 #[test]
 fn acceptance_names_each_threshold_and_integrity_failure() {
     let defaults = Thresholds::default();
-    let two_dates = Thresholds {
-        min_tape_dates: 2,
-        ..Thresholds::default()
-    };
     type Edit = fn(&mut Value);
     let rows: [(&str, Edit, &Thresholds, &[Reason]); 16] = [
         ("at every bound", |_| {}, &defaults, &[]),
@@ -71,15 +67,17 @@ fn acceptance_names_each_threshold_and_integrity_failure() {
             &[Reason::DrawdownTooDeep],
         ),
         (
-            "dates below",
-            |_| {},
-            &two_dates,
+            "duplicate dates count once",
+            |r| r["tape"]["dates"] = json!(["2026-11-23", "2026-11-25", "2026-11-25"]),
+            &defaults,
             &[Reason::TooFewTapeDates],
         ),
         (
-            "dates at",
-            |r| r["tape"]["dates"] = json!(["2026-11-24", "2026-11-25"]),
-            &two_dates,
+            "three distinct dates with a duplicate",
+            |r| {
+                r["tape"]["dates"] = json!(["2026-11-23", "2026-11-25", "2026-11-26", "2026-11-26"])
+            },
+            &defaults,
             &[],
         ),
         (

@@ -3,6 +3,8 @@ use super::*;
 use nivra_core::{execution::Instrument, finance::Amount};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+mod archive_window;
+pub(crate) use archive_window::*;
 mod export;
 pub(crate) use export::*;
 mod receipts;

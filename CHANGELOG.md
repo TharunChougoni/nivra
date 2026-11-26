@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**Strategy acceptance now defaults to three tape dates.** Configure an
+`archive_window` dataset and replay strategies across at least three
+reviewed NSE sessions. Update all quote writers to this build before pinning
+archive windows. Replay a new source revision or parameter set to register
+an entry with this build's replay adapter hash. See [research](docs/RESEARCH.md#strategy-replay).
+
 **Breaking history change.** TimescaleDB now stores daily and minute candles,
 coverage, and receipts. Set `market_archive`, run
 `nivra archive init --config PAPER_CONFIG`, then run

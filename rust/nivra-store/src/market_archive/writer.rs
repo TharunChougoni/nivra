@@ -193,6 +193,12 @@ fn insert_quotes(
     batch: &QuoteBatch<'_>,
     compressed: &[u8],
 ) -> Result<(i64, bool)> {
+    // Quote IDs must become visible in order for a committed ID to pin a
+    // replay while capture and book imports run concurrently.
+    tx.query_one(
+        "SELECT pg_advisory_xact_lock($1)",
+        &[&super::QUOTE_ORDER_LOCK],
+    )?;
     let Some(receipt_id) = insert_or_verify(tx, 1, &batch.receipt, compressed)? else {
         let row = tx.query_one(
             "SELECT id FROM receipts WHERE sha256 = $1",

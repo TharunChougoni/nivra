@@ -70,7 +70,14 @@ pub(crate) struct CandidateDataset {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum CandidateDatasetKind {
     CurrentSessionFeatures,
-    ArchivedFeatureSnapshots { path: PathBuf, sha256: String },
+    ArchiveWindow {
+        from_session: chrono::NaiveDate,
+        to_session: chrono::NaiveDate,
+    },
+    ArchivedFeatureSnapshots {
+        path: PathBuf,
+        sha256: String,
+    },
 }
 /// Reviewed opt-in after-cost cash replay over the existing action-tape engine.
 /// Omission preserves every historical policy byte and advertises no execution
@@ -104,7 +111,7 @@ impl CandidateExecutionSettings {
     }
 }
 /// Opt-in after-cost replay of a `strategy_actions_v1` strategy over the
-/// current session's frozen quote tape, with the book's capital and costs.
+/// a frozen quote tape, with the book's capital and costs.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CandidateStrategySettings {
@@ -333,6 +340,15 @@ impl CandidateComputeSettings {
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
                 || !aliases.insert(&dataset.dataset_id)
+            {
+                return Err("candidate_dataset_invalid");
+            }
+            if let CandidateDatasetKind::ArchiveWindow {
+                from_session,
+                to_session,
+            } = dataset.kind
+                && !(0..crate::runtime::paper_replay::MAX_ARCHIVE_WINDOW_DAYS)
+                    .contains(&(to_session - from_session).num_days())
             {
                 return Err("candidate_dataset_invalid");
             }

@@ -264,6 +264,8 @@ fn candidate_submit_args(
         parent_ref: None,
         observation: None,
         strategy: None,
+        archive_daily_window: None,
+        as_of_receipt_id: None,
     }
 }
 
@@ -679,7 +681,7 @@ print(json.dumps({"actions":a}))"#;
     assert_eq!(done["acceptance"]["verdict"], "rejected", "{done}");
     assert_eq!(
         done["acceptance"]["reasons"],
-        json!(["too_few_trades", "net_pnl_too_low"])
+        json!(["too_few_trades", "net_pnl_too_low", "too_few_tape_dates"])
     );
     assert!(
         !c.sessions_root
@@ -3267,4 +3269,242 @@ fn observation_carry_and_evidence_contracts() {
 #[test]
 fn continuation_and_corrective_contracts() {
     run_contracts(&[], true);
+}
+
+#[test]
+#[ignore = "requires TimescaleDB at NIVRA_ARCHIVE_TEST_URL and bubblewrap"]
+fn archive_strategy_replay_pins_quotes_across_sessions() -> Result<()> {
+    use crate::runtime::{
+        market_archive,
+        paper_replay::{ArchiveWindow, DailyWindow, TapeLimits, archive_window_tape},
+    };
+    use nivra_store::market_archive::{init, write_quotes};
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::time::{Duration, Instant};
+
+    let url = std::env::var("NIVRA_ARCHIVE_TEST_URL")?;
+    let (scheme, auth_host) = url.split_once("://").ok_or("fixture_url")?;
+    let (auth, host) = auth_host.rsplit_once('@').ok_or("fixture_url")?;
+    let (user, password) = auth.split_once(':').ok_or("fixture_url")?;
+    let tmp = tempfile::tempdir()?;
+    let dir = tmp.path();
+    let password_file = dir.join("archive-password");
+    fs::OpenOptions::new()
+        .create_new(true)
+        .mode(0o600)
+        .write(true)
+        .open(&password_file)?
+        .write_all(password.as_bytes())?;
+    let archive = crate::runtime::MarketArchiveSettings {
+        url: format!("{scheme}://{user}@{host}"),
+        password_file,
+    };
+    let mut writer = market_archive::connect(&archive)?;
+    init(&mut writer)?;
+
+    const MANIFEST: &str = include_str!("../../../../../../fixtures/strategy/manifest.json");
+    const EVENTS: &str = include_str!("../../../../../../fixtures/strategy/events.jsonl");
+    const SOURCE: &str = include_str!("../../../../../../fixtures/strategy/strategy.py");
+    const PARAMETERS: &str = include_str!("../../../../../../fixtures/strategy/parameters.json");
+    // The reviewed calendar excludes November 24 and the intervening weekend.
+    let days = [
+        "2026-11-23",
+        "2026-11-25",
+        "2026-11-26",
+        "2026-11-27",
+        "2026-11-30",
+    ];
+    let manifest: Value = serde_json::from_str(MANIFEST)?;
+    let events = EVENTS
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<std::result::Result<Vec<Value>, _>>()?;
+    let mut research = settings(dir, &dir.join("unused-runtime"));
+    let (_, base) = owner_fixture(dir, &research);
+    research = candidate_execution_settings(dir, &research, 1_048_576);
+    let candidate = research.candidate_compute.as_mut().unwrap();
+    candidate.datasets.push(CandidateDataset {
+        dataset_id: "archive-test".into(),
+        kind: CandidateDatasetKind::ArchiveWindow {
+            from_session: days[0].parse()?,
+            to_session: days[3].parse()?,
+        },
+    });
+    let limits = TapeLimits {
+        max_quote_events: 10_000,
+        max_observations: 100_000,
+        max_tape_bytes: 16 * 1024 * 1024,
+    };
+    let max_wall_ms = 20_000;
+    candidate.strategy = Some(CandidateStrategySettings {
+        enabled: true,
+        abi: "strategy_actions_v1".into(),
+        max_wall_ms,
+        max_quote_events: limits.max_quote_events,
+        max_observations: limits.max_observations,
+        max_tape_bytes: limits.max_tape_bytes,
+    });
+    assert!(
+        candidate_sandbox_ready(&research),
+        "fixture needs bubblewrap"
+    );
+    let (mut c, cfg) = candidate_config(dir, &base, research);
+    c.session = days[3].parse()?;
+    c.paper_costs = Some(serde_json::from_value(manifest["paper_costs"].clone())?);
+    c.market_archive = Some(archive);
+    for day in days {
+        let directory = if day.parse::<chrono::NaiveDate>()? == c.session {
+            c.directory.clone()
+        } else {
+            c.sessions_root.as_ref().unwrap().join(day)
+        };
+        fs::create_dir_all(&directory)?;
+        fs::write(
+            directory.join("wide-universe.json"),
+            serde_json::to_vec(&json!({"session":day,"instruments":manifest["universe"]}))?,
+        )?;
+    }
+    let write = |writer: &mut _, event: &Value, at: i64| -> Result<()> {
+        let data: serde_json::Map<String, Value> = event["observations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| {
+                let key = o["key"].as_str().unwrap();
+                let price = |side: &str| {
+                    o["quote"][side]
+                        .as_str()
+                        .unwrap()
+                        .parse::<serde_json::Number>()
+                        .unwrap()
+                };
+                let row = json!({
+                    "instrument_token":key,"timestamp":at-100,"last_price":price("bid"),
+                    "volume":o["volume"],"lower_circuit_limit":10,"upper_circuit_limit":1000,
+                    "depth":{
+                        "buy":[{"price":price("bid"),"quantity":o["quote"]["bid_units"]}],
+                        "sell":[{"price":price("ask"),"quantity":o["quote"]["ask_units"]}]
+                    }
+                });
+                (key.to_owned(), row)
+            })
+            .collect();
+        let raw = json!({
+            "source":"upstox-readonly-v1","purpose":"execution_or_protection",
+            "requested_ms":at-200,"received_ms":at,
+            "body":json!({"status":"success","data":data}).to_string()
+        })
+        .to_string();
+        let batch = market_archive::normalize::capture_quotes(&raw)?;
+        assert!(write_quotes(writer, &batch)?);
+        Ok(())
+    };
+    for day in &days[..3] {
+        let start = candidate_at_on(day, 9, 20);
+        for (step, event) in events.iter().enumerate() {
+            write(&mut writer, event, start + 1_000 * step as i64)?;
+        }
+    }
+    let start = candidate_at_on(days[0], 9, 20);
+    let end = candidate_at_on(days[3], 9, 21);
+    let submit = |receipt_id| {
+        let mut args = candidate_submit_args("archive-strategy", SOURCE, None);
+        args.params = serde_json::from_str::<Value>(PARAMETERS).unwrap()["params"].clone();
+        args.params["start_ms"] = json!(start);
+        args.dataset_id = "archive-test".into();
+        args.training_from_ms = start - 1;
+        args.training_to_ms = start - 1;
+        args.selection_from_ms = start;
+        args.selection_to_ms = end;
+        args.horizon_minutes = 1;
+        args.strategy = Some(true);
+        args.as_of_receipt_id = receipt_id;
+        candidate_submit(
+            &c,
+            &cfg,
+            "fixture-model",
+            3,
+            "turn-archive",
+            args,
+            end,
+            Some(candidate_evidence()),
+        )
+    };
+    let first = submit(None)?;
+    assert_eq!(first["status"], "completed", "{first}");
+    assert_eq!(first["tape"]["dates"], json!(&days[..3]), "{first}");
+    assert_eq!(
+        first["tape"]["archive_window"]["sessions"],
+        json!(&days[..4])
+    );
+    assert_eq!(
+        first["tape"]["archive_window"]["missing_sessions"],
+        json!([days[3]])
+    );
+    assert_eq!(first["tape"]["strategy_calls"], 18);
+    assert_eq!(first["summary"]["trades"], 2, "{first}");
+    assert!(
+        !first["acceptance"]["reasons"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("too_few_tape_dates"))
+    );
+    let watermark = first["tape"]["archive_window"]["as_of_receipt_id"]
+        .as_i64()
+        .unwrap();
+
+    // The append's receipt clock falls inside the original window.
+    write(&mut writer, &events[0], end - 1_000)?;
+    let repeated = submit(Some(watermark))?;
+    assert_eq!(repeated["tape"], first["tape"]);
+    assert_eq!(repeated["report_sha256"], first["report_sha256"]);
+    let fresh = submit(None)?;
+    assert_ne!(
+        fresh["tape"]["events_sha256"],
+        first["tape"]["events_sha256"]
+    );
+    assert_eq!(
+        fresh["tape"]["archive_window"]["missing_sessions"],
+        json!([])
+    );
+
+    if std::env::var_os("NIVRA_ARCHIVE_WINDOW_PERF").is_some() {
+        for day in days {
+            let open = candidate_at_on(day, 9, 30);
+            for batch in 0..4_400 {
+                write(&mut writer, &events[0], open + batch * 5_000)?;
+            }
+        }
+        let window = ArchiveWindow {
+            from_session: days[0].parse()?,
+            to_session: days[4].parse()?,
+            from_ms: candidate_at_on(days[0], 9, 30),
+            to_ms: candidate_at_on(days[4], 10, 30),
+            daily: Some(DailyWindow {
+                from_minute: 570,
+                to_minute: 630,
+            }),
+            receipt_id: None,
+        };
+        let started = Instant::now();
+        let budget = Duration::from_millis(max_wall_ms);
+        let (tape, coverage) = archive_window_tape(&c, &window, c.allocation()?, limits, &|| {
+            (started.elapsed() >= budget).then_some("strategy_replay_wall_budget")
+        })?;
+        let elapsed = started.elapsed();
+        let tape = tape.expect("five sessions of quote tape");
+        assert_eq!(coverage.sessions.len(), 5);
+        assert!(coverage.missing_sessions.is_empty());
+        assert_eq!(tape.protection_receipts, 3_600);
+        assert_eq!(tape.protection_observations, 7_200);
+        assert!(elapsed < budget);
+        eprintln!(
+            "archive_window_tape_ms={:.1} max_wall_ms={max_wall_ms} stored_batches=22000 tape_batches={} tape_bytes={}",
+            elapsed.as_secs_f64() * 1_000.0,
+            tape.protection_receipts,
+            tape.events.len()
+        );
+    }
+    Ok(())
 }

@@ -1,4 +1,5 @@
 use super::{ArchiveClient, Result};
+use postgres::types::Type;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fmt::Write};
@@ -77,6 +78,72 @@ fn decode((hash, _): ReceiptKey, compressed: &[u8]) -> Result<String> {
         return Err("archive_receipt_conflict".into());
     }
     Ok(String::from_utf8(body)?)
+}
+
+/// A committed quote ID pins the visible prefix shared by capture and imports.
+pub fn quote_watermark(db: &mut ArchiveClient) -> Result<i64> {
+    Ok(db
+        .query_one(
+            "SELECT COALESCE((SELECT id FROM receipts WHERE kind = 1 ORDER BY id DESC LIMIT 1), 0)",
+            &[],
+        )?
+        .get(0))
+}
+
+/// Select batches using the hypertable's receipt clock. Fetch bodies separately
+/// so a session's entire compressed payload is never in memory at once.
+pub fn quote_receipt_ids(
+    db: &mut ArchiveClient,
+    from_ms: i64,
+    to_ms: i64,
+    watermark: i64,
+    limit: i64,
+) -> Result<Vec<(i64, i64)>> {
+    Ok(db
+        .query_typed(
+            "SELECT DISTINCT receipt_ms, receipt_id FROM quote_obs
+             WHERE receipt_ms BETWEEN $1 AND $2 AND receipt_id <= $3
+             AND purpose IN (1, 2, 3) AND source_ms <= receipt_ms
+             ORDER BY receipt_ms, receipt_id LIMIT $4",
+            &[
+                (&from_ms, Type::INT8),
+                (&to_ms, Type::INT8),
+                (&watermark, Type::INT8),
+                (&limit, Type::INT8),
+            ],
+        )?
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect())
+}
+
+pub fn quote_receipt_bodies(
+    db: &mut ArchiveClient,
+    receipts: &[(i64, i64)],
+) -> Result<Vec<String>> {
+    let ids: Vec<_> = receipts.iter().map(|&(_, id)| id).collect();
+    let rows = db.query_typed(
+        "SELECT r.received_ms, r.sha256, r.body
+         FROM unnest($1::bigint[]) WITH ORDINALITY AS wanted(id, ord)
+         JOIN receipts r USING (id) WHERE r.kind = 1 ORDER BY wanted.ord",
+        &[(&ids, Type::INT8_ARRAY)],
+    )?;
+    if rows.len() != receipts.len() {
+        return Err("archive_quote_body_missing".into());
+    }
+    rows.iter()
+        .zip(receipts)
+        .map(|(row, &(expected_ms, _))| {
+            let received_ms = row.get(0);
+            if received_ms != expected_ms {
+                return Err("archive_receipt_conflict".into());
+            }
+            decode(
+                (row.get::<_, &[u8]>(1).try_into()?, received_ms),
+                row.get(2),
+            )
+        })
+        .collect()
 }
 
 /// The paper journal selects the time window and order. Resolve only its

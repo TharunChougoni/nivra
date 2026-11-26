@@ -1,11 +1,17 @@
 use super::*;
+use crate::runtime::paper_replay::{
+    ArchiveWindow, ArchiveWindowReport, ExecutionTape, TapeLimits, archive_window_tape,
+    execution_tape_bounded_with_stop,
+};
 use crate::runtime::strategy::{self, replay};
 use crate::runtime::strategy_library::{self, Author, Library, acceptance};
 use std::os::unix::fs::DirBuilderExt;
+use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant};
 
 /// `backtest` with `strategy: true`: replay the source as a
-/// `strategy_actions_v1` strategy over the selection window of this session's
-/// frozen quote tape, with the book's capital, costs and exit policy. The
+/// `strategy_actions_v1` strategy over a frozen quote tape with the book's
+/// capital, costs and exit policy. The
 /// report is kept by content hash under `model/strategy-replays/`.
 pub(super) fn strategy_backtest(
     c: &Config,
@@ -16,6 +22,7 @@ pub(super) fn strategy_backtest(
     now: i64,
     preempted: &dyn Fn() -> bool,
 ) -> Result<Value> {
+    let started = Instant::now();
     let Some(settings) = candidate.strategy.as_ref().filter(|s| s.enabled) else {
         return Ok(not_dispatched("candidate_strategy_disabled"));
     };
@@ -23,28 +30,71 @@ pub(super) fn strategy_backtest(
     if args.execution.is_some() || args.parent_ref.is_some() {
         return Ok(not_dispatched("candidate_strategy_args_conflict"));
     }
-    if !candidate.datasets.iter().any(|dataset| {
-        dataset.dataset_id == args.dataset_id
-            && matches!(dataset.kind, CandidateDatasetKind::CurrentSessionFeatures)
-    }) {
-        return Ok(not_dispatched("candidate_strategy_dataset_unsupported"));
-    }
+    let dataset = candidate
+        .datasets
+        .iter()
+        .find(|d| d.dataset_id == args.dataset_id);
+    let window = match dataset.map(|d| &d.kind) {
+        Some(CandidateDatasetKind::ArchiveWindow {
+            from_session,
+            to_session,
+        }) => {
+            if args.selection_to_ms > now {
+                return Ok(not_dispatched("candidate_archive_window_in_future"));
+            }
+            Some(ArchiveWindow {
+                from_session: *from_session,
+                to_session: *to_session,
+                from_ms: args.selection_from_ms,
+                to_ms: args.selection_to_ms,
+                daily: args.archive_daily_window,
+                receipt_id: args.as_of_receipt_id,
+            })
+        }
+        Some(CandidateDatasetKind::CurrentSessionFeatures)
+            if args.archive_daily_window.is_none() && args.as_of_receipt_id.is_none() =>
+        {
+            None
+        }
+        _ => return Ok(not_dispatched("candidate_strategy_dataset_unsupported")),
+    };
     let Some(costs) = c.paper_costs.clone() else {
         return Ok(not_dispatched("paper_costs_required"));
     };
     let capital = c.allocation()?;
-    let tape = match crate::runtime::paper_replay::execution_tape_bounded(
-        c.quote_source(),
-        c.session,
-        candidate_previous_trading_session(c),
-        capital,
-        settings.max_quote_events,
-        settings.max_observations,
-        settings.max_tape_bytes,
-        now,
-    ) {
-        Ok(tape) => tape,
+    let budget = Duration::from_millis(settings.max_wall_ms);
+    let stop = || {
+        if preempted() {
+            Some("strategy_replay_preempted")
+        } else if started.elapsed() >= budget {
+            Some("strategy_replay_wall_budget")
+        } else {
+            None
+        }
+    };
+    let limits = TapeLimits {
+        max_quote_events: settings.max_quote_events,
+        max_observations: settings.max_observations,
+        max_tape_bytes: settings.max_tape_bytes,
+    };
+    let (tape, archive) = match build_tape(c.clone(), window, capital, limits, now, &stop) {
+        Ok(result) => result,
+        Err(reason)
+            if matches!(
+                reason.as_str(),
+                "strategy_replay_preempted" | "strategy_replay_wall_budget"
+            ) =>
+        {
+            return Ok(stopped_replay(&reason, 0, None));
+        }
         Err(reason) => return Ok(not_dispatched(&reason)),
+    };
+    let Some(tape) = tape else {
+        return Ok(json!({
+            "status":"not_dispatched",
+            "reason":"candidate_execution_quotes_unavailable",
+            "tape":{"archive_window":archive}
+        }));
     };
     let parameters = replay::Parameters {
         version: 1,
@@ -56,18 +106,7 @@ pub(super) fn strategy_backtest(
         from_ms: Some(args.selection_from_ms),
         to_ms: Some(args.selection_to_ms),
     };
-    let started = std::time::Instant::now();
-    let budget = std::time::Duration::from_millis(settings.max_wall_ms);
-    let stop = || {
-        if preempted() {
-            Some("strategy_replay_preempted")
-        } else if started.elapsed() >= budget {
-            Some("strategy_replay_wall_budget")
-        } else {
-            None
-        }
-    };
-    let report = match replay::run(
+    let mut report = match replay::run(
         &candidate.sandbox,
         args.source.as_bytes(),
         &parameters,
@@ -78,13 +117,11 @@ pub(super) fn strategy_backtest(
         Ok(Ok(report)) => report,
         // No report is kept for a partial replay.
         Ok(Err(stopped)) => {
-            return Ok(json!({
-                "status":"not_dispatched",
-                "reason":stopped.reason,
-                "strategy_calls":stopped.strategy_calls,
-                "last_at_ms":stopped.last_at_ms,
-                "next_condition":"retry_with_a_narrower_selection_window"
-            }));
+            return Ok(stopped_replay(
+                stopped.reason,
+                stopped.strategy_calls,
+                stopped.last_at_ms,
+            ));
         }
         Err(error) => {
             return Ok(not_dispatched(&crate::runtime::failure_code(
@@ -92,6 +129,10 @@ pub(super) fn strategy_backtest(
             )));
         }
     };
+    if let Some(archive) = archive {
+        report["tape"]["archive_window"] = json!(archive);
+        report["tape"]["events_sha256"] = json!(tape.events_sha256);
+    }
     let bytes = nivra_cli::candidate_execution::artifact_bytes(&report)?;
     let report_sha256 = digest(&bytes);
     let directory = c.directory.join("model").join("strategy-replays");
@@ -129,6 +170,75 @@ pub(super) fn strategy_backtest(
         "acceptance":acceptance,
         "paper_only":true
     }))
+}
+
+fn stopped_replay(reason: &str, strategy_calls: usize, last_at_ms: Option<i64>) -> Value {
+    json!({
+        "status":"not_dispatched",
+        "reason":reason,
+        "strategy_calls":strategy_calls,
+        "last_at_ms":last_at_ms,
+        "next_condition":"retry_with_a_narrower_selection_window"
+    })
+}
+
+type BuiltTape = std::result::Result<(Option<ExecutionTape>, Option<ArchiveWindowReport>), String>;
+
+fn build_tape(
+    c: Config,
+    window: Option<ArchiveWindow>,
+    capital: Amount,
+    limits: TapeLimits,
+    now: i64,
+    stop: &dyn Fn() -> Option<&'static str>,
+) -> BuiltTape {
+    if let Some(reason) = stop() {
+        return Err(reason.into());
+    }
+    // A synchronous archive query can be waiting on I/O while a decision
+    // turn arrives. Release the lane promptly and let only the in-flight
+    // operation finish under the archive connection's timeouts.
+    let cancel = Arc::new(AtomicBool::new(false));
+    let worker_cancel = cancel.clone();
+    let (send, receive) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("strategy-tape".into())
+        .spawn(move || {
+            let stop = || {
+                worker_cancel
+                    .load(Ordering::Relaxed)
+                    .then_some("strategy_replay_cancelled")
+            };
+            let result = match window {
+                Some(window) => archive_window_tape(&c, &window, capital, limits, &stop)
+                    .map(|(tape, archive)| (tape, Some(archive))),
+                None => execution_tape_bounded_with_stop(
+                    c.quote_source(),
+                    c.session,
+                    candidate_previous_trading_session(&c),
+                    capital,
+                    limits,
+                    now,
+                    &stop,
+                )
+                .map(|tape| (Some(tape), None)),
+            };
+            let _ = send.send(result);
+        })
+        .map_err(|_| "strategy_replay_tape_worker_failed")?;
+    loop {
+        if let Some(reason) = stop() {
+            cancel.store(true, Ordering::Relaxed);
+            return Err(reason.into());
+        }
+        match receive.recv_timeout(Duration::from_millis(10)) {
+            Ok(result) => return stop().map_or(result, |reason| Err(reason.into())),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("strategy_replay_tape_worker_failed".into());
+            }
+        }
+    }
 }
 
 /// Run the acceptance check and register an accepted strategy. The verdict
