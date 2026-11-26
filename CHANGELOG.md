@@ -1,6 +1,19 @@
 # Source snapshot
 
-## Unreleased
+## 0.14.1 — 2026-11-27
+
+**Paper fills must carry their fee policy and benchmark price.** Every fill
+stores `costs` and `expected_price`, and reconciliation re-derives each fee
+(#50). Before upgrading, check the stopped book: every fill in
+`state.body.fills` must have both fields. If one does not, close the book flat
+with the previous binary and start a fresh paper book with
+`nivra setup --confirm-fresh-paper`. See
+[configuration](packaging/rust/CONFIGURATION.md).
+
+**Removed** virtual observation tape events, the unused `research_quotes`
+paper tick, placeholder Health activity metrics, unused market and research
+APIs and three Cargo dependencies. Quote staging no longer has a test-only
+bypass.
 
 **`nivra update` installs `nivra-analysis`.** The updater fetches the
 published `nivra-analysis-x86_64-unknown-linux-musl` asset with its checksum,
