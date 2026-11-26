@@ -7,7 +7,6 @@ mod decision;
 mod decision_evidence;
 mod diagnostics;
 mod discovery;
-mod engine;
 pub mod exit_backtest;
 pub(crate) mod experiment_ledger;
 pub(crate) mod harness;
@@ -40,9 +39,9 @@ mod web_tools;
 mod wide;
 mod workspace;
 use chrono::{DateTime, FixedOffset, NaiveDate, Timelike, Utc};
-use engine::{Book, Quote};
 use fs2::FileExt;
 use nivra_cli::dashboard_host::DashboardPublicHost;
+use nivra_core::execution::Quote;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -350,75 +349,6 @@ pub(crate) fn stopped_book_safe(path: &Path) -> Result<bool> {
     rollover::stopped_book_safe(path)
 }
 
-#[cfg(test)]
-fn tick(
-    db: &mut Connection,
-    c: &Config,
-    b: &mut Book,
-    q: Option<&Quote>,
-    raw: Option<&str>,
-    clock: impl FnOnce() -> i64,
-) -> Result<()> {
-    // Take the write lock BEFORE the financial clock sample. No network, model
-    // or pending SQLite read snapshot can age a quote between lock and decision.
-    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let now = clock();
-    let mut next = b.clone();
-    let event = next.step(now, q, &c.strategy)?;
-    next.reconcile()?;
-    tx.execute(
-        "INSERT INTO ticks(at,receipt,body,event) VALUES(?,?,?,?)",
-        rusqlite::params![now, q.map(|q| q.receipt), raw, event],
-    )?;
-    tx.execute(
-        "INSERT INTO state VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
-        rusqlite::params![book_binding(c)?, serde_json::to_string(&next)?],
-    )?;
-    tx.commit()?;
-    *b = next;
-    Ok(())
-}
-#[cfg(test)]
-fn load(db: &Connection, c: &Config) -> Result<Book> {
-    let binding = book_binding(c)?;
-    let mut stmt = db.prepare("SELECT binding,body FROM state WHERE id=1")?;
-    let mut rows = stmt.query([])?;
-    match rows.next()? {
-        Some(r) => {
-            let old: String = r.get(0)?;
-            if old != binding {
-                return Err("book_binding_changed".into());
-            }
-            let b: Book = serde_json::from_str(&r.get::<_, String>(1)?)?;
-            b.reconcile()?;
-            Ok(b)
-        }
-        None => Ok(Book::new(c.session)),
-    }
-}
-#[cfg(test)]
-fn save(
-    db: &mut Connection,
-    c: &Config,
-    b: &Book,
-    at: i64,
-    raw: Option<&str>,
-    receipt: Option<i64>,
-    event: &str,
-) -> Result<()> {
-    b.reconcile()?;
-    let tx = db.transaction()?;
-    tx.execute(
-        "INSERT INTO ticks(at,receipt,body,event) VALUES(?,?,?,?)",
-        rusqlite::params![at, receipt, raw, event],
-    )?;
-    tx.execute(
-        "INSERT INTO state VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
-        rusqlite::params![book_binding(c)?, serde_json::to_string(b)?],
-    )?;
-    tx.commit()?;
-    Ok(())
-}
 pub fn entry(path: &Path, probe: bool) -> ExitCode {
     // Never propagate provider/credential errors or response bodies to logs.
     match run(path, probe) {

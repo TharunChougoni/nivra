@@ -294,13 +294,8 @@ pub(crate) fn memory(c: &Config, lane: Lane) -> Option<ReviewMemory> {
     if prior >= c.session {
         return None;
     }
-    let dated = rollover::root(c)
-        .ok()
-        .map(|root| root.join(prior.to_string()));
-    dated
-        .as_deref()
-        .and_then(|directory| read_memory(c, directory, prior))
-        .or_else(|| read_memory(c, c.legacy_directory.as_deref()?, prior))
+    let directory = rollover::root(c).ok()?.join(prior.to_string());
+    read_memory(c, &directory, prior)
 }
 
 fn model_id(model: &ModelSpec) -> String {

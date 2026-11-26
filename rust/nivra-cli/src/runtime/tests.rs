@@ -1,5 +1,4 @@
 use super::*;
-use nivra_core::finance::Price;
 pub(super) fn test_costs() -> nivra_core::finance::FeeArithmetic {
     serde_json::from_str(include_str!(
         "../../../../fixtures/test-legacy-paper-costs.json"
@@ -35,8 +34,6 @@ pub(super) fn config(dir: &Path) -> Config {
         calendar_source: "NSE/CMTR/71775".into(),
         directory: dir.to_owned(),
         sessions_root: Some(dir.join("sessions")),
-        legacy_directory: None,
-        history_directory: None,
         daily_history_sessions: 21,
         execution: Default::default(),
         history_preparation_start_minute: 480,
@@ -60,7 +57,6 @@ pub(super) fn config(dir: &Path) -> Config {
         read_journal_inode: 0,
         strategy: "model_planner_v1".into(),
         capital: Some(nivra_core::execution::a("5000")),
-        prior_config: None,
     }
 }
 #[test]
@@ -409,22 +405,6 @@ fn runtime_timing_defaults_preserve_binding_and_reject_invalid_bounds() {
         }
     }
 }
-fn start() -> i64 {
-    DateTime::parse_from_rfc3339("2026-10-16T09:15:00+05:30")
-        .unwrap()
-        .timestamp_millis()
-}
-fn quote(now: i64, step: i64) -> Quote {
-    let p = 30000 + ((step / 15) * 5) % 300;
-    Quote {
-        bid: Price::parse(&format!("{}.{:02}", p / 100, p % 100)).unwrap(),
-        ask: Price::parse(&format!("{}.{:02}", (p + 2) / 100, (p + 2) % 100)).unwrap(),
-        bid_units: 100,
-        ask_units: 100,
-        source: now,
-        receipt: now,
-    }
-}
 
 #[test]
 fn next_session_monday_and_weekend_idle_calendar() {
@@ -525,113 +505,10 @@ fn next_session_monday_and_weekend_idle_calendar() {
 }
 
 #[test]
-fn freshness_grace_and_recovery() {
-    for (age, entry_allowed) in [(1800, true), (7900, false), (8100, false)] {
-        let mut b = Book::new("2026-10-16".parse().unwrap());
-        let at = start();
-        let mut q = quote(at, 0);
-        q.source -= age;
-        q.receipt -= age;
-        let event = b.step(at, Some(&q), "model_abstain").unwrap();
-        assert!(!b.halted);
-        // A stale quote blocks entries in the grace window. Past it the book
-        // reports no decision work: a no-op skip, never a failed decision (#221).
-        assert_eq!(
-            event,
-            if entry_allowed {
-                planner::NO_DECISION_WORK
-            } else if age < 8000 {
-                "supervision_grace_entries_blocked"
-            } else {
-                "data_unavailable_no_financial_action"
-            }
-        );
-        assert!(b.fills.is_empty());
-        b.step(at + 10000, Some(&quote(at + 10000, 1)), "model_abstain")
-            .unwrap();
-        assert!(!b.halted);
-    }
-}
-#[test]
-fn terminal_and_corrupt_books_are_preserved() {
+fn missing_original_book_is_never_replaced() {
     let d = tempfile::tempdir().unwrap();
     let c = config(d.path());
-    let mut db = open_book(&c).unwrap();
-    let mut b = Book::new(c.session);
-    b.halted = true;
-    save(&mut db, &c, &b, start(), None, None, "halted").unwrap();
-    let mut b = load(&db, &c).unwrap();
-    assert_eq!(
-        b.step(start(), Some(&quote(start(), 0)), &c.strategy)
-            .unwrap(),
-        "preserved_terminal_state"
-    );
-    b.cash = nivra_core::finance::Amount::from_integer(1);
-    assert!(save(&mut db, &c, &b, start(), None, None, "corrupt").is_err());
-    assert!(load(&db, &c).unwrap().halted);
-    let mut changed = c.clone();
-    changed.strategy = "model_abstain".into();
-    assert!(load(&db, &changed).is_err());
-    // A failed state write never commits half a tick.
-    let d = tempfile::tempdir().unwrap();
-    let c = config(d.path());
-    let mut db = open_book(&c).unwrap();
-    let b = Book::new(c.session);
-    save(&mut db, &c, &b, start(), None, None, "initial").unwrap();
-    db.execute_batch("CREATE TRIGGER fail_state BEFORE UPDATE ON state BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
-    assert!(save(&mut db, &c, &b, start() + 1, None, None, "must_rollback").is_err());
-    let count: i64 = db
-        .query_row("SELECT count(*) FROM ticks", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(count, 1);
-    assert_eq!(load(&db, &c).unwrap(), b);
-}
-#[test]
-fn financial_clock_after_lock_blocks_delayed_entry_and_late_session() {
-    let d = tempfile::tempdir().unwrap();
-    let c = config(d.path());
-    let mut db = open_book(&c).unwrap();
-    let mut b = Book::new(c.session);
-    b.history = vec![Price::parse("299").unwrap(); 10];
-    let q = quote(start(), 0);
-    tick(&mut db, &c, &mut b, Some(&q), None, || start() + 2500).unwrap();
-    assert!(b.fills.is_empty());
-    tick(&mut db, &c, &mut b, Some(&q), None, || start() + 2000).unwrap();
-    assert!(b.fills.is_empty());
-    let old = b.clone();
-    db.execute_batch("CREATE TRIGGER fail_state BEFORE UPDATE ON state BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
-    let close = start() + 21600000;
-    let q = quote(close, 0);
-    assert!(tick(&mut db, &c, &mut b, Some(&q), None, || close).is_err());
-    assert_eq!(b, old);
-    assert_eq!(load(&db, &c).unwrap(), old);
-    let mut b = Book::new(c.session);
-    b.history = vec![Price::parse("299").unwrap(); 10];
-    let after = start() + 22500000;
-    assert_eq!(
-        b.step(after, Some(&quote(after, 0)), &c.strategy).unwrap(),
-        "outside_session_no_financial_action"
-    );
-    assert!(b.fills.is_empty());
-}
-#[test]
-fn missing_original_book_is_never_replaced_and_stops_survive() {
-    let d = tempfile::tempdir().unwrap();
-    let c = config(d.path());
-    let mut db = open_book(&c).unwrap();
-    let mut b = Book::new(c.session);
-    b.stopped = true;
-    save(&mut db, &c, &b, start(), None, None, "stopped").unwrap();
-    drop(db);
-    let db = open_book(&c).unwrap();
-    let mut b = load(&db, &c).unwrap();
-    assert!(b.stopped);
-    assert_eq!(
-        b.step(start(), Some(&quote(start(), 0)), &c.strategy)
-            .unwrap(),
-        "preserved_terminal_state"
-    );
-    drop(db);
+    drop(open_book(&c).unwrap());
     fs::rename(
         c.directory.join("paper.sqlite"),
         c.directory.join("original-preserved.sqlite"),

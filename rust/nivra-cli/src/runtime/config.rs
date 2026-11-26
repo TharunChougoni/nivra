@@ -719,11 +719,6 @@ pub struct Config {
     pub directory: PathBuf,
     #[serde(default, skip_serializing)]
     pub sessions_root: Option<PathBuf>,
-    #[serde(skip)]
-    pub legacy_directory: Option<PathBuf>,
-    #[serde(default, skip_serializing)]
-    #[allow(dead_code)] // Accept paper configs from before the history migration.
-    pub history_directory: Option<PathBuf>,
     /// Opt-in bounded previous-session acquisition before the market opens.
     #[serde(default, skip_serializing)]
     pub history_preparation_enabled: bool,
@@ -763,8 +758,6 @@ pub struct Config {
     pub strategy: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capital: Option<nivra_core::finance::Amount>,
-    #[serde(default, skip_serializing)]
-    pub prior_config: Option<PathBuf>,
 }
 pub(crate) fn default_model_readiness_check_interval_ms() -> i64 {
     60_000

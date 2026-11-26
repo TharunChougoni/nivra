@@ -1112,14 +1112,14 @@ fn a_fallback_switch_is_journalled_and_charged_but_refused_after_a_served_tool()
 #[test]
 fn next_decision_receives_only_the_sealed_predecessor_review() {
     let dir = tempfile::tempdir().unwrap();
-    let original = dir.path().join("original");
-    std::fs::create_dir(&original).unwrap();
-    let (prior, cfg) = crate::runtime::decision::decision_fixture_config(&original);
+    let (mut prior, cfg) = crate::runtime::decision::decision_fixture_config(dir.path());
+    let original = dir.path().join("sessions").join(prior.session.to_string());
+    std::fs::create_dir_all(&original).unwrap();
+    prior.directory = original.clone();
     let mut successor = prior.clone();
     successor.session = "2026-10-19".parse().unwrap();
     successor.previous_session = prior.session;
     successor.directory = successor.sessions_root.as_ref().unwrap().join("2026-10-19");
-    successor.legacy_directory = Some(original.clone());
 
     for marker in [lanes::REVIEW_MARKER, lanes::AFTER_CLOSE_MARKER] {
         assert!(lanes::claim(&prior, marker).unwrap());

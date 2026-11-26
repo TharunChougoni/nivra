@@ -38,10 +38,8 @@ Every command that changes a book needs `--confirm-paper-review`.
 | `<session>/report.json`, `review.json` | Sealed close report and review |
 | `~/.local/state/nivra/` | Updater status, failure and recovery records |
 
-The unit files are in `packaging/rust/`. A host first installed from the
-retired `ind-sadr` repository keeps its old data directories, because the book
-binding hashes paths inside them. The paper unit sets memory, task and file
-limits. A drop-in survives upgrades and can override them, so after each
+The unit files are in `packaging/rust/`. The paper unit sets memory, task and
+file limits. A drop-in survives upgrades and can override them, so after each
 install check what systemd loaded:
 
 ```sh

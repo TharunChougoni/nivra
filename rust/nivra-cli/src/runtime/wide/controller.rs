@@ -393,9 +393,7 @@ impl<'a> Controller<'a> {
         }
         let (event_config, agent, event_config_reason) = attach_policy(&mut db, c, &mut p, policy)?;
         let strategy = strategy_runner(c, event_config.as_ref())?;
-        if c.prior_config.is_none() || c.legacy_directory.is_some() {
-            persist(&mut db, c, &p, millis(), None, None, "wide_reconciled")?;
-        }
+        persist(&mut db, c, &p, millis(), None, None, "wide_reconciled")?;
         let token = dashboard_token(c)?;
         let view = Arc::new(Mutex::new(serde_json::json!({"status":"starting"})));
         let SessionEvidence {

@@ -1,4 +1,4 @@
-//! Model-led paper session rollover with explicit original-config migration.
+//! Model-led paper session rollover.
 use super::phases::{IdleStatus, PreviewStatus, SealVerdict};
 use super::*;
 use chrono::Datelike;
@@ -40,11 +40,6 @@ pub(super) fn current(c: &Config) -> Result<Config> {
         return Err(Fail::new("session_pointer_identity").into());
     }
     let mut next = c.clone();
-    next.legacy_directory = Some(
-        c.legacy_directory
-            .clone()
-            .unwrap_or_else(|| c.directory.clone()),
-    );
     next.session = date;
     next.previous_session = c.next_sessions(date)?.1;
     next.directory = root(c)?.join(date.to_string());
@@ -55,16 +50,14 @@ pub(super) fn current(c: &Config) -> Result<Config> {
     verify_decision(&next, &saved)?;
     Ok(next)
 }
-// Explicit migration: the previous config is evidence, never a replacement binding.
+/// The config whose hash binds this session's book. A reviewed cost-only
+/// transition binds the source book to the saved prior config.
 pub(super) fn original_config(c: &Config) -> Result<Config> {
     if let Some(transition) = c
         .paper_cost_transition
         .as_ref()
         .filter(|t| t.source_session == c.session)
     {
-        if c.prior_config.is_some() {
-            return Err("paper_cost_transition_conflicting_prior_config".into());
-        }
         let old: Config = serde_json::from_slice(
             &crate::read_bounded(&transition.prior_config, 65536)
                 .map_err(|_| "prior_config_unreadable")?,
@@ -109,58 +102,14 @@ pub(super) fn original_config(c: &Config) -> Result<Config> {
         }
         return Ok(old);
     }
-    let Some(path) = &c.prior_config else {
-        return Ok(c.clone());
-    };
-    // Only the original book may use this evidence; dated successors use their own config.
-    if c.legacy_directory
-        .as_ref()
-        .is_some_and(|d| d != &c.directory)
-    {
-        return Ok(c.clone());
-    }
-    let old: Config = serde_json::from_slice(
-        &crate::read_bounded(path, 65536).map_err(|_| Fail::new("prior_config_unreadable"))?,
-    )?;
-    if old.account != c.account
-        || old.session != c.session
-        || old.directory != c.directory
-        || old.previous_session != c.previous_session
-        || old.calendar_source != c.calendar_source
-        || old.read_journal != c.read_journal
-        || old.read_scope != c.read_scope
-        || old.read_journal_device != c.read_journal_device
-        || old.read_journal_inode != c.read_journal_inode
-        || old.token_file != c.token_file
-        || old.dashboard_token_file != c.dashboard_token_file
-    {
-        return Err(Fail::new("prior_config_identity_mismatch").into());
-    }
-    // The saved config must still refer to the original shared read journal.
-    let journal = fs::symlink_metadata(&c.read_journal)?;
-    if !journal.is_file()
-        || journal.dev() != c.read_journal_device
-        || journal.ino() != c.read_journal_inode
-    {
-        return Err(Fail::new("prior_config_journal_identity_mismatch").into());
-    }
-    let db = Connection::open_with_flags(
-        c.directory.join("paper.sqlite"),
-        OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )?;
-    let body: String = db.query_row("SELECT body FROM state WHERE id=1", [], |r| r.get(0))?;
-    let (open, _, halted, closed) = book_flags(&body)?;
-    if open != 0 || halted || !closed {
-        return Err(Fail::new("migration_requires_closed_flat_non_halted_book").into());
-    }
-    Ok(old)
+    Ok(c.clone())
 }
 fn migration_evidence(c: &Config, day: NaiveDate) -> Result<Value> {
     let cost_transition = c
         .paper_cost_transition
         .as_ref()
         .is_some_and(|t| t.source_session == c.session);
-    if c.prior_config.is_none() && !cost_transition {
+    if !cost_transition {
         return Ok(Value::Null);
     }
     let old = original_config(c)?;
@@ -168,13 +117,8 @@ fn migration_evidence(c: &Config, day: NaiveDate) -> Result<Value> {
     successor.session = day;
     successor.previous_session = c.next_sessions(day)?.1;
     successor.directory = root(c)?.join(day.to_string());
-    let kind = if cost_transition {
-        "explicit_paper_cost_transition"
-    } else {
-        "explicit_prior_config"
-    };
     let result = json!({
-        "kind": kind,
+        "kind": "explicit_paper_cost_transition",
         "old_binding": digest(&serde_json::to_vec(&old)?),
         "new_binding": digest(&serde_json::to_vec(&successor)?),
         "original_state_preserved": true
@@ -232,15 +176,9 @@ pub(super) fn bound_state_immutable(c: &Config) -> Result<(Connection, String)> 
 }
 
 fn book_flags(body: &str) -> Result<(u64, bool, bool, bool)> {
-    let flags = if let Ok(p) = serde_json::from_str::<Portfolio>(body) {
-        p.reconcile()?;
-        (p.positions.len() as u64, p.stopped, p.halted, p.closed)
-    } else {
-        let b: Book = serde_json::from_str(body)?;
-        b.reconcile()?;
-        (b.units, b.stopped, b.halted, b.closed)
-    };
-    Ok(flags)
+    let p: Portfolio = serde_json::from_str(body)?;
+    p.reconcile()?;
+    Ok((p.positions.len() as u64, p.stopped, p.halted, p.closed))
 }
 const STOPPED_CARRY_FILE: &str = "stopped-carry-acceptance.json";
 const STOPPED_CARRY_REASON: &str = "operator_accepted_closed_stopped_carry";
@@ -821,21 +759,7 @@ fn verify_carry_with(c: &Config, value: &Value, immutable: bool) -> Result<()> {
     let mut prior = c.clone();
     prior.session = source;
     prior.previous_session = serde_json::from_value(value["source_previous_session"].clone())?;
-    prior.directory = if let Some(legacy) = &c.legacy_directory {
-        let saved: Option<Value> = fs::read(legacy.join("report.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok());
-        if saved
-            .as_ref()
-            .is_some_and(|v| v["session"] == source.to_string())
-        {
-            legacy.clone()
-        } else {
-            root(c)?.join(source.to_string())
-        }
-    } else {
-        root(c)?.join(source.to_string())
-    };
+    prior.directory = root(c)?.join(source.to_string());
     let (db, body) = if immutable {
         bound_state_immutable(&prior)?
     } else {
@@ -940,11 +864,6 @@ fn advance_checked(c: &Config, now: i64, require_pi: bool) -> Result<Option<Conf
         return Err(Fail::new("rollover_requires_sealed_report").into());
     }
     let mut next = c.clone();
-    next.legacy_directory = Some(
-        c.legacy_directory
-            .clone()
-            .unwrap_or_else(|| c.directory.clone()),
-    );
     next.session = serde_json::from_value(plan["session"].clone())?;
     next.previous_session = serde_json::from_value(plan["previous_session"].clone())?;
     next.directory = root(c)?.join(next.session.to_string());
@@ -1024,18 +943,13 @@ fn offline_migration(c: &Config, target: NaiveDate) -> Value {
     if let Ok(evidence) = migration_evidence(c, target) {
         return evidence;
     }
-    let kind = if c
-        .paper_cost_transition
+    if c.paper_cost_transition
         .as_ref()
-        .is_some_and(|t| t.source_session == c.session)
+        .is_none_or(|t| t.source_session != c.session)
     {
-        "explicit_paper_cost_transition"
-    } else if c.prior_config.is_some() {
-        "explicit_prior_config"
-    } else {
         return Value::Null;
-    };
-    json!({"kind":kind,"original_state_preserved":true})
+    }
+    json!({"kind":"explicit_paper_cost_transition","original_state_preserved":true})
 }
 /// Advance an already-validated rollover while the controller is stopped.
 /// The root lock is always taken before the selected source book lock. The
