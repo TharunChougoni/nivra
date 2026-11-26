@@ -75,10 +75,6 @@ pub(crate) enum CandidateDatasetKind {
         to_session: chrono::NaiveDate,
     },
     ArchiveBars(nivra_store::market_archive::BarWindow),
-    ArchivedFeatureSnapshots {
-        path: PathBuf,
-        sha256: String,
-    },
 }
 /// Reviewed opt-in after-cost cash replay over the existing action-tape engine.
 /// Omission preserves every historical policy byte and advertises no execution
@@ -371,15 +367,6 @@ impl CandidateComputeSettings {
             }
             if let CandidateDatasetKind::ArchiveBars(window) = &dataset.kind
                 && !window.validate()
-            {
-                return Err("candidate_dataset_invalid");
-            }
-            if let CandidateDatasetKind::ArchivedFeatureSnapshots { path, sha256 } = &dataset.kind
-                && (nivra_store::private_path::file_path_ok(path).is_err()
-                    || sha256.len() != 64
-                    || !sha256
-                        .bytes()
-                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
             {
                 return Err("candidate_dataset_invalid");
             }

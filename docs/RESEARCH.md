@@ -488,9 +488,9 @@ With `research_tools.candidate_compute.enabled`, the research lane has
 `backtest`, `backtest_status`, `backtest_result` and `backtest_cancel`.
 `backtest` queues an immutable ranker version: source, params, a hypothesis,
 training and selection windows, and a horizon in minutes. It runs over a
-registered dataset in `candidate_compute.datasets`. A dataset is either the
-current session's features or an archived feature-snapshot file pinned by
-SHA-256.
+registered `current_session_features` dataset in
+`candidate_compute.datasets`: the features of the current and previous
+session.
 
 When `candidate_compute.execution.enabled` is also set, `backtest` accepts an
 `execution` argument. It requests an after-cost cash replay over the frozen

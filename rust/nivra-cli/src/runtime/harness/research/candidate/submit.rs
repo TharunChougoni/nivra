@@ -1,36 +1,5 @@
 use super::*;
 
-fn archived_feature_snapshots(
-    path: &Path,
-    sha256: &str,
-    session: &str,
-    replay: &ScorerReplaySettings,
-    now: i64,
-) -> std::result::Result<Vec<nivra_core::strategy::FeatureSnapshot>, String> {
-    let bytes = crate::read_bounded(path, 4 * 1024 * 1024)
-        .map_err(|_| "candidate_archived_dataset_unreadable")?;
-    if digest(&bytes) != sha256 {
-        return Err("candidate_archived_dataset_hash_mismatch".into());
-    }
-    let snapshots: Vec<nivra_core::strategy::FeatureSnapshot> =
-        serde_json::from_slice(&bytes).map_err(|_| "candidate_archived_dataset_invalid")?;
-    if snapshots.is_empty()
-        || snapshots.len() > 10_000
-        || snapshots
-            .windows(2)
-            .any(|w| w[0].observed_ms >= w[1].observed_ms)
-        || snapshots.iter().any(|snapshot| {
-            snapshot.observed_ms < 0
-                || snapshot.observed_ms > now
-                || !archival_candidate_window(session, snapshot.observed_ms)
-                || snapshot.lookback_samples != replay.lookback_samples
-        })
-    {
-        return Err("candidate_archived_dataset_invalid".into());
-    }
-    Ok(snapshots)
-}
-
 /// Freeze and admit one prospective observation over a verified original
 /// candidate. The original supplies source/params/features/result provenance;
 /// the model declares the observation units, research capital, costs, holding
@@ -847,8 +816,6 @@ pub(crate) fn candidate_submit_preemptible(
         }
     }
     let previous_session = candidate_previous_trading_session(c);
-    let archived_window =
-        archival_candidate_window(&c.session.to_string(), windows.selection_to_ms);
     let snapshots = match &dataset.kind {
         CandidateDatasetKind::CurrentSessionFeatures => {
             super::super::super::super::paper_replay::session_feature_snapshots(
@@ -861,12 +828,6 @@ pub(crate) fn candidate_submit_preemptible(
                 now,
             )
             .map_err(|_| "candidate_dataset_unavailable".to_owned())
-        }
-        CandidateDatasetKind::ArchivedFeatureSnapshots { path, sha256 } if archived_window => {
-            if args.execution.is_some() {
-                return Ok(not_dispatched("candidate_archived_execution_unavailable"));
-            }
-            archived_feature_snapshots(path, sha256, &c.session.to_string(), &candidate.replay, now)
         }
         _ => return Ok(not_dispatched("candidate_dataset_window_mismatch")),
     };
