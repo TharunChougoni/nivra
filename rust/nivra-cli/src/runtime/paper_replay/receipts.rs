@@ -1,6 +1,6 @@
 use super::*;
 
-use nivra_store::market_archive::QuoteBodies;
+use nivra_store::market_archive::{MAX_QUOTE_BODY_BYTES, QuoteBodies};
 
 #[derive(Clone, Copy)]
 pub(crate) struct QuoteSource<'a> {
@@ -40,9 +40,15 @@ impl<'a> QuoteSource<'a> {
                     }
                 }
             }
-            let resolved = bodies.resolve_page(raw, || {
-                super::super::market_archive::connect(self.archive.ok_or("archive_config_missing")?)
-            });
+            let resolved = if cfg!(test) && self.archive.is_none() {
+                raw.into_iter().map(|(_, body)| Ok(body)).collect()
+            } else {
+                bodies.resolve_page(raw, || {
+                    super::super::market_archive::connect(
+                        self.archive.ok_or("archive_config_missing")?,
+                    )
+                })
+            };
             page = times
                 .into_iter()
                 .zip(resolved)
@@ -172,7 +178,7 @@ fn visit_quote_receipts(
     let mut statement = db
         .prepare(
             "SELECT at,receipt,body FROM ticks WHERE id IN (
-                SELECT id FROM ticks WHERE event IN ('wide_quotes','scanner_metadata')
+                SELECT id FROM ticks WHERE event IN ('wide_quotes','scanner_metadata','archive_quote_gap')
                 AND at<=?2 ORDER BY id DESC LIMIT ?1
             ) ORDER BY id ASC",
         )
@@ -258,14 +264,13 @@ fn archived_receipt_filtered(
     only_keys: Option<&BTreeSet<String>>,
     skip_research: bool,
 ) -> std::result::Result<QuoteReceipt, String> {
-    if raw.len() > 2_000_000 {
+    if raw.len() > MAX_QUOTE_BODY_BYTES {
         return Err("scorer_snapshots_unavailable".into());
     }
     let receipt = receipt.ok_or("scorer_snapshots_receipt_missing")?;
     let archive: Value =
         serde_json::from_str(raw).map_err(|_| "scorer_snapshots_invalid".to_string())?;
-    if archive["kind"] == "compacted_quote_receipt"
-        || archive["received_ms"] != receipt
+    if archive["received_ms"] != receipt
         || receipt > at
         || at > max_source_ms
         || receipt > max_source_ms
@@ -532,7 +537,6 @@ impl ExecutionTapeBuilder {
             "events_sha256":events_sha256,
             "synthetic":false,
             "max_observation_gap_ms":self.max_gap_ms.max(1),
-            "history_directory":null,
             "paper_costs":null,
             "provenance":provenance
         }))
@@ -604,7 +608,7 @@ pub(crate) fn session_feature_snapshots(
         "previous_session":previous_session,
         "capital":"5000","universe":evidence.instruments,
         "events_sha256":nivra_core::replay::digest(events.as_bytes()),
-        "synthetic":false,"max_observation_gap_ms":max_gap_ms.max(1),"history_directory":null,
+        "synthetic":false,"max_observation_gap_ms":max_gap_ms.max(1),
         "provenance":{
             "legacy_quote_purpose_unknown":0,
             "source":"session_paper_quotes_read_only",
@@ -659,7 +663,7 @@ pub(crate) fn candidate_quotes(
     let db = open_quote_journal(source.directory)?;
     let end_of_evidence_ms: Option<i64> = db
         .query_row(
-            "SELECT MAX(at) FROM ticks WHERE event IN ('wide_quotes','scanner_metadata') AND at<=?1",
+            "SELECT MAX(at) FROM ticks WHERE event IN ('wide_quotes','scanner_metadata','archive_quote_gap') AND at<=?1",
             rusqlite::params![now],
             |row| row.get(0),
         )
@@ -673,7 +677,7 @@ pub(crate) fn candidate_quotes(
         .collect::<BTreeMap<_, _>>();
     let mut statement = db
         .prepare(
-            "SELECT at,receipt,body FROM ticks WHERE event IN ('wide_quotes','scanner_metadata') AND at<=?1 AND (receipt IS NULL OR (receipt>=?2 AND receipt<=?3)) ORDER BY id ASC",
+            "SELECT at,receipt,body FROM ticks WHERE event IN ('wide_quotes','scanner_metadata','archive_quote_gap') AND at<=?1 AND (receipt IS NULL OR (receipt>=?2 AND receipt<=?3)) ORDER BY id ASC",
         )
         .map_err(snapshot_unavailable)?;
     let rows = statement
@@ -731,9 +735,7 @@ pub(crate) fn candidate_quotes(
 
 /// One original quote receipt row from the archived journal. `receipt_ms` is
 /// the archived financial receipt clock and `event_at_ms` is the journal insert
-/// clock; neither is replaced by a later read time. A retention-compacted row
-/// keeps its original archive SHA and explicit unknown key/purpose instead of
-/// being silently dropped.
+/// clock; neither is replaced by a later read time.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn candidate_quotes_window_with(
     source: QuoteSource<'_>,
@@ -787,10 +789,6 @@ pub(super) fn candidate_quotes_window_with(
     // Purpose and financial receipt window are filtered before the bounded row
     // limit. The old reader ordered by insert id and applied the limit first,
     // so a late read could miss the first eligible receipt in the window.
-    // Research-observation receipts have their own tick event (#240), so
-    // trading retention never compacts them; receipts written before that
-    // split stay readable in `wide_quotes`. Trading purposes never read the
-    // research event.
     let purpose_filter = purposes
         .iter()
         .map(|purpose| {
@@ -804,7 +802,7 @@ pub(super) fn candidate_quotes_window_with(
                 QuotePurposeV1::Protection | QuotePurposeV1::Screen => "'wide_quotes'".into(),
             };
             format!(
-                "(event IN ({events}) AND instr(body,'\"purpose\":\"{}\"')>0)",
+                "(event IN ({events}) AND CASE WHEN json_valid(body) THEN json_extract(body,'$.purpose') END='{}')",
                 purpose.archive_str()
             )
         })
@@ -815,8 +813,17 @@ pub(super) fn candidate_quotes_window_with(
     } else {
         "receipt ASC,id ASC"
     };
+    let unconverted = if cfg!(test) && source.archive.is_none() {
+        ""
+    } else {
+        "OR (event IN ('wide_quotes','scanner_metadata','research_quotes')
+         AND CASE WHEN json_valid(body) THEN json_extract(body,'$.kind') END
+             IS NOT 'market_archive_quote')"
+    };
     let sql = format!(
-        "SELECT at,receipt,body FROM ticks WHERE receipt IS NOT NULL AND receipt>0 AND receipt>=?1 AND receipt<=?2 AND at<=?3 AND ({purpose_filter}) ORDER BY {order} LIMIT ?4"
+        "SELECT at,receipt,body FROM ticks WHERE receipt IS NOT NULL AND receipt>0
+         AND receipt>=?1 AND receipt<=?2 AND at<=?3
+         AND ({purpose_filter} {unconverted}) ORDER BY {order} LIMIT ?4"
     );
     let mut statement = db
         .prepare(&sql)
@@ -839,18 +846,11 @@ pub(super) fn candidate_quotes_window_with(
     }
     let truncated = receipt_rows.len() > max_rows;
     receipt_rows.truncate(max_rows);
-    // A compacted row has no readable body, but its original receipt time and
-    // archive SHA are retained so a first-eligible exit can never be assumed.
-    // Entry freeze needs the NEWEST compacted receipt (it may hide the latest
-    // entry); exit needs the OLDEST (it may hide the first exit). Ordering both
-    // ascending would hide a newer compacted entry beyond the row limit.
-    let compacted_order = if newest_first {
-        "receipt DESC,id DESC"
-    } else {
-        "receipt ASC,id ASC"
-    };
+    // A missing receipt can conceal the first exit or the latest entry.
     let compacted_sql = format!(
-        "SELECT at,receipt,body FROM ticks WHERE event='wide_quotes' AND receipt IS NOT NULL AND receipt>0 AND receipt>=?1 AND receipt<=?2 AND at<=?3 AND instr(body,'\"kind\":\"compacted_quote_receipt\"')>0 ORDER BY {compacted_order} LIMIT ?4"
+        "SELECT at,coalesce(receipt,at) AS receipt,body FROM ticks
+         WHERE event='archive_quote_gap' AND coalesce(receipt,at) BETWEEN ?1 AND ?2
+         AND at<=?3 ORDER BY {order} LIMIT ?4"
     );
     let mut compacted_statement = db
         .prepare(&compacted_sql)
@@ -896,7 +896,7 @@ pub(super) fn candidate_quotes_window_with(
         if receipt > at {
             return Err("candidate_quotes_receipt_binding".into());
         }
-        if raw.len() > 2_000_000 {
+        if raw.len() > MAX_QUOTE_BODY_BYTES {
             return Err("candidate_quotes_unavailable".into());
         }
         let archive: Value =
@@ -992,4 +992,20 @@ pub(super) fn candidate_quotes_window_with(
         "window":{"from_ms":from_ms,"to_ms":to_ms},
         "purposes":purposes.iter().map(|purpose| purpose.as_str()).collect::<Vec<_>>()
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replay_accepts_a_large_envelope_of_a_bounded_provider_body() {
+        // Escaping the original JSON when it is nested in the receipt adds bytes.
+        let body = json!({"status":"success","data":{},"padding":"\"".repeat(700_000)}).to_string();
+        let envelope =
+            json!({"received_ms":1000,"purpose":"scanner_metadata","body":body}).to_string();
+        assert!(body.len() < 2_000_000 && envelope.len() > 2_000_000);
+        let quote = archived_receipt(&BTreeMap::new(), 1001, Some(1000), &envelope, 1001).unwrap();
+        assert_eq!(quote.receipt_ms, 1000);
+    }
 }

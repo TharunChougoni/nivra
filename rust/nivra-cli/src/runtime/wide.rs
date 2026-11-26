@@ -515,15 +515,7 @@ fn commit_quotes_screened(
     held_positions: bool,
     archive: Option<ArchivedQuote<'_>>,
 ) -> Result<()> {
-    let reference = archive
-        .map(|archive| -> Result<_> {
-            archive.writer.stage(&raw)?;
-            Ok(nivra_store::market_archive::quote_reference(
-                archive.purpose,
-                &raw,
-            ))
-        })
-        .transpose()?;
+    let body = ArchivedQuote::stage(archive, raw)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let now = clock();
     let mut next = p.clone();
@@ -715,7 +707,7 @@ fn commit_quotes_screened(
     record_halt_transition(&tx, &next, now)?;
     tx.execute(
         "INSERT INTO ticks(at,receipt,body,event) VALUES(?,?,?,'wide_quotes')",
-        rusqlite::params![now, receipt, reference.as_deref().unwrap_or(&raw)],
+        rusqlite::params![now, receipt, body.as_ref()],
     )?;
     tx.execute(
         "INSERT INTO state VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",

@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fmt::Write};
 
 const REFERENCE_KIND: &str = "market_archive_quote";
-const MAX_QUOTE_BODY_BYTES: usize = 4_000_256;
+pub const MAX_QUOTE_BODY_BYTES: usize = 4_000_256;
 
 #[derive(Deserialize, Serialize)]
 struct Reference<'a> {
@@ -30,11 +30,12 @@ pub fn quote_reference(purpose: &str, raw: &str) -> String {
 type ReceiptKey = ([u8; 32], i64);
 type Bodies = BTreeMap<ReceiptKey, Vec<u8>>;
 
-fn reference_key(raw: &str, received: Option<i64>) -> Result<Option<ReceiptKey>> {
-    if !raw.starts_with("{\"kind\":\"market_archive_quote\"") {
-        return Ok(None);
+fn reference_key(raw: &str, received: Option<i64>) -> Result<ReceiptKey> {
+    let reference: Reference<'_> =
+        serde_json::from_str(raw).map_err(|_| "archive_quote_reference_invalid")?;
+    if reference.kind != REFERENCE_KIND {
+        return Err("archive_quote_reference_invalid".into());
     }
-    let reference: Reference<'_> = serde_json::from_str(raw)?;
     let hex = reference.sha256;
     if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("archive_quote_reference_invalid".into());
@@ -43,10 +44,12 @@ fn reference_key(raw: &str, received: Option<i64>) -> Result<Option<ReceiptKey>>
     for (index, byte) in sha256.iter_mut().enumerate() {
         *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16)?;
     }
-    Ok(Some((
+    Ok((
         sha256,
-        received.ok_or("archive_quote_reference_invalid")?,
-    )))
+        received
+            .filter(|ms| *ms > 0)
+            .ok_or("archive_quote_reference_invalid")?,
+    ))
 }
 
 fn fetch(db: &mut ArchiveClient, keys: &[ReceiptKey]) -> Result<Bodies> {
@@ -146,8 +149,7 @@ pub fn quote_receipt_bodies(
         .collect()
 }
 
-/// The paper journal selects the time window and order. Resolve only its
-/// references in bounded pages, leaving inline receipts available offline.
+/// Resolve paper journal references in bounded pages with the original bytes.
 #[derive(Default)]
 pub struct QuoteBodies {
     db: Option<ArchiveClient>,
@@ -163,7 +165,10 @@ impl QuoteBodies {
             .iter()
             .map(|(received, raw)| reference_key(raw, *received))
             .collect();
-        let keys: Vec<_> = refs.iter().filter_map(|key| *key.as_ref().ok()?).collect();
+        let keys: Vec<_> = refs
+            .iter()
+            .filter_map(|key| key.as_ref().ok().copied())
+            .collect();
         let bodies = (|| {
             if !keys.is_empty() && self.db.is_none() {
                 self.db = Some(connect()?);
@@ -173,12 +178,9 @@ impl QuoteBodies {
                 None => Ok(BTreeMap::new()),
             }
         })();
-        rows.into_iter()
-            .zip(refs)
-            .map(|((_, raw), key)| {
-                let Some(key) = key? else {
-                    return Ok(raw);
-                };
+        refs.into_iter()
+            .map(|key| {
+                let key = key?;
                 let compressed = bodies
                     .as_ref()
                     .map_err(|_| "archive_quote_read_failed")?
@@ -200,10 +202,8 @@ impl QuoteBodies {
             .expect("one receipt")
     }
 
-    pub fn read(db: &mut ArchiveClient, raw: String, receipt_ms: Option<i64>) -> Result<String> {
-        let Some(key) = reference_key(&raw, receipt_ms)? else {
-            return Ok(raw);
-        };
+    pub fn read(db: &mut ArchiveClient, raw: &str, receipt_ms: Option<i64>) -> Result<String> {
+        let key = reference_key(raw, receipt_ms)?;
         decode(
             key,
             fetch(db, &[key])?

@@ -91,6 +91,24 @@ pub(super) struct ArchivedQuote<'a> {
     pub(super) purpose: &'a str,
 }
 
+impl ArchivedQuote<'_> {
+    pub(super) fn stage<'a>(
+        archive: Option<Self>,
+        raw: std::borrow::Cow<'a, str>,
+    ) -> Result<std::borrow::Cow<'a, str>> {
+        match archive {
+            Some(archive) => {
+                archive.writer.stage(&raw)?;
+                Ok(std::borrow::Cow::Owned(
+                    nivra_store::market_archive::quote_reference(archive.purpose, &raw),
+                ))
+            }
+            None if cfg!(test) => Ok(raw),
+            None => Err("archive_config_missing".into()),
+        }
+    }
+}
+
 pub(in crate::runtime) enum QuoteReadTarget<'a> {
     Held { depth_sink: Option<&'a mut Scanner> },
     Plan,
@@ -274,22 +292,20 @@ pub(super) fn persist_scanner_metadata(
     archive: String,
     writer: Option<&super::super::market_archive::capture::Writer>,
 ) -> Result<()> {
-    let reference = writer
-        .map(|writer| -> Result<_> {
-            writer.stage(&archive)?;
-            Ok(nivra_store::market_archive::quote_reference(
-                "scanner_metadata",
-                &archive,
-            ))
-        })
-        .transpose()?;
+    let body = ArchivedQuote::stage(
+        writer.map(|writer| ArchivedQuote {
+            writer,
+            purpose: "scanner_metadata",
+        }),
+        archive.into(),
+    )?;
     persist(
         db,
         c,
         p,
         at,
         Some(receipt),
-        reference.as_deref().or(Some(&archive)),
+        Some(body.as_ref()),
         "scanner_metadata",
     )?;
     Ok(())

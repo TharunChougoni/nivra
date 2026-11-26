@@ -59,17 +59,11 @@ fn write_tape(
     let rows = statement
         .query_map([], quote_row)
         .map_err(|_| "quote_tape_unavailable".to_string())?;
-    let (mut count, mut observations, mut compacted, mut max_gap_ms) = (0usize, 0usize, 0usize, 0);
+    let (mut count, mut observations, mut max_gap_ms) = (0usize, 0usize, 0);
     let (mut first, mut last) = (None, None::<i64>);
     let mut seen = BTreeSet::new();
     for row in c.quote_source().rows(rows) {
         let (at, receipt, raw) = row?;
-        // Retention keeps only a hash of a compacted body; it is counted,
-        // never replayed.
-        if raw.contains("\"kind\":\"compacted_quote_receipt\"") {
-            compacted += 1;
-            continue;
-        }
         let mut receipt = archived_receipt(&index, at, receipt, &raw, i64::MAX)?;
         if receipt.kind == QuotePurposeV1::ResearchObservation {
             continue;
@@ -130,6 +124,16 @@ fn write_tape(
             .unwrap_or_else(|| "unknown".into());
         *gaps.entry(reason).or_insert(0u64) += 1;
     }
+    let missing: i64 = db
+        .query_row(
+            "SELECT count(*) FROM ticks WHERE event='archive_quote_gap'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| "quote_tape_unavailable".to_string())?;
+    if missing != 0 {
+        gaps.insert("original_receipt_unavailable".into(), missing as u64);
+    }
     let events_sha256: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
     let universe = instruments
         .iter()
@@ -144,12 +148,10 @@ fn write_tape(
         "events_sha256":events_sha256,
         "synthetic":false,
         "max_observation_gap_ms":max_gap_ms.max(1),
-        "history_directory":null,
         "paper_costs":c.paper_costs,
         "provenance":{
             "source":"closed_paper_book_quote_journal_read_only",
             "legacy_quote_purpose_unknown":0,
-            "compacted_receipts_skipped":compacted,
             "quote_tape_gaps":gaps,
             "previous_session_semantics":"verified_calendar_trading_day",
             "max_observation_gap_ms_semantics":"observed_max_receipt_gap_not_an_engine_tolerance"
@@ -169,7 +171,6 @@ fn write_tape(
         "instruments":universe.len(),
         "first_at_ms":first,
         "last_at_ms":last,
-        "compacted_receipts_skipped":compacted,
         "quote_tape_gaps":gaps,
         "events_sha256":events_sha256,
         "manifest_sha256":digest(&manifest),

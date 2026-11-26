@@ -20,7 +20,6 @@
  "events_sha256": "1c41f8f97a79c8a789065971528f2f7a522a1ed3947be72a9d16a6c95c40b01c",
  "synthetic": true,
  "max_observation_gap_ms": 1000,
- "history_directory": null,
  "paper_costs": {
   "per_order": "0",
   "buy_bps": "10",

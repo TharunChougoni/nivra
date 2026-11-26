@@ -73,6 +73,10 @@ fn execution_preparation_defaults_and_validation() {
     template["read_journal_device"] = serde_json::json!(0);
     template["read_journal_inode"] = serde_json::json!(0);
     template["capital"] = serde_json::json!("5000");
+    template["market_archive"] = serde_json::json!({
+        "url": "postgresql://nivra@localhost/nivra_market",
+        "password_file": "/private/archive-password",
+    });
     let baseline: Config = serde_json::from_value(template).unwrap();
     baseline.validate().unwrap();
     let original = serde_json::to_value(config(Path::new("fixture"))).unwrap();

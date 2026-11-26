@@ -649,11 +649,20 @@ pub(super) fn snapshot(
     let client = data::Client::new(&c.market_data_transport)?;
     let refs: Vec<_> = keys.iter().map(String::as_str).collect();
     let (requested, received, raw) = client.quotes(c, &refs)?;
+    let output = snapshot_response(&allowed, keys, requested, received, &raw, millis(), id)?;
+    let purpose = "research_observation";
+    let envelope = json!({"source":"upstox-readonly-v1","purpose":purpose,
+        "requested_ms":requested,"received_ms":received,"body":raw})
+    .to_string();
+    let batch = super::super::market_archive::normalize::capture_quotes(&envelope)?;
+    let mut database = super::super::market_archive::open(c)?;
+    nivra_store::market_archive::write_quotes(&mut database, &batch)?;
     rollover::atomic(
         &archive.join(format!("{id}-quote-receipt.json")),
-        &json!({"requested_ms":requested,"received_ms":received,"body_sha256":digest(raw.as_bytes()),"body":raw}),
+        &json!({"requested_ms":requested,"received_ms":received,"reference":
+            serde_json::from_str::<Value>(&nivra_store::market_archive::quote_reference(purpose, &envelope))?}),
     )?;
-    snapshot_response(&allowed, keys, requested, received, &raw, millis(), id)
+    Ok(output)
 }
 pub(super) fn snapshot_response(
     allowed: &[nivra_core::execution::Instrument],

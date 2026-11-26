@@ -41,17 +41,22 @@ pub(in crate::runtime) fn import(
     let mut verified = 0;
     let mut compacted = 0;
     let mut updates = Vec::new();
+    let mut gaps = Vec::new();
     {
         let mut stmt = tx.prepare(
-            "SELECT id, at, receipt, body FROM ticks
-             WHERE event IN ('wide_quotes','scanner_metadata','research_quotes') ORDER BY id",
+            "SELECT id, at, receipt, body, event FROM ticks
+             WHERE event IN ('wide_quotes','scanner_metadata','research_quotes','archive_quote_gap') ORDER BY id",
         )?;
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
             let raw: String = row.get(3)?;
             let value: Value = serde_json::from_str(&raw)?;
-            if value["kind"] == "compacted_quote_receipt" {
+            let event: String = row.get(4)?;
+            if event == "archive_quote_gap" || value["kind"] == "compacted_quote_receipt" {
                 compacted += 1;
+                if rewrite && event != "archive_quote_gap" {
+                    gaps.push((row.get::<_, i64>(0)?, json!({"sha256":value["sha256"]})));
+                }
                 continue;
             }
             let receipt = row
@@ -59,7 +64,7 @@ pub(in crate::runtime) fn import(
                 .ok_or("archive_receipt_time_invalid")?;
             let is_reference = value["kind"] == "market_archive_quote";
             let raw = if is_reference {
-                QuoteBodies::read(db, raw, Some(receipt))?
+                QuoteBodies::read(db, &raw, Some(receipt))?
             } else {
                 raw
             };
@@ -87,8 +92,14 @@ pub(in crate::runtime) fn import(
             params![reference, id],
         )?;
     }
+    for (id, body) in &gaps {
+        tx.execute(
+            "UPDATE ticks SET event='archive_quote_gap', body=?1 WHERE id=?2",
+            params![body.to_string(), id],
+        )?;
+    }
     tx.commit()?;
-    if rewrite && !updates.is_empty() {
+    if rewrite && !(updates.is_empty() && gaps.is_empty()) {
         book.execute_batch("VACUUM")?;
     }
     Ok(
@@ -318,6 +329,17 @@ mod tests {
         .map(|r| (r.at_ms, r.receipt_ms, r.kind, r.observations))
         .collect::<Vec<_>>();
 
+        let inline = paper_replay::quote_receipts_bounded(
+            old_cfg.quote_source(),
+            old_cfg.session,
+            100,
+            last,
+        );
+        assert_eq!(
+            inline.err().as_deref(),
+            Some("archive_quote_reference_invalid")
+        );
+
         let imported = import(&mut archive_db, &old_dir, false)?;
         assert_eq!(imported["inserted"], total_quote_ticks);
 
@@ -388,8 +410,27 @@ mod tests {
         assert_eq!(reimported["inserted"], 0);
         assert_eq!(reimported["verified"], total_quote_ticks);
 
+        let lost_at = last + 100;
+        let lost_hash = "a".repeat(64);
+        let db = Connection::open(&db_path)?;
+        db.execute(
+            "INSERT INTO ticks(at, receipt, body, event) VALUES(?1,?1,?2,'wide_quotes')",
+            params![
+                lost_at,
+                json!({"kind":"compacted_quote_receipt","sha256":lost_hash}).to_string()
+            ],
+        )?;
+        drop(db);
         let second = import(&mut archive_db, &old_dir, true)?;
         assert_eq!(second["rewritten"], 0);
+        assert_eq!(second["compacted"], 1);
+        let db = Connection::open(&db_path)?;
+        let gap: (i64, String, String) = db.query_row(
+            "SELECT receipt, event, json_extract(body,'$.sha256') FROM ticks WHERE at=?1",
+            [lost_at],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(gap, (lost_at, "archive_quote_gap".into(), lost_hash));
         Ok(())
     }
 }

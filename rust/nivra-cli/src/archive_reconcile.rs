@@ -289,7 +289,6 @@ mod tests {
             "events_sha256": digest(&events),
             "synthetic":true,
             "max_observation_gap_ms":1000,
-            "history_directory":null,
             "provenance":{}
         }))
         .unwrap();

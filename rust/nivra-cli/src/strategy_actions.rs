@@ -622,7 +622,7 @@ pub(crate) fn verify_action_replay() {
     };
     let manifest = |events: &[u8]| {
         serde_json::to_vec(&json!({"schema":1,"session":"2026-10-16","previous_session":"2026-10-15","capital":"5000",
-        "universe":[{"key":"SYNTHETIC|A","symbol":"FIXTURE","series":"EQ","tick":"0.05"}],"events_sha256":digest(events),"synthetic":true,"max_observation_gap_ms":1000,"history_directory":null,"provenance":{}})).unwrap()
+        "universe":[{"key":"SYNTHETIC|A","symbol":"FIXTURE","series":"EQ","tick":"0.05"}],"events_sha256":digest(events),"synthetic":true,"max_observation_gap_ms":1000,"provenance":{}})).unwrap()
     };
     let source = serde_json::to_vec(
         &json!([{"at_ms":at,"key":"SYNTHETIC|A","units":10,"max_price":"100"},
@@ -709,7 +709,7 @@ pub(crate) fn verify_action_replay() {
         "universe":[
             {"key":"SYNTHETIC|A","symbol":"AAA","series":"EQ","tick":"0.05"},
             {"key":"SYNTHETIC|B","symbol":"BBB","series":"EQ","tick":"0.05"}
-        ],"events_sha256":digest(events),"synthetic":true,"max_observation_gap_ms":1000,"history_directory":null,"provenance":{}})).unwrap()
+        ],"events_sha256":digest(events),"synthetic":true,"max_observation_gap_ms":1000,"provenance":{}})).unwrap()
     };
     let exec_quote = |key: &str, source: i64, receipt: i64, bid: &str, ask: &str, units: u64| {
         json!({
@@ -1607,7 +1607,7 @@ pub(crate) fn verify_action_replay() {
         "universe":[
             {"key":"SYNTHETIC|A","symbol":"AAA","series":"EQ","tick":"0.05"},
             {"key":"NSE_FO|X","symbol":"FUT","series":"EQ","tick":"0.05"}
-        ],"events_sha256":digest(&screen_events),"synthetic":true,"max_observation_gap_ms":1000,"history_directory":null,"provenance":{}})).unwrap();
+        ],"events_sha256":digest(&screen_events),"synthetic":true,"max_observation_gap_ms":1000,"provenance":{}})).unwrap();
     let nfo_signals = vec![ScoredSignal {
         at_ms: at,
         ordered_keys: vec!["NSE_FO|X".into()],
@@ -1743,7 +1743,6 @@ pub(crate) fn verify_action_replay() {
             "schema":1,"session":"2026-10-16","previous_session":"2026-10-15","capital":"5000",
             "universe":[{"key":"SYNTHETIC|A","symbol":"AAA","series":"EQ","tick":"0.05"}],
             "events_sha256":digest(events),"synthetic":true,"max_observation_gap_ms":1000,
-            "history_directory":null,
             "provenance":{"archive_sha256":digest(b"whole-tape-last-receipt"),"per_key":{}}
         }))
         .unwrap()

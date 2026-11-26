@@ -24,9 +24,9 @@ struct PaperManifest {
     capital: nivra_core::finance::Amount,
     universe: Vec<nivra_core::execution::Instrument>,
     events_sha256: String,
-    synthetic: bool,
+    #[serde(rename = "synthetic")]
+    _synthetic: bool,
     max_observation_gap_ms: i64,
-    history_directory: Option<std::path::PathBuf>,
     provenance: Value,
 }
 
@@ -65,9 +65,6 @@ pub fn archive_identity(manifest: &[u8], events: &[u8]) -> Result<ArchiveIdentit
         {
             return Err("strategy_archive_screening_purpose_unknown".into());
         }
-        // Source labels are parsed, never used to read files or claim genuine
-        // market data. The caller retains the original manifest alongside output.
-        let _source_labels = (paper.synthetic, paper.history_directory);
         let mut keys = BTreeSet::new();
         for instrument in &paper.universe {
             if instrument.key.is_empty()
@@ -640,7 +637,7 @@ mod tests {
             "schema":1,"session":session,"previous_session":session.pred_opt().unwrap(),
             "capital":"5000","universe":manifest["universe"],
             "events_sha256":nivra_core::replay::digest(events),"synthetic":true,
-            "max_observation_gap_ms":60000,"history_directory":null,
+            "max_observation_gap_ms":60000,
             "provenance":{"legacy_quote_purpose_unknown":0}
         });
         let paper_snapshots =

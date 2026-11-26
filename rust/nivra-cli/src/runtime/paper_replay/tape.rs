@@ -375,7 +375,6 @@ fn virtual_observation_tape_bounded_with(
         "events_sha256":events_sha256,
         "synthetic":false,
         "max_observation_gap_ms":1,
-        "history_directory":null,
         "paper_costs":null,
         "provenance":{
             "source":"original_paper_quote_journal_read_only",

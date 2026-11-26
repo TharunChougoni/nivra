@@ -69,7 +69,7 @@ repeat against the same container.
 docker run -d --name nivra-archive-f -p 55435:5432 -e POSTGRES_PASSWORD=test timescale/timescaledb:latest-pg17
 docker exec nivra-archive-f pg_isready
 export NIVRA_ARCHIVE_TEST_URL=postgresql://postgres:test@127.0.0.1:55435/postgres
-cargo test --workspace --locked -- --ignored
+TMPDIR=/tmp cargo test --workspace --locked -- --ignored
 docker rm -f nivra-archive-f
 ```
 

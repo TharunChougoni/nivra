@@ -91,6 +91,8 @@ counts of instruments, receipts, observations, bars, and coverage.
 Remove `history_directory`, `dashboard.retention.keep_full_quote_bodies`, and
 `dashboard.retention.max_quote_body_bytes` from installed configs. Import
 legacy history with `nivra archive import-history --config PAPER_JSON HISTORY_DIR`.
+If removing custom retention settings changes a sealed book's config binding,
+keep that book for history and prepare a fresh paper config and book.
 
 A planner key outside the pi policy shape refuses with `planner_config_invalid`.
 Optional keys at their defaults are not serialized, so they leave a sealed
