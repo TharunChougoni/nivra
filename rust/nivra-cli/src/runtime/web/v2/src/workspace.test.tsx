@@ -293,14 +293,6 @@ const splits: Record<
     readiness: { status: "ready", reason: "controller_ready" },
     activity_attribution: {
       session: "2026-10-29",
-      conversion: {
-        candidates_evaluated: 12,
-        decisions_considered: 3,
-        actions_proposed: 2,
-        actions_validated: 1,
-        fills_executed: 1,
-        overall_conversion_rate: 1 / 12,
-      },
       financials: {
         realized_pnl: "12.50",
         marked_pnl: "2.00",
@@ -314,17 +306,6 @@ const splits: Record<
         max_drawdown: "5.00",
         max_drawdown_pct: 0.01,
       },
-      latency: { p50_ms: 500, p95_ms: 1000 },
-      experiment_attributions: [
-        {
-          source_hash: "fixture-source-hash",
-          spec_id: "fixture-spec",
-          decisions_count: 2,
-          fills_count: 1,
-          net_after_cost_pnl: "13.00",
-          trial_status: "reviewed",
-        },
-      ],
     },
     history_preparation: {
       status: "READY",
@@ -549,10 +530,10 @@ test("client renders every section, archived books and private lock state", asyn
       }
       if (section === "health") {
         await until(() =>
-          document.querySelector('[title="fixture-source-hash"]'),
+          document.body.textContent?.includes("Net after cost"),
         );
         assert.ok(document.body.textContent?.includes("Activity"));
-        assert.ok(document.body.textContent?.includes("Net P&L"));
+        assert.ok(document.body.textContent?.includes("Net after cost"));
         assert.ok(document.body.textContent?.includes("13.00"));
         assert.ok(document.body.textContent?.includes("Live trading"));
         assert.ok(document.body.textContent?.includes("Off"));

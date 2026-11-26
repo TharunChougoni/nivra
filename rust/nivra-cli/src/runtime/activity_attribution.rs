@@ -1,87 +1,8 @@
-//! A5 Activity Measurement and Candidate Attribution.
-//!
-//! Tracks candidate-to-decision/action/fill conversion rates, categorized abstention
-//! reasons, after-cost financial performance, turnover and cost drag, peak-to-trough
-//! drawdown, decision latency distributions, and experiment outcome attribution
-//! linking financial outcomes to selection provenance (`source_hash`) and the trial ledger.
+//! After-cost P&L, turnover and drawdown from the paper book.
 
 use nivra_core::finance::{Amount, FinancialError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
-
-/// Conversion metrics along the pipeline from evaluated candidates to fills.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CandidateConversion {
-    pub candidates_evaluated: u64,
-    pub decisions_considered: u64,
-    pub actions_proposed: u64,
-    pub actions_validated: u64,
-    pub fills_executed: u64,
-    pub candidate_to_decision_rate: f64,
-    pub decision_to_action_rate: f64,
-    pub action_to_fill_rate: f64,
-    pub overall_conversion_rate: f64,
-}
-
-impl CandidateConversion {
-    pub fn new(
-        candidates_evaluated: u64,
-        decisions_considered: u64,
-        actions_proposed: u64,
-        actions_validated: u64,
-        fills_executed: u64,
-    ) -> Self {
-        let candidate_to_decision_rate = if candidates_evaluated > 0 {
-            decisions_considered as f64 / candidates_evaluated as f64
-        } else {
-            0.0
-        };
-        let decision_to_action_rate = if decisions_considered > 0 {
-            actions_proposed as f64 / decisions_considered as f64
-        } else {
-            0.0
-        };
-        let action_to_fill_rate = if actions_proposed > 0 {
-            fills_executed as f64 / actions_proposed as f64
-        } else {
-            0.0
-        };
-        let overall_conversion_rate = if candidates_evaluated > 0 {
-            fills_executed as f64 / candidates_evaluated as f64
-        } else {
-            0.0
-        };
-        Self {
-            candidates_evaluated,
-            decisions_considered,
-            actions_proposed,
-            actions_validated,
-            fills_executed,
-            candidate_to_decision_rate,
-            decision_to_action_rate,
-            action_to_fill_rate,
-            overall_conversion_rate,
-        }
-    }
-}
-
-/// Categorized taxonomy of abstention and refusal reasons.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AbstentionTaxonomy {
-    pub model_abstained: u64,
-    pub risk_preflight_blocked: u64,
-    pub freshness_expired: u64,
-    pub spread_cost_excessive: u64,
-    pub market_closed_or_halted: u64,
-    pub universe_filter_excluded: u64,
-    pub candidate_confidence_low: u64,
-    pub duplicate_or_in_flight: u64,
-    pub other: u64,
-    pub reasons: BTreeMap<String, u64>,
-    pub total_abstentions: u64,
-}
-
 /// Realized and marked P&L after explicit fees, with benchmark slippage reported
 /// separately as a diagnostic cost drag. Fill prices already include adverse
 /// slippage, so subtracting it from P&L again would count that impact twice.
@@ -238,119 +159,18 @@ impl DrawdownTracker {
     }
 }
 
-/// Latency distribution metrics across decision loop turns.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DecisionLatencyStats {
-    pub count: usize,
-    pub min_ms: u64,
-    pub max_ms: u64,
-    pub mean_ms: f64,
-    pub p50_ms: u64,
-    pub p90_ms: u64,
-    pub p95_ms: u64,
-    pub p99_ms: u64,
-    pub buckets: BTreeMap<String, u64>,
-}
-
-impl DecisionLatencyStats {
-    pub fn from_latencies(latencies: &[u64]) -> Self {
-        if latencies.is_empty() {
-            let mut buckets = BTreeMap::new();
-            buckets.insert("<500ms".to_string(), 0);
-            buckets.insert("500ms-1s".to_string(), 0);
-            buckets.insert("1s-2s".to_string(), 0);
-            buckets.insert("2s-5s".to_string(), 0);
-            buckets.insert("5s-10s".to_string(), 0);
-            buckets.insert(">10s".to_string(), 0);
-            return Self {
-                count: 0,
-                min_ms: 0,
-                max_ms: 0,
-                mean_ms: 0.0,
-                p50_ms: 0,
-                p90_ms: 0,
-                p95_ms: 0,
-                p99_ms: 0,
-                buckets,
-            };
-        }
-
-        let mut sorted = latencies.to_vec();
-        sorted.sort_unstable();
-
-        let count = sorted.len();
-        let min_ms = sorted[0];
-        let max_ms = sorted[count - 1];
-        let sum: u64 = sorted.iter().sum();
-        let mean_ms = sum as f64 / count as f64;
-
-        let percentile = |p: f64| -> u64 {
-            let idx = ((p / 100.0) * (count as f64 - 1.0)).round() as usize;
-            sorted[idx.min(count - 1)]
-        };
-
-        let p50_ms = percentile(50.0);
-        let p90_ms = percentile(90.0);
-        let p95_ms = percentile(95.0);
-        let p99_ms = percentile(99.0);
-
-        let mut buckets = BTreeMap::new();
-        let mut b_500 = 0u64;
-        let mut b_1s = 0u64;
-        let mut b_2s = 0u64;
-        let mut b_5s = 0u64;
-        let mut b_10s = 0u64;
-        let mut b_inf = 0u64;
-
-        for &lat in latencies {
-            match lat {
-                0..=499 => b_500 += 1,
-                500..=999 => b_1s += 1,
-                1000..=1999 => b_2s += 1,
-                2000..=4999 => b_5s += 1,
-                5000..=9999 => b_10s += 1,
-                _ => b_inf += 1,
-            }
-        }
-        buckets.insert("<500ms".to_string(), b_500);
-        buckets.insert("500ms-1s".to_string(), b_1s);
-        buckets.insert("1s-2s".to_string(), b_2s);
-        buckets.insert("2s-5s".to_string(), b_5s);
-        buckets.insert("5s-10s".to_string(), b_10s);
-        buckets.insert(">10s".to_string(), b_inf);
-
-        Self {
-            count,
-            min_ms,
-            max_ms,
-            mean_ms,
-            p50_ms,
-            p90_ms,
-            p95_ms,
-            p99_ms,
-            buckets,
-        }
-    }
-}
-
-/// Comprehensive Activity and Attribution Report.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActivityReport {
     pub session: String,
-    pub conversion: CandidateConversion,
-    pub abstentions: AbstentionTaxonomy,
     pub financials: FinancialAfterCost,
     pub turnover: TurnoverCostDrag,
     pub drawdown: DrawdownTracker,
-    pub latency: DecisionLatencyStats,
 }
 
 impl ActivityReport {
     pub fn to_json(&self) -> Value {
         json!({
             "session": self.session,
-            "conversion": self.conversion,
-            "abstentions": self.abstentions,
             "financials": self.financials,
             "turnover": self.turnover,
             "drawdown": self.drawdown,
@@ -359,7 +179,6 @@ impl ActivityReport {
                 "complete": false,
                 "reason": "historical position marks are not durably retained with this report",
             },
-            "latency": self.latency,
         })
     }
 }

@@ -40,18 +40,12 @@ pub(crate) fn supersede_plan_actions(
     Ok(())
 }
 
-/// After-cost figures from the book's own fills. Conversion, abstention,
-/// latency and experiment attribution came from the retired orchestrator
-/// ledger and stay at their zero values.
 pub(crate) fn activity_analytics(c: &Config, portfolio: &Portfolio) -> Result<Value> {
     let session = c.session.to_string();
     struct OpenLot {
         units: u64,
         price: Price,
     }
-
-    let fills_executed = portfolio.fills.len() as u64;
-    let conversion = activity_attribution::CandidateConversion::new(0, 0, 0, 0, fills_executed);
 
     let mut lots = BTreeMap::<String, std::collections::VecDeque<OpenLot>>::new();
     let mut gross_realized = Amount::ZERO;
@@ -215,16 +209,11 @@ pub(crate) fn activity_analytics(c: &Config, portfolio: &Portfolio) -> Result<Va
     let drawdown = activity_attribution::DrawdownTracker::from_series(&dd_points)
         .map_err(|e| Fail::new(format!("drawdown_calc_error: {e:?}")))?;
 
-    let latency = activity_attribution::DecisionLatencyStats::from_latencies(&[]);
-
     Ok(activity_attribution::ActivityReport {
         session,
-        conversion,
-        abstentions: activity_attribution::AbstentionTaxonomy::default(),
         financials,
         turnover,
         drawdown,
-        latency,
     }
     .to_json())
 }

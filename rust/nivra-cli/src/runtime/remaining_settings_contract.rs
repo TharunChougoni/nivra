@@ -405,12 +405,6 @@ fn dashboard_phase1_settings_defaults_bounds_and_roundtrip() {
 
     // Verify activity attribution metrics
     use super::activity_attribution::*;
-    let conv = CandidateConversion::new(100, 50, 20, 15, 10);
-    assert_eq!(conv.candidate_to_decision_rate, 0.5);
-    assert_eq!(conv.decision_to_action_rate, 0.4);
-    assert_eq!(conv.action_to_fill_rate, 0.5);
-    assert_eq!(conv.overall_conversion_rate, 0.1);
-
     let fin = FinancialAfterCost::calculate(
         nivra_core::finance::Amount::parse("150.50").unwrap(),
         nivra_core::finance::Amount::parse("50.25").unwrap(),
@@ -461,22 +455,12 @@ fn dashboard_phase1_settings_defaults_bounds_and_roundtrip() {
     assert_eq!(dd.max_drawdown_duration_ms, 1000);
     assert!((dd.max_drawdown_pct - 5.0).abs() < 1e-6);
 
-    let latency = DecisionLatencyStats::from_latencies(&[200, 450, 750, 1500, 3200, 6000, 12000]);
-    assert_eq!(latency.count, 7);
-    assert_eq!(latency.min_ms, 200);
-    assert_eq!(latency.max_ms, 12000);
-    assert_eq!(latency.buckets.get("<500ms"), Some(&2));
-
     let report = ActivityReport {
         session: "2026-10-28".into(),
-        conversion: conv,
-        abstentions: AbstentionTaxonomy::default(),
         financials: fin,
         turnover,
         drawdown: dd,
-        latency,
     };
     let rep_json = report.to_json();
     assert_eq!(rep_json["session"], "2026-10-28");
-    assert_eq!(rep_json["abstentions"]["total_abstentions"], 0);
 }

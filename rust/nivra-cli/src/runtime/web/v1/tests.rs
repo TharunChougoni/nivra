@@ -37,10 +37,12 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
 
     let activity = serde_json::json!({
         "session":"2026-10-29",
-        "conversion":{"candidates_evaluated":12,"fills_executed":1},
-        "financials":{"net_after_cost_pnl":"13.00"},
-        "experiment_attributions":[{"source_hash":"fixture-hash","net_after_cost_pnl":"13.00"}]
+        "financials":{"net_after_cost_pnl":"13.00"}
     });
+    let mut stored_activity = activity.clone();
+    stored_activity["conversion"] = serde_json::json!({"fills_executed":1});
+    stored_activity["abstentions"] = serde_json::json!({"total_abstentions":0});
+    stored_activity["latency"] = serde_json::json!({"p50_ms":0});
     let operational = serde_json::json!({
         "version":2,
         "captured_at_ms":900_000,
@@ -54,7 +56,7 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
         "reason":"research_worker_failed"
     });
     let view = Arc::new(Mutex::new(
-        serde_json::json!({"paper_only":true,"live_enabled":false,"account":"fixture-alias","authorized_session":"2026-10-29","capital":"5000","portfolio":{"cash":"5000","positions":{},"fills":[]},"private":"must-not-be-served","activity_attribution":activity,"research_tasks":research_tasks.clone()}),
+        serde_json::json!({"paper_only":true,"live_enabled":false,"account":"fixture-alias","authorized_session":"2026-10-29","capital":"5000","portfolio":{"cash":"5000","positions":{},"fills":[]},"private":"must-not-be-served","activity_attribution":stored_activity,"research_tasks":research_tasks.clone()}),
     ));
     let request = |extra: &str| {
         format!(
@@ -361,10 +363,6 @@ fn meta_is_authenticated_conditional_and_only_projects_explicit_identity() {
     assert_eq!(
         health_body["activity_attribution"]["financials"]["net_after_cost_pnl"],
         "13.00"
-    );
-    assert_eq!(
-        health_body["activity_attribution"]["experiment_attributions"][0]["source_hash"],
-        "fixture-hash"
     );
     // An absent captured projection stays absent; the API never fabricates a
     // disabled/unavailable research block on its own.

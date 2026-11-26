@@ -564,29 +564,6 @@ export interface HealthResponse extends SummaryResponse {
 }
 export interface ActivityAttribution {
   session?: string;
-  conversion?: {
-    candidates_evaluated?: number;
-    decisions_considered?: number;
-    actions_proposed?: number;
-    actions_validated?: number;
-    fills_executed?: number;
-    candidate_to_decision_rate?: number;
-    decision_to_action_rate?: number;
-    action_to_fill_rate?: number;
-    overall_conversion_rate?: number;
-  };
-  abstentions?: {
-    total_abstentions?: number;
-    model_abstained?: number;
-    risk_preflight_blocked?: number;
-    freshness_expired?: number;
-    spread_cost_excessive?: number;
-    market_closed_or_halted?: number;
-    universe_filter_excluded?: number;
-    candidate_confidence_low?: number;
-    duplicate_or_in_flight?: number;
-    other?: number;
-  };
   financials?: {
     realized_pnl?: Decimal;
     marked_pnl?: Decimal;
@@ -617,29 +594,6 @@ export interface ActivityAttribution {
     complete?: boolean;
     reason?: string;
   };
-  latency?: {
-    count?: number;
-    min_ms?: number;
-    max_ms?: number;
-    mean_ms?: number;
-    p50_ms?: number;
-    p90_ms?: number;
-    p95_ms?: number;
-    p99_ms?: number;
-  };
-  experiment_attributions?: {
-    source_hash?: string;
-    spec_id?: string | null;
-    selection_reason?: string | null;
-    decisions_count?: number;
-    fills_count?: number;
-    notional_volume?: Decimal;
-    realized_pnl?: Decimal;
-    marked_pnl?: Decimal;
-    fees_incurred?: Decimal;
-    net_after_cost_pnl?: Decimal;
-    trial_status?: string | null;
-  }[];
 }
 export interface SeriesCoverage {
   from_ms?: number | null;

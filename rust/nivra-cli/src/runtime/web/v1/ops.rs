@@ -127,7 +127,21 @@ pub(super) fn health_body(view: &serde_json::Value, now_ms: i64) -> serde_json::
         "health":p["health"],"read_failure_reason":view["read_failure_reason"],"stop_classification":stop_classification(p)
     });
     body["readiness"] = view["readiness"].clone();
-    body["activity_attribution"] = view["activity_attribution"].clone();
+    body["activity_attribution"] = view["activity_attribution"]
+        .as_object()
+        .map(|activity| {
+            [
+                "session",
+                "financials",
+                "turnover",
+                "drawdown",
+                "drawdown_coverage",
+            ]
+            .into_iter()
+            .filter_map(|key| activity.get(key).map(|value| (key.into(), value.clone())))
+            .collect::<serde_json::Map<_, _>>()
+        })
+        .map_or(serde_json::Value::Null, serde_json::Value::Object);
     body["model_initialization"] = view["model_initialization"].clone();
     body["history_preparation"] = view["history_preparation"].clone();
     body["market_feed"] = view["market_feed"].clone();

@@ -5,7 +5,6 @@ import {
   count,
   datetime,
   duration,
-  percent,
   percentPoints,
 } from "./data";
 import { plain } from "./labels";
@@ -17,10 +16,8 @@ import type { HealthResponse } from "./types";
 import {
   Empty,
   Facts,
-  Instrument,
   Notice,
   Panel,
-  ShortId,
   Status,
   Table,
   useWorkspace,
@@ -154,137 +151,49 @@ export function Health() {
         }
       >
         {attribution ? (
-          <>
-            <div className="cols-2">
-              <Facts
-                items={[
-                  [
-                    "Candidates evaluated",
-                    count(attribution.conversion?.candidates_evaluated),
-                  ],
-                  [
-                    "Decisions considered",
-                    count(attribution.conversion?.decisions_considered),
-                  ],
-                  [
-                    "Actions proposed / validated",
-                    `${count(attribution.conversion?.actions_proposed)} / ${count(attribution.conversion?.actions_validated)}`,
-                  ],
-                  [
-                    "Simulated fills",
-                    count(attribution.conversion?.fills_executed),
-                  ],
-                  [
-                    "Candidate → decision",
-                    percent(attribution.conversion?.candidate_to_decision_rate),
-                  ],
-                  [
-                    "Decision → action",
-                    percent(attribution.conversion?.decision_to_action_rate),
-                  ],
-                  [
-                    "Action → fill",
-                    percent(attribution.conversion?.action_to_fill_rate),
-                  ],
-                  [
-                    "Overall conversion",
-                    percent(attribution.conversion?.overall_conversion_rate),
-                  ],
-                  [
-                    "Abstentions",
-                    count(attribution.abstentions?.total_abstentions),
-                  ],
-                  [
-                    "Decision time (typical / slow)",
-                    `${count(attribution.latency?.p50_ms)} / ${count(attribution.latency?.p95_ms)} ms`,
-                  ],
-                ]}
-              />
-              <Facts
-                items={[
-                  [
-                    "Realized P&L",
-                    amount(attribution.financials?.realized_pnl),
-                  ],
-                  ["Marked P&L", amount(attribution.financials?.marked_pnl)],
-                  ["Fees deducted", amount(attribution.financials?.total_fees)],
-                  ["Slippage", amount(attribution.financials?.total_slippage)],
-                  [
-                    "Cost drag",
-                    amount(attribution.financials?.total_cost_drag),
-                  ],
-                  [
-                    "Net after cost",
-                    amount(attribution.financials?.net_after_cost_pnl),
-                  ],
-                  [
-                    "Traded notional",
-                    amount(attribution.turnover?.notional_traded),
-                  ],
-                  [
-                    "Cost drag (bps)",
-                    count(attribution.turnover?.total_cost_drag_bps),
-                  ],
-                  [
-                    "Current / max drawdown",
-                    `${amount(attribution.drawdown?.current_drawdown)} / ${amount(attribution.drawdown?.max_drawdown)}`,
-                  ],
-                  [
-                    "Max drawdown (%)",
-                    percentPoints(attribution.drawdown?.max_drawdown_pct),
-                  ],
-                  ...(attribution.drawdown_coverage?.reason
-                    ? [
-                        [
-                          "Drawdown coverage",
-                          plain(attribution.drawdown_coverage.reason),
-                        ] as [string, string],
-                      ]
-                    : []),
-                ]}
-              />
-            </div>
-            <Panel title="By strategy" className="stack-top">
-              <Table
-                rows={attribution.experiment_attributions || []}
-                columns={[
-                  {
-                    key: "spec",
-                    label: "Strategy",
-                    render: (row) => (
-                      <Instrument
-                        symbol={
-                          row.spec_id ? plain(row.spec_id) : "Not recorded"
-                        }
-                        sub={<ShortId value={row.source_hash} />}
-                      />
-                    ),
-                  },
-                  {
-                    key: "decisions",
-                    label: "Decisions",
-                    render: (row) => count(row.decisions_count),
-                  },
-                  {
-                    key: "fills",
-                    label: "Fills",
-                    render: (row) => count(row.fills_count),
-                  },
-                  {
-                    key: "net",
-                    label: "Net P&L",
-                    render: (row) => amount(row.net_after_cost_pnl),
-                  },
-                  {
-                    key: "trial",
-                    label: "Trial",
-                    render: (row) => plain(row.trial_status),
-                  },
-                ]}
-                empty="No strategy attribution recorded"
-              />
-            </Panel>
-          </>
+          <Facts
+            items={[
+              [
+                "Realized P&L",
+                amount(attribution.financials?.realized_pnl),
+              ],
+              ["Marked P&L", amount(attribution.financials?.marked_pnl)],
+              ["Fees deducted", amount(attribution.financials?.total_fees)],
+              ["Slippage", amount(attribution.financials?.total_slippage)],
+              [
+                "Cost drag",
+                amount(attribution.financials?.total_cost_drag),
+              ],
+              [
+                "Net after cost",
+                amount(attribution.financials?.net_after_cost_pnl),
+              ],
+              [
+                "Traded notional",
+                amount(attribution.turnover?.notional_traded),
+              ],
+              [
+                "Cost drag (bps)",
+                count(attribution.turnover?.total_cost_drag_bps),
+              ],
+              [
+                "Current / max drawdown",
+                `${amount(attribution.drawdown?.current_drawdown)} / ${amount(attribution.drawdown?.max_drawdown)}`,
+              ],
+              [
+                "Max drawdown (%)",
+                percentPoints(attribution.drawdown?.max_drawdown_pct),
+              ],
+              ...(attribution.drawdown_coverage?.reason
+                ? [
+                    [
+                      "Drawdown coverage",
+                      plain(attribution.drawdown_coverage.reason),
+                    ] as [string, string],
+                  ]
+                : []),
+            ]}
+          />
         ) : (
           <Empty title="Activity unavailable" />
         )}

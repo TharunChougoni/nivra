@@ -2197,57 +2197,13 @@ export function transcriptAt(
 
 function attributionAt(data: MockData, now: number): ActivityAttribution {
   const b = bookAt(data, now);
-  const visible = data.turns.filter((t) => (t.at_ms ?? 0) <= now);
-  const gates = visible.filter((t) => t.lane === "gate").length;
-  const decided = data.decisions.filter((d) => d.at <= now);
-  const proposed = decided.reduce((s, d) => s + d.actions.length, 0);
-  const validated = decided.reduce(
-    (s, d) => s + d.actions.filter((a) => a.reason === "accepted").length,
-    0,
-  );
-  const declined = visible.filter(
-    (t) => t.verdict && !t.verdict.escalate,
-  ).length;
   const dd = drawdownOf(equityUpTo(data, now));
   const current = b.equity;
   const net = b.realized + b.marked - b.fees;
-  const elapsed = visible
-    .filter((t) => t.lane === "decision" && t.status === "ok")
-    .map((t) => t.elapsed_ms ?? 0)
-    .sort((x, y) => x - y);
-  const q = (p: number) =>
-    elapsed[Math.min(elapsed.length - 1, Math.floor(p * elapsed.length))] ?? 0;
   const ratio = (a: number, c: number) =>
     c ? Math.round((a / c) * 1e4) / 1e4 : 0;
-  const rejected = proposed - validated;
-  const abst = {
-    model_abstained: 2,
-    risk_preflight_blocked: 1,
-    freshness_expired: 1,
-    spread_cost_excessive: Math.floor(declined / 4),
-    market_closed_or_halted: 0,
-    universe_filter_excluded: 1,
-    candidate_confidence_low: Math.floor(declined / 3),
-    duplicate_or_in_flight: 1,
-    other: Math.max(0, rejected - 3),
-  };
   return {
     session: data.session,
-    conversion: {
-      candidates_evaluated: gates,
-      decisions_considered: decided.length,
-      actions_proposed: proposed,
-      actions_validated: validated,
-      fills_executed: b.seen.length,
-      candidate_to_decision_rate: ratio(decided.length, gates),
-      decision_to_action_rate: ratio(validated, decided.length * 2),
-      action_to_fill_rate: ratio(b.seen.length, validated),
-      overall_conversion_rate: ratio(b.seen.length, gates),
-    },
-    abstentions: {
-      total_abstentions: Object.values(abst).reduce((s, v) => s + v, 0),
-      ...abst,
-    },
     financials: {
       realized_pnl: d2(b.realized),
       marked_pnl: d2(b.marked),
@@ -2279,31 +2235,6 @@ function attributionAt(data: MockData, now: number): ActivityAttribution {
       complete: false,
       reason: "historical_position_marks_not_retained",
     },
-    latency: {
-      count: elapsed.length,
-      min_ms: elapsed[0] ?? 0,
-      max_ms: elapsed.at(-1) ?? 0,
-      mean_ms: Math.round(
-        elapsed.reduce((s, v) => s + v, 0) / Math.max(1, elapsed.length),
-      ),
-      p50_ms: q(0.5),
-      p90_ms: q(0.9),
-      p95_ms: q(0.95),
-      p99_ms: q(0.99),
-    },
-    experiment_attributions: data.strategies.map((s, i) => ({
-      source_hash: s.hash,
-      spec_id: s.id,
-      selection_reason: i ? "challenger_trial" : "champion",
-      decisions_count: i ? 3 : 8,
-      fills_count: i ? 4 : 11,
-      notional_volume: d2(b.notional * (i ? 0.31 : 0.69)),
-      realized_pnl: d2(b.realized * (i ? 0.2 : 0.8)),
-      marked_pnl: d2(b.marked * (i ? 0.35 : 0.65)),
-      fees_incurred: d2(b.fees * (i ? 0.3 : 0.7)),
-      net_after_cost_pnl: d2(net * (i ? 0.25 : 0.75)),
-      trial_status: i ? "in_trial" : "reviewed",
-    })),
   };
 }
 

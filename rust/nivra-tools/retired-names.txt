@@ -33,7 +33,6 @@
 2	luna	rust/nivra-cli/src/strategy_archive.rs
 1	luna	rust/nivra-core/src/strategy.rs
 5	luna	rust/nivra-tools/src/retired.rs
-1	orchestrator	rust/nivra-cli/src/runtime/decision.rs
 1	orchestrator	rust/nivra-cli/src/runtime/discovery/settings.rs
 1	orchestrator	rust/nivra-cli/src/runtime/harness.rs
 2	orchestrator	rust/nivra-cli/src/runtime/options/mod.rs

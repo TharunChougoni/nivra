@@ -46,10 +46,6 @@ export const tone = (v: number | null) =>
     : v > 0
       ? ("pos" as const)
       : ("neg" as const);
-export const percent = (value?: number | null) =>
-  typeof value === "number" && Number.isFinite(value)
-    ? `${(value * 100).toFixed(2)}%`
-    : "Not reported";
 export const percentPoints = (value?: number | null) =>
   typeof value === "number" && Number.isFinite(value)
     ? `${value.toFixed(2)}%`
