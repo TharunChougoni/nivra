@@ -10,7 +10,6 @@ import type {
   SessionsResponse,
   HealthResponse,
   AlertsResponse,
-  ToolsResponse,
   OperationalHealth,
 } from "./types";
 import { test } from "node:test";
@@ -147,7 +146,6 @@ const splits: Record<
   | SessionsResponse
   | HealthResponse
   | AlertsResponse
-  | ToolsResponse
 > = {
   "/api/v1/summary": summary,
   "/api/v1/portfolio": portfolio,
@@ -287,33 +285,6 @@ const splits: Record<
       },
     ],
     next: null,
-  },
-  "/api/v1/tools": {
-    v: 1,
-    session: "2026-10-29",
-    total: 1,
-    calls: [
-      {
-        v: 1,
-        at_ms: envelope.as_of_ms,
-        session: "2026-10-29",
-        run: "harness-decision-fixture",
-        turn: 0,
-        call: "call_one",
-        tool: "web_search",
-        provider: "searxng",
-        query: "nifty bank",
-        url: null,
-        status: "ok",
-        reason: null,
-        latency_ms: 42,
-        bytes: 512,
-        results: 3,
-        execution_authorized: false,
-      },
-    ],
-    next: null,
-    execution_authorized: false,
   },
   "/api/v1/health": {
     ...envelope,
@@ -1337,13 +1308,17 @@ test("instrument chart range picker loads archive history and shows plain unavai
     );
     priceTab.click();
     await until(() =>
-      document.querySelector<HTMLSelectElement>('select[aria-label="History range"]'),
+      document.querySelector<HTMLSelectElement>(
+        'select[aria-label="History range"]',
+      ),
     );
     const rangeSelect = document.querySelector<HTMLSelectElement>(
       'select[aria-label="History range"]',
     )!;
     rangeSelect.value = "5d";
-    rangeSelect.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    rangeSelect.dispatchEvent(
+      new dom.window.Event("change", { bubbles: true }),
+    );
     await until(() =>
       requests.some((u) => u.includes("kind=archive-minute-bar")),
     );
@@ -1356,7 +1331,9 @@ test("instrument chart range picker loads archive history and shows plain unavai
 
     unavailableMode = true;
     rangeSelect.value = "30d";
-    rangeSelect.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    rangeSelect.dispatchEvent(
+      new dom.window.Event("change", { bubbles: true }),
+    );
     await until(() =>
       requests.some((u) => u.includes("kind=archive-daily-bar")),
     );
@@ -1364,6 +1341,113 @@ test("instrument chart range picker loads archive history and shows plain unavai
       document.body.textContent?.includes("Market archive is not configured"),
     );
     assert.ok(document.body.textContent?.includes("Archive unavailable"));
+  } finally {
+    app.stop();
+    root.unmount();
+    dom.window.close();
+  }
+});
+
+test("overview shows watched held position option, hides live attribution in archived sessions, and surfaces series errors", async () => {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "http://localhost/",
+    pretendToBeVisual: true,
+  });
+  for (const key of GLOBALS)
+    Object.defineProperty(globalThis, key, {
+      value:
+        key === "getComputedStyle"
+          ? dom.window.getComputedStyle.bind(dom.window)
+          : dom.window[key],
+      configurable: true,
+      writable: true,
+    });
+  globalThis.addEventListener = dom.window.addEventListener.bind(dom.window);
+  globalThis.removeEventListener = dom.window.removeEventListener.bind(
+    dom.window,
+  );
+  const { App, Context } = await loadApp();
+  const { createRoot } = await import("react-dom/client");
+  let seriesFail = true;
+  const fetch = fetchFixture({
+    "/api/v1/portfolio": () =>
+      json({
+        ...portfolio,
+        positions: [
+          {
+            instrument: {
+              key: "NSE_EQ|HELDONLY",
+              symbol: "HELDONLY",
+              kind: "cash",
+            },
+            units: "5",
+            entry: "200",
+            mark: "210",
+            decision_id: "d1",
+            marked_at: envelope.as_of_ms,
+          },
+        ],
+      }),
+    "/api/v1/series": () => {
+      if (seriesFail)
+        return new Response(JSON.stringify({ error: "series_unavailable" }), {
+          status: 503,
+        });
+      return json({ ...envelope, points: [], unavailable: false });
+    },
+  });
+  const app = createController(dom.window, { connect: false, fetch });
+  const root = createRoot(document.getElementById("root")!);
+  root.render(
+    <Context.Provider value={app}>
+      <App />
+    </Context.Provider>,
+  );
+  try {
+    await app.authenticate("fixture-only");
+    // 1. Live equity series failure is shown instead of "No equity checkpoints recorded yet."
+    await until(() => app.getSnapshot().series.equityState === "error");
+    await until(() => document.body.textContent?.includes("Could not load"));
+
+    // 2. Watching a held position absent from scanner.items keeps its option in Chart instrument select.
+    seriesFail = false;
+    app.watch("NSE_EQ|HELDONLY");
+    const priceTab = [
+      ...document.querySelectorAll<HTMLElement>('[role="tab"]'),
+    ].find((t) => t.textContent?.includes("Instrument price"))!;
+    priceTab.dispatchEvent(
+      new dom.window.MouseEvent("mousedown", { bubbles: true, button: 0 }),
+    );
+    priceTab.click();
+    await until(() =>
+      document.querySelector<HTMLSelectElement>(
+        'select[aria-label="Chart instrument"]',
+      ),
+    );
+    const instSelect = document.querySelector<HTMLSelectElement>(
+      'select[aria-label="Chart instrument"]',
+    )!;
+    assert.equal(instSelect.value, "NSE_EQ|HELDONLY");
+    assert.equal(instSelect.selectedOptions[0]?.textContent, "HELDONLY");
+
+    // 3. Selecting an archived session does not show today's live Realized attribution figure.
+    await until(() => document.body.textContent?.includes("₹12.50"));
+    const sessionSelect = document.querySelector<HTMLSelectElement>(
+      'select[aria-label="Selected session"]',
+    )!;
+    const archivedOption = [...sessionSelect.options].find((o) =>
+      o.value.includes("2026-10-28"),
+    )!;
+    sessionSelect.value = archivedOption.value;
+    sessionSelect.dispatchEvent(
+      new dom.window.Event("change", { bubbles: true }),
+    );
+    await until(() => document.body.textContent?.includes("Archived session"));
+    assert.equal(
+      document.body.textContent?.includes("₹12.50"),
+      false,
+      "archived session overview must not show today's live realized P&L",
+    );
   } finally {
     app.stop();
     root.unmount();

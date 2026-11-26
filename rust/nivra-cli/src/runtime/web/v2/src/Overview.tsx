@@ -1,10 +1,7 @@
-import type { Fill, Point, Position, SeriesCoverage } from "./types";
-import type { Column } from "./ui";
 import React, { useEffect, useMemo, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
-import { ApiError } from "./api";
-import Chart from "./Chart";
 import { BookContinuity } from "./Operational";
+import { OverviewChartsPanel } from "./OverviewCharts";
 import LaneTimeline, { laneColor, sessionRange } from "./charts/LaneTimeline";
 import Sparkline, { bucketize } from "./charts/Sparkline";
 import {
@@ -17,15 +14,14 @@ import {
   finance,
   fillsFor,
   istDateString,
-  istDayEndMs,
-  istDayStartMs,
   numeric,
   plansFor,
-  projectSeries,
   sessionKey,
-  shiftIstDate,
+  signed,
+  tone,
   usd,
 } from "./data";
+import { sentenceCase, turnOutcome } from "./labels";
 import {
   conditionOf,
   equityStats,
@@ -36,8 +32,9 @@ import {
   modeOf,
   orderTracks,
 } from "./model";
+import { useRead, useRevision } from "./reads";
+import type { Position } from "./types";
 import {
-  Button,
   Empty,
   InstrumentCell,
   KpiStrip,
@@ -50,30 +47,15 @@ import {
   Table,
   useWorkspace,
 } from "./ui";
-import type { KpiItem } from "./ui";
-import {
-  ARCHIVE_LABELS,
-  ARCHIVE_RANGE_LABELS,
-  plain,
-  sentenceCase,
-  turnOutcome,
-} from "./labels";
-import { useRead, useRevision } from "./reads";
+import type { Column, KpiItem } from "./ui";
 
-const signed = (v: number | null) =>
-  v === null ? "—" : (v > 0 ? "+" : "") + amount(v);
-const tone = (v: number | null) =>
-  v === null || v === 0
-    ? undefined
-    : v > 0
-      ? ("pos" as const)
-      : ("neg" as const);
 const KINDS: [string, string][] = [
   ["all", "All"],
   ["cash", "Cash"],
   ["future", "Future"],
   ["option", "Option"],
 ];
+
 const kindGroup = (p: Position) => {
   const k = instrumentLabel(p.instrument).kind;
   return k === "call" || k === "put"
@@ -90,6 +72,7 @@ const RESEARCH_DESTINATIONS = [
   "instruments",
   "health",
 ];
+
 /** Research-only dashboards have no book: show what can be inspected instead. */
 function ResearchOverview() {
   return (
@@ -125,41 +108,10 @@ export default function Overview() {
   );
 }
 
-type HistoryPreset = "today" | "5d" | "7d" | "30d" | "90d" | "custom";
-type ArchiveKind = "archive-minute-bar" | "archive-daily-bar";
-interface ArchiveSeriesState {
-  status: "idle" | "loading" | "ready" | "unavailable" | "error";
-  points: Point[];
-  coverage: SeriesCoverage | null;
-  reason: string | null;
-  kind: ArchiveKind;
-}
-const emptyArchive = (
-  kind: ArchiveKind = "archive-minute-bar",
-): ArchiveSeriesState => ({
-  status: "idle",
-  points: [],
-  coverage: null,
-  reason: null,
-  kind,
-});
-
 function BookOverview() {
   const [state, app] = useWorkspace(),
-    [view, setView] = useState("equity"),
     [kind, setKind] = useState("all"),
-    [laneFilter, setLaneFilter] = useState("all"),
-    [historyPreset, setHistoryPreset] = useState<HistoryPreset>("today"),
-    [draftFrom, setDraftFrom] = useState(""),
-    [draftTo, setDraftTo] = useState(""),
-    [draftKind, setDraftKind] = useState<ArchiveKind>("archive-minute-bar"),
-    [customRequest, setCustomRequest] = useState<{
-      fromDate: string;
-      toDate: string;
-      kind: ArchiveKind;
-      seq: number;
-    } | null>(null),
-    [archive, setArchive] = useState<ArchiveSeriesState>(() => emptyArchive());
+    [laneFilter, setLaneFilter] = useState("all");
   const r = app.record(),
     f = finance(r),
     s = state.summary,
@@ -172,158 +124,17 @@ function BookOverview() {
     if (!state.watch && prospects[0]?.instrument_key)
       app.watch(prospects[0].instrument_key);
   }, [prospects, state.watch]);
+
   const current = currentSession(state, state.meta),
     historical = sessionKey(r) !== sessionKey(current);
   const asOf = numeric(s?.as_of_ms);
   const todayIst =
     s?.session || current?.id?.date || istDateString(asOf ?? Date.now());
-  const archiveRequest = useMemo(() => {
-    if (view === "equity" || historyPreset === "today" || !state.watch)
-      return null;
-    if (historyPreset === "custom") {
-      if (!customRequest) return null;
-      return {
-        instrument: state.watch,
-        kind: customRequest.kind,
-        fromDate: customRequest.fromDate,
-        toDate: customRequest.toDate,
-        seq: customRequest.seq,
-      };
-    }
-    const lookbackDays =
-      historyPreset === "5d"
-        ? 4
-        : historyPreset === "7d"
-          ? 6
-          : historyPreset === "30d"
-            ? 29
-            : 89;
-    const reqKind: ArchiveKind =
-      historyPreset === "5d" || historyPreset === "7d"
-        ? "archive-minute-bar"
-        : "archive-daily-bar";
-    return {
-      instrument: state.watch,
-      kind: reqKind,
-      fromDate: shiftIstDate(todayIst, -lookbackDays),
-      toDate: todayIst,
-      seq: 0,
-    };
-  }, [view, historyPreset, state.watch, todayIst, customRequest]);
-  useEffect(() => {
-    if (!archiveRequest) {
-      setArchive(emptyArchive());
-      return;
-    }
-    const from = istDayStartMs(archiveRequest.fromDate);
-    const to = istDayEndMs(archiveRequest.toDate);
-    if (from === null || to === null || to < from) {
-      setArchive({
-        status: "error",
-        points: [],
-        coverage: null,
-        reason: "series_range_invalid",
-        kind: archiveRequest.kind,
-      });
-      return;
-    }
-    let cancelled = false;
-    setArchive({
-      status: "loading",
-      points: [],
-      coverage: null,
-      reason: null,
-      kind: archiveRequest.kind,
-    });
-    (async () => {
-      try {
-        const collected: Point[] = [];
-        let cursorTo = to;
-        let lastCoverage: SeriesCoverage | null = null;
-        for (let page = 0; page < 5; page++) {
-          const body = await app.api.series({
-            kind: archiveRequest.kind,
-            instrument: archiveRequest.instrument,
-            from,
-            to: cursorTo,
-          });
-          if (cancelled) return;
-          if (body?.unavailable) {
-            setArchive({
-              status: "unavailable",
-              points: [],
-              coverage: null,
-              reason: body.reason || "archive_unavailable",
-              kind: archiveRequest.kind,
-            });
-            return;
-          }
-          const projected = projectSeries(body, archiveRequest.kind);
-          if (page === 0) lastCoverage = projected.coverage;
-          collected.push(...projected.points);
-          if (!body?.truncated || body.next == null || body.next < from) break;
-          cursorTo = body.next;
-        }
-        collected.sort((a, b) => a.at - b.at);
-        const deduped: Point[] = [];
-        for (const p of collected) {
-          const prev = deduped.at(-1);
-          if (prev && prev.at === p.at) deduped[deduped.length - 1] = p;
-          else deduped.push(p);
-        }
-        if (!cancelled)
-          setArchive({
-            status: "ready",
-            points: deduped,
-            coverage: lastCoverage,
-            reason: null,
-            kind: archiveRequest.kind,
-          });
-      } catch (e) {
-        if (!cancelled)
-          setArchive({
-            status: "error",
-            points: [],
-            coverage: null,
-            reason: e instanceof ApiError ? e.code : "archive_unavailable",
-            kind: archiveRequest.kind,
-          });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [archiveRequest, app]);
-  const selectHistoryPreset = (next: HistoryPreset) => {
-    setHistoryPreset(next);
-    if (next === "custom") {
-      const fromDate = draftFrom || shiftIstDate(todayIst, -4);
-      const toDate = draftTo || todayIst;
-      setDraftFrom(fromDate);
-      setDraftTo(toDate);
-      setCustomRequest((prev) => ({
-        fromDate,
-        toDate,
-        kind: draftKind,
-        seq: (prev?.seq ?? 0) + 1,
-      }));
-    }
-  };
-  const applyCustomRange = () => {
-    const fromDate = draftFrom || shiftIstDate(todayIst, -4);
-    const toDate = draftTo || todayIst;
-    setCustomRequest((prev) => ({
-      fromDate,
-      toDate,
-      kind: draftKind,
-      seq: (prev?.seq ?? 0) + 1,
-    }));
-  };
+
   const series = state.series || {};
   const equitySeries = series.equity?.length
     ? series.equity
     : state.equityPoints;
-  const priceSeries = series.price?.length ? series.price : state.points;
   const fills = fillsFor(state, r),
     plans = plansFor(state, r);
   const stats = useMemo(
@@ -376,11 +187,17 @@ function BookOverview() {
     ],
     [
       "Realized",
-      attribution?.realized_pnl == null
+      historical || attribution?.realized_pnl == null
         ? "—"
         : signed(numeric(attribution.realized_pnl)),
-      attribution?.realized_pnl == null ? "Not loaded" : "recorded",
-      { tone: tone(numeric(attribution?.realized_pnl)) },
+      historical
+        ? "Archived session"
+        : attribution?.realized_pnl == null
+          ? "Not loaded"
+          : "recorded",
+      {
+        tone: historical ? undefined : tone(numeric(attribution?.realized_pnl)),
+      },
     ],
     [
       "Unrealized",
@@ -389,7 +206,7 @@ function BookOverview() {
       { tone: tone(f.unrealized) },
     ],
     ["Fees", amount(f.fees), f.fees === null ? "Not recorded" : "recorded"],
-    ["Cash", amount(f.cash), "recorded"],
+    ["Cash", amount(f.cash), f.cash === null ? "Not reported" : "recorded"],
     [
       "Gross exposure",
       amount(f.gross),
@@ -420,32 +237,7 @@ function BookOverview() {
         : (coverage.label ?? `${count(turns.length)} turns`),
     ],
   ];
-  const selected = prospects.find((v) => v.instrument_key === state.watch);
-  const showEquity = view === "equity";
-  const showArchive = !showEquity && historyPreset !== "today";
-  const points = showArchive
-    ? archive.points
-    : historical
-      ? []
-      : showEquity
-        ? equitySeries
-        : priceSeries;
-  const active = showEquity ? series.equity : series.price;
-  const loadState = showArchive
-    ? archive.status
-    : showEquity
-      ? series.equityState
-      : series.priceState;
-  const cached =
-    !showArchive &&
-    !!active?.length &&
-    (showEquity ? series.equityCached : series.priceCached);
-  const markers = (fills ?? []).flatMap((fill: Fill) => {
-    const at = numeric(fill.at);
-    return at === null || (!showEquity && fill.instrument?.key !== state.watch)
-      ? []
-      : [{ at, side: fill.buy ? ("buy" as const) : ("sell" as const) }];
-  });
+
   const positions = f.positions.filter(
     (p) => kind === "all" || kindGroup(p) === kind,
   );
@@ -519,180 +311,14 @@ function BookOverview() {
       <BookContinuity summary={s} portfolio={state.portfolio} />
       <KpiStrip items={kpis} />
       <div className="grid-12">
-        <Panel
-          className="span-8"
-          title={showEquity ? "Account equity" : "Instrument price"}
-          note={
-            showArchive
-              ? ARCHIVE_RANGE_LABELS[historyPreset]
-              : historical
-                ? "Archived session"
-                : showEquity
-                  ? "Fills marked, drawdown below"
-                  : "Last received price"
-          }
-          actions={
-            <>
-              {!showEquity && (
-                <>
-                  <select
-                    aria-label="Chart instrument"
-                    value={state.watch}
-                    onChange={(e) => app.watch(e.target.value)}
-                  >
-                    {!prospects.length && (
-                      <option value="">No instruments</option>
-                    )}
-                    {prospects.map((p) => (
-                      <option key={p.instrument_key} value={p.instrument_key}>
-                        {
-                          instrumentLabel({ ...p.instrument, symbol: p.symbol })
-                            .primary
-                        }
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    aria-label="History range"
-                    value={historyPreset}
-                    onChange={(e) =>
-                      selectHistoryPreset(e.target.value as HistoryPreset)
-                    }
-                  >
-                    {Object.entries(ARCHIVE_RANGE_LABELS).map(([id, text]) => (
-                      <option key={id} value={id}>
-                        {text}
-                      </option>
-                    ))}
-                  </select>
-                </>
-              )}
-              <Segments
-                value={view}
-                onChange={setView}
-                items={[
-                  ["equity", "Equity"],
-                  ["price", "Instrument price"],
-                ]}
-                label="Chart series"
-              />
-            </>
-          }
-        >
-          {!showEquity && historyPreset === "custom" && (
-            <div className="filter-bar">
-              <div className="filter-fields">
-                <label>
-                  From{" "}
-                  <input
-                    type="date"
-                    aria-label="History start date"
-                    value={draftFrom}
-                    onChange={(e) => setDraftFrom(e.target.value)}
-                  />
-                </label>
-                <label>
-                  To{" "}
-                  <input
-                    type="date"
-                    aria-label="History end date"
-                    value={draftTo}
-                    onChange={(e) => setDraftTo(e.target.value)}
-                  />
-                </label>
-                <label>
-                  Interval{" "}
-                  <select
-                    aria-label="History interval"
-                    value={draftKind}
-                    onChange={(e) =>
-                      setDraftKind(e.target.value as ArchiveKind)
-                    }
-                  >
-                    <option value="archive-minute-bar">1 min</option>
-                    <option value="archive-daily-bar">Daily</option>
-                  </select>
-                </label>
-                <Button type="button" onClick={applyCustomRange}>
-                  Load
-                </Button>
-              </div>
-            </div>
-          )}
-          <Chart
-            points={points}
-            coverage={
-              showArchive
-                ? archive.coverage
-                : showEquity
-                  ? series.equityCoverage
-                  : series.priceCoverage
-            }
-            label={
-              showEquity
-                ? "Account equity"
-                : selected?.symbol || "Selected instrument"
-            }
-            baseline={showEquity ? (stats.first?.value ?? null) : null}
-            drawdown={showEquity}
-            markers={showArchive ? [] : markers}
-            multiDay={showArchive}
-            daily={showArchive && archive.kind === "archive-daily-bar"}
-            source={
-              showArchive
-                ? plain("market_archive", ARCHIVE_LABELS)
-                : historical
-                  ? "Archive has no chart history"
-                  : cached
-                    ? "Cached, may be stale"
-                    : active?.length
-                      ? showEquity
-                        ? series.equitySource
-                          ? "Recorded checkpoints"
-                          : "Seen in this tab"
-                        : series.priceSource
-                          ? "Minute bars from received quotes"
-                          : "Live quotes, this tab"
-                      : "Seen in this tab"
-            }
-            height={showEquity ? 300 : 280}
-            emptyTone={
-              showArchive
-                ? archive.status === "unavailable"
-                  ? "unavailable"
-                  : archive.status === "error"
-                    ? "failed"
-                    : "empty"
-                : undefined
-            }
-            emptyTitle={
-              showArchive
-                ? archive.status === "unavailable"
-                  ? "Archive unavailable"
-                  : archive.status === "error"
-                    ? "Could not load archive history"
-                    : "No archive history"
-                : showEquity
-                  ? "No equity history"
-                  : "No price history"
-            }
-            emptyDetail={
-              showArchive
-                ? loadState === "loading" || loadState === "idle"
-                  ? "Loading…"
-                  : archive.status === "unavailable" || archive.status === "error"
-                    ? plain(archive.reason, ARCHIVE_LABELS)
-                    : "No archived bars for this range."
-                : historical
-                  ? "This archive has one checkpoint only."
-                  : loadState === "loading" || loadState === "idle"
-                    ? "Loading…"
-                    : showEquity
-                      ? "No equity checkpoints recorded yet."
-                      : "No minute bars yet. Missing minutes stay blank."
-            }
-          />
-        </Panel>
+        <OverviewChartsPanel
+          historical={historical}
+          todaySession={todayIst}
+          prospects={prospects}
+          index={index}
+          baseline={stats.first?.value ?? null}
+          fills={fills ?? []}
+        />
         <Panel
           className="span-4"
           title="pi lanes"
