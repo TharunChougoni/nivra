@@ -169,3 +169,40 @@ pub(crate) fn from_paise(paise: i64) -> Result<nivra_core::finance::Amount> {
     use nivra_core::finance::Amount;
     Ok(Amount::from_integer(paise).checked_div(Amount::from_integer(100))?)
 }
+
+/// Settings for a new, empty database on the disposable TimescaleDB that
+/// `NIVRA_ARCHIVE_TEST_URL` names, so ignored tests never see each other's rows.
+#[cfg(test)]
+pub(crate) fn test_settings(dir: &Path) -> Result<MarketArchiveSettings> {
+    use std::{
+        io::Write,
+        os::unix::fs::OpenOptionsExt,
+        sync::atomic::{AtomicU32, Ordering},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let url = std::env::var("NIVRA_ARCHIVE_TEST_URL")?;
+    let (scheme, rest) = url.split_once("://").ok_or("fixture_url")?;
+    let (auth, location) = rest.rsplit_once('@').ok_or("fixture_url")?;
+    let (user, password) = auth.split_once(':').ok_or("fixture_url")?;
+    let host = location.split_once('/').map_or(location, |(host, _)| host);
+    let database = format!(
+        "nivra_test_{}_{}_{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed),
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros()
+    );
+    market_archive::connect(&format!("{scheme}://{user}@{host}/postgres"), password)?
+        .batch_execute(&format!("CREATE DATABASE {database}"))?;
+    let password_file = dir.join("archive-password");
+    std::fs::OpenOptions::new()
+        .create_new(true)
+        .mode(0o600)
+        .write(true)
+        .open(&password_file)?
+        .write_all(password.as_bytes())?;
+    Ok(MarketArchiveSettings {
+        url: format!("{scheme}://{user}@{host}/{database}"),
+        password_file,
+    })
+}

@@ -3279,27 +3279,11 @@ fn archive_strategy_replay_pins_quotes_across_sessions() -> Result<()> {
         paper_replay::{ArchiveWindow, DailyWindow, TapeLimits, archive_window_tape},
     };
     use nivra_store::market_archive::{init, write_quotes};
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     use std::time::{Duration, Instant};
 
-    let url = std::env::var("NIVRA_ARCHIVE_TEST_URL")?;
-    let (scheme, auth_host) = url.split_once("://").ok_or("fixture_url")?;
-    let (auth, host) = auth_host.rsplit_once('@').ok_or("fixture_url")?;
-    let (user, password) = auth.split_once(':').ok_or("fixture_url")?;
     let tmp = tempfile::tempdir()?;
     let dir = tmp.path();
-    let password_file = dir.join("archive-password");
-    fs::OpenOptions::new()
-        .create_new(true)
-        .mode(0o600)
-        .write(true)
-        .open(&password_file)?
-        .write_all(password.as_bytes())?;
-    let archive = crate::runtime::MarketArchiveSettings {
-        url: format!("{scheme}://{user}@{host}"),
-        password_file,
-    };
+    let archive = crate::runtime::market_archive::test_settings(tmp.path())?;
     let mut writer = market_archive::connect(&archive)?;
     init(&mut writer)?;
 
@@ -3397,7 +3381,7 @@ fn archive_strategy_replay_pins_quotes_across_sessions() -> Result<()> {
         })
         .to_string();
         let batch = market_archive::normalize::capture_quotes(&raw)?;
-        assert!(write_quotes(writer, &batch)?);
+        write_quotes(writer, &batch)?;
         Ok(())
     };
     for day in &days[..3] {

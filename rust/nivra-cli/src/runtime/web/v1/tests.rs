@@ -1461,25 +1461,9 @@ fn archive_series_reads_five_day_minute_chart_under_200ms() -> crate::runtime::R
         CandleBar, CandleBatch, CandleUnit, QuoteBatch, QuoteObservation, QuotePurpose, Receipt,
         init, write_candles, write_quotes,
     };
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
 
-    let test_url = std::env::var("NIVRA_ARCHIVE_TEST_URL")?;
-    let (scheme, auth_host) = test_url.split_once("://").ok_or("fixture_url")?;
-    let (auth, host) = auth_host.rsplit_once('@').ok_or("fixture_url")?;
-    let (user, password) = auth.split_once(':').ok_or("fixture_url")?;
     let tmp = tempfile::tempdir()?;
-    let password_file = tmp.path().join("archive-password");
-    std::fs::OpenOptions::new()
-        .create_new(true)
-        .mode(0o600)
-        .write(true)
-        .open(&password_file)?
-        .write_all(password.as_bytes())?;
-    let settings = MarketArchiveSettings {
-        url: format!("{scheme}://{user}@{host}"),
-        password_file,
-    };
+    let settings = crate::runtime::market_archive::test_settings(tmp.path())?;
     let mut db = crate::runtime::market_archive::connect(&settings)?;
     init(&mut db)?;
 

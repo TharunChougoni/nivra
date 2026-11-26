@@ -4603,25 +4603,10 @@ mod strategy_execution {
 fn archive_capture_replays_the_same_session_as_sqlite() -> Result<()> {
     use crate::runtime::{market_archive, paper_replay};
     use serde_json::{Value, json};
-    use std::io::Write;
     use std::time::{Duration, Instant};
 
-    let test_url = std::env::var("NIVRA_ARCHIVE_TEST_URL")?;
-    let (scheme, auth_host) = test_url.split_once("://").ok_or("fixture_url")?;
-    let (auth, host) = auth_host.rsplit_once('@').ok_or("fixture_url")?;
-    let (user, password) = auth.split_once(':').ok_or("fixture_url")?;
     let tmp = tempfile::tempdir()?;
-    let password_file = tmp.path().join("archive-password");
-    fs::OpenOptions::new()
-        .create_new(true)
-        .mode(0o600)
-        .write(true)
-        .open(&password_file)?
-        .write_all(password.as_bytes())?;
-    let settings = MarketArchiveSettings {
-        url: format!("{scheme}://{user}@{host}"),
-        password_file,
-    };
+    let settings = crate::runtime::market_archive::test_settings(tmp.path())?;
     let mut archive_db = market_archive::connect(&settings)?;
     nivra_store::market_archive::init(&mut archive_db)?;
     let before = nivra_store::market_archive::check(&mut archive_db)?;

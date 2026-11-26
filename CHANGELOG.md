@@ -31,6 +31,18 @@ keep the archive configured when replaying books that contain references.
 `nivra archive import-book --config PAPER_CONFIG BOOK_DIR` copies a closed
 book's quote bodies into the archive without changing the book.
 
+**Retention shrinks closed books after archiving.** With `market_archive`
+configured, `nivra retention --apply` replaces a closed book's bulk quote
+bodies with archive references once TimescaleDB holds a receipt with the same
+SHA-256 and receipt time, then vacuums the book. Run `nivra archive import-book`
+on older closed books first and check `kept_missing_archive_quotes` in the
+`--dry-run` summary. See [operations](docs/OPERATIONS.md#shrink-closed-books-after-archiving-quotes).
+
+**Dashboard history from the archive.** The instrument chart has a range
+picker for past sessions and multi-day history. Minute charts cover up to 14
+days and daily charts up to 366 days, read from TimescaleDB on request. Live
+sessions still stream over SSE.
+
 ## 0.12.8 — 2026-11-26
 
 A pre-open history pass no longer parks a session it cannot start (#27). A

@@ -121,18 +121,8 @@ fn reviewed_session_gaps_and_admission() {
 }
 
 fn fixture_archive_config(directory: &Path) -> Config {
-    // The integration DSN points at a disposable container and carries its test password.
-    let dsn = std::env::var("NIVRA_ARCHIVE_TEST_URL").unwrap();
-    let (credentials, host) = dsn.rsplit_once('@').unwrap();
-    let (user, password) = credentials.rsplit_once(':').unwrap();
-    let password_file = directory.join("archive-password");
-    fs::write(&password_file, password).unwrap();
-    fs::set_permissions(&password_file, fs::Permissions::from_mode(0o600)).unwrap();
     let mut config = super::super::tests::config(directory);
-    config.market_archive = Some(super::super::config::MarketArchiveSettings {
-        url: format!("{user}@{host}"),
-        password_file,
-    });
+    config.market_archive = Some(super::super::market_archive::test_settings(directory).unwrap());
     config
 }
 
