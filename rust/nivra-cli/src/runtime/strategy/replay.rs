@@ -1,11 +1,11 @@
 //! After-cost replay of a `strategy_actions_v1` strategy over a recorded quote
-//! tape. Each executable receipt is one scan, handled in the paper controller's
-//! order: held exits first (`Portfolio::apply_at`), then one strategy call,
-//! then its actions through the planner checks and `execute_plan`. Only
+//! tape. Selected depth receipts drive calls after held protection. The same
+//! selection and executable freshness rules apply to paper calls. Only
 //! original receipts fill; nothing is interpolated or carried forward.
 use super::{
     ABI, ActionResult, MAX_PROSPECTS, Observation, Worker, WorkerConfig, WorkerKey, apply,
     parse_output,
+    selection::{REFRESH_MS, Screen, Selection},
 };
 use crate::runtime::Result;
 use crate::runtime::strategy_library::review;
@@ -177,6 +177,8 @@ pub(crate) fn adapter_sha256() -> String {
         [
             include_str!("mod.rs"),
             include_str!("replay.rs"),
+            include_str!("selection.rs"),
+            include_str!("../../../../nivra-core/src/strategy.rs"),
             include_str!("runner.py"),
         ]
         .concat()
@@ -205,6 +207,7 @@ pub(crate) fn run(
     stop: &dyn Fn() -> Option<&'static str>,
 ) -> Result<std::result::Result<Value, Stopped>> {
     parameters.validate()?;
+    let screen = Screen::parse(&parameters.params)?;
     if source.is_empty()
         || source.len() > 262_144
         || manifest.len() > 512 * 1024
@@ -269,6 +272,9 @@ pub(crate) fn run(
     let mut scanner = Scanner::default();
     nivra_cli::strategy_archive::load_daily_volume_baselines(&mut scanner, manifest)?;
     let mut coverage = Coverage::default();
+    let mut selection = Selection::default();
+    let mut next_refresh = 0;
+    let mut session = None;
     // Remaining depth of the latest original receipt per key.
     let mut depth = BTreeMap::<String, Quote>::new();
     let mut dates = BTreeSet::<NaiveDate>::new();
@@ -291,44 +297,80 @@ pub(crate) fn run(
                 last_at_ms: last_call_at,
             }));
         }
+        if session != Some(day) {
+            session = Some(day);
+            next_refresh = now;
+            selection.clear();
+            depth.clear();
+            for sample in scanner.samples.values_mut() {
+                *sample = nivra_core::execution::Sample {
+                    avg_daily_volume: sample.avg_daily_volume,
+                    avg_daily_volume_sessions: sample.avg_daily_volume_sessions,
+                    ..Default::default()
+                };
+            }
+        }
         let screening = matches!(event.kind, EventKind::Screen);
-        let mut executable = !screening;
+        let mut changed = BTreeSet::new();
         for o in &event.observations {
-            if scanner
-                .samples
-                .get(&o.key)
-                .and_then(|sample| sample.intraday.as_ref())
-                .is_none_or(|previous| {
-                    o.quote.receipt > previous.clock.receipt
-                        && o.quote.source >= previous.clock.source
-                })
-            {
+            let executable = !screening || o.archive_sha256.is_some();
+            if scanner.samples.get(&o.key).is_none_or(|previous| {
+                o.quote.receipt > previous.seen
+                    && previous
+                        .source
+                        .is_none_or(|source| o.quote.source >= source)
+            }) {
                 let instrument = &universe[&o.key];
-                if screening || o.archive_sha256.is_some() {
+                if executable {
                     scanner.observe_fields(now, instrument, &o.quote, &o.fields())?;
+                } else {
+                    scanner.observe_price(
+                        now,
+                        &o.key,
+                        o.quote.bid,
+                        o.quote.source,
+                        o.quote.receipt,
+                        MAX_FINANCIAL_AGE_MS,
+                        Some(&o.fields()),
+                    )?;
                 }
             }
-            // Archive screen rows are validated two-sided REST quotes. Legacy
-            // screen-only inputs do not convey execution authority.
-            if screening && o.archive_sha256.is_none() {
-                continue;
-            }
-            executable = true;
-            match depth.get(&o.key) {
-                Some(old) if o.quote.receipt <= old.receipt || o.quote.source < old.source => {}
-                _ => {
-                    depth.insert(o.key.clone(), o.quote.clone());
+            if executable
+                && depth
+                    .get(&o.key)
+                    .is_none_or(|old| o.quote.receipt > old.receipt && o.quote.source >= old.source)
+            {
+                depth.insert(o.key.clone(), o.quote.clone());
+                if o.quote.fresh(now, MAX_FINANCIAL_AGE_MS) {
+                    changed.insert(o.key.as_str());
                 }
             }
         }
-        if !executable {
+        let fresh_quote = |key: &str| {
+            depth
+                .get(key)
+                .filter(|quote| quote.fresh(now, MAX_FINANCIAL_AGE_MS))
+        };
+        let held_keys: BTreeSet<_> = portfolio.positions.keys().cloned().collect();
+        if now >= next_refresh {
+            let ranked = super::prospects(&scanner, now, 40)?;
+            selection.refresh(
+                &scanner,
+                now,
+                screen.as_ref(),
+                &held_keys,
+                ranked.iter().map(|prospect| prospect.key.as_str()),
+                40,
+            );
+            next_refresh = now.saturating_add(REFRESH_MS);
+        }
+        if changed.is_empty() {
             continue;
         }
         depth_events += 1;
-        let mut fresh: BTreeMap<String, Quote> = depth
+        let mut fresh: BTreeMap<String, Quote> = held_keys
             .iter()
-            .filter(|(_, q)| q.fresh(now, MAX_FINANCIAL_AGE_MS))
-            .map(|(k, q)| (k.clone(), q.clone()))
+            .filter_map(|key| fresh_quote(key).map(|quote| (key.clone(), quote.clone())))
             .collect();
         // Held exits, exactly as the paper controller's quote commit runs them.
         let held = portfolio.positions.clone();
@@ -358,8 +400,24 @@ pub(crate) fn run(
             .contains(&minute);
         let in_window = parameters.from_ms.is_none_or(|from| now >= from)
             && parameters.to_ms.is_none_or(|to| now <= to);
-        if in_session && in_window {
-            let prospects = super::prospects(&scanner, now, parameters.top_n)?;
+        let prospects = selection.prospects(&scanner, now, parameters.top_n, |key| {
+            !portfolio.positions.contains_key(key)
+                && depth.get(key).is_some_and(|quote| {
+                    quote.fresh(now, MAX_FINANCIAL_AGE_MS)
+                        && quote.bid_units > 0
+                        && quote.ask_units > 0
+                })
+        });
+        let relevant = held_keys.iter().any(|key| changed.contains(key.as_str()))
+            || prospects
+                .iter()
+                .any(|prospect| changed.contains(prospect.key.as_str()));
+        if in_session && in_window && relevant {
+            fresh.extend(
+                prospects
+                    .iter()
+                    .map(|prospect| (prospect.key.clone(), depth[&prospect.key].clone())),
+            );
             if let Some(reason) = stop() {
                 return Ok(Err(Stopped {
                     reason,

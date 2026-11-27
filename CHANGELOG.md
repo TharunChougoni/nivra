@@ -31,6 +31,13 @@ and strategies get fresh quotes and complete features for their candidates.
 - Upstox full-mode subscriptions supply paper strategies with displayed depth,
   session VWAP, book imbalance, and relative volume. The original source and
   receipt clocks still have to pass the two-second gate.
+- Action strategies can nominate up to 20 cash candidates with a price-only
+  rule in `params.promotion`. Holdings stay subscribed and the ranker fills
+  spare slots. The summary reports how many nominees have fresh full depth.
+- Full-depth updates start strategy calls without waiting for a rank pass.
+  An update during a call requests one follow-up on the latest state. Each
+  call includes at most 20 prospects plus holdings. Archive replay uses
+  the same nomination and receipt-triggered selection rules.
 - Quote tapes preserve the archived VWAP, book totals, and touch. Archive-backed
   tapes include pre-session average daily volumes. Rebuild tapes to pick up
   these fields. The execution tape ceiling is now 32 MiB.

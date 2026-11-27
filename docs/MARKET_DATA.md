@@ -165,7 +165,7 @@ until 30 minutes after it last ranked there. The names share the existing
 request every `depth_poll_ms` (8 s), after the shortlist, so they use no
 extra reads. Held names are skipped because the protection read covers them
 every 2 s. Held and shortlist requests run on separate workers. The paper
-controller commits their results and gives completed held reads priority.
+controller commits their results and processes held depth first.
 The journal records ordinary `wide_quotes` with the original receipt times
 used by the two-second gate.
 
@@ -177,7 +177,8 @@ records one `quote_tape_gap` tick instead, with `reason`, `watched` and
 | Reason | When |
 |---|---|
 | `depth_batch_full` | More watched names than the batch has room for. The most recently ranked names are kept. |
-| `feed_fallback` | The depth read pauses in fallback. The rotating REST scan still records each name once per pass. |
+| `feed_fallback` | The depth read pauses in LTPC-only fallback. Full mode still requests REST depth for promoted names. |
+| `held_depth_queue_full` | A burst filled the pushed held-depth queue. The controller requests another held REST read. |
 
 A controller restart forgets names that had already left the top K.
 

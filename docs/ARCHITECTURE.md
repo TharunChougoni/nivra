@@ -47,7 +47,7 @@ integrity incident.
 ## Where strategies will run
 
 Today a model proposes each paper trade. The planned design has models write
-strategies that a deterministic executor runs on every scan. See
+strategies that a deterministic executor runs on eligible quote updates. See
 [direction](DIRECTION.md).
 
 ## Durable state

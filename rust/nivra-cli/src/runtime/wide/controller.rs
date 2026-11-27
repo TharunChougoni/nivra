@@ -12,6 +12,7 @@ mod close;
 mod dispatch;
 mod prepare;
 mod quotes;
+mod strategy_inputs;
 mod trading;
 mod view;
 
@@ -81,7 +82,7 @@ struct Controller {
     active: bool,
     _choice_watch: Option<choice_watch::ChoiceWatch>,
     quote_reads: quotes::QuoteReads,
-    strategy_dirty: bool,
+    strategy_inputs: strategy_inputs::Inputs,
     depth_candidates: Vec<(String, Option<f64>)>,
     volume_history_loaded: bool,
     last_history_check: i64,
@@ -131,6 +132,7 @@ struct Controller {
     option_instruments: Vec<Instrument>,
     option_universe: Option<options::OptionUniverse>,
     tradable: Vec<Instrument>,
+    tradable_by_key: BTreeMap<String, usize>,
     /// Shared so one pass's session phases can read it beside `&mut self`.
     universe: Option<Rc<Universe>>,
     stopping: Arc<AtomicBool>,
@@ -304,6 +306,14 @@ fn watch_strategy_choices(
             None
         }
     }
+}
+
+fn instrument_index(tradable: &[Instrument]) -> BTreeMap<String, usize> {
+    tradable
+        .iter()
+        .enumerate()
+        .map(|(index, i)| (i.key.clone(), index))
+        .collect()
 }
 
 fn load_pi_policy(c: &Config) -> Result<planner::PlannerConfig> {
@@ -512,7 +522,7 @@ impl Controller {
             active: false,
             _choice_watch: choice_watch,
             quote_reads,
-            strategy_dirty: false,
+            strategy_inputs: strategy_inputs::Inputs::default(),
             depth_candidates: Vec::new(),
             volume_history_loaded: false,
             last_history_check: 0,
@@ -559,6 +569,7 @@ impl Controller {
             option_status,
             option_instruments: Vec::new(),
             option_universe: None,
+            tradable_by_key: instrument_index(&tradable),
             tradable,
             universe,
             stopping,

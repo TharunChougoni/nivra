@@ -7,7 +7,7 @@ use crate::runtime::controller_events::{Event as ControllerEvent, Events};
 const QUOTE_POLL_MS: i64 = 2000;
 
 impl Controller {
-    fn feed_settings(&self) -> Option<&market_feed::Settings> {
+    pub(super) fn feed_settings(&self) -> Option<&market_feed::Settings> {
         self.event_config
             .as_ref()?
             .discovery
@@ -79,6 +79,11 @@ impl Controller {
                 QUOTE_POLL_MS,
             );
             include(true, self.last_rank, self.rank_interval());
+            include(
+                self.strategy.is_some(),
+                self.strategy_inputs.next_refresh(now),
+                0,
+            );
             if let Some(settings) = self.feed_settings() {
                 if let Some(at) = self.feed_retry_deadline() {
                     include(true, at, 0);
@@ -100,6 +105,7 @@ impl Controller {
     }
 
     pub(super) fn service_strategy_reply(&mut self, now: i64, changed: bool) -> Result<()> {
+        self.commit_pushed_depth()?;
         self.commit_protection()?;
         self.protection_read(now)?;
         if let Some(run) = &mut self.strategy {
@@ -112,7 +118,6 @@ impl Controller {
                 &millis,
             )?;
         }
-        self.strategy_dirty |= changed;
         Ok(())
     }
 
@@ -152,10 +157,13 @@ impl Controller {
             .and_then(|d| d.quote_freshness_ms)
             .unwrap_or(super::super::super::discovery::MAX_QUOTE_FRESHNESS_MS);
         let rank_due = now - self.last_rank >= self.rank_interval();
+        let promotion_due =
+            self.strategy.is_some() && now >= self.strategy_inputs.next_refresh(now);
         let mut feed_fallback = self.feed_health["fallback"] != false;
         let due_retry = self.feed_retry_deadline().filter(|&at| at <= now);
         if maintenance
             || rank_due
+            || promotion_due
             || due_retry.is_some()
             || events.contains(ControllerEvent::FeedState)
         {
@@ -185,20 +193,22 @@ impl Controller {
         if rank_due {
             self.rank(&u, now)?;
             self.last_rank = now;
-            self.strategy_dirty = true;
         }
+        self.reconcile_strategy_inputs(now, rank_due)?;
         if let Some(settings) = feed_settings.as_ref()
             && now - self.last_depth >= settings.depth_poll_ms
             && !self.quote_reads.pending(ReadKind::Depth)
         {
             self.last_depth = now;
-            if !feed_fallback {
-                self.depth_read(&u, now, settings)?;
+            if !feed_fallback || settings.full_depth() {
+                self.depth_read(now, settings)?;
             } else if !self.tape.is_empty() {
                 self.tape_gap(now, "feed_fallback", 0)?;
             }
         }
-        self.clear_read_block(freshness)?;
+        if maintenance || events.contains(ControllerEvent::Quotes) {
+            self.clear_read_block(freshness)?;
+        }
         Ok(())
     }
 
@@ -228,7 +238,7 @@ impl Controller {
                             .values()
                             .map(|position| position.instrument.clone())
                             .collect();
-                        worker.set_promoted_keys(&held, [])?;
+                        worker.set_promoted_keys(&held, [], false)?;
                         self.feed_worker = Some(worker);
                     }
                     Err(_) => {
@@ -242,7 +252,9 @@ impl Controller {
                 note_feed_health(&self.feature_store, feed_now, !fallback);
                 self.feed_health = health;
                 feed_fallback = fallback;
-                if now - self.last_rank >= settings.tick_ms {
+                if now - self.last_rank >= settings.tick_ms
+                    || (self.strategy.is_some() && now >= self.strategy_inputs.next_refresh(now))
+                {
                     let mut store = self
                         .feature_store
                         .lock()
@@ -256,24 +268,6 @@ impl Controller {
                         activity,
                         Some(&mut store),
                     )?;
-                    // Full-feed merge hook for held instruments outside the cash universe.
-                    if settings.full_depth() && !fallback {
-                        for position in self.p.positions.values().filter(|position| {
-                            !u.instruments
-                                .iter()
-                                .any(|instrument| instrument.key == position.instrument.key)
-                        }) {
-                            super::super::super::market_feed::observe_cache(
-                                &mut self.scan,
-                                std::slice::from_ref(&position.instrument),
-                                &points,
-                                settings,
-                                feed_now,
-                                activity,
-                                None,
-                            )?;
-                        }
-                    }
                     feed_fresh = !fallback;
                     if c.index_feeds.enabled {
                         // Non-tradeable index context: separate store so
@@ -569,69 +563,13 @@ impl Controller {
                 "stale":projection["stale_count"]
             });
             self.depth_candidates = super::super::super::discovery::candidates(&projection);
-            // Full-feed promotion hook. Ranking supplies spare slots after holdings.
-            if let Some(worker) = &self.feed_worker {
-                let held: Vec<_> = self
-                    .p
-                    .positions
-                    .values()
-                    .map(|position| position.instrument.clone())
-                    .collect();
-                worker.set_promoted_keys(
-                    &held,
-                    self.depth_candidates.iter().map(|(key, _)| key.clone()),
-                )?;
-            }
             checkpoint_scanner(&self.db, &self.scan)?;
         }
         Ok(())
     }
 
-    pub(super) fn observe_strategy(&mut self) -> Result<()> {
-        let Some(run) = self.strategy.as_mut() else {
-            return Ok(());
-        };
-        if self.p.halted
-            || self.p.stopped
-            || self.p.closed
-            || self.universe.is_none()
-            || (!self.strategy_dirty && run.has_call())
-        {
-            return Ok(());
-        }
-        let now = millis();
-        let Some(top_n) = run.ready(&self.db, &self.config, now)? else {
-            return Ok(());
-        };
-        if !std::mem::take(&mut self.strategy_dirty) {
-            return Ok(());
-        }
-        match super::super::strategy_run::Frozen::capture(
-            &self.scan,
-            now,
-            top_n,
-            &self.p,
-            &self.tradable,
-        ) {
-            Ok(frozen) => run.start(frozen, &millis),
-            Err(error) => run.fail(
-                &self.db,
-                &self.config,
-                now,
-                None,
-                &failure_code(error.as_ref()),
-            )?,
-        }
-        Ok(())
-    }
-
     /// Order-book depth for the leading candidates the book does not hold.
-    fn depth_read(
-        &mut self,
-        u: &Universe,
-        now: i64,
-        settings: &market_feed::Settings,
-    ) -> Result<()> {
+    fn depth_read(&mut self, now: i64, settings: &market_feed::Settings) -> Result<()> {
         let held_keys = self
             .p
             .positions
@@ -639,13 +577,13 @@ impl Controller {
             .map(String::as_str)
             .collect::<BTreeSet<_>>();
         let shortlist_keys = self
-            .depth_candidates
+            .strategy_inputs
+            .selection()
             .iter()
-            .take(settings.shortlist_size)
-            .map(|(key, _)| key.as_str())
+            .map(String::as_str)
             .filter(|key| !held_keys.contains(key))
             .filter(|key| {
-                !settings.full_depth()
+                !self.full_strategy_depth()
                     || !self
                         .scan
                         .samples
@@ -665,7 +603,11 @@ impl Controller {
         let (keys, dropped) = self.tape.batch(&shortlist_keys, &held_keys, cap);
         let shortlist = keys
             .iter()
-            .filter_map(|key| u.instruments.iter().find(|i| i.key == *key).cloned())
+            .filter_map(|key| {
+                self.tradable_by_key
+                    .get(*key)
+                    .map(|&i| self.tradable[i].clone())
+            })
             .collect::<Vec<_>>();
         if dropped > 0 {
             self.tape_gap(now, "depth_batch_full", dropped)?;

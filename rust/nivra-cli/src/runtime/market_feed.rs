@@ -337,9 +337,24 @@ impl Transport for Network {
         }
     }
 }
+/// Prospects can coalesce to the latest receipt. Held depth preserves
+/// crosses that would disappear if the book only saw the latest touch.
+#[derive(Default)]
+pub(super) struct DepthUpdates {
+    pub prospects: BTreeMap<String, Point>,
+    pub held: VecDeque<(String, Point)>,
+    pub held_gap: bool,
+    pub reconnected: bool,
+}
+
+const HELD_QUEUE_LIMIT: usize = 256;
+
 #[derive(Default)]
 struct Cache {
     points: BTreeMap<String, Point>,
+    held: BTreeSet<String>,
+    strategy_keys: BTreeSet<String>,
+    depth_updates: DepthUpdates,
     /// Cash screening keys; index-only points must not mask a cash data gap.
     screening_keys: BTreeSet<String>,
     connected: bool,
@@ -357,10 +372,34 @@ struct Cache {
     controller_notify: Option<super::controller_events::Notify>,
 }
 impl Cache {
+    fn queue_depth(&mut self, key: &str, point: &Point) -> bool {
+        if self.held.contains(key) {
+            if self.depth_updates.held.len() == HELD_QUEUE_LIMIT {
+                self.depth_updates.held.pop_back();
+                self.depth_updates.held_gap = true;
+            }
+            self.depth_updates
+                .held
+                .push_back((key.to_owned(), point.clone()));
+        } else if self.strategy_keys.contains(key) {
+            self.depth_updates
+                .prospects
+                .insert(key.to_owned(), point.clone());
+        } else {
+            return false;
+        }
+        true
+    }
+
     fn record_ticks(&mut self, receipt: i64, count: u64, window: i64) {
         self.ticks_total = self.ticks_total.saturating_add(count);
-        self.tick_buckets
-            .retain(|(at, _)| receipt.saturating_sub(*at) < window);
+        while self
+            .tick_buckets
+            .front()
+            .is_some_and(|(at, _)| receipt.saturating_sub(*at) >= window)
+        {
+            self.tick_buckets.pop_front();
+        }
         if let Some((at, ticks)) = self.tick_buckets.back_mut()
             && *at == receipt
         {
@@ -458,6 +497,8 @@ impl Controller {
         if let Ok(mut cache) = self.cache.lock() {
             cache.connected = false;
             cache.full_keys = 0;
+            cache.depth_updates.prospects.clear();
+            cache.depth_updates.reconnected = true;
             cache.last_error = Some(reason);
             cache.next_retry = now.saturating_add(self.retry_ms);
             cache.reconnects = cache.reconnects.saturating_add(1);
@@ -590,6 +631,7 @@ impl Controller {
                     c.invalid_ltpc = c.invalid_ltpc.saturating_add(invalid);
                     if !points.is_empty() {
                         let mut accepted = 0;
+                        let mut depth_changed = false;
                         for (key, mut point) in points {
                             if let Some(mixed) = &self.mixed
                                 && !mixed.current.full.contains(&key)
@@ -603,7 +645,9 @@ impl Controller {
                                 })
                             {
                                 accepted += 1;
-                                if point.depth.is_none() {
+                                if point.depth.is_some() {
+                                    depth_changed |= c.queue_depth(&key, &point);
+                                } else {
                                     point.depth =
                                         c.points.get_mut(&key).and_then(|prior| prior.depth.take());
                                 }
@@ -618,7 +662,12 @@ impl Controller {
                             self.retry_ms = self.settings.reconnect_initial_ms;
                             if let Some(notify) = &c.controller_notify {
                                 use super::controller_events::Event;
-                                notify.signal(if first { Event::FeedState } else { Event::Feed });
+                                if first {
+                                    notify.signal(Event::FeedState);
+                                }
+                                if depth_changed {
+                                    notify.signal(Event::Feed);
+                                }
                             }
                         }
                     }
@@ -754,6 +803,7 @@ impl Worker {
         &self,
         held: &[Instrument],
         ranked: impl IntoIterator<Item = String>,
+        notify_strategy: bool,
     ) -> Result<()> {
         if self.settings.full_depth() {
             let full = subscription_plan::promoted(
@@ -761,12 +811,37 @@ impl Worker {
                 ranked.into_iter().filter(|key| self.universe.contains(key)),
                 self.settings.shortlist_size,
             )?;
+            {
+                let mut cache = self.cache.lock().map_err(|_| "feed_cache_unavailable")?;
+                cache.held = held
+                    .iter()
+                    .map(|instrument| instrument.key.clone())
+                    .collect();
+                cache.strategy_keys = if notify_strategy {
+                    full.difference(&cache.held).cloned().collect()
+                } else {
+                    BTreeSet::new()
+                };
+                let Cache {
+                    strategy_keys,
+                    depth_updates,
+                    ..
+                } = &mut *cache;
+                depth_updates
+                    .prospects
+                    .retain(|key, _| strategy_keys.contains(key));
+            }
             *self
                 .promoted
                 .lock()
                 .map_err(|_| "feed_promotions_unavailable")? = full;
         }
         Ok(())
+    }
+
+    pub fn drain_depth(&self) -> Result<DepthUpdates> {
+        let mut cache = self.cache.lock().map_err(|_| "feed_cache_unavailable")?;
+        Ok(std::mem::take(&mut cache.depth_updates))
     }
 
     /// Health is judged against a clock read under the cache lock, never a
@@ -779,7 +854,15 @@ impl Worker {
             if cache.fallback(now, &self.settings) {
                 BTreeMap::new()
             } else {
-                cache.points.clone()
+                cache
+                    .points
+                    .iter()
+                    .map(|(key, point)| {
+                        let mut price = point.clone();
+                        price.depth = None;
+                        (key.clone(), price)
+                    })
+                    .collect()
             },
             cache.health(now, &self.settings),
             cache.fallback(now, &self.settings),
@@ -828,61 +911,100 @@ pub(super) fn observe_cache(
             scan.missing(&instrument.key, "stale");
             continue;
         }
-        let fields = scan
-            .samples
-            .get(&instrument.key)
-            .and_then(|s| {
-                s.market_fields_receipt
-                    .filter(|at| {
-                        now.checked_sub(*at).is_some_and(|age| {
-                            (0..=if s.metadata_preloaded {
-                                settings.metadata_preload_max_age_ms
-                            } else {
-                                settings.metadata_stale_ms
-                            })
-                                .contains(&age)
-                        })
-                    })
-                    .and(s.market_fields.as_ref())
-            })
-            .cloned();
-        // Shortlist REST depth may have supplied a newer screening observation.
-        // Retain its actual price clocks while the connection supplies eligibility.
-        let retained = scan
-            .samples
-            .get(&instrument.key)
-            .filter(|s| s.seen > point.receipt && s.source.is_some_and(|at| at >= point.source))
-            .and_then(|s| Some((s.current?, s.source?, s.seen)));
-        let (price, source, receipt) =
-            retained.unwrap_or((point.price, point.source, point.receipt));
         if let Some(store) = feature_store.as_deref_mut() {
             super::wide::observe_feature(store, &instrument.key, point.price, point.receipt);
         }
-        scan.observe_price(
-            now,
-            &instrument.key,
-            price,
-            source,
-            receipt,
-            // Price age does not expire a price learned on this healthy connection.
-            i64::MAX,
-            fields.as_ref(),
-        )?;
-        let sample = scan.samples.get_mut(&instrument.key).unwrap();
-        if let Some(mut data) = point.depth.clone() {
-            if let Some(touch) = &data.touch {
-                let grid = CashOrderGrid::new(1, instrument.tick)?;
-                if grid.validate(1, touch.bid).is_err() || grid.validate(1, touch.ask).is_err() {
-                    data.touch = None;
-                }
-            }
-            sample.observe_intraday(data);
-        }
-        sample.price_kind = Some("ltpc".into());
-        sample.scan_activity = activity;
-        sample.fresh_for_ms = Some(settings.scan_activity_timeout_ms);
+        observe_point(scan, instrument, point, settings, now, activity)?;
     }
     Ok(())
+}
+
+pub(super) fn observe_point(
+    scan: &mut Scanner,
+    instrument: &Instrument,
+    point: &Point,
+    settings: &Settings,
+    now: i64,
+    activity: Option<i64>,
+) -> Result<bool> {
+    let fields = scan
+        .samples
+        .get(&instrument.key)
+        .and_then(|s| {
+            s.market_fields_receipt
+                .filter(|at| {
+                    now.checked_sub(*at).is_some_and(|age| {
+                        (0..=if s.metadata_preloaded {
+                            settings.metadata_preload_max_age_ms
+                        } else {
+                            settings.metadata_stale_ms
+                        })
+                            .contains(&age)
+                    })
+                })
+                .and(s.market_fields.as_ref())
+        })
+        .cloned();
+    // Shortlist REST depth may have supplied a newer screening observation.
+    // Retain its actual price clocks while the connection supplies eligibility.
+    let retained = scan
+        .samples
+        .get(&instrument.key)
+        .filter(|s| s.seen > point.receipt && s.source.is_some_and(|at| at >= point.source))
+        .and_then(|s| Some((s.current?, s.source?, s.seen)));
+    let (price, source, receipt) = retained.unwrap_or((point.price, point.source, point.receipt));
+    scan.observe_price(
+        now,
+        &instrument.key,
+        price,
+        source,
+        receipt,
+        // Price age does not expire a price learned on this healthy connection.
+        i64::MAX,
+        fields.as_ref(),
+    )?;
+    let sample = scan.samples.get_mut(&instrument.key).unwrap();
+
+    sample.price_kind = Some("ltpc".into());
+    sample.scan_activity = activity;
+    sample.fresh_for_ms = Some(settings.scan_activity_timeout_ms);
+    observe_depth(sample, instrument, point)
+}
+
+/// Pushed depth uses the instrument's tick grid and keeps the receipt clock.
+pub(super) fn observe_depth(
+    sample: &mut nivra_core::execution::Sample,
+    instrument: &Instrument,
+    point: &Point,
+) -> Result<bool> {
+    let Some(mut data) = point.depth.clone() else {
+        return Ok(false);
+    };
+    let clock = data.clock;
+    if sample
+        .intraday
+        .as_ref()
+        .is_some_and(|old| clock.source < old.clock.source || clock.receipt <= old.clock.receipt)
+    {
+        return Ok(false);
+    }
+    if let Some(touch) = &data.touch {
+        let grid = CashOrderGrid::new(1, instrument.tick)?;
+        if grid.validate(1, touch.bid).is_err() || grid.validate(1, touch.ask).is_err() {
+            data.touch = None;
+        }
+    }
+    sample.observe_intraday(data);
+    if sample
+        .intraday
+        .as_ref()
+        .is_some_and(|depth| depth.clock == clock)
+    {
+        // Pushed touch carries no REST open-interest receipt.
+        sample.open_interest = None;
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 #[cfg(test)]

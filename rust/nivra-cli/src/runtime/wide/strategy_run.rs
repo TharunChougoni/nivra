@@ -8,13 +8,14 @@
 use super::*;
 use crate::runtime::controller_events::Notify;
 use crate::runtime::strategy::{
-    self, ActionResult, Observation, Prospect, WorkerConfig, WorkerKey, host::StrategyHost,
+    self, ActionResult, Observation, Prospect, WorkerConfig, WorkerKey,
+    host::StrategyHost,
+    selection::{Screen, Selection, executable},
 };
 use crate::runtime::strategy_library::{
     Library,
     choice::{self, Running},
 };
-use nivra_core::market::MAX_FINANCIAL_AGE_MS;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -95,6 +96,7 @@ struct Active {
     run_id: String,
     source: Vec<u8>,
     top_n: usize,
+    screen: Option<Screen>,
 }
 
 /// One scan's state, frozen for a call: the ranked prospects, the depth
@@ -104,37 +106,40 @@ pub(super) struct Frozen {
     pub at_ms: i64,
     pub prospects: Vec<Prospect>,
     pub quotes: BTreeMap<String, Quote>,
-    pub portfolio: Portfolio,
     pub universe: BTreeMap<String, Instrument>,
 }
 impl Frozen {
-    pub(super) fn capture(
+    pub(super) fn capture<'a>(
         scan: &Scanner,
         now: i64,
         top_n: usize,
         p: &Portfolio,
-        tradable: &[Instrument],
-    ) -> Result<Self> {
-        Ok(Self {
+        selection: &Selection,
+        instrument: impl Fn(&str) -> Option<&'a Instrument>,
+        covered: impl Fn(&str) -> bool,
+    ) -> Self {
+        let prospects = selection.prospects(scan, now, top_n, &covered);
+        let universe = prospects
+            .iter()
+            .filter_map(|prospect| instrument(&prospect.key).map(|i| (i.key.clone(), i.clone())))
+            .collect();
+        let quotes = prospects
+            .iter()
+            .map(|prospect| &prospect.key)
+            .filter_map(|key| executable(scan, key, now).map(|quote| (key.clone(), quote)))
+            .chain(p.positions.keys().filter_map(|key| {
+                let quote = scan.samples.get(key)?.executable.as_ref()?;
+                quote
+                    .fresh(now, nivra_core::market::MAX_FINANCIAL_AGE_MS)
+                    .then(|| (key.clone(), quote.clone()))
+            }))
+            .collect();
+        Self {
             at_ms: now,
-            prospects: strategy::prospects(scan, now, top_n)?,
-            quotes: scan
-                .samples
-                .iter()
-                .filter_map(|(key, sample)| {
-                    sample
-                        .executable
-                        .as_ref()
-                        .filter(|q| q.fresh(now, MAX_FINANCIAL_AGE_MS))
-                        .map(|q| (key.clone(), q.clone()))
-                })
-                .collect(),
-            portfolio: p.clone(),
-            universe: tradable
-                .iter()
-                .map(|i| (i.key.clone(), i.clone()))
-                .collect(),
-        })
+            prospects,
+            quotes,
+            universe,
+        }
     }
 }
 
@@ -182,6 +187,7 @@ pub(super) struct StrategyRun {
     calls: u64,
     failures: u64,
     skipped: u64,
+    dirty: bool,
     last_call_at_ms: Option<i64>,
 }
 
@@ -205,6 +211,7 @@ impl StrategyRun {
             calls: 0,
             failures: 0,
             skipped: 0,
+            dirty: false,
             last_call_at_ms: None,
         }
     }
@@ -236,6 +243,7 @@ impl StrategyRun {
         let active = match choice.running {
             Some(running) => Some(Active {
                 top_n: running.top_n()?,
+                screen: Screen::parse(running.params())?,
                 run_id: running.run_id(),
                 source: match &running {
                     Running::Accepted { entry, .. } => self.library.source(entry)?,
@@ -274,6 +282,37 @@ impl StrategyRun {
 
     pub(super) fn has_call(&self) -> bool {
         self.in_flight.is_some()
+    }
+
+    pub(super) fn desired_id(&self) -> Option<&str> {
+        self.active.as_ref().map(|active| active.run_id.as_str())
+    }
+
+    pub(super) fn screen(&self) -> Option<&Screen> {
+        self.active.as_ref()?.screen.as_ref()
+    }
+
+    pub(super) fn request_observation(&mut self) {
+        if self.dirty && self.has_call() {
+            self.skipped += 1;
+        }
+        self.dirty = true;
+    }
+
+    pub(super) fn take_observation(
+        &mut self,
+        db: &Connection,
+        c: &Config,
+        now: i64,
+    ) -> Result<Option<usize>> {
+        if !self.dirty || self.has_call() {
+            return Ok(None);
+        }
+        let top_n = self.ready(db, c, now)?;
+        if top_n.is_some() {
+            self.dirty = false;
+        }
+        Ok(top_n)
     }
 
     pub(super) fn refresh_choice(
@@ -354,7 +393,6 @@ impl StrategyRun {
             return Ok(None);
         }
         if self.in_flight.is_some() {
-            self.skipped += 1;
             return Ok(None);
         }
         match self.host.live_ready(now) {
@@ -407,7 +445,7 @@ impl StrategyRun {
     }
 
     /// Submit `frozen` non-blockingly to the live worker. Call [`Self::ready`] first.
-    pub(super) fn start(&mut self, frozen: Frozen, clock: &dyn Fn() -> i64) {
+    pub(super) fn start(&mut self, frozen: Frozen, p: &Portfolio, clock: &dyn Fn() -> i64) {
         if self.in_flight.is_some() {
             return;
         }
@@ -429,8 +467,7 @@ impl StrategyRun {
             instruments: Vec::new(),
             immediate_error: None,
         };
-        let outcome = frozen
-            .portfolio
+        let outcome = p
             .costs
             .as_ref()
             .ok_or("paper_costs_required")
@@ -440,7 +477,7 @@ impl StrategyRun {
                     &meta.params,
                     &frozen.prospects,
                     &flight.quotes,
-                    &frozen.portfolio,
+                    p,
                     &frozen.universe,
                     costs,
                 );
@@ -547,6 +584,7 @@ impl StrategyRun {
         }
         self.host.sync_desired(None, now)?;
         self.active = None;
+        self.dirty = false;
         self.known.clear();
         Ok(())
     }

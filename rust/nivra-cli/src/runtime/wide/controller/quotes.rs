@@ -162,6 +162,7 @@ impl Controller {
                         },
                         ReadKind::Scanner { .. } => QuoteReadTarget::Scan(&mut self.scan),
                     };
+                    let receipt = rows.receipt;
                     let outcome = apply_executable_quotes(
                         rows,
                         &self.config,
@@ -174,8 +175,19 @@ impl Controller {
                         target,
                         self.archive.as_ref(),
                     )?;
-                    if outcome.is_none() && !matches!(kind, ReadKind::Plan) {
-                        self.strategy_dirty = true;
+                    let full = self.full_strategy_depth();
+                    if outcome.is_none()
+                        && !matches!(kind, ReadKind::Plan)
+                        && let Some(run) = self.strategy.as_mut()
+                        && self.strategy_inputs.rest_read(
+                            &self.scan,
+                            &instruments,
+                            receipt,
+                            millis(),
+                        )
+                        && (!full || matches!(kind, ReadKind::Held))
+                    {
+                        run.request_observation();
                     }
                     outcome
                 }

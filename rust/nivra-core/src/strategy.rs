@@ -703,28 +703,126 @@ fn extract_window(
     lookback_samples: usize,
     settings: Option<&FeatureSettings>,
 ) -> FeatureSnapshot {
+    let mut rows = extract_rows(
+        scanner.samples.iter(),
+        scanner.settings.session_start_minute,
+        now,
+        max_age,
+        metadata_max_age,
+        lookback_samples,
+        settings,
+    );
+    let median = median_move(
+        rows.iter()
+            .filter_map(|r| r.features.get(&Feature::MoveBps).copied()),
+    );
+    add_market_relative(&mut rows, median);
+    FeatureSnapshot {
+        observed_ms: now,
+        lookback_samples,
+        rows,
+    }
+}
+
+/// Extract only the explicitly selected keys, using the broad screening
+/// median computed outside the executable quote dispatch.
+pub fn indexed_features<'a>(
+    scanner: &crate::execution::Scanner,
+    keys: impl IntoIterator<Item = &'a String>,
+    now: i64,
+    market_median: Option<f64>,
+) -> Vec<FeatureRow> {
+    let samples = keys
+        .into_iter()
+        .filter_map(|key| scanner.samples.get_key_value(key));
+    let mut rows = extract_rows(
+        samples,
+        scanner.settings.session_start_minute,
+        now,
+        crate::market::MAX_FINANCIAL_AGE_MS,
+        crate::market::MAX_FINANCIAL_AGE_MS,
+        default_lookback_samples(),
+        Some(&FeatureSettings::default()),
+    );
+    add_market_relative(&mut rows, market_median);
+    rows
+}
+
+fn sample_is_current(s: &crate::execution::Sample, now: i64, max_age: i64, legacy: bool) -> bool {
+    let freshness = if s.scan_activity.is_some() {
+        s.fresh_for_ms.unwrap_or(max_age)
+    } else {
+        max_age.min(s.fresh_for_ms.unwrap_or(max_age))
+    };
+    !matches!(
+        s.reason.as_str(),
+        "stale" | "invalid_quote" | "no_quote_returned"
+    ) && (legacy || s.diagnostic.is_none())
+        && s.seen > 0
+        && now
+            .checked_sub(s.scan_activity.unwrap_or(s.seen))
+            .is_some_and(|age| (0..=freshness).contains(&age))
+        && (s.scan_activity.is_some()
+            || s.source.is_none_or(|source| {
+                now.checked_sub(source)
+                    .is_some_and(|age| (0..=freshness).contains(&age))
+            }))
+}
+
+/// Price-only lookback move, available before depth and market metadata arrive.
+pub fn screening_move(sample: &crate::execution::Sample, now: i64) -> Option<f64> {
+    if !sample_is_current(sample, now, crate::market::MAX_FINANCIAL_AGE_MS, false) {
+        return None;
+    }
+    let first = sample.history.get(
+        sample
+            .history
+            .len()
+            .saturating_sub(default_lookback_samples()),
+    )?;
+    let current = sample.current.as_ref().or_else(|| sample.history.last())?;
+    let first: f64 = first.amount().to_string().parse().ok()?;
+    let current: f64 = current.amount().to_string().parse().ok()?;
+    Some((current / first - 1.0) * 10_000.0)
+}
+
+pub fn median_move(moves: impl IntoIterator<Item = f64>) -> Option<f64> {
+    let mut moves: Vec<_> = moves.into_iter().collect();
+    moves.sort_unstable_by(f64::total_cmp);
+    let n = moves.len();
+    let middle = *moves.get(n / 2)?;
+    Some(if n.is_multiple_of(2) {
+        (moves[n / 2 - 1] + middle) / 2.0
+    } else {
+        middle
+    })
+}
+
+fn add_market_relative(rows: &mut [FeatureRow], median: Option<f64>) {
+    if let Some(median) = median {
+        for row in rows {
+            if let Some(v) = row.features.get(&Feature::MoveBps).copied() {
+                row.features.insert(Feature::MarketRelativeBps, v - median);
+                row.features
+                    .insert(Feature::AbsoluteMarketRelativeBps, (v - median).abs());
+            }
+        }
+    }
+}
+
+fn extract_rows<'a>(
+    samples: impl IntoIterator<Item = (&'a String, &'a crate::execution::Sample)>,
+    session_start_minute: u32,
+    now: i64,
+    max_age: i64,
+    metadata_max_age: i64,
+    lookback_samples: usize,
+    settings: Option<&FeatureSettings>,
+) -> Vec<FeatureRow> {
     let legacy_screening = settings.is_none();
     let mut rows = Vec::new();
-    for (key, s) in &scanner.samples {
-        let age = now.checked_sub(s.scan_activity.unwrap_or(s.seen));
-        let freshness = if s.scan_activity.is_some() {
-            s.fresh_for_ms.unwrap_or(max_age)
-        } else {
-            max_age.min(s.fresh_for_ms.unwrap_or(max_age))
-        };
-        if matches!(
-            s.reason.as_str(),
-            "stale" | "invalid_quote" | "no_quote_returned"
-        ) || (!legacy_screening && s.diagnostic.is_some())
-        {
-            continue;
-        }
-        if s.seen <= 0
-            || age.is_none_or(|a| a < 0 || a > freshness)
-            || s.source
-                .filter(|_| s.scan_activity.is_none())
-                .is_some_and(|t| now.checked_sub(t).is_none_or(|a| a < 0 || a > freshness))
-        {
+    for (key, s) in samples {
+        if !sample_is_current(s, now, max_age, legacy_screening) {
             continue;
         }
         let prices: Vec<f64> = s.history[s.history.len().saturating_sub(lookback_samples)..]
@@ -743,7 +841,7 @@ fn extract_window(
         let mut features = BTreeMap::from([(Feature::Price, current)]);
         if !legacy_screening
             && let Some(minutes) =
-                crate::execution::minutes_since_open(s.seen, scanner.settings.session_start_minute)
+                crate::execution::minutes_since_open(s.seen, session_start_minute)
         {
             features.insert(Feature::MinutesSinceOpen, minutes);
         }
@@ -805,10 +903,7 @@ fn extract_window(
                 && let Some(value) = settings.relative_volume(
                     fields.volume,
                     s.avg_daily_volume,
-                    crate::execution::minutes_since_open(
-                        s.seen,
-                        scanner.settings.session_start_minute,
-                    ),
+                    crate::execution::minutes_since_open(s.seen, session_start_minute),
                 )
             {
                 features.insert(Feature::RelVolumeTod, value);
@@ -871,10 +966,7 @@ fn extract_window(
                 if let Some(value) = settings.relative_volume(
                     volume,
                     s.avg_daily_volume,
-                    crate::execution::minutes_since_open(
-                        data.clock.source,
-                        scanner.settings.session_start_minute,
-                    ),
+                    crate::execution::minutes_since_open(data.clock.source, session_start_minute),
                 ) {
                     features.insert(Feature::RelVolumeTod, value);
                 }
@@ -886,31 +978,7 @@ fn extract_window(
             features,
         });
     }
-    let mut moves: Vec<f64> = rows
-        .iter()
-        .filter_map(|r| r.features.get(&Feature::MoveBps).copied())
-        .collect();
-    moves.sort_by(f64::total_cmp);
-    if !moves.is_empty() {
-        let n = moves.len();
-        let median = if n.is_multiple_of(2) {
-            (moves[n / 2 - 1] + moves[n / 2]) / 2.0
-        } else {
-            moves[n / 2]
-        };
-        for row in &mut rows {
-            if let Some(v) = row.features.get(&Feature::MoveBps).copied() {
-                row.features.insert(Feature::MarketRelativeBps, v - median);
-                row.features
-                    .insert(Feature::AbsoluteMarketRelativeBps, (v - median).abs());
-            }
-        }
-    }
-    FeatureSnapshot {
-        observed_ms: now,
-        lookback_samples,
-        rows,
-    }
+    rows
 }
 
 #[cfg(test)]

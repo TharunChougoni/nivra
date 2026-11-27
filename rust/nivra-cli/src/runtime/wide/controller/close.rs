@@ -174,6 +174,7 @@ impl Controller {
         self.pending_universe = None;
         self.pending_options = None;
         self.tradable.clear();
+        self.tradable_by_key.clear();
         if let Ok(mut catalog) = self.instrument_catalog.lock() {
             *catalog = None;
         }
@@ -193,7 +194,7 @@ impl Controller {
         self.active = false;
         self.next_maintenance = 0;
         self.quote_reads = quotes::QuoteReads::start(&self.config, self.events.notify())?;
-        self.strategy_dirty = false;
+        self.strategy_inputs = strategy_inputs::Inputs::default();
         self.depth_candidates.clear();
         self.last_protection_read = 0;
         self.last_plan_read = 0;

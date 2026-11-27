@@ -1,6 +1,7 @@
 {
  "version": 1,
  "params": {
+  "promotion": {"order": "rising", "min_move_bps": 25},
   "edge_margin": "1.5",
   "entry_window_minutes": 60,
   "flat_minute": 915,

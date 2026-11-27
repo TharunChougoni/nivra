@@ -220,7 +220,15 @@ impl Controller {
             v_json["agent"] = agent.status();
         }
         v_json["strategy_execution"] = match &self.strategy {
-            Some(run) => run.status(&self.db, &self.p),
+            Some(run) => {
+                let mut status = run.status(&self.db, &self.p);
+                status["coverage"] = self.strategy_inputs.coverage(
+                    &self.scan,
+                    completed_at_ms,
+                    self.full_strategy_depth(),
+                );
+                status
+            }
             None => serde_json::json!({"enabled":false}),
         };
         v_json["research_context"] = research_context_status;

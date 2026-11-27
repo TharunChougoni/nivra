@@ -453,9 +453,23 @@ pub(super) fn persist(
     raw: Option<&str>,
     event: &str,
 ) -> Result<()> {
-    p.reconcile()?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    record_halt_transition(&tx, p, at)?;
+    persist_state(&tx, c, p, at, receipt, raw, event)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn persist_state(
+    tx: &rusqlite::Transaction<'_>,
+    c: &Config,
+    p: &Portfolio,
+    at: i64,
+    receipt: Option<i64>,
+    raw: Option<&str>,
+    event: &str,
+) -> Result<()> {
+    p.reconcile()?;
+    record_halt_transition(tx, p, at)?;
     tx.execute(
         "INSERT INTO ticks(at,receipt,body,event) VALUES(?,?,?,?)",
         rusqlite::params![at, receipt, raw, event],
@@ -464,7 +478,6 @@ pub(super) fn persist(
         "INSERT INTO state VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
         rusqlite::params![book_binding(c)?, serde_json::to_string(p)?],
     )?;
-    tx.commit()?;
     Ok(())
 }
 

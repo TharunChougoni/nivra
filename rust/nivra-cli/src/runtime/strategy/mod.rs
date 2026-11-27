@@ -23,6 +23,7 @@ use std::{
 
 pub(crate) mod host;
 pub(crate) mod replay;
+pub(crate) mod selection;
 pub(crate) mod worker;
 
 pub(crate) use worker::{Worker, WorkerConfig, WorkerKey, runner_sha256};

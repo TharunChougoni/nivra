@@ -1,5 +1,6 @@
 {
  "params": {
+  "promotion": {"order": "rising", "min_move_bps": 5},
   "avoid_open_minutes": 30,
   "edge_margin": "1.5",
   "flat_minute": 915,

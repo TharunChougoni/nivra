@@ -4,7 +4,7 @@ This guide covers the procedures you run on a paper host. Nivra trades on
 paper only, and nothing here enables live orders.
 
 With `strategy_execution` enabled and an active strategy, Rust runs the active
-strategy on every scan while the pi decision lane supervises strategy choice,
+strategy on eligible quote updates while the pi decision lane supervises strategy choice,
 exceptions and Nifty options. Without an active strategy, the decision lane
 chooses paper actions on each trigger and Rust validates and fills them. See
 [direction](DIRECTION.md).

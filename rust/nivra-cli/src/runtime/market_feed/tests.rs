@@ -849,3 +849,53 @@ fn ticks_newer_than_a_stale_loop_clock_are_not_reported_as_fallback() {
     assert_eq!(health["state"], "streaming");
     assert!(now >= millis() - 1000);
 }
+
+#[test]
+fn broad_prices_stay_in_the_cache_and_full_receipts_notify_the_book() {
+    let inbox = super::super::controller_events::Inbox::new();
+    let key = "NSE_EQ|A".to_string();
+    let mut cache = Cache {
+        controller_notify: Some(inbox.notify()),
+        last_tick: Some(999),
+        strategy_keys: BTreeSet::from([key.clone()]),
+        ..Cache::default()
+    };
+    let mut controller = Controller {
+        keys: vec![key.clone()],
+        allowed: BTreeSet::from([key.clone()]),
+        mixed: Some(Mixed {
+            core: BTreeSet::from([key.clone()]),
+            requested: Default::default(),
+            current: Plan::mixed(&BTreeSet::new(), BTreeSet::from([key.clone()])),
+        }),
+        revision: None,
+        token_checked: 0,
+        retry_ms: 1000,
+        settings: Settings::default(),
+        cache: Arc::new(Mutex::new(std::mem::take(&mut cache))),
+    };
+    let mut mock = Mock {
+        revision: "fixture".into(),
+        polls: VecDeque::new(),
+        subscriptions: Vec::new(),
+        changes: Vec::new(),
+        active: false,
+    };
+    controller.ingest(&mut mock, &frame(1_000, 100.0), 1_001);
+    assert!(
+        !inbox
+            .wait(Duration::ZERO)
+            .contains(super::super::controller_events::Event::Feed)
+    );
+    let hex = "080112610a084e53455f45517c41125512530a510a1709000000000000594010e307180521000000000080584012180a16080b11cdccccccccfc58401807213333333333035940290000000000e05840309875490000000000c0724051000000000000594018e807";
+    let full: Vec<_> = (0..hex.len())
+        .step_by(2)
+        .map(|n| u8::from_str_radix(&hex[n..n + 2], 16).unwrap())
+        .collect();
+    controller.ingest(&mut mock, &full, 1_002);
+    assert!(
+        inbox
+            .wait(Duration::ZERO)
+            .contains(super::super::controller_events::Event::Feed)
+    );
+}

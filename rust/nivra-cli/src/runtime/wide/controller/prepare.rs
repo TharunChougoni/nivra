@@ -71,6 +71,7 @@ impl Controller {
                     self.tradable = prepared.instruments.clone();
                     self.tradable
                         .extend(self.option_instruments.iter().cloned());
+                    self.tradable_by_key = instrument_index(&self.tradable);
                     if let Ok(mut catalog) = self.instrument_catalog.lock() {
                         *catalog = Some(super::super::super::instrument_display::Catalog::new(
                             prepared.dashboard_projection(),
@@ -113,6 +114,7 @@ impl Controller {
                     self.p.options = Some(catalog);
                     self.p.fee_schedule = Some(c.fee_schedule()?);
                     self.tradable.extend(instruments.iter().cloned());
+                    self.tradable_by_key = instrument_index(&self.tradable);
                     self.option_instruments = instruments;
                     self.option_status = prepared.dashboard_projection();
                     self.option_universe = Some(prepared);

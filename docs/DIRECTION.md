@@ -27,7 +27,7 @@ signal, adds cost and noise without an edge we can measure.
 | --- | --- |
 | Research lane | Writes strategies (entry rule, size, stop, target, time exit) after the close on the day's recorded quotes, and backtests each one after costs. |
 | Acceptance | A deterministic after-cost replay accepts or rejects a strategy and registers accepted versions, hash-pinned, in the strategy library. Paper trading does not need a multi-day shadow period first. |
-| Strategy executor | The paper controller runs the active strategy on every scan. It sends that strategy's actions through the same execution gate as model plans: identity, cash, fees and quotes no more than 2 s old. |
+| Strategy executor | The paper controller runs the active strategy on eligible quote updates. It sends that strategy's actions through the same execution gate as model plans: identity, cash, fees and quotes no more than 2 s old. |
 | Decision lane | Supervises. It picks the active strategy at the open and when the regime changes, and handles what rules cannot: Nifty options, exceptions and held positions in unusual states. |
 | Gate lane | Screens Nifty options. Chain moves start its turns; it ranks F&O prospects for the decision lane, which alone decides the bet. It never sees cash entries. |
 | Review lane | Reviews the day after the seal and leaves an agenda for research. |

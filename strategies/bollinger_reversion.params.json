@@ -1,6 +1,7 @@
 {
  "version": 1,
  "params": {
+  "promotion": {"order": "falling", "min_move_bps": 5},
   "avoid_open_minutes": 30,
   "band_z": "2.0",
   "edge_margin": "1.5",

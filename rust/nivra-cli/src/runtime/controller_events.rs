@@ -21,7 +21,7 @@ pub(crate) struct Events(u8);
 
 impl Events {
     pub(crate) fn has_trading_work(&self) -> bool {
-        self.0 & !(Event::Feed as u8) != 0
+        self.0 != 0
     }
 
     pub(crate) fn contains(&self, event: Event) -> bool {

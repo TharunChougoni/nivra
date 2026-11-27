@@ -241,6 +241,14 @@ call), `strategy_wall_timeout`, `strategy_output_limit`,
 `strategy_unknown_instrument`, `strategy_missing_on_observation`,
 `strategy_review_unsafe` or `strategy_worker_quarantined`.
 
+Use the optional `params.promotion` object to nominate cash candidates before
+they have depth. Set `order` to `rising`, `falling`, or `largest_move`.
+`min_move_bps` defaults to zero and sets the minimum move in that direction
+over the retained price lookback. Nivra evaluates the rule once a second
+and on a strategy change. A nomination keeps its slot for at least ten
+seconds during the same activation. Holdings always get depth, and the
+ranker fills remaining slots. Omit `promotion` to use the ranker alone.
+
 ### Strategy replay
 
 The replay processes original, validated, two-sided quotes from archived REST
@@ -250,7 +258,8 @@ A screen-only legacy tape event updates the scanner.
 1. Feed the quoted touch, VWAP, volume, and book totals through the same
    per-instrument reducer as the paper scanner.
 2. Run held stops, targets, and time exits on the receipt.
-3. Call the strategy with the latest prospects and fresh quotes.
+3. Call the strategy when the receipt updates a selected prospect or a holding.
+   Replay uses archived executable receipts as coverage for the selected keys.
 4. Validate and apply the actions. Each fill consumes the displayed depth
    available on that receipt.
 
@@ -282,7 +291,7 @@ The parameters are `{"version":1}` plus these optional fields:
 | `params` | `{}` |
 | `capital`, `costs` | The manifest's `capital` and `paper_costs` |
 | `exit_policy` | None: every held stop, target and time exit executes |
-| `top_n` | 20 prospects (at most 50) |
+| `top_n` | 20 prospects by default. A call is capped at 20. |
 | `from_ms`, `to_ms` | The whole tape. The window limits strategy calls, not held exits |
 
 The command prints the summary and the `report_sha256`, which is the SHA-256
@@ -512,15 +521,15 @@ does not read it.
 
 With `strategy_execution` enabled in the planner config (see
 [operations](OPERATIONS.md#manage-action-strategies)), the paper controller
-runs the active version on rank passes, executable quote receipts, and
-strategy selection changes:
+runs the active version on executable updates for covered prospects and
+holdings.
 
-1. The controller handles completed held-quote reads and strategy revocations
-   before it applies returned strategy actions. A dedicated quote reader
-   fetches held depth on its own two-second deadline.
-2. The controller freezes one observation: the built-in prospects (the
-   report's `top_n`), the depth quotes still within two seconds of their
-   original receipt, held positions with their exit intents, cash and costs.
+1. The controller processes pushed held depth and completed held reads before
+   it applies returned strategy actions. A dedicated REST reader supplies
+   held depth on its own two-second deadline.
+2. The controller looks up at most the report's `top_n` covered prospects,
+   capped at 20. It includes the current holdings, their exit intents, fresh
+   quotes, cash, and costs in the same observation.
 3. The controller dispatches the observation non-blockingly to a `StrategyHost`
    pool holding the active live worker (with non-blocking hot swap on strategy
    changes and immediate revocation on stand-down or disable), keeping the main
@@ -534,6 +543,11 @@ strategy selection changes:
    source and receipt ages after the lock. An action can use only the remaining
    units on its original receipt. A fill records the `strategy_id` where a
    model fill records a decision ID.
+
+`/api/v1/summary` reports `strategy_execution.coverage`. `nominated` counts
+strategy nominees and `covered` counts nominees with fresh, valid pushed
+depth. `fresh_prospects` includes ranker picks and follows the reported
+`source` of `full` or `rest`.
 
 The summary API reports the last 256 completed calls under
 `strategy_execution.latency`. Each hop reports its sample count and p50, p95,

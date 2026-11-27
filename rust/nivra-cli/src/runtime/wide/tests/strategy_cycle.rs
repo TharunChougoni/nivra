@@ -118,7 +118,11 @@ impl Tape {
             let mut quote: Quote = serde_json::from_value(o["quote"].clone()).unwrap();
             quote.source += shift;
             quote.receipt += shift;
-            self.scan.samples.entry(key).or_default().executable = Some(quote);
+            let sample = self.scan.samples.entry(key).or_default();
+            sample.current = Some(quote.bid);
+            sample.seen = quote.receipt;
+            sample.source = Some(quote.source);
+            sample.executable = Some(quote);
         }
         let fresh = self.fresh(at);
         commit_quotes(
@@ -143,22 +147,31 @@ impl Tape {
             .collect()
     }
     fn frozen(&self, at: i64) -> Frozen {
-        Frozen {
-            at_ms: at,
-            prospects: Vec::new(),
-            quotes: self.fresh(at),
-            portfolio: self.p.clone(),
-            universe: self
-                .universe
-                .iter()
-                .map(|i| (i.key.clone(), i.clone()))
-                .collect(),
-        }
+        use crate::runtime::strategy::selection::{Selection, executable};
+        let mut selection = Selection::default();
+        let index: BTreeMap<_, _> = self.universe.iter().map(|i| (i.key.as_str(), i)).collect();
+        selection.refresh(
+            &self.scan,
+            at,
+            None,
+            &self.p.positions.keys().cloned().collect(),
+            index.keys().copied(),
+            20,
+        );
+        Frozen::capture(
+            &self.scan,
+            at,
+            20,
+            &self.p,
+            &selection,
+            |key| index.get(key).copied(),
+            |key| executable(&self.scan, key, at).is_some(),
+        )
     }
     /// One scan: wait for startup/hot-swap if settling, start a call, wait and apply.
     fn scan(&mut self, run: &mut StrategyRun, at: i64) {
         if run.settle_startup(&self.db, &self.c, at).unwrap().is_some() {
-            run.start(self.frozen(at), &|| at);
+            run.start(self.frozen(at), &self.p, &|| at);
             run.wait();
         }
         run.poll(&mut self.db, &self.c, &mut self.p, &mut self.scan, &|| at)
@@ -289,7 +302,13 @@ fn worker_reply_applies_fixture_on_one_notification() {
     tape.p.settings.session_start_minute = 0;
     tape.p.settings.session_end_minute = 1440;
     tape.protect_at(0, at);
-    run.start(tape.frozen(at), &millis);
+    run.request_observation();
+    assert!(
+        run.take_observation(&tape.db, &tape.c, at)
+            .unwrap()
+            .is_some()
+    );
+    run.start(tape.frozen(at), &tape.p, &millis);
     assert!(
         inbox
             .wait(Duration::from_secs(1))
@@ -374,8 +393,13 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
             .wait(Duration::ZERO)
             .contains(ControllerEvent::Strategy)
     );
-    timeout.start(tape.frozen(at), &|| at);
-    assert_eq!(timeout.ready(&tape.db, &tape.c, at).unwrap(), None);
+    timeout.start(tape.frozen(at), &tape.p, &|| at);
+    timeout.request_observation();
+    timeout.request_observation();
+    assert_eq!(
+        timeout.take_observation(&tape.db, &tape.c, at).unwrap(),
+        None
+    );
     let due = Instant::now() + Duration::from_millis(40);
     let wait = due.saturating_duration_since(Instant::now());
     assert!(!inbox.wait(wait).contains(ControllerEvent::Strategy));

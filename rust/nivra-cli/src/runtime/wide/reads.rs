@@ -91,7 +91,7 @@ pub(super) fn scan_rest_rows(
 }
 pub(super) struct FetchedQuoteRows {
     requested: i64,
-    receipt: i64,
+    pub(super) receipt: i64,
     raw: String,
     /// The validated `data` object of the provider body.
     rows: serde_json::Map<String, serde_json::Value>,
