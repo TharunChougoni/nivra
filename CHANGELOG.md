@@ -1,5 +1,11 @@
 # Source snapshot
 
+## Unreleased
+
+- The summary API reports strategy latency percentiles from quote to gate.
+  Install the updated binary. The book creates its bounded timing table on
+  the first completed call.
+
 ## 0.16.0 — 2026-11-27
 
 ### Upgrade an installed paper host (breaking)

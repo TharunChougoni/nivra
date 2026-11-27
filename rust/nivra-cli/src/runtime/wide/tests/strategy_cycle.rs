@@ -144,7 +144,7 @@ impl Tape {
     /// One scan: wait for startup/hot-swap if settling, start a call, wait and apply.
     fn scan(&mut self, run: &mut StrategyRun, at: i64) {
         if run.settle_startup(&self.db, &self.c, at).unwrap().is_some() {
-            run.start(self.frozen(at));
+            run.start(self.frozen(at), &|| at);
             run.wait();
         }
         run.poll(&mut self.db, &self.c, &mut self.p, &|| at)
@@ -240,6 +240,11 @@ fn active_strategy_fills_refuses_and_exits_through_the_gate() {
     assert_eq!(status["strategy"]["strategy_id"], id.as_str());
     assert_eq!(status["fills"].as_array().unwrap().len(), 4);
     assert_eq!(status["calls"], 6);
+    let latency = &status["latency"];
+    assert_eq!(latency["calls"], 6);
+    assert_eq!(latency["submit_to_reply"]["samples"], 6);
+    assert_eq!(latency["quote_source_to_gate"]["samples"], 3);
+    assert_eq!(latency["book_lock_to_gate"]["p99_ms"], 0);
     assert!(tape.failures().is_empty());
 }
 
@@ -300,7 +305,7 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
             .unwrap()
             .is_some()
     );
-    timeout.start(tape.frozen(at));
+    timeout.start(tape.frozen(at), &|| at);
     assert_eq!(timeout.ready(&tape.db, &tape.c, at).unwrap(), None);
     let at = tape.protect(4);
     assert!(tape.p.positions.is_empty(), "protection waits for no call");

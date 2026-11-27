@@ -14,7 +14,10 @@ use crate::runtime::strategy_library::{
     choice::{self, Running},
 };
 use nivra_core::market::MAX_FINANCIAL_AGE_MS;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+mod latency;
 use std::collections::BTreeMap;
 
 /// How often the library is read again, so a pin, disable or new entry takes
@@ -151,6 +154,7 @@ struct InFlight {
     quotes: BTreeMap<String, Quote>,
     instruments: Vec<Instrument>,
     immediate_error: Option<&'static str>,
+    timing: latency::Timing,
 }
 
 pub(super) struct StrategyRun {
@@ -303,7 +307,7 @@ impl StrategyRun {
             .as_ref()
             .is_some_and(|flight| flight.activation_generation != self.host.activation_generation())
         {
-            self.in_flight = None;
+            self.record_revoked(db, now)?;
         }
         if self.active.is_none() {
             return Ok(None);
@@ -362,7 +366,7 @@ impl StrategyRun {
     }
 
     /// Submit `frozen` non-blockingly to the live worker. Call [`Self::ready`] first.
-    pub(super) fn start(&mut self, frozen: Frozen) {
+    pub(super) fn start(&mut self, frozen: Frozen, clock: &dyn Fn() -> i64) {
         if self.in_flight.is_some() {
             return;
         }
@@ -374,7 +378,7 @@ impl StrategyRun {
         };
         let strategy_id = meta.run_id.clone();
         let params = meta.params.clone();
-        let quotes = frozen.quotes.clone();
+        let mut timing = latency::Timing::new(strategy_id.clone(), frozen.at_ms, &frozen.quotes);
         let Some(costs) = frozen.portfolio.costs.clone() else {
             self.calls += 1;
             self.last_call_at_ms = Some(frozen.at_ms);
@@ -384,9 +388,10 @@ impl StrategyRun {
                 seq: 0,
                 strategy_id,
                 observed_at: frozen.at_ms,
-                quotes,
+                quotes: frozen.quotes,
                 instruments: Vec::new(),
                 immediate_error: Some("paper_costs_required"),
+                timing,
             });
             return;
         };
@@ -402,7 +407,11 @@ impl StrategyRun {
         let instruments: Vec<Instrument> = observation.instruments().cloned().collect();
         let outcome = serde_json::to_vec(&observation)
             .map_err(|_| "strategy_input_limit")
-            .and_then(|bytes| self.host.submit_live(&bytes, frozen.at_ms));
+            .and_then(|bytes| {
+                let now = clock();
+                timing.submitted_at_ms = Some(now);
+                self.host.submit_live(&bytes, now)
+            });
         self.calls += 1;
         self.last_call_at_ms = Some(frozen.at_ms);
         match outcome {
@@ -413,9 +422,10 @@ impl StrategyRun {
                     seq,
                     strategy_id,
                     observed_at: frozen.at_ms,
-                    quotes,
+                    quotes: frozen.quotes,
                     instruments,
                     immediate_error: None,
+                    timing,
                 });
             }
             Err(reason) => {
@@ -425,9 +435,10 @@ impl StrategyRun {
                     seq: 0,
                     strategy_id,
                     observed_at: frozen.at_ms,
-                    quotes,
+                    quotes: frozen.quotes,
                     instruments,
                     immediate_error: Some(reason),
+                    timing,
                 });
             }
         }
@@ -459,45 +470,59 @@ impl StrategyRun {
             return Ok(());
         };
         if flight.activation_generation != self.host.activation_generation() {
-            self.in_flight = None;
-            return Ok(());
+            return self.record_revoked(db, clock());
         }
-        if let Some(reason) = flight.immediate_error {
-            let flight = self.in_flight.take().expect("in_flight checked");
-            return self.fail(db, c, clock(), Some(&flight.strategy_id), reason);
-        }
-        let poll_now = clock();
-        let Some(reply) = self
-            .host
-            .poll_call(&flight.worker_key, flight.seq, poll_now)
-        else {
-            return Ok(());
+        let (received_at_ms, outcome) = if let Some(reason) = flight.immediate_error {
+            (None, Err(reason))
+        } else {
+            let Some(reply) = self.host.poll_call(&flight.worker_key, flight.seq, clock()) else {
+                return Ok(());
+            };
+            (reply.received_at_ms, reply.outcome)
         };
-        let flight = self.in_flight.take().expect("in_flight checked");
-        let strategy_id = flight.strategy_id.clone();
-        let outcome = match reply {
-            Err(reason) => Err(reason.to_owned()),
-            Ok(bytes) => match strategy::parse_actions(&bytes, &flight.instruments) {
-                Err(reason) => Err(reason.to_owned()),
-                Ok(actions) => apply_cycle(
-                    db,
-                    c,
-                    p,
-                    &self.library,
-                    &self.policy,
-                    &self.host,
-                    flight,
-                    actions,
-                    clock,
-                )
-                .map_err(|error| failure_code(error.as_ref())),
-            },
-        };
+        let mut flight = self.in_flight.take().expect("in_flight checked");
+        flight.timing.reply_received_at_ms = received_at_ms;
+        let outcome = outcome
+            .and_then(|bytes| strategy::parse_actions(&bytes, &flight.instruments))
+            .map_err(str::to_owned);
         match outcome {
-            Ok(()) => self.last_failure = None,
-            Err(reason) => self.fail(db, c, clock(), Some(&strategy_id), &reason)?,
+            Ok(actions) if actions.is_empty() => {
+                flight.timing.outcome = "no_actions".into();
+                flight.timing.record(db)?;
+                self.last_failure = None;
+            }
+            Ok(actions) => match apply_cycle(db, c, p, self, &mut flight, actions, clock) {
+                Ok(()) => self.last_failure = None,
+                Err(error) => {
+                    self.record_failed_call(db, c, clock(), flight, &failure_code(error.as_ref()))?
+                }
+            },
+            Err(reason) => self.record_failed_call(db, c, clock(), flight, &reason)?,
         }
         Ok(())
+    }
+
+    fn record_failed_call(
+        &mut self,
+        db: &Connection,
+        c: &Config,
+        now: i64,
+        mut flight: InFlight,
+        reason: &str,
+    ) -> Result<()> {
+        flight.timing.outcome = reason.to_owned();
+        flight.timing.record(db)?;
+        self.fail(db, c, now, Some(&flight.strategy_id), reason)
+    }
+
+    fn record_revoked(&mut self, db: &Connection, now: i64) -> Result<()> {
+        let mut flight = self.in_flight.take().expect("in_flight checked");
+        flight.timing.reply_received_at_ms = self
+            .host
+            .poll_call(&flight.worker_key, flight.seq, now)
+            .and_then(|reply| reply.received_at_ms);
+        flight.timing.outcome = "strategy_activation_stale".into();
+        flight.timing.record(db)
     }
 
     /// Journal a failure and note it in the day's diagnostics, once per
@@ -574,6 +599,7 @@ impl StrategyRun {
             "calls": self.calls, "failures": self.failures, "skipped": self.skipped,
             "last_call_at_ms": self.last_call_at_ms, "last_failure": self.last_failure,
             "actions": recent_actions(db).unwrap_or_default(),
+            "latency": latency::summary(db).unwrap_or_else(|_| json!({"error":"strategy_latency_unavailable"})),
             "refusals": super::recent_refusals(db, 50)
                 .map(|rows| rows.into_iter()
                     .filter(|r| r["source"]["kind"] == "strategy")
@@ -585,28 +611,23 @@ impl StrategyRun {
     }
 }
 
-#[allow(clippy::too_many_arguments)] // One call's frozen inputs and generation verification.
 fn apply_cycle(
     db: &mut Connection,
     c: &Config,
     p: &mut Portfolio,
-    library: &Library,
-    policy: &choice::ChoicePolicy,
-    host: &StrategyHost,
-    mut flight: InFlight,
+    run: &StrategyRun,
+    flight: &mut InFlight,
     actions: Vec<Value>,
     clock: &dyn Fn() -> i64,
 ) -> Result<()> {
-    if actions.is_empty() {
-        return Ok(());
-    }
     let strategy_id = &flight.strategy_id;
     let observed_at = flight.observed_at;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    if flight.activation_generation != host.activation_generation() {
+    flight.timing.book_locked_at_ms = Some(clock());
+    if flight.activation_generation != run.host.activation_generation() {
         return Err("strategy_activation_stale".into());
     }
-    let authoritative = choice::choose(library, policy)?;
+    let authoritative = choice::choose(&run.library, &run.policy)?;
     if authoritative
         .running
         .as_ref()
@@ -622,7 +643,7 @@ fn apply_cycle(
     let mut next = p.clone();
     let results = strategy::apply(
         &mut next,
-        now,
+        clock,
         &mut flight.quotes,
         &flight.instruments,
         actions,
@@ -636,11 +657,24 @@ fn apply_cycle(
         outcome,
         max_price,
         refused,
+        gate_at_ms,
     } in &results
     {
+        if let Some((quote, decided_at_ms)) = key
+            .as_ref()
+            .and_then(|key| flight.quotes.get(key))
+            .zip(*gate_at_ms)
+        {
+            flight.timing.gates.push(latency::GateTime {
+                index: *index,
+                quote: quote.into(),
+                decided_at_ms,
+            });
+        }
+        let at = gate_at_ms.unwrap_or(now);
         tx.execute(
             "INSERT INTO strategy_action(at,observed_at,strategy_id,idx,instrument_key,side,units,outcome) VALUES(?,?,?,?,?,?,?,?)",
-            rusqlite::params![now, observed_at, strategy_id, *index as i64, key, side, *units as i64, outcome],
+            rusqlite::params![at, observed_at, strategy_id, *index as i64, key, side, *units as i64, outcome],
         )?;
         if let (Some(refused), Some(key), Some(side), Some(max_price)) =
             (refused, key, side, max_price)
@@ -655,7 +689,7 @@ fn apply_cycle(
                 id: strategy_id,
                 observed_at,
             };
-            record_refusal(&tx, now, source, *index, &action, refused)?;
+            record_refusal(&tx, at, source, *index, &action, refused)?;
         }
     }
     next.reconcile()?;
@@ -673,6 +707,8 @@ fn apply_cycle(
         "INSERT INTO state VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
         rusqlite::params![book_binding(c)?, serde_json::to_string(&next)?],
     )?;
+    flight.timing.outcome = "actions_applied".into();
+    flight.timing.record(&tx)?;
     tx.commit()?;
     *p = next;
     Ok(())

@@ -522,6 +522,12 @@ runs the active version on each rank pass:
    gate (with original quote receipt-age rechecks) against the book at that moment.
    A fill records the `strategy_id` where a model fill records a decision ID.
 
+The summary API reports the last 256 completed calls under
+`strategy_execution.latency`. Each hop reports its sample count and p50, p95,
+and p99 in milliseconds. Calls without an action contribute observations and
+worker timings. Gate and end-to-end timings use the exact quote for each
+action that reaches the execution gate, including refused actions.
+
 The controller runs a version only when its report names this build's
 `engine_sha256` and `adapter_sha256` AND its review record matches the current
 `source_sha256`, `runner_sha256` and `review_policy_sha256` (plus passes the

@@ -287,13 +287,13 @@ impl StrategyHost {
         key: &WorkerKey,
         expected_seq: u64,
         now_ms: i64,
-    ) -> Option<Result<Vec<u8>, &'static str>> {
+    ) -> Option<super::worker::WorkerReply> {
         let worker = self.workers.get_mut(key)?;
-        let (seq, outcome) = worker.poll(now_ms)?;
-        if seq != expected_seq {
-            return Some(Err("strategy_output_invalid"));
+        let mut reply = worker.poll(now_ms)?;
+        if reply.seq != expected_seq {
+            reply.outcome = Err("strategy_output_invalid");
         }
-        Some(outcome)
+        Some(reply)
     }
 
     #[cfg(test)]

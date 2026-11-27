@@ -245,6 +245,8 @@ pub(crate) struct ActionResult {
     /// The execution gate's refusal with the numbers its check used.
     #[serde(skip)]
     pub refused: Option<Refused>,
+    #[serde(skip)]
+    pub gate_at_ms: Option<i64>,
 }
 
 fn side_name(side: &PlanSide) -> &'static str {
@@ -261,7 +263,7 @@ fn side_name(side: &PlanSide) -> &'static str {
 /// same receipt cannot reuse it. `decision` is recorded on fills and exits.
 pub(crate) fn apply(
     portfolio: &mut Portfolio,
-    now: i64,
+    clock: &dyn Fn() -> i64,
     quotes: &mut BTreeMap<String, Quote>,
     instruments: &[Instrument],
     actions: Vec<Value>,
@@ -271,7 +273,7 @@ pub(crate) fn apply(
         .iter()
         .map(|a| a["instrument_key"].as_str().map(str::to_owned))
         .collect();
-    let verdicts = planner::validate_actions(actions, portfolio, instruments, now)?;
+    let verdicts = planner::validate_actions(actions, portfolio, instruments, clock())?;
     let mut results = Vec::with_capacity(verdicts.len());
     for verdict in verdicts {
         let key = keys[verdict.index].clone();
@@ -284,6 +286,7 @@ pub(crate) fn apply(
                 outcome: verdict.reason,
                 max_price: None,
                 refused: None,
+                gate_at_ms: None,
             });
             continue;
         };
@@ -293,6 +296,7 @@ pub(crate) fn apply(
             .ok_or("strategy_instrument_missing")?;
         let side = side_name(&action.side);
         let mut refused = None;
+        let mut gate_at_ms = None;
         let outcome = if matches!(action.side, PlanSide::ReviseExit) {
             if portfolio.revise_exit(instrument, &action.exit_intent, decision)? {
                 "exit_revised"
@@ -304,6 +308,8 @@ pub(crate) fn apply(
             let max_price = action
                 .max_price
                 .ok_or("strategy_action_max_price_missing")?;
+            let now = clock();
+            gate_at_ms = Some(now);
             match portfolio.execute_plan(
                 now,
                 instrument,
@@ -339,6 +345,7 @@ pub(crate) fn apply(
             outcome: outcome.into(),
             max_price: action.max_price,
             refused,
+            gate_at_ms,
         });
     }
     Ok(results)

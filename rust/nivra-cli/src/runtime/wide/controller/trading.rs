@@ -549,7 +549,7 @@ impl Controller<'_> {
             &self.p,
             &self.tradable,
         ) {
-            Ok(frozen) => run.start(frozen),
+            Ok(frozen) => run.start(frozen, &millis),
             Err(error) => run.fail(
                 &self.db,
                 &self.config,

@@ -1,6 +1,7 @@
 //! Persistent Python strategy worker (`python3 -I -S -B` with one I/O thread,
 //! bounded NDJSON exchange via `nivra_sandbox::stream::Stream`, continuous
 //! stderr drain, monotonic per-call deadline, backoff, and quarantine).
+use crate::runtime::millis;
 use nivra_core::replay::digest;
 use nivra_sandbox::{
     Failure,
@@ -168,14 +169,19 @@ enum WorkerEvent {
     },
     Reply {
         generation: u64,
-        seq: u64,
-        outcome: Result<Vec<u8>, &'static str>,
+        reply: WorkerReply,
         elapsed_us: u64,
     },
     Failed {
         generation: u64,
         reason: &'static str,
     },
+}
+
+pub(crate) struct WorkerReply {
+    pub seq: u64,
+    pub received_at_ms: Option<i64>,
+    pub outcome: Result<Vec<u8>, &'static str>,
 }
 
 #[derive(Deserialize)]
@@ -412,33 +418,27 @@ fn spawn_process(
 
             while let Ok(req) = req_rx.recv() {
                 line.clear();
-                let outcome = match stream.exchange_within(&req.payload, &mut line, req.timeout) {
-                    Ok(()) => parse_reply(&line, generation, req.seq, max_output),
-                    Err(failure) => Err(map_failure(failure)),
+                let exchange = stream.exchange_within(&req.payload, &mut line, req.timeout);
+                let received_at_ms = exchange.is_ok().then(millis);
+                let (outcome, elapsed_us) = match exchange {
+                    Ok(()) => match parse_reply(&line, generation, req.seq, max_output) {
+                        Ok((bytes, elapsed_us)) => (Ok(bytes), elapsed_us),
+                        Err(reason) => (Err(reason), 0),
+                    },
+                    Err(failure) => (Err(map_failure(failure)), 0),
                 };
-                match outcome {
-                    Ok((bytes, elapsed_us)) => {
-                        let _ = event_tx.send(WorkerEvent::Reply {
-                            generation,
-                            seq: req.seq,
-                            outcome: Ok(bytes),
-                            elapsed_us,
-                        });
-                    }
-                    Err(reason) => {
-                        {
-                            let _guard = io_reap_lock.lock();
-                            io_pgid.store(0, Ordering::Release);
-                            drop(stream);
-                        }
-                        let _ = event_tx.send(WorkerEvent::Reply {
-                            generation,
-                            seq: req.seq,
-                            outcome: Err(reason),
-                            elapsed_us: 0,
-                        });
-                        return;
-                    }
+                let failed = outcome.is_err();
+                let _ = event_tx.send(WorkerEvent::Reply {
+                    generation,
+                    reply: WorkerReply {
+                        seq: req.seq,
+                        received_at_ms,
+                        outcome,
+                    },
+                    elapsed_us,
+                });
+                if failed {
+                    break;
                 }
             }
             let _guard = io_reap_lock.lock();
@@ -491,7 +491,7 @@ pub(crate) struct Worker {
     generation: u64,
     next_seq: u64,
     state: WorkerState,
-    pending_reply: Option<(u64, Result<Vec<u8>, &'static str>)>,
+    pending_reply: Option<WorkerReply>,
     failure_times: VecDeque<i64>,
     stderr: Arc<Mutex<StderrRing>>,
     process: Option<RunningProcess>,
@@ -627,36 +627,32 @@ impl Worker {
                 }
                 WorkerEvent::Reply {
                     generation,
-                    seq,
-                    outcome,
+                    mut reply,
                     elapsed_us,
                 } if generation == self.generation => {
-                    if let WorkerState::Busy {
-                        seq: active_seq, ..
-                    } = self.state
-                    {
-                        if seq != active_seq {
-                            self.record_failure("strategy_output_invalid", now_ms);
-                            self.pending_reply = Some((active_seq, Err("strategy_output_invalid")));
-                        } else {
-                            match outcome {
-                                Ok(bytes) => {
-                                    self.last_elapsed_us = Some(elapsed_us);
-                                    self.state = WorkerState::Ready;
-                                    self.pending_reply = Some((seq, Ok(bytes)));
-                                }
-                                Err(reason) => {
-                                    self.record_failure(reason, now_ms);
-                                    self.pending_reply = Some((seq, Err(reason)));
-                                }
-                            }
+                    if let WorkerState::Busy { seq, .. } = self.state {
+                        if reply.seq != seq {
+                            reply.seq = seq;
+                            reply.outcome = Err("strategy_output_invalid");
                         }
+                        match reply.outcome {
+                            Ok(_) => {
+                                self.last_elapsed_us = Some(elapsed_us);
+                                self.state = WorkerState::Ready;
+                            }
+                            Err(reason) => self.record_failure(reason, now_ms),
+                        }
+                        self.pending_reply = Some(reply);
                     }
                 }
                 WorkerEvent::Failed { generation, reason } if generation == self.generation => {
                     if let WorkerState::Busy { seq, .. } = self.state {
                         self.record_failure(reason, now_ms);
-                        self.pending_reply = Some((seq, Err(reason)));
+                        self.pending_reply = Some(WorkerReply {
+                            seq,
+                            received_at_ms: None,
+                            outcome: Err(reason),
+                        });
                     } else if !matches!(self.state, WorkerState::Quarantined { .. }) {
                         self.record_failure(reason, now_ms);
                     }
@@ -669,7 +665,11 @@ impl Worker {
             && Instant::now() >= deadline + Duration::from_millis(50)
         {
             self.record_failure("strategy_wall_timeout", now_ms);
-            self.pending_reply = Some((seq, Err("strategy_wall_timeout")));
+            self.pending_reply = Some(WorkerReply {
+                seq,
+                received_at_ms: None,
+                outcome: Err("strategy_wall_timeout"),
+            });
         }
     }
 
@@ -681,7 +681,7 @@ impl Worker {
 
     /// Non-blocking poll for ready or reply events. Returns `Some(...)` if an
     /// active in-flight call finished on this poll.
-    pub(crate) fn poll(&mut self, now_ms: i64) -> Option<(u64, Result<Vec<u8>, &'static str>)> {
+    pub(crate) fn poll(&mut self, now_ms: i64) -> Option<WorkerReply> {
         self.drain_events(now_ms);
         self.pending_reply.take()
     }
@@ -804,15 +804,14 @@ impl Worker {
             match process.event_rx.recv() {
                 Ok(WorkerEvent::Reply {
                     generation,
-                    seq: reply_seq,
-                    outcome,
+                    reply,
                     elapsed_us,
                 }) if generation == self.generation => {
-                    if reply_seq != seq {
+                    if reply.seq != seq {
                         self.record_failure("strategy_output_invalid", now_ms);
                         return Err("strategy_output_invalid");
                     }
-                    return match outcome {
+                    return match reply.outcome {
                         Ok(bytes) => {
                             self.last_elapsed_us = Some(elapsed_us);
                             self.state = WorkerState::Ready;

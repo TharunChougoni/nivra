@@ -353,7 +353,7 @@ pub(crate) fn run(
                     let before = portfolio.fills.len();
                     let results = apply(
                         &mut portfolio,
-                        now,
+                        &|| now,
                         &mut fresh,
                         &instruments,
                         actions,
