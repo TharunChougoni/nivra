@@ -5,4 +5,5 @@ pub mod journal;
 pub mod market_archive;
 pub mod private_path;
 pub mod research_jobs;
+pub mod research_memory;
 pub mod strategy_results;

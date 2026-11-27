@@ -24,3 +24,5 @@ pub mod daily_research;
 
 pub mod sleeve;
 pub mod strategy;
+
+pub mod autoresearch;
