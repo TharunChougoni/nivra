@@ -20,4 +20,5 @@ These guides describe the code on `main`. The design and its rationale are in
 
 Reference notes: [fees](reference/KOTAK_FEE_REVIEW.md),
 [market sources](reference/MARKET_SOURCE_REVIEW.md),
+[feed review](reference/FEED_REVIEW.md),
 [shared replay](reference/SHARED_REPLAY.md).

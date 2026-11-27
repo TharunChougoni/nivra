@@ -72,6 +72,16 @@ To turn on the feed, merge
 into the planner `discovery` settings. Without a `market_feed` block,
 `mode` is `rest` and scanning uses REST quotes only.
 
+The V3 socket carries three subscription modes per key: `ltpc` (last price,
+its trade time and size, previous close), `firstLevelWithGreeks` (that plus one
+level of depth and the greeks) and `fullFeed` (that plus the five level book).
+The wire format for all three is in
+[MarketDataFeed.proto](../rust/nivra-cli/src/runtime/market_feed/MarketDataFeed.proto).
+Nivra decodes the `ltpc` variant only, so the feed is screening only and
+executable depth comes from REST. The pools are 5,000 keys in `ltpc` mode and
+2,000 in full mode per connection. [Feed review](reference/FEED_REVIEW.md)
+records what the other modes would buy and what the host measures today.
+
 With `mode` set to `ltpc`, the feed works as follows:
 
 1. Nivra calls `GET https://api.upstox.com/v3/feed/market-data-feed/authorize`
@@ -79,6 +89,9 @@ With `mode` set to `ltpc`, the feed works as follows:
 2. It opens one connection and subscribes the whole cash universe in LTPC
    mode, at most 5,000 keys. It decodes frames with
    [MarketDataFeed.proto](../rust/nivra-cli/src/runtime/market_feed/MarketDataFeed.proto).
+   `subscription_plan.rs` holds older per-tier defaults (1,900 LTPC keys, 100
+   full keys). That module is not consumed by the feed and is not a provider
+   limit.
 3. REST full quotes refresh screening metadata every `metadata_poll_ms`.
    Metadata includes volume and circuit bands, which LTPC lacks. REST depth
    reads cover the shortlist, held positions and outstanding model actions.
@@ -88,7 +101,9 @@ With `mode` set to `ltpc`, the feed works as follows:
    median from all fresh prices before it filters or truncates.
 
 An LTPC price stays eligible for screening while the connection has had a
-heartbeat or message within `scan_activity_timeout_ms`. REST samples use
+heartbeat or message within `scan_activity_timeout_ms`. The feed reports
+`screening_only: true` because an LTPC point carries no bid, ask or displayed
+size, and the execution gate needs all three. REST samples use
 `max_scan_age_ms` instead. An invalid price, such as `ltp` 0 before the first
 trade, skips that instrument.
 
