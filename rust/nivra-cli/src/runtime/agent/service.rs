@@ -1325,4 +1325,159 @@ mod tests {
         assert_eq!(gated[2]["reason"], "agent_turn_timeout");
         service.stop();
     }
+
+    #[test]
+    fn the_pre_open_choice_and_a_gated_fo_escalation_share_one_session() {
+        use crate::runtime::options::chain::tests::{catalog, depth, spot};
+        let dir = tempfile::tempdir().unwrap();
+        let (c, mut cfg) = crate::runtime::decision::decision_fixture_config(dir.path());
+        cfg.strategy_execution = Some(planner::StrategyExecution {
+            enabled: true,
+            fallback: vec!["vwap_trend".into()],
+        });
+        let agent = cfg.agent.as_mut().unwrap();
+        agent.mode = AgentMode::Shadow;
+        let mut gate = agent.lanes[&Lane::Decision].clone();
+        gate.daily_calls = 2;
+        agent.lanes.insert(Lane::Gate, gate);
+        let mut service = LaneService::start(&cfg).unwrap();
+        // Hold the worker's channels so each turn is settled by hand.
+        let (jobs, inbox) = sync_channel(1);
+        let (out, done) = channel();
+        service.jobs = Some(jobs);
+        service.done = done;
+        let mut portfolio = crate::runtime::tests::test_portfolio();
+        portfolio.cash = nivra_core::finance::Amount::parse("15000").unwrap();
+        portfolio.options = Some(catalog("26040"));
+        let store = FeatureStore::new(Default::default()).unwrap();
+        let at = |hh, mm| {
+            chrono::DateTime::parse_from_rfc3339(&format!("{}T{hh:02}:{mm:02}:00+05:30", c.session))
+                .unwrap()
+                .timestamp_millis()
+        };
+        let mut db = crate::runtime::open_book(&c).unwrap();
+        // One scan: a fresh at-the-money call quote and a fresh spot.
+        let mut tick =
+            |service: &mut LaneService, now: i64, minute: u32, bid: &str, index: &str| {
+                let mut scanner = Scanner::default();
+                let ask = format!("{bid}.20");
+                depth(&mut scanner, "NSE_FO|26000CE", bid, &ask, now - 100);
+                let cycle = Cycle {
+                    c: &c,
+                    cfg: &cfg,
+                    now,
+                    minute,
+                    sealed: false,
+                    portfolio: &portfolio,
+                    instruments: &[],
+                    ranking: &[],
+                    ranked_at: 0,
+                    decision_ready: minute >= c.execution.session_start_minute,
+                    prepared: true,
+                    scanner: &scanner,
+                    store: &store,
+                    index: None,
+                    regime: None,
+                    spot: Some(spot(index, now - 50)),
+                };
+                service.tick(&cycle, &mut db).unwrap();
+                inbox.try_recv().ok().map(|job| job.work)
+            };
+        let finish = |work: &Work, verdict: Option<Verdict>| {
+            out.send(Done {
+                lane: work.lane,
+                triggers: work.triggers.clone(),
+                turns: Vec::new(),
+                plan: None,
+                paper_input: None,
+                review: None,
+                verdict,
+                error: None,
+                retry_at_ms: None,
+            })
+            .unwrap();
+        };
+
+        // 09:00: the pre-open turn chooses the strategy. The chain is visible
+        // but raises nothing before the open.
+        let pre_open = tick(&mut service, at(9, 0), 540, "100", "26040").unwrap();
+        assert_eq!(pre_open.lane, Lane::Decision);
+        assert!(
+            pre_open
+                .triggers
+                .iter()
+                .all(|t| t.kind == TriggerKind::PreOpen)
+        );
+        assert_eq!(pre_open.brief.task["kind"], "pre_open");
+        assert!(pre_open.brief.fo.is_some());
+        assert!(pre_open.brief.gate_prospects.is_empty());
+        finish(&pre_open, None);
+
+        // 10:00: the research search that fired with it runs next.
+        let search = tick(&mut service, at(10, 0), 600, "100", "26040").unwrap();
+        assert_eq!(search.lane, Lane::Research);
+        assert_eq!(search.brief.task["kind"], "strategy_search");
+        finish(&search, None);
+
+        // 10:01: spot +40 bps and the call premium +20 %. The pre-open turn
+        // did not swallow the move: the F&O batch meets the gate.
+        let screen = tick(&mut service, at(10, 1), 601, "120", "26144").unwrap();
+        assert_eq!(screen.lane, Lane::Gate);
+        assert!(
+            screen
+                .triggers
+                .iter()
+                .all(|t| t.kind == TriggerKind::FoSignal)
+        );
+        assert_eq!(screen.brief.budget.fo_bar.unwrap().spot_move_bps, 30.0);
+        let (prospects, dropped) = super::super::tools::validate_prospects(
+            &[json!({"instrument_key":"NSE_FO|26000CE","idea":"buy_call",
+                "evidence":"premium +20%","why":"momentum at the money"})],
+            portfolio.options.as_ref(),
+        );
+        assert!(dropped.is_empty());
+        finish(
+            &screen,
+            Some(Verdict {
+                escalate: true,
+                reason: "ATM call premium jumped".into(),
+                prospects,
+            }),
+        );
+
+        // 10:02: the escalated batch reaches the decision lane as an ordinary
+        // turn with the gate's prospect, not as a pre-open choice.
+        let decision = tick(&mut service, at(10, 2), 602, "120", "26144").unwrap();
+        assert_eq!(decision.lane, Lane::Decision);
+        assert_eq!(decision.triggers, screen.triggers);
+        assert!(decision.brief.task.is_null());
+        assert_eq!(
+            decision.brief.gate_prospects[0].instrument_key,
+            "NSE_FO|26000CE"
+        );
+        let journal = std::fs::read_to_string(lanes::root(&c).join("triggers.ndjson")).unwrap();
+        let events: Vec<String> = journal
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .map(|e| {
+                let what = e["trigger"]["kind"].as_str().or(e["lane"].as_str());
+                format!("{} {}", e["event"].as_str().unwrap(), what.unwrap_or(""))
+            })
+            .collect();
+        assert_eq!(
+            events,
+            [
+                "fired pre_open",
+                "fired strategy_search",
+                "dispatched decision",
+                "dispatched research",
+                "fired fo_signal",
+                "fired fo_signal",
+                "dispatched gate",
+                "gated ",
+                "dispatched decision",
+            ]
+        );
+        service.stop();
+    }
 }
