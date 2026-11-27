@@ -597,3 +597,27 @@ fn option_triggers_respect_phase_expiry_day_budget_and_decision_turns() {
     let back = chain(26_000.0, true, vec![row(ce, 100.0, 1_000_000, true)]);
     assert_eq!(observe(&mut engine, Phase::Open, 600, 0.0, &back), 1);
 }
+
+#[test]
+fn option_trigger_settings_validate_and_stay_out_of_the_policy_at_their_defaults() {
+    let defaults = TriggerSettings::default();
+    assert!(defaults.validate());
+    assert!(serde_json::to_value(&defaults).unwrap().get("fo").is_none());
+    let custom: TriggerSettings =
+        serde_json::from_value(serde_json::json!({"fo":{"spot_move_bps":45.0,"strikes_near":3}}))
+            .unwrap();
+    assert!(custom.validate());
+    assert_eq!(
+        serde_json::to_value(&custom).unwrap()["fo"]["strikes_near"],
+        3
+    );
+    for bad in [
+        serde_json::json!({"fo":{"strikes_near":0}}),
+        serde_json::json!({"fo":{"premium_move_bps":0.0}}),
+        serde_json::json!({"fo":{"expiry_day_last_minute":1440}}),
+    ] {
+        let settings: TriggerSettings = serde_json::from_value(bad).unwrap();
+        assert!(!settings.validate());
+    }
+    assert!(serde_json::from_value::<TriggerSettings>(serde_json::json!({"fo":{"oi":1}})).is_err());
+}

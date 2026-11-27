@@ -109,7 +109,7 @@ fn strategy_select_definition() -> Value {
 fn verdict_definition() -> Value {
     json!({
         "name":"verdict",
-        "description":"Finish the screen. escalate=true wakes the decision lane now with your prospects, best first; escalate=false lets the triggers pass without a decision turn. The host keeps only prospects whose key is in the current option universe and whose idea matches the contract. It never sizes, plans or trades.",
+        "description":"Finish the screen. escalate=true runs the decision lane now with your prospects, best first; escalate=false lets the triggers pass without a decision turn. The host keeps only prospects whose key is in the current option universe and whose idea matches the contract. It never sizes, plans or trades.",
         "parameters":{
             "type":"object",
             "properties":{

@@ -18,8 +18,9 @@ pub(crate) struct TriggerSettings {
     pub research: ResearchTriggers,
     #[serde(default)]
     pub review: ReviewTriggers,
-    /// F&O triggers that wake the gate ([fo]).
-    #[serde(default)]
+    /// F&O triggers that start gate turns ([fo]). Left out at its defaults so
+    /// a sealed policy hash does not change.
+    #[serde(default, skip_serializing_if = "FoTriggers::is_default")]
     pub fo: FoTriggers,
 }
 

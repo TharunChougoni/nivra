@@ -1,4 +1,4 @@
-//! F&O triggers: the Nifty option chain, not the cash scanner, wakes the gate.
+//! F&O triggers: the Nifty option chain, not the cash scanner, starts gate turns.
 //! A trigger fires when spot, a near-money premium or its open interest moves
 //! past a threshold since the last trigger or decision turn, and only while a
 //! contract near the money is liquid and affordable enough to act on.
@@ -59,6 +59,10 @@ pub(crate) struct FoBar {
 }
 
 impl FoTriggers {
+    pub(super) fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
     pub(super) fn validate(&self) -> bool {
         [
             self.spot_move_bps,
