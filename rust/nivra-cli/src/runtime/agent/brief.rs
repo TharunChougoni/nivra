@@ -4,8 +4,10 @@
 use super::Lane;
 use super::lanes::ReviewMemory;
 use super::protocol::Usage;
-use super::triggers::{Held, Phase, Ranked, Trigger};
+use super::tools::Prospect;
+use super::triggers::{FoBar, Held, Phase, Ranked, Trigger};
 use crate::runtime::Result;
+use crate::runtime::options::chain::Chain;
 use nivra_core::execution::Portfolio;
 use nivra_core::finance::{FeeArithmetic, Price};
 use serde::Serialize;
@@ -83,6 +85,11 @@ pub(crate) struct Brief {
     /// Current deterministic intraday regime summary, when available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub regime: Option<RegimeFacts>,
+    /// The near-the-money Nifty option chain: spot, expiry and, per contract,
+    /// spread in ticks, depth in lots, open interest and the cash one lot
+    /// needs. Gate and decision turns, when the option universe is ready.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fo: Option<Chain>,
     /// Eligible action strategies and active strategy live outcomes, for
     /// decision turns when `strategy_execution` is enabled.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -94,6 +101,9 @@ pub(crate) struct Brief {
     pub execution_refusals: Vec<Value>,
     /// Research answers not yet delivered to a decision turn.
     pub research_updates: Vec<Value>,
+    /// F&O prospects the gate escalated for this turn, best first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gate_prospects: Vec<Prospect>,
     /// What this turn is about: a research question, an agenda, the day.
     #[serde(skip_serializing_if = "Value::is_null")]
     pub task: Value,
@@ -134,6 +144,9 @@ pub(crate) struct BudgetFacts {
     pub cost_allowed_usd: f64,
     pub entry_score_bar: f64,
     pub entry_top_k: usize,
+    /// The F&O trigger thresholds at the decision lane's spend. Gate turns.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fo_bar: Option<FoBar>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -315,9 +328,11 @@ impl Brief {
             ranking,
             fills,
             regime: facts.regime.cloned(),
+            fo: None,
             strategies: None,
             execution_refusals: Vec::new(),
             research_updates: Vec::new(),
+            gate_prospects: Vec::new(),
             task,
             triggers: triggers.iter().take(MAX_TRIGGERS).cloned().collect(),
         }
@@ -419,5 +434,6 @@ pub(crate) fn budget(
         cost_allowed_usd: cost_usd,
         entry_score_bar: round(bar.0),
         entry_top_k: bar.1,
+        fo_bar: None,
     }
 }

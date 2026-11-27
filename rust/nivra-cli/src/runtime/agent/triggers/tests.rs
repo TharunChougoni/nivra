@@ -436,3 +436,164 @@ fn the_strategy_is_chosen_before_the_open_and_research_searches_when_none_is_acc
         ]
     );
 }
+
+/// A chain row: mid premium, open interest and whether it can be traded now.
+fn row(key: &str, mid: f64, oi: u64, tradable: bool) -> crate::runtime::options::chain::ChainRow {
+    crate::runtime::options::chain::ChainRow {
+        instrument_key: key.into(),
+        option: "call",
+        strike: "26000".into(),
+        offset: 0,
+        lot_size: 65,
+        bid: mid.to_string(),
+        ask: mid.to_string(),
+        spread_ticks: if tradable { 2 } else { 12 },
+        depth_lots: 5,
+        quote_age_ms: 100,
+        open_interest: Some(oi),
+        lot_cash: "6500".into(),
+        affordable_lots: 1,
+        round_trip_cost_bps: 80.0,
+        mid,
+    }
+}
+
+fn chain(
+    spot: f64,
+    expiry_day: bool,
+    rows: Vec<crate::runtime::options::chain::ChainRow>,
+) -> crate::runtime::options::chain::Chain {
+    crate::runtime::options::chain::Chain {
+        underlying_key: "NSE_INDEX|Nifty 50".into(),
+        spot: spot.to_string(),
+        spot_age_ms: 10,
+        expiry: nivra_core::time::ExchangeDate::parse("2026-10-20").unwrap(),
+        days_to_expiry: if expiry_day { 0 } else { 4 },
+        expiry_day,
+        atm_strike: "26000".into(),
+        rows,
+        spot_value: spot,
+    }
+}
+
+fn fo(
+    engine: &mut TriggerEngine,
+    now: i64,
+    chain: &crate::runtime::options::chain::Chain,
+) -> Vec<(String, String)> {
+    engine
+        .observe_fo(&FoObservation {
+            now,
+            minute: 600,
+            phase: Phase::Open,
+            decision_spent: 0.0,
+            chain,
+        })
+        .into_iter()
+        .map(|t| {
+            assert_eq!(t.kind, TriggerKind::FoSignal);
+            (t.reason, t.instrument_key.unwrap())
+        })
+        .collect()
+}
+
+fn pair(reason: &str, key: &str) -> (String, String) {
+    (reason.into(), key.into())
+}
+
+#[test]
+fn option_chain_moves_fire_once_from_their_reference_on_tradable_contracts() {
+    let mut engine = TriggerEngine::new(TriggerSettings::default());
+    let (ce, thin) = ("NSE_FO|26000CE", "NSE_FO|26100CE");
+    let start = chain(
+        26_000.0,
+        false,
+        vec![
+            row(ce, 100.0, 1_000_000, true),
+            row(thin, 60.0, 500_000, false),
+        ],
+    );
+    // The first chain only sets references.
+    assert!(fo(&mut engine, 1_000, &start).is_empty());
+    // Spot +40 bps, the liquid premium +20 % and its OI +15 %. The thin
+    // contract moved as much but cannot be traded, so it stays quiet.
+    let moved = chain(
+        26_104.0,
+        false,
+        vec![
+            row(ce, 120.0, 1_150_000, true),
+            row(thin, 75.0, 800_000, false),
+        ],
+    );
+    assert_eq!(
+        fo(&mut engine, 2_000, &moved),
+        [
+            pair("spot_move", "NSE_INDEX|Nifty 50"),
+            pair("premium_move", ce),
+            pair("oi_shift", ce)
+        ]
+    );
+    let (lane, batch) = engine.next().unwrap();
+    assert_eq!((lane, batch.len()), (Lane::Decision, 3));
+    assert_eq!(batch[1].score, Some(2_000.0));
+    // The same chain again: each reference moved to the value it fired on.
+    assert!(fo(&mut engine, 3_000, &moved).is_empty());
+    // Another +20 % inside the cooldown waits; after it, it fires.
+    let again = chain(26_104.0, false, vec![row(ce, 144.0, 1_150_000, true)]);
+    assert!(fo(&mut engine, 4_000, &again).is_empty());
+    assert_eq!(
+        fo(&mut engine, 2_000 + 10 * 60_000, &again),
+        [pair("premium_move", ce)]
+    );
+    // Once the thin contract tightens, its move since its first sight fires.
+    let tight = chain(26_104.0, false, vec![row(thin, 75.0, 500_000, true)]);
+    assert_eq!(
+        fo(&mut engine, 2_000 + 10 * 60_000, &tight),
+        [pair("premium_move", thin)]
+    );
+}
+
+#[test]
+fn option_triggers_respect_phase_expiry_day_budget_and_decision_turns() {
+    let ce = "NSE_FO|26000CE";
+    let start = chain(26_000.0, true, vec![row(ce, 100.0, 1_000_000, true)]);
+    let moved = chain(26_104.0, true, vec![row(ce, 100.0, 1_000_000, true)]);
+    let observe = |engine: &mut TriggerEngine, phase, minute, spent, chain| {
+        engine
+            .observe_fo(&FoObservation {
+                now: 5_000,
+                minute,
+                phase,
+                decision_spent: spent,
+                chain,
+            })
+            .len()
+    };
+    let fresh = || {
+        let mut engine = TriggerEngine::new(TriggerSettings::default());
+        engine.observe_fo(&FoObservation {
+            now: 1_000,
+            minute: 600,
+            phase: Phase::PreOpen,
+            decision_spent: 0.0,
+            chain: &start,
+        });
+        engine
+    };
+    assert_eq!(observe(&mut fresh(), Phase::PreClose, 600, 0.0, &moved), 0);
+    // Expiry day stops raising triggers at 13:30.
+    assert_eq!(observe(&mut fresh(), Phase::Open, 810, 0.0, &moved), 0);
+    assert_eq!(observe(&mut fresh(), Phase::Open, 809, 0.0, &moved), 1);
+    // A spent decision budget doubles the bar: +40 bps no longer clears 60.
+    assert_eq!(observe(&mut fresh(), Phase::Open, 600, 1.0, &moved), 0);
+    assert_eq!(TriggerSettings::default().fo.bar(0.5).spot_move_bps, 45.0);
+    // With no contract to trade, a spot move is not worth a turn.
+    let illiquid = chain(26_104.0, true, vec![row(ce, 100.0, 1_000_000, false)]);
+    assert_eq!(observe(&mut fresh(), Phase::Open, 600, 0.0, &illiquid), 0);
+    // A decision turn saw the chain: moves count from the next chain after it.
+    let mut engine = fresh();
+    engine.decision_started(2_000, &[], &[]);
+    assert_eq!(observe(&mut engine, Phase::Open, 600, 0.0, &moved), 0);
+    let back = chain(26_000.0, true, vec![row(ce, 100.0, 1_000_000, true)]);
+    assert_eq!(observe(&mut engine, Phase::Open, 600, 0.0, &back), 1);
+}

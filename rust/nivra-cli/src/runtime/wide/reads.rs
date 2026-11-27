@@ -282,6 +282,27 @@ pub(super) fn persist_scanner_metadata(
     Ok(())
 }
 
+/// A depth read attaches the executable quote, and the open interest the
+/// same row reports, to the sample it read (#38).
+pub(super) fn attach_depth(
+    scan: &mut Scanner,
+    quotes: &BTreeMap<String, Quote>,
+    rows: &serde_json::Map<String, serde_json::Value>,
+) {
+    for (key, quote) in quotes {
+        let Some(sample) = scan.samples.get_mut(key) else {
+            continue;
+        };
+        sample.executable = Some(quote.clone());
+        sample.open_interest = rows
+            .values()
+            .find(|row| row["instrument_token"] == key.as_str())
+            .and_then(|row| row["oi"].as_f64())
+            .filter(|oi| oi.is_finite() && *oi >= 0.0)
+            .map(|oi| oi as u64);
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // Explicit original receipt tracking; never resample it.
 pub(in crate::runtime) fn read_executable_quotes(
     client: &data::Client,
@@ -329,13 +350,7 @@ pub(in crate::runtime) fn read_executable_quotes(
         QuoteReadTarget::Held {
             depth_sink: Some(scan),
         }
-        | QuoteReadTarget::Depth { scan, .. } => {
-            for (key, quote) in &quotes {
-                if let Some(sample) = scan.samples.get_mut(key) {
-                    sample.executable = Some(quote.clone());
-                }
-            }
-        }
+        | QuoteReadTarget::Depth { scan, .. } => attach_depth(scan, &quotes, &rows),
         QuoteReadTarget::Scan(scan) => {
             let mut store = feature_store
                 .lock()

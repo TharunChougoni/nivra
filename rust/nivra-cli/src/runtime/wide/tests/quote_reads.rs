@@ -796,3 +796,23 @@ fn archive_capture_replays_the_same_session_as_sqlite() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn a_depth_read_attaches_the_quote_and_open_interest_it_read() {
+    let key = "NSE_FO|26000CE";
+    let mut scan = Scanner::default();
+    scan.samples.insert(key.into(), Default::default());
+    let quotes = [(key.to_owned(), quote(start(), 50))].into();
+    let rows = serde_json::json!({
+        "NSE_FO:NIFTY26000CE":{"instrument_token":key,"oi":125_000.0},
+        "NSE_FO:NIFTY26100CE":{"instrument_token":"NSE_FO|26100CE","oi":9.0}
+    });
+    attach_depth(&mut scan, &quotes, rows.as_object().unwrap());
+    assert_eq!(scan.samples[key].executable, Some(quote(start(), 50)));
+    assert_eq!(scan.samples[key].open_interest, Some(125_000));
+    // A key the scanner does not sample gains nothing; a row without OI clears it.
+    assert!(!scan.samples.contains_key("NSE_FO|26100CE"));
+    let without = serde_json::json!({"x":{"instrument_token":key}});
+    attach_depth(&mut scan, &quotes, without.as_object().unwrap());
+    assert_eq!(scan.samples[key].open_interest, None);
+}

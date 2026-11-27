@@ -6,6 +6,7 @@ use crate::runtime::Result;
 use crate::runtime::harness::{Bridge, bridge_definitions, failure_reason};
 use crate::runtime::planner::{self, PlannerConfig};
 use nivra_core::execution::{Instrument, Portfolio};
+use nivra_core::market::{InstrumentKind, OptionCatalog};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -108,14 +109,25 @@ fn strategy_select_definition() -> Value {
 fn verdict_definition() -> Value {
     json!({
         "name":"verdict",
-        "description":"Finish the screen: escalate=true runs the decision lane on these triggers now; escalate=false lets them pass without a decision turn. It never plans or trades.",
+        "description":"Finish the screen. escalate=true wakes the decision lane now with your prospects, best first; escalate=false lets the triggers pass without a decision turn. The host keeps only prospects whose key is in the current option universe and whose idea matches the contract. It never sizes, plans or trades.",
         "parameters":{
             "type":"object",
             "properties":{
                 "escalate":{"type":"boolean"},
-                "reason":{"type":"string","minLength":1,"maxLength":400}
+                "reason":{"type":"string","minLength":1,"maxLength":400},
+                "prospects":{"type":"array","maxItems":MAX_PROSPECTS,"description":"Ranked F&O prospects for the decision lane, best first. Use [] when you do not escalate.","items":{
+                    "type":"object",
+                    "properties":{
+                        "instrument_key":{"type":"string","maxLength":256,"description":"An NSE_FO key from the brief's fo.rows."},
+                        "idea":{"type":"string","enum":["buy_call","buy_put"]},
+                        "evidence":{"type":"string","minLength":1,"maxLength":MAX_PROSPECT_TEXT,"description":"The numbers: spot or premium move, OI shift, spread in ticks, depth in lots, days to expiry, lot cash against book cash."},
+                        "why":{"type":"string","minLength":1,"maxLength":MAX_PROSPECT_TEXT,"description":"Why it deserves a decision turn now."}
+                    },
+                    "required":["instrument_key","idea","evidence","why"],
+                    "additionalProperties":false
+                }}
             },
-            "required":["escalate","reason"],
+            "required":["escalate","reason","prospects"],
             "additionalProperties":false
         }
     })
@@ -216,34 +228,155 @@ pub(crate) struct LaneHost<'a> {
     pub plan: Option<PlanAttempt>,
     /// The gate lane's last `verdict` this turn.
     pub verdict: Option<Verdict>,
+    /// The option universe a gate prospect must name. Gate turns only.
+    pub options: Option<&'a OptionCatalog>,
     /// Called with the turn's usage so far, so a crash still charges it.
     pub on_usage: Option<UsageCheckpoint<'a>>,
 }
 
-/// The gate's answer for one batch of entry triggers.
+/// The gate's answer for one batch of F&O triggers.
 #[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
 pub(crate) struct Verdict {
     pub escalate: bool,
     pub reason: String,
+    /// Validated prospects, best first; empty unless `escalate`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prospects: Vec<Prospect>,
+}
+
+/// Prospects one escalation may carry.
+pub(crate) const MAX_PROSPECTS: usize = 5;
+const MAX_PROSPECT_TEXT: usize = 300;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Idea {
+    BuyCall,
+    BuyPut,
+}
+
+/// One F&O prospect the gate hands the decision lane. The contract terms come
+/// from the option universe, never from the model.
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
+pub(crate) struct Prospect {
+    pub rank: usize,
+    pub instrument_key: String,
+    pub idea: Idea,
+    pub strike: String,
+    pub expiry: String,
+    pub lot_size: u64,
+    pub evidence: String,
+    pub why: String,
+}
+
+/// Keep the prospects that name a contract in the option universe with a
+/// matching idea, in the gate's order, at most `MAX_PROSPECTS`. Every other
+/// entry is dropped with its reason.
+pub(crate) fn validate_prospects(
+    raw: &[Value],
+    catalog: Option<&OptionCatalog>,
+) -> (Vec<Prospect>, Vec<Value>) {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Raw {
+        instrument_key: String,
+        idea: Idea,
+        evidence: String,
+        why: String,
+    }
+    let text = |value: &str| {
+        let value = value.trim();
+        (!value.is_empty() && value.chars().count() <= MAX_PROSPECT_TEXT).then(|| {
+            crate::runtime::transcript::redact(&json!(value))
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+    };
+    let mut kept: Vec<Prospect> = Vec::new();
+    let mut dropped = Vec::new();
+    for entry in raw {
+        let key = entry["instrument_key"].as_str().unwrap_or_default();
+        let reason = match serde_json::from_value::<Raw>(entry.clone()) {
+            Err(_) => "prospect_invalid",
+            Ok(_) if kept.len() >= MAX_PROSPECTS => "prospect_limit",
+            Ok(raw) => match (
+                catalog.and_then(|c| c.contracts.get(&raw.instrument_key)),
+                text(&raw.evidence).zip(text(&raw.why)),
+            ) {
+                (None, _) => "prospect_not_in_option_universe",
+                (_, None) => "prospect_invalid",
+                (Some(_), _) if kept.iter().any(|p| p.instrument_key == raw.instrument_key) => {
+                    "prospect_duplicate"
+                }
+                (Some(contract), Some((evidence, why))) => {
+                    let idea = match contract.option {
+                        InstrumentKind::Call => Idea::BuyCall,
+                        _ => Idea::BuyPut,
+                    };
+                    if idea != raw.idea {
+                        "prospect_idea_mismatch"
+                    } else {
+                        kept.push(Prospect {
+                            rank: kept.len() + 1,
+                            instrument_key: contract.key.clone(),
+                            idea,
+                            strike: contract.strike.amount().to_string(),
+                            expiry: contract.expiry.to_string(),
+                            lot_size: contract.lot_size,
+                            evidence,
+                            why,
+                        });
+                        continue;
+                    }
+                }
+            },
+        };
+        dropped.push(
+            json!({"instrument_key":key.chars().take(64).collect::<String>(),"reason":reason}),
+        );
+    }
+    (kept, dropped)
 }
 
 impl LaneHost<'_> {
     fn verdict(&mut self, args: &Value) -> std::result::Result<Value, String> {
-        let verdict: Verdict =
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Args {
+            escalate: bool,
+            reason: String,
+            #[serde(default)]
+            prospects: Vec<Value>,
+        }
+        let args: Args =
             serde_json::from_value(args.clone()).map_err(|_| "agent_verdict_invalid")?;
-        let reason = verdict.reason.trim();
+        let reason = args.reason.trim();
         if reason.is_empty() || reason.chars().count() > 400 {
             return Err("agent_verdict_invalid".into());
         }
+        let (prospects, dropped) = if args.escalate {
+            validate_prospects(&args.prospects, self.options)
+        } else {
+            (Vec::new(), Vec::new())
+        };
         let verdict = Verdict {
-            escalate: verdict.escalate,
+            escalate: args.escalate,
             reason: crate::runtime::transcript::redact(&json!(reason))
                 .as_str()
                 .unwrap_or_default()
                 .to_owned(),
+            prospects,
         };
         self.verdict = Some(verdict.clone());
-        Ok(json!({"status":"recorded","escalate":verdict.escalate}))
+        let kept: Vec<&str> = verdict
+            .prospects
+            .iter()
+            .map(|p| p.instrument_key.as_str())
+            .collect();
+        Ok(
+            json!({"status":"recorded","escalate":verdict.escalate,"prospects":kept,"dropped":dropped}),
+        )
     }
 
     fn strategy_select(&mut self, args: &Value) -> std::result::Result<Value, String> {

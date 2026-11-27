@@ -422,6 +422,9 @@ impl<'a> LaneRunner<'a> {
                 .then_some((&context.portfolio, context.instruments.as_slice())),
             plan: None,
             verdict: None,
+            options: (lane == Lane::Gate)
+                .then_some(context.portfolio.options.as_ref())
+                .flatten(),
             on_usage: Some(Box::new(move |usage: &Usage| {
                 // A failed checkpoint only loses crash accounting; the turn's
                 // final usage is still charged when it settles.

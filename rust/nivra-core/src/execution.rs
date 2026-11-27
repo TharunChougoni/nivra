@@ -1100,6 +1100,9 @@ pub struct Sample {
     /// Latest REST bid/ask/depth for a shortlisted key; never a screening price.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub executable: Option<Quote>,
+    /// Open interest from the same REST read as `executable`, for F&O keys.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_interest: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fresh_for_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

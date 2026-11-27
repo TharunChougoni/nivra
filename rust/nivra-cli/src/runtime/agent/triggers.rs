@@ -6,6 +6,9 @@ use super::Lane;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod fo;
+pub(crate) use fo::{FoBar, FoObservation, FoTriggers};
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TriggerSettings {
@@ -15,6 +18,9 @@ pub(crate) struct TriggerSettings {
     pub research: ResearchTriggers,
     #[serde(default)]
     pub review: ReviewTriggers,
+    /// F&O triggers that wake the gate ([fo]).
+    #[serde(default)]
+    pub fo: FoTriggers,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -154,6 +160,7 @@ impl TriggerSettings {
             && r.drift_threshold.is_finite()
             && (0.0..=1.0).contains(&r.drift_threshold)
             && r.drift_min_samples > 0
+            && self.fo.validate()
     }
 }
 
@@ -165,6 +172,8 @@ pub(crate) enum TriggerKind {
     PositionRisk,
     Fill,
     EntryCandidate,
+    /// A Nifty option chain move; the gate screens these batches.
+    FoSignal,
     Schedule,
     /// The pre-open turn that chooses today's strategy.
     PreOpen,
@@ -186,6 +195,7 @@ impl TriggerKind {
             Self::PositionRisk
             | Self::Fill
             | Self::EntryCandidate
+            | Self::FoSignal
             | Self::Schedule
             | Self::PreOpen => Lane::Decision,
             Self::Request
@@ -365,6 +375,7 @@ pub(crate) struct TriggerEngine {
     strategy_search: bool,
     sealed: bool,
     after_close: bool,
+    fo: fo::FoState,
     pending: BTreeMap<Lane, Vec<Trigger>>,
 }
 
@@ -500,6 +511,7 @@ impl TriggerEngine {
             .map(|h| (h.instrument_key.clone(), h.mark))
             .collect();
         self.risk.retain(|(_, reason)| *reason != "adverse_move");
+        self.fo.rebase();
         self.top_k_seen = ranking
             .iter()
             .take(self.settings.decision.top_k)

@@ -7,11 +7,12 @@ use super::lanes::{self, LaneRunner, TurnContext};
 use super::paper;
 use super::protocol::{TurnStatus, Usage};
 use super::requests::Requests;
-use super::tools::{PlanAttempt, Verdict};
+use super::tools::{PlanAttempt, Prospect, Verdict};
 use super::triggers::{
-    Observation, Phase, Ranked, Trigger, TriggerEngine, TriggerKind, ranker_registry,
+    FoObservation, Observation, Phase, Ranked, Trigger, TriggerEngine, TriggerKind, ranker_registry,
 };
 use super::{AgentMode, AgentSettings, Lane};
+use crate::runtime::options::{SpotQuote, chain};
 use crate::runtime::planner::{self, Backend, PlannerConfig};
 use crate::runtime::wide::strategy_run::{self, SupervisionState};
 use crate::runtime::{Config, Connection, Result, decision, decision_evidence, redecision};
@@ -103,6 +104,23 @@ pub(crate) struct Cycle<'a> {
     pub store: &'a FeatureStore,
     pub index: Option<Value>,
     pub regime: Option<RegimeFacts>,
+    /// Fresh Nifty spot when the option universe is enabled.
+    pub spot: Option<SpotQuote>,
+}
+
+/// F&O triggers the gate escalated, with its validated prospects; the next
+/// dispatch runs them on the decision lane without screening them again.
+#[derive(Clone, Debug, PartialEq)]
+struct Escalation {
+    triggers: Vec<Trigger>,
+    prospects: Vec<Prospect>,
+}
+
+/// A lane turn ready to hand the worker.
+struct Prepared {
+    job: Job,
+    claim: Option<redecision::Claim>,
+    consumes_agenda: bool,
 }
 
 struct Job {
@@ -146,9 +164,11 @@ pub(crate) struct LaneService {
     pending_claim: Option<redecision::Claim>,
     hold_until_ms: i64,
     agenda: Option<String>,
-    /// Entry triggers the gate escalated; the next dispatch runs them on the
-    /// decision lane without screening them again.
-    escalated: Option<Vec<Trigger>>,
+    escalated: Option<Escalation>,
+    /// This scan's near-the-money option chain, for F&O triggers and briefs.
+    chain: Option<chain::Chain>,
+    /// Why the chain could not be built, journalled once per change.
+    chain_failure: Option<String>,
     /// This process claimed the after-close marker, so a requeued batch may
     /// still run its turn.
     after_close_claimed: bool,
@@ -321,6 +341,8 @@ impl LaneService {
             hold_until_ms: 0,
             agenda: None,
             escalated: None,
+            chain: None,
+            chain_failure: None,
             after_close_claimed: false,
             status: json!({"status":"idle"}),
         })
@@ -455,6 +477,17 @@ impl LaneService {
             strategy_fills,
             regime: cycle.regime.as_ref().map(|r| r.label.as_str()),
         });
+        let mut fired = fired;
+        self.refresh_chain(cycle)?;
+        if let Some(chain) = &self.chain {
+            fired.extend(self.engine.observe_fo(&FoObservation {
+                now: cycle.now,
+                minute: cycle.minute,
+                phase,
+                decision_spent: self.fraction(Lane::Decision, &spent),
+                chain,
+            }));
+        }
         for trigger in &fired {
             append(
                 c,
@@ -470,7 +503,9 @@ impl LaneService {
             && self.engine.decision_waiting()
             && (!cycle.ranking.is_empty()
                 || !held.is_empty()
-                || fired.iter().any(|t| t.kind == TriggerKind::Fill)
+                || fired
+                    .iter()
+                    .any(|t| matches!(t.kind, TriggerKind::Fill | TriggerKind::FoSignal))
                 || supervision.supervised)
         {
             self.preempt.store(true, Ordering::Release);
@@ -489,6 +524,39 @@ impl LaneService {
         )
     }
 
+    /// The near-the-money chain for this scan, when options are enabled and
+    /// the universe and a fresh spot exist.
+    fn refresh_chain(&mut self, cycle: &Cycle<'_>) -> Result<()> {
+        let c = cycle.c;
+        let (Some(catalog), Some(spot)) = (cycle.portfolio.options.as_ref(), &cycle.spot) else {
+            self.chain = None;
+            return Ok(());
+        };
+        let built = chain::near_money(
+            catalog,
+            cycle.scanner,
+            cycle.portfolio,
+            spot,
+            c.session,
+            cycle.now,
+            self.engine.settings().fo.strikes_near,
+        );
+        let failure = built
+            .as_ref()
+            .err()
+            .map(|error| crate::runtime::harness::failure_reason(error.as_ref()));
+        if failure.is_some() && failure != self.chain_failure {
+            append(
+                c,
+                "triggers.ndjson",
+                &json!({"event":"fo_chain_unavailable","at_ms":cycle.now,"reason":failure}),
+            )?;
+        }
+        self.chain_failure = failure;
+        self.chain = built.ok();
+        Ok(())
+    }
+
     fn dispatch(
         &mut self,
         cycle: &Cycle<'_>,
@@ -499,178 +567,17 @@ impl LaneService {
         supervision: &SupervisionState,
     ) -> Result<()> {
         let c = cycle.c;
-        let strategy_active = supervision.strategy_active();
-        let (lane, mut triggers) = match self.escalated.take() {
-            Some(triggers) => (Lane::Decision, triggers),
-            None => {
-                let Some((lane, triggers)) = self.engine.next() else {
-                    return Ok(());
-                };
-                (
-                    self.screen(c, lane, &triggers, spent, strategy_active)?,
-                    triggers,
-                )
-            }
+        let Some(Prepared {
+            job,
+            claim,
+            consumes_agenda,
+        }) = self.prepare(cycle, db, held, phase, spent, supervision)?
+        else {
+            return Ok(());
         };
-        if strategy_active && matches!(lane, Lane::Decision | Lane::Gate) {
-            let (entry, rest): (Vec<_>, Vec<_>) = triggers
-                .into_iter()
-                .partition(|t| t.kind == TriggerKind::EntryCandidate);
-            if !entry.is_empty() {
-                self.skip(c, lane, &entry, "strategy_owns_cash_entries")?;
-            }
-            if rest.is_empty() {
-                return Ok(());
-            }
-            triggers = rest;
-        }
-        let Ok(settings) = self.settings.lane(lane) else {
-            return self.skip(c, lane, &triggers, "agent_lane_not_configured");
-        };
-        let p = cycle.portfolio;
-        let pre_open = lane == Lane::Decision
-            && phase == Phase::PreOpen
-            && triggers.iter().all(|t| t.kind == TriggerKind::PreOpen);
-        if matches!(lane, Lane::Decision | Lane::Gate) {
-            if !(phase.trading() || pre_open) || p.halted || p.stopped || p.closed {
-                return self.skip(c, lane, &triggers, "agent_book_not_trading");
-            }
-            if cycle.ranking.is_empty()
-                && held.is_empty()
-                && !triggers
-                    .iter()
-                    .any(|trigger| trigger.kind == TriggerKind::Fill)
-                && !(supervision.supervised
-                    && triggers.iter().any(|trigger| {
-                        matches!(trigger.kind, TriggerKind::Schedule | TriggerKind::PreOpen)
-                    }))
-            {
-                return self.skip(c, lane, &triggers, "agent_no_eligible_evidence");
-            }
-        }
-        if self.fraction(lane, spent) >= 1.0
-            || (lane == Lane::Gate && self.fraction(Lane::Decision, spent) >= 1.0)
-        {
-            return self.skip(c, lane, &triggers, "agent_budget_exhausted");
-        }
+        let (lane, triggers) = (job.work.lane, job.work.triggers.clone());
         let Some(jobs) = self.jobs.as_ref() else {
             return self.skip(c, lane, &triggers, "agent_worker_unavailable");
-        };
-        let context = match self.context(cycle) {
-            Ok(context) => context,
-            Err(error) => {
-                self.hold_until_ms = cycle.now.saturating_add(CONTEXT_RETRY_MS);
-                let entry = json!({"event":"deferred","lane":lane,"at_ms":cycle.now,
-                    "reason":crate::runtime::harness::failure_reason(error.as_ref()),
-                    "retry_at_ms":self.hold_until_ms,"triggers":triggers});
-                self.engine.requeue(queue(lane), triggers);
-                return append(c, "triggers.ndjson", &entry);
-            }
-        };
-        if lane == Lane::Review && !lanes::claim(c, lanes::REVIEW_MARKER)? {
-            return self.skip(c, lane, &triggers, "agent_review_already_ran");
-        }
-        let after_close = |t: &Trigger| t.kind == TriggerKind::AfterClose;
-        if !self.after_close_claimed && triggers.iter().any(after_close) {
-            if lanes::claim(c, lanes::AFTER_CLOSE_MARKER)? {
-                self.after_close_claimed = true;
-            } else {
-                let (ran, rest): (Vec<_>, Vec<_>) = triggers.into_iter().partition(after_close);
-                self.skip(c, lane, &ran, "agent_after_close_already_ran")?;
-                if rest.is_empty() {
-                    return Ok(());
-                }
-                triggers = rest;
-            }
-        }
-        let memory = lanes::memory(c, lane);
-        let facts = Facts {
-            session: SessionFacts {
-                date: c.session.to_string(),
-                phase,
-                minute: cycle.minute,
-                now_ms: cycle.now,
-            },
-            portfolio: p,
-            ranking: cycle.ranking,
-            memory: memory.as_ref(),
-            execution: if self.mode == AgentMode::Paper {
-                "paper_plan_pending_host_validation"
-            } else {
-                "shadow_never_executed"
-            },
-            regime: cycle.regime.as_ref(),
-        };
-        let used = spent.get(&lane).cloned().unwrap_or_default();
-        let budget = brief::budget(
-            lane,
-            &used,
-            settings.daily_calls,
-            settings.daily_cost_usd,
-            self.engine.entry_bar(self.fraction(Lane::Decision, spent)),
-        );
-        let consumes_agenda = lane == Lane::Research
-            && triggers
-                .iter()
-                .any(|trigger| trigger.kind == TriggerKind::Agenda);
-        let agenda = consumes_agenda.then_some(self.agenda.as_deref()).flatten();
-        let task = match lane {
-            Lane::Research if triggers.iter().any(after_close) => {
-                json!({"kind":"after_close","session":c.session.to_string(),
-                    "instructions":AFTER_CLOSE_TASK,"review":agenda})
-            }
-            Lane::Research if consumes_agenda => {
-                json!({"kind":"agenda","review":self.agenda})
-            }
-            Lane::Research
-                if triggers
-                    .iter()
-                    .any(|t| t.kind == TriggerKind::StrategySearch) =>
-            {
-                strategy_search_task(c, cycle.cfg, cycle.now)
-            }
-            Lane::Research => json!({"kind":triggers[0].kind}),
-            Lane::Review => json!({"kind":"review","session":c.session.to_string()}),
-            Lane::Gate => json!({"kind":"gate"}),
-            Lane::Decision if pre_open => {
-                json!({"kind":"pre_open","session":c.session.to_string(),"instructions":PRE_OPEN_TASK})
-            }
-            Lane::Decision => Value::Null,
-        };
-        let mut brief = Brief::build(&facts, budget, task, &triggers);
-        if lane == Lane::Decision {
-            brief.strategies = brief::strategy_facts(db, c, cycle.cfg);
-            brief.execution_refusals =
-                crate::runtime::wide::recent_refusals(db, brief::MAX_REFUSALS)?;
-        }
-        // The pre-open turn chooses a strategy; it never holds a paper plan.
-        let claim = if lane == Lane::Decision && self.mode == AgentMode::Paper && !pre_open {
-            let claim = paper::reserve(
-                db,
-                c,
-                cycle.cfg,
-                p,
-                cycle.now,
-                &context.bundle,
-                primary(&triggers),
-            )?;
-            let Some(claim) = claim else {
-                return self.skip(c, lane, &triggers, "agent_paper_authority_unavailable");
-            };
-            Some(claim)
-        } else {
-            None
-        };
-        let job = Job {
-            c: c.clone(),
-            cfg: cycle.cfg.clone(),
-            work: Work {
-                lane,
-                triggers: triggers.clone(),
-                brief,
-                context,
-                paper_turn_id: claim.as_ref().map(paper::turn_id),
-            },
         };
         self.preempt.store(false, Ordering::Release);
         match jobs.try_send(job) {
@@ -707,25 +614,236 @@ impl LaneService {
         )
     }
 
+    /// The next due turn, or `None` when it was skipped, deferred or nothing
+    /// is due. Every skip is journalled.
+    fn prepare(
+        &mut self,
+        cycle: &Cycle<'_>,
+        db: &mut Connection,
+        held: &[super::triggers::Held],
+        phase: Phase,
+        spent: &BTreeMap<Lane, Usage>,
+        supervision: &SupervisionState,
+    ) -> Result<Option<Prepared>> {
+        let c = cycle.c;
+        let strategy_active = supervision.strategy_active();
+        let (lane, mut triggers, prospects) = match self.escalated.take() {
+            Some(escalation) => (Lane::Decision, escalation.triggers, escalation.prospects),
+            None => {
+                let Some((lane, triggers)) = self.engine.next() else {
+                    return Ok(None);
+                };
+                (
+                    self.screen(c, lane, &triggers, spent)?,
+                    triggers,
+                    Vec::new(),
+                )
+            }
+        };
+        if strategy_active && matches!(lane, Lane::Decision | Lane::Gate) {
+            let (entry, rest): (Vec<_>, Vec<_>) = triggers
+                .into_iter()
+                .partition(|t| t.kind == TriggerKind::EntryCandidate);
+            if !entry.is_empty() {
+                self.skip(c, lane, &entry, "strategy_owns_cash_entries")?;
+            }
+            if rest.is_empty() {
+                return Ok(None);
+            }
+            triggers = rest;
+        }
+        let Ok(settings) = self.settings.lane(lane) else {
+            return self
+                .skip(c, lane, &triggers, "agent_lane_not_configured")
+                .map(|()| None);
+        };
+        let p = cycle.portfolio;
+        let pre_open = lane == Lane::Decision
+            && phase == Phase::PreOpen
+            && triggers.iter().all(|t| t.kind == TriggerKind::PreOpen);
+        if matches!(lane, Lane::Decision | Lane::Gate) {
+            if !(phase.trading() || pre_open) || p.halted || p.stopped || p.closed {
+                return self
+                    .skip(c, lane, &triggers, "agent_book_not_trading")
+                    .map(|()| None);
+            }
+            if cycle.ranking.is_empty()
+                && held.is_empty()
+                && !triggers.iter().any(|trigger| {
+                    matches!(trigger.kind, TriggerKind::Fill | TriggerKind::FoSignal)
+                })
+                && !(supervision.supervised
+                    && triggers.iter().any(|trigger| {
+                        matches!(trigger.kind, TriggerKind::Schedule | TriggerKind::PreOpen)
+                    }))
+            {
+                return self
+                    .skip(c, lane, &triggers, "agent_no_eligible_evidence")
+                    .map(|()| None);
+            }
+        }
+        if self.fraction(lane, spent) >= 1.0
+            || (lane == Lane::Gate && self.fraction(Lane::Decision, spent) >= 1.0)
+        {
+            return self
+                .skip(c, lane, &triggers, "agent_budget_exhausted")
+                .map(|()| None);
+        }
+        if self.jobs.is_none() {
+            return self
+                .skip(c, lane, &triggers, "agent_worker_unavailable")
+                .map(|()| None);
+        }
+        let context = match self.context(cycle) {
+            Ok(context) => context,
+            Err(error) => {
+                self.hold_until_ms = cycle.now.saturating_add(CONTEXT_RETRY_MS);
+                let entry = json!({"event":"deferred","lane":lane,"at_ms":cycle.now,
+                    "reason":crate::runtime::harness::failure_reason(error.as_ref()),
+                    "retry_at_ms":self.hold_until_ms,"triggers":triggers});
+                self.engine.requeue(queue(lane), triggers);
+                return append(c, "triggers.ndjson", &entry).map(|()| None);
+            }
+        };
+        if lane == Lane::Review && !lanes::claim(c, lanes::REVIEW_MARKER)? {
+            return self
+                .skip(c, lane, &triggers, "agent_review_already_ran")
+                .map(|()| None);
+        }
+        let after_close = |t: &Trigger| t.kind == TriggerKind::AfterClose;
+        if !self.after_close_claimed && triggers.iter().any(after_close) {
+            if lanes::claim(c, lanes::AFTER_CLOSE_MARKER)? {
+                self.after_close_claimed = true;
+            } else {
+                let (ran, rest): (Vec<_>, Vec<_>) = triggers.into_iter().partition(after_close);
+                self.skip(c, lane, &ran, "agent_after_close_already_ran")?;
+                if rest.is_empty() {
+                    return Ok(None);
+                }
+                triggers = rest;
+            }
+        }
+        let memory = lanes::memory(c, lane);
+        let facts = Facts {
+            session: SessionFacts {
+                date: c.session.to_string(),
+                phase,
+                minute: cycle.minute,
+                now_ms: cycle.now,
+            },
+            portfolio: p,
+            ranking: cycle.ranking,
+            memory: memory.as_ref(),
+            execution: if self.mode == AgentMode::Paper {
+                "paper_plan_pending_host_validation"
+            } else {
+                "shadow_never_executed"
+            },
+            regime: cycle.regime.as_ref(),
+        };
+        let used = spent.get(&lane).cloned().unwrap_or_default();
+        let decision_spent = self.fraction(Lane::Decision, spent);
+        let mut budget = brief::budget(
+            lane,
+            &used,
+            settings.daily_calls,
+            settings.daily_cost_usd,
+            self.engine.entry_bar(decision_spent),
+        );
+        if lane == Lane::Gate {
+            budget.fo_bar = Some(self.engine.settings().fo.bar(decision_spent));
+        }
+        let consumes_agenda = lane == Lane::Research
+            && triggers
+                .iter()
+                .any(|trigger| trigger.kind == TriggerKind::Agenda);
+        let agenda = consumes_agenda.then_some(self.agenda.as_deref()).flatten();
+        let task = match lane {
+            Lane::Research if triggers.iter().any(after_close) => {
+                json!({"kind":"after_close","session":c.session.to_string(),
+                    "instructions":AFTER_CLOSE_TASK,"review":agenda})
+            }
+            Lane::Research if consumes_agenda => {
+                json!({"kind":"agenda","review":self.agenda})
+            }
+            Lane::Research
+                if triggers
+                    .iter()
+                    .any(|t| t.kind == TriggerKind::StrategySearch) =>
+            {
+                strategy_search_task(c, cycle.cfg, cycle.now)
+            }
+            Lane::Research => json!({"kind":triggers[0].kind}),
+            Lane::Review => json!({"kind":"review","session":c.session.to_string()}),
+            Lane::Gate => json!({"kind":"gate"}),
+            Lane::Decision if pre_open => {
+                json!({"kind":"pre_open","session":c.session.to_string(),"instructions":PRE_OPEN_TASK})
+            }
+            Lane::Decision => Value::Null,
+        };
+        let mut brief = Brief::build(&facts, budget, task, &triggers);
+        if matches!(lane, Lane::Decision | Lane::Gate) {
+            brief.fo = self.chain.clone();
+        }
+        if lane == Lane::Decision {
+            brief.gate_prospects = prospects;
+            brief.strategies = brief::strategy_facts(db, c, cycle.cfg);
+            brief.execution_refusals =
+                crate::runtime::wide::recent_refusals(db, brief::MAX_REFUSALS)?;
+        }
+        // The pre-open turn chooses a strategy; it never holds a paper plan.
+        let claim = if lane == Lane::Decision && self.mode == AgentMode::Paper && !pre_open {
+            let claim = paper::reserve(
+                db,
+                c,
+                cycle.cfg,
+                p,
+                cycle.now,
+                &context.bundle,
+                primary(&triggers),
+            )?;
+            let Some(claim) = claim else {
+                return self
+                    .skip(c, lane, &triggers, "agent_paper_authority_unavailable")
+                    .map(|()| None);
+            };
+            Some(claim)
+        } else {
+            None
+        };
+        Ok(Some(Prepared {
+            job: Job {
+                c: c.clone(),
+                cfg: cycle.cfg.clone(),
+                work: Work {
+                    lane,
+                    triggers,
+                    brief,
+                    context,
+                    paper_turn_id: claim.as_ref().map(paper::turn_id),
+                },
+            },
+            claim,
+            consumes_agenda,
+        }))
+    }
+
     /// The lane a decision batch runs on first: the gate when one is
-    /// configured with budget left and every trigger is an entry candidate,
-    /// unless an active strategy owns cash entries. Fills, position risk and
-    /// scheduled turns always reach the decision lane directly. An exhausted
-    /// gate passes its batches through.
+    /// configured with budget left and every trigger is an F&O signal. Cash
+    /// entry candidates, fills, position risk and scheduled turns reach the
+    /// decision lane directly. An exhausted gate passes its batches through.
     fn screen(
         &self,
         c: &Config,
         lane: Lane,
         triggers: &[Trigger],
         spent: &BTreeMap<Lane, Usage>,
-        strategy_active: bool,
     ) -> Result<Lane> {
-        if strategy_active
-            || lane != Lane::Decision
+        if lane != Lane::Decision
             || !self.settings.lanes.contains_key(&Lane::Gate)
             || !triggers
                 .iter()
-                .all(|trigger| trigger.kind == TriggerKind::EntryCandidate)
+                .all(|trigger| trigger.kind == TriggerKind::FoSignal)
         {
             return Ok(lane);
         }
@@ -785,22 +903,31 @@ impl LaneService {
             }
         } else if done.lane == Lane::Gate {
             // A gate that failed or gave no verdict escalates: a broken screen
-            // must not silence entry triggers. The journal says which it was.
-            let (escalate, reason) = match &done.verdict {
-                Some(verdict) => (verdict.escalate, verdict.reason.as_str()),
+            // must not silence F&O triggers. The journal says which it was.
+            let (escalate, reason, prospects) = match &done.verdict {
+                Some(verdict) => (
+                    verdict.escalate,
+                    verdict.reason.as_str(),
+                    verdict.prospects.clone(),
+                ),
                 None => (
                     true,
                     done.error.as_deref().unwrap_or("agent_gate_no_verdict"),
+                    Vec::new(),
                 ),
             };
             append(
                 c,
                 "triggers.ndjson",
                 &json!({"event":"gated","at_ms":cycle.now,"escalate":escalate,
-                    "verdict":done.verdict.is_some(),"reason":reason,"triggers":done.triggers}),
+                    "verdict":done.verdict.is_some(),"reason":reason,"prospects":prospects,
+                    "triggers":done.triggers}),
             )?;
             if escalate {
-                self.escalated = Some(done.triggers.clone());
+                self.escalated = Some(Escalation {
+                    triggers: done.triggers.clone(),
+                    prospects,
+                });
             }
         }
         let paper_status = if let Some(claim) = self.pending_claim.as_ref() {
@@ -925,6 +1052,7 @@ mod tests {
             store: &store,
             index: None,
             regime: None,
+            spot: None,
         };
 
         let mut db = Connection::open_in_memory().unwrap();
@@ -971,6 +1099,7 @@ mod tests {
             store: &store,
             index: None,
             regime: None,
+            spot: None,
         };
         let mut db = crate::runtime::open_book(&c).unwrap();
         // History not yet prepared: nothing fires, even at nine.
@@ -1014,43 +1143,35 @@ mod tests {
     }
 
     #[test]
-    fn the_gate_screens_only_entry_candidates_and_escalates_unless_it_declines() {
+    fn the_gate_screens_fo_signals_and_its_valid_prospects_reach_the_decision_brief() {
+        use crate::runtime::options::chain::tests::{catalog, depth, spot};
         let dir = tempfile::tempdir().unwrap();
         let (c, mut cfg) = crate::runtime::decision::decision_fixture_config(dir.path());
         let agent = cfg.agent.as_mut().unwrap();
+        agent.mode = AgentMode::Shadow;
         let mut gate = agent.lanes[&Lane::Decision].clone();
         gate.daily_calls = 2;
         agent.lanes.insert(Lane::Gate, gate);
+        let settings = agent.clone();
         let mut service = LaneService::start(&cfg).unwrap();
-        let entry = || {
-            vec![Trigger::new(
-                TriggerKind::EntryCandidate,
-                "entered_top_k",
-                1,
-            )]
-        };
+        let signal = || vec![Trigger::new(TriggerKind::FoSignal, "premium_move", 1)];
         let mut spent = BTreeMap::new();
+        let route = |service: &LaneService, triggers: &[Trigger], spent: &BTreeMap<_, _>| {
+            service.screen(&c, Lane::Decision, triggers, spent).unwrap()
+        };
 
-        assert_eq!(
-            service
-                .screen(&c, Lane::Decision, &entry(), &spent, false)
-                .unwrap(),
-            Lane::Gate
-        );
-        assert_eq!(
-            service
-                .screen(&c, Lane::Decision, &entry(), &spent, true)
-                .unwrap(),
-            Lane::Decision
-        );
-        let mut mixed = entry();
+        // Only F&O batches meet the gate; cash entry candidates go straight
+        // to the decision lane, and so does any batch with a fill.
+        assert_eq!(route(&service, &signal(), &spent), Lane::Gate);
+        let cash = [Trigger::new(
+            TriggerKind::EntryCandidate,
+            "entered_top_k",
+            1,
+        )];
+        assert_eq!(route(&service, &cash, &spent), Lane::Decision);
+        let mut mixed = signal();
         mixed.push(Trigger::new(TriggerKind::Fill, "fill_batch", 1));
-        assert_eq!(
-            service
-                .screen(&c, Lane::Decision, &mixed, &spent, false)
-                .unwrap(),
-            Lane::Decision
-        );
+        assert_eq!(route(&service, &mixed, &spent), Lane::Decision);
         spent.insert(
             Lane::Gate,
             Usage {
@@ -1058,20 +1179,25 @@ mod tests {
                 ..Usage::default()
             },
         );
-        assert_eq!(
-            service
-                .screen(&c, Lane::Decision, &entry(), &spent, false)
-                .unwrap(),
-            Lane::Decision
-        );
+        assert_eq!(route(&service, &signal(), &spent), Lane::Decision);
+        spent.clear();
 
-        let portfolio = crate::runtime::tests::test_portfolio();
-        let scanner = Scanner::default();
+        let now = c
+            .session
+            .and_hms_opt(4, 30, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        let mut portfolio = crate::runtime::tests::test_portfolio();
+        portfolio.cash = nivra_core::finance::Amount::parse("15000").unwrap();
+        portfolio.options = Some(catalog("26040"));
+        let mut scanner = Scanner::default();
+        depth(&mut scanner, "NSE_FO|26000CE", "100", "100.20", now - 100);
         let store = FeatureStore::new(Default::default()).unwrap();
         let cycle = Cycle {
             c: &c,
             cfg: &cfg,
-            now: 20_000,
+            now,
             minute: 600,
             sealed: false,
             portfolio: &portfolio,
@@ -1084,11 +1210,84 @@ mod tests {
             store: &store,
             index: None,
             regime: None,
+            spot: Some(spot("26040", now - 50)),
         };
         let mut db = Connection::open_in_memory().unwrap();
-        let done = |verdict: Option<Verdict>, error: Option<&str>| Done {
+        let supervision = SupervisionState::default();
+        service.refresh_chain(&cycle).unwrap();
+        let prepare = |service: &mut LaneService, db: &mut Connection| {
+            service
+                .prepare(&cycle, db, &[], Phase::Open, &spent, &supervision)
+                .unwrap()
+                .unwrap()
+                .job
+                .work
+        };
+
+        // The gate's brief carries the chain and the F&O thresholds.
+        service.engine.push(signal().remove(0));
+        let mut work = prepare(&mut service, &mut db);
+        assert_eq!(work.lane, Lane::Gate);
+        let chain = work.brief.fo.as_ref().unwrap();
+        assert_eq!(chain.rows[0].instrument_key, "NSE_FO|26000CE");
+        assert_eq!(work.brief.budget.fo_bar.unwrap().spot_move_bps, 30.0);
+
+        // A scripted gate escalates four prospects; the host keeps the one
+        // that names a contract in the universe with a matching idea.
+        let prospect = |key: &str, idea: &str| json!({"instrument_key":key,"idea":idea,"evidence":"premium +20%, 4 ticks, 4 lots","why":"momentum at the money"});
+        let (client, peer) = super::super::tests::connect(move |peer| {
+            let (id, _) = peer.turn();
+            let reply = peer.call(&id, "verdict", json!({"escalate":true,"reason":"ATM call premium jumped",
+                "prospects":[prospect("NSE_FO|26000CE","buy_call"),prospect("NSE_FO|99999CE","buy_call"),
+                    prospect("NSE_FO|26000PE","buy_call"),prospect("NSE_FO|26000CE","buy_call")]}));
+            peer.finish(&id, "ok", "", 1, 0.0);
+            reply
+        });
+        let mut fixture = super::super::tests::fixture_agent(client);
+        let clock = move || now;
+        let mut runner = LaneRunner::new(&mut fixture, &settings, &c, &cfg, &clock);
+        let done = run(&mut runner, &mut work);
+        drop(runner);
+        let reply = peer.join().unwrap();
+        assert_eq!(reply["output"]["prospects"], json!(["NSE_FO|26000CE"]));
+        let dropped: Vec<&str> = reply["output"]["dropped"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["reason"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            dropped,
+            [
+                "prospect_not_in_option_universe",
+                "prospect_idea_mismatch",
+                "prospect_duplicate"
+            ]
+        );
+        service.settle(&cycle, &mut db, done).unwrap();
+
+        // The next decision turn runs the escalated batch with the prospect,
+        // its terms taken from the option universe.
+        let work = prepare(&mut service, &mut db);
+        assert_eq!(work.lane, Lane::Decision);
+        assert_eq!(work.triggers[0].kind, TriggerKind::FoSignal);
+        let prospects = &work.brief.gate_prospects;
+        assert_eq!(prospects.len(), 1);
+        let p = &prospects[0];
+        assert_eq!((p.rank, p.instrument_key.as_str()), (1, "NSE_FO|26000CE"));
+        assert_eq!(
+            (p.strike.as_str(), p.expiry.as_str(), p.lot_size),
+            ("26000", "2026-10-20", 65)
+        );
+        assert_eq!(p.idea, super::super::tools::Idea::BuyCall);
+        let brief: Value = serde_json::from_str(&work.brief.render().unwrap()).unwrap();
+        assert_eq!(brief["gate_prospects"][0]["why"], "momentum at the money");
+        assert!(brief["fo"]["rows"].is_array());
+
+        // A declined screen ends the batch; a failed one escalates without prospects.
+        let gated = |verdict: Option<Verdict>, error: Option<&str>| Done {
             lane: Lane::Gate,
-            triggers: entry(),
+            triggers: signal(),
             turns: Vec::new(),
             plan: None,
             paper_input: None,
@@ -1097,45 +1296,33 @@ mod tests {
             error: error.map(str::to_owned),
             retry_at_ms: None,
         };
-        let verdict = |escalate| {
-            Some(Verdict {
-                escalate,
-                reason: "depth".into(),
-            })
+        let declined = Verdict {
+            escalate: false,
+            reason: "wide".into(),
+            prospects: Vec::new(),
         };
         service
-            .settle(&cycle, &mut db, done(verdict(false), None))
+            .settle(&cycle, &mut db, gated(Some(declined), None))
             .unwrap();
         assert!(service.escalated.is_none());
         service
-            .settle(&cycle, &mut db, done(verdict(true), None))
+            .settle(&cycle, &mut db, gated(None, Some("agent_turn_timeout")))
             .unwrap();
-        assert_eq!(service.escalated.take(), Some(entry()));
-        // A failed screen must not silence the triggers.
-        service
-            .settle(&cycle, &mut db, done(None, Some("agent_turn_timeout")))
-            .unwrap();
-        assert_eq!(service.escalated.take(), Some(entry()));
-
-        let journal = std::fs::read_to_string(lanes::root(&c).join("triggers.ndjson")).unwrap();
-        let events: Vec<Value> = journal
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
-        let kinds: Vec<(&str, Option<bool>)> = events
-            .iter()
-            .map(|e| (e["event"].as_str().unwrap(), e["escalate"].as_bool()))
-            .collect();
         assert_eq!(
-            kinds,
-            [
-                ("gate_bypassed", None),
-                ("gated", Some(false)),
-                ("gated", Some(true)),
-                ("gated", Some(true))
-            ]
+            service.escalated.take(),
+            Some(Escalation {
+                triggers: signal(),
+                prospects: Vec::new()
+            })
         );
-        assert_eq!(events[3]["reason"], "agent_turn_timeout");
+        let journal = std::fs::read_to_string(lanes::root(&c).join("triggers.ndjson")).unwrap();
+        let gated: Vec<Value> = journal
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .filter(|e| e["event"] == "gated")
+            .collect();
+        assert_eq!(gated[0]["prospects"][0]["instrument_key"], "NSE_FO|26000CE");
+        assert_eq!(gated[2]["reason"], "agent_turn_timeout");
         service.stop();
     }
 }

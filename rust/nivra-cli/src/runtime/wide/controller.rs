@@ -685,6 +685,7 @@ impl<'a> Controller<'a> {
                 .enabled
                 .then(|| self.index_context.json()),
             regime,
+            spot: super::super::options::spot_quote(&self.index_context, &self.config, t.now),
         };
         match agent.tick(&cycle, &mut self.db) {
             Ok(()) => self.agent_failure = None,

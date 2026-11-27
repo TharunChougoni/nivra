@@ -13,7 +13,7 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 /// The agent's side of the pipe, scripted per test. No process, no socket.
-struct Peer {
+pub(super) struct Peer {
     reader: BufReader<std::io::PipeReader>,
     writer: std::io::PipeWriter,
     calls: usize,
@@ -31,13 +31,13 @@ impl Peer {
         self.reader.read_line(&mut line).unwrap();
         serde_json::from_str(&line).unwrap()
     }
-    fn turn(&mut self) -> (String, Value) {
+    pub(super) fn turn(&mut self) -> (String, Value) {
         let turn = self.recv();
         assert_eq!(turn["type"], "turn");
         self.model = turn["model"].clone();
         (turn["id"].as_str().unwrap().to_owned(), turn)
     }
-    fn call(&mut self, turn: &str, name: &str, args: Value) -> Value {
+    pub(super) fn call(&mut self, turn: &str, name: &str, args: Value) -> Value {
         self.calls += 1;
         let call_id = format!("call-{}", self.calls);
         self.send(
@@ -50,14 +50,21 @@ impl Peer {
     fn message(&mut self, turn: &str, cost_usd: f64) {
         self.send(json!({"type":"event","turn_id":turn,"event":{"kind":"message","stop_reason":"toolUse","usage":{"input":100,"output":10,"cost_usd":cost_usd}}}));
     }
-    fn finish(&mut self, turn: &str, status: &str, text: &str, calls: u64, cost_usd: f64) {
+    pub(super) fn finish(
+        &mut self,
+        turn: &str,
+        status: &str,
+        text: &str,
+        calls: u64,
+        cost_usd: f64,
+    ) {
         self.send(json!({"type":"turn_result","id":turn,"status":status,"output":{"text":text},
             "usage":{"input":100*calls,"output":10*calls,"cache_read":50,"cache_write":0,"cost_usd":cost_usd,"calls":calls},
             "model":self.model["id"],"provider":self.model["provider"],"session_file":null,"prompt_sha256":"0".repeat(64)}));
     }
 }
 
-fn connect<T: Send + 'static>(
+pub(super) fn connect<T: Send + 'static>(
     script: impl FnOnce(&mut Peer) -> T + Send + 'static,
 ) -> (AgentClient, JoinHandle<T>) {
     let (from_rust, to_agent) = std::io::pipe().unwrap();
@@ -252,7 +259,7 @@ fn context(cash: &str) -> TurnContext {
     }
 }
 
-fn fixture_agent(client: AgentClient) -> Agent {
+pub(super) fn fixture_agent(client: AgentClient) -> Agent {
     let mut client = Some(client);
     Agent::new(Box::new(move || {
         client.take().ok_or_else(|| "fixture_agent_exited".into())
@@ -298,7 +305,7 @@ fn args(name: &str) -> Value {
         }
         "plan" => json!({"actions":[],"stance":"hold","notes":"no edge"}),
         "strategy_select" => json!({"strategy_id":null,"reason":"stand down in fixture"}),
-        "verdict" => json!({"escalate":false,"reason":"one tick, no depth"}),
+        "verdict" => json!({"escalate":false,"reason":"one tick, no depth","prospects":[]}),
         "research" => {
             json!({"question":"Does the gap fade survive costs?","refs":["2026-11-20","NSE_EQ|INE0ECP01024"]})
         }

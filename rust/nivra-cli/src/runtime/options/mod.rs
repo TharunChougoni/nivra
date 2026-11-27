@@ -7,6 +7,7 @@ use super::*;
 use nivra_core::execution::{Portfolio, Scanner};
 use nivra_core::market::{OptionCatalog, Segment};
 
+pub(crate) mod chain;
 pub(crate) mod expiry;
 mod universe;
 pub(crate) use universe::{OptionUniverse, SpotQuote, prepare};
