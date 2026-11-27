@@ -1,5 +1,25 @@
 # Source snapshot
 
+## 0.18.0 — 2026-11-27
+
+Strategies react to fresh pushed quotes for candidates they nominate, and a
+strategy switch takes effect in milliseconds. No upgrade step beyond installing
+the release; add a `params.promotion` rule to a strategy to nominate its own
+candidates, otherwise the ranker fills the slots.
+
+### Changed
+
+- Action strategies can nominate up to 20 cash candidates with a price-only
+  rule in `params.promotion`. Holdings stay subscribed and the ranker fills
+  spare slots. The summary reports how many nominees have fresh full depth.
+- Full-depth updates start strategy calls without waiting for a rank pass.
+  An update during a call requests one follow-up on the latest state. Each
+  call includes at most 20 prospects plus holdings. Archive replay uses
+  the same nomination and receipt-triggered selection rules.
+- Strategy choice publications trigger background worker startup. The first
+  call for a replacement waits for its ready event. A stand-down revokes the
+  active call immediately. The summary reports switch-to-first-call latency.
+
 ## 0.17.0 — 2026-11-27
 
 Strategy actions reach the execution gate in about 130 ms instead of 2 to 3 s,
@@ -31,16 +51,6 @@ and strategies get fresh quotes and complete features for their candidates.
 - Upstox full-mode subscriptions supply paper strategies with displayed depth,
   session VWAP, book imbalance, and relative volume. The original source and
   receipt clocks still have to pass the two-second gate.
-- Action strategies can nominate up to 20 cash candidates with a price-only
-  rule in `params.promotion`. Holdings stay subscribed and the ranker fills
-  spare slots. The summary reports how many nominees have fresh full depth.
-- Full-depth updates start strategy calls without waiting for a rank pass.
-  An update during a call requests one follow-up on the latest state. Each
-  call includes at most 20 prospects plus holdings. Archive replay uses
-  the same nomination and receipt-triggered selection rules.
-- Strategy choice publications trigger background worker startup. The first
-  call for a replacement waits for its ready event. A stand-down revokes the
-  active call immediately. The summary reports switch-to-first-call latency.
 - Quote tapes preserve the archived VWAP, book totals, and touch. Archive-backed
   tapes include pre-session average daily volumes. Rebuild tapes to pick up
   these fields. The execution tape ceiling is now 32 MiB.
