@@ -1,10 +1,10 @@
 # Source snapshot
 
-## 0.15.1 — 2026-11-27
+## 0.16.0 — 2026-11-27
 
 ### Upgrade an installed paper host (breaking)
 
-1. Deploy both the rebuilt `nivra` binary and updated `agent/` runtime (`npm run build --prefix agent`).
+1. Install the release and deploy the rebuilt `nivra` binary and updated `agent/` runtime (`npm run build --prefix agent`).
 2. **Owner override of sandbox guard:** `strategy_actions_v1` scripts now
    require a top-level `on_observation(obs)` entry point (adapter digest changed)
    and run on a persistent hardened Python worker (`python3 -I -S -B`, rlimits,
@@ -32,11 +32,13 @@
   bound to exact `source_sha256`, `runner_sha256` and `review_policy_sha256`
   digests (`entry_version: 2`).
 - **Removed** `nivra_sandbox::run_document` (one-shot action-strategy bubblewrap helper).
-- **Fixed:** a decision-lane strategy choice now counts only under the planner
-  policy it was made under. A stand-down recorded before fallbacks were
-  configured kept blocking them after `config-apply`. Each `lane_select` records
-  the policy digest; older records count under no policy. No upgrade step for
-  controls alone.
+
+## 0.15.1 — 2026-11-27
+
+**Fixed:** a decision-lane strategy choice now counts only under the planner
+policy it was made under. A stand-down recorded before fallbacks were
+configured kept blocking them after `config-apply`. Each `lane_select` records
+the policy digest; older records count under no policy. No upgrade step.
 
 ## 0.15.0 — 2026-11-27
 
