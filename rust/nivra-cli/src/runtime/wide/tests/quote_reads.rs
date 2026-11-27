@@ -46,6 +46,7 @@ fn restart_metadata_uses_original_receipt_and_configured_age() {
                 receipt: now,
                 last_trade: now,
                 prior_close: None,
+                depth: None,
             },
         )]);
         super::super::super::market_feed::observe_cache(

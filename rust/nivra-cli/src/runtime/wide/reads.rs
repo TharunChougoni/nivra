@@ -1,5 +1,9 @@
 //! Scanner and executable quote reads for the wide controller.
 use super::*;
+use nivra_core::{
+    execution::MarketFields,
+    intraday::{Clock, Features, Receipt},
+};
 
 #[allow(clippy::too_many_arguments)] // Preserve original receipt separately from the processing clock.
 pub(super) fn scan_rest_rows(
@@ -31,26 +35,33 @@ pub(super) fn scan_rest_rows(
             }
             continue;
         };
-        let fields = (|| -> Result<nivra_core::execution::MarketFields> {
-            Ok(nivra_core::execution::MarketFields {
-                session_vwap: nivra_core::execution::session_vwap(row),
-                best_bid: nivra_core::execution::book_level(row, "buy").0,
-                best_bid_qty: nivra_core::execution::book_level(row, "buy").1,
-                best_ask: nivra_core::execution::book_level(row, "sell").0,
-                best_ask_qty: nivra_core::execution::book_level(row, "sell").1,
-                total_buy_quantity: row["total_buy_quantity"].as_u64(),
-                total_sell_quantity: row["total_sell_quantity"].as_u64(),
-                lower_circuit_limit: nivra_core::execution::number(&row["lower_circuit_limit"])?,
-                upper_circuit_limit: nivra_core::execution::number(&row["upper_circuit_limit"])?,
-                volume: row["volume"].as_u64().ok_or("volume_missing")?,
-            })
-        })();
+        let fields = MarketFields::from_row(row);
         let sample = scan.samples.entry(instrument.key.clone()).or_default();
         sample.diagnostic = (row["symbol"] != instrument.symbol).then(|| "symbol_mismatch".into());
         if let Ok(fields) = &fields {
-            sample.metadata_preloaded = false;
-            sample.market_fields = Some(fields.clone());
-            sample.market_fields_receipt = Some(receipt);
+            if sample
+                .market_fields_receipt
+                .is_none_or(|previous| receipt >= previous)
+            {
+                sample.metadata_preloaded = false;
+                sample.market_fields = Some(fields.clone());
+                sample.market_fields_receipt = Some(receipt);
+            }
+            if let Ok(source) = data::quote_source(row) {
+                let touch = data::parse_row(
+                    row,
+                    receipt,
+                    &instrument.key,
+                    &instrument.symbol,
+                    instrument.tick,
+                )
+                .ok();
+                sample.observe_intraday(Features::reduce(Receipt::from_fields(
+                    Clock { source, receipt },
+                    fields,
+                    touch,
+                )));
+            }
         }
         // Incomplete REST metadata must not erase retained fields or renew their receipt.
         if metadata_only {
@@ -213,18 +224,34 @@ pub(super) fn apply_scanner_metadata(
         raw,
         rows,
     } = fetched;
-    if scan_rest_rows(
-        scan,
-        instruments,
-        &rows,
-        receipt,
-        millis(),
-        2000,
-        true,
-        None,
-    )
-    .is_err()
-    {
+    let mixed = event_config
+        .and_then(|cfg| cfg.discovery.as_ref())
+        .and_then(|discovery| discovery.market_feed.as_ref())
+        .is_some_and(market_feed::Settings::full_depth);
+    let result = if mixed {
+        // A rotating REST read supplies the price for names outside the LTPC
+        // pool. Names with a streaming price only need the REST metadata.
+        let (streamed, overflow): (Vec<_>, Vec<_>) = instruments.iter().cloned().partition(|i| {
+            scan.samples
+                .get(&i.key)
+                .is_some_and(|sample| sample.scan_activity.is_some())
+        });
+        let now = millis();
+        scan_rest_rows(scan, &streamed, &rows, receipt, now, 2000, true, None)
+            .and_then(|()| scan_rest_rows(scan, &overflow, &rows, receipt, now, 2000, false, None))
+    } else {
+        scan_rest_rows(
+            scan,
+            instruments,
+            &rows,
+            receipt,
+            millis(),
+            2000,
+            true,
+            None,
+        )
+    };
+    if result.is_err() {
         persist(
             db,
             c,
@@ -262,23 +289,53 @@ pub(super) fn attach_depth(
     quotes: &BTreeMap<String, Quote>,
     rows: &serde_json::Map<String, serde_json::Value>,
 ) {
-    for (key, quote) in quotes {
-        let Some(sample) = scan.samples.get_mut(key) else {
+    for row in rows.values() {
+        let Some(key) = row["instrument_token"].as_str() else {
             continue;
         };
-        let stamp = (quote.receipt, quote.source);
-        match sample.executable.as_ref().map(|q| (q.receipt, q.source)) {
-            Some(current) if current > stamp => continue,
-            // Preserve any depth already used on this receipt.
-            Some(current) if current == stamp => {}
-            _ => sample.executable = Some(quote.clone()),
+        let (Some(sample), Some(quote)) = (scan.samples.get_mut(key), quotes.get(key)) else {
+            continue;
+        };
+        if let Ok(fields) = MarketFields::from_row(row) {
+            if sample
+                .market_fields_receipt
+                .is_none_or(|previous| quote.receipt >= previous)
+            {
+                sample.metadata_preloaded = false;
+                sample.market_fields = Some(fields.clone());
+                sample.market_fields_receipt = Some(quote.receipt);
+            }
+            sample.observe_intraday(Features::reduce(Receipt::from_fields(
+                Clock {
+                    source: quote.source,
+                    receipt: quote.receipt,
+                },
+                &fields,
+                Some(quote.clone()),
+            )));
+        } else if sample.intraday.as_ref().is_none_or(|previous| {
+            quote.source >= previous.clock.source && quote.receipt > previous.clock.receipt
+        }) {
+            // Options or incomplete rows can still carry valid executable depth.
+            sample.observe_intraday(Features::reduce(Receipt {
+                clock: Clock {
+                    source: quote.source,
+                    receipt: quote.receipt,
+                },
+                vwap: None,
+                volume: None,
+                buy_quantity: None,
+                sell_quantity: None,
+                touch: Some(quote.clone()),
+                levels: Default::default(),
+            }));
         }
-        sample.open_interest = rows
-            .values()
-            .find(|row| row["instrument_token"] == key.as_str())
-            .and_then(|row| row["oi"].as_f64())
-            .filter(|oi| oi.is_finite() && *oi >= 0.0)
-            .map(|oi| oi as u64);
+        if sample.executable.as_ref() == Some(quote) {
+            sample.open_interest = row["oi"]
+                .as_f64()
+                .filter(|oi| oi.is_finite() && *oi >= 0.0)
+                .map(|oi| oi as u64);
+        }
     }
 }
 

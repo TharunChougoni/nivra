@@ -3,6 +3,7 @@
 pub mod feature_store;
 pub mod finance;
 pub mod historical;
+pub mod intraday;
 pub mod market;
 pub mod native;
 pub mod prefilter;

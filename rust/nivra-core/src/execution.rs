@@ -1097,7 +1097,7 @@ pub struct Sample {
     pub scan_activity: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub price_kind: Option<String>,
-    /// Latest REST bid/ask/depth for a shortlisted key; never a screening price.
+    /// Latest validated executable touch from REST or the full market feed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub executable: Option<Quote>,
     /// Open interest from the same REST read as `executable`, for F&O keys.
@@ -1111,6 +1111,8 @@ pub struct Sample {
     pub market_fields: Option<MarketFields>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub market_fields_receipt: Option<i64>,
+    #[serde(skip)]
+    pub intraday: Option<crate::intraday::Features>,
     /// Restored screening metadata; original receipt remains authoritative.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub metadata_preloaded: bool,
@@ -1123,6 +1125,23 @@ pub struct Sample {
     pub seen: i64,
     pub reason: String,
 }
+impl Sample {
+    pub fn observe_intraday(&mut self, features: crate::intraday::Features) {
+        let clock = features.clock;
+        if !clock.same_session(clock.receipt)
+            || clock.source <= 0
+            || clock.source > clock.receipt
+            || self.intraday.as_ref().is_some_and(|old| {
+                clock.source < old.clock.source || clock.receipt <= old.clock.receipt
+            })
+        {
+            return;
+        }
+        self.executable.clone_from(&features.touch);
+        self.intraday = Some(features);
+    }
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Scanner {
     #[serde(skip)]
@@ -1148,18 +1167,7 @@ impl Scanner {
             sample.reason = "stale".into();
             return Ok(());
         }
-        let fields = MarketFields {
-            session_vwap: session_vwap(row),
-            best_bid: book_level(row, "buy").0,
-            best_bid_qty: book_level(row, "buy").1,
-            best_ask: book_level(row, "sell").0,
-            best_ask_qty: book_level(row, "sell").1,
-            total_buy_quantity: row["total_buy_quantity"].as_u64(),
-            total_sell_quantity: row["total_sell_quantity"].as_u64(),
-            lower_circuit_limit: number(&row["lower_circuit_limit"])?,
-            upper_circuit_limit: number(&row["upper_circuit_limit"])?,
-            volume: row["volume"].as_u64().ok_or("volume_missing")?,
-        };
+        let fields = MarketFields::from_row(row)?;
         self.observe_fields(now, i, q, &fields)
     }
     pub fn observe_fields(
@@ -1179,6 +1187,16 @@ impl Scanner {
         s.metadata_preloaded = false;
         s.market_fields = Some(fields.clone());
         s.market_fields_receipt = Some(q.receipt);
+        s.observe_intraday(crate::intraday::Features::reduce(
+            crate::intraday::Receipt::from_fields(
+                crate::intraday::Clock {
+                    source: q.source,
+                    receipt: q.receipt,
+                },
+                fields,
+                Some(q.clone()),
+            ),
+        ));
         s.reason = "warming".into();
         if !q.fresh(now, MAX_FINANCIAL_AGE_MS) {
             s.reason = "stale".into();
@@ -1351,6 +1369,25 @@ pub struct MarketFields {
     pub lower_circuit_limit: Amount,
     pub upper_circuit_limit: Amount,
     pub volume: u64,
+}
+impl MarketFields {
+    pub fn from_row(row: &serde_json::Value) -> Result<Self> {
+        use crate::intraday::json_quantity;
+        let (best_bid, best_bid_qty) = book_level(row, "buy");
+        let (best_ask, best_ask_qty) = book_level(row, "sell");
+        Ok(Self {
+            session_vwap: session_vwap(row),
+            best_bid,
+            best_bid_qty,
+            best_ask,
+            best_ask_qty,
+            total_buy_quantity: json_quantity(&row["total_buy_quantity"]),
+            total_sell_quantity: json_quantity(&row["total_sell_quantity"]),
+            lower_circuit_limit: number(&row["lower_circuit_limit"])?,
+            upper_circuit_limit: number(&row["upper_circuit_limit"])?,
+            volume: json_quantity(&row["volume"]).ok_or("volume_missing")?,
+        })
+    }
 }
 impl Scanner {
     pub fn market_allows_with_policy(

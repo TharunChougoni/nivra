@@ -220,7 +220,17 @@ impl Controller {
                     settings.clone(),
                     self.events.notify(),
                 ) {
-                    Ok(worker) => self.feed_worker = Some(worker),
+                    Ok(worker) => {
+                        // Full-feed promotion hook. Pin positions from the opening book.
+                        let held: Vec<_> = self
+                            .p
+                            .positions
+                            .values()
+                            .map(|position| position.instrument.clone())
+                            .collect();
+                        worker.set_promoted_keys(&held, [])?;
+                        self.feed_worker = Some(worker);
+                    }
                     Err(_) => {
                         note_feed_health(&self.feature_store, now, false);
                         self.feed_health = serde_json::json!({"mode":"ltpc","fallback":true,"reason":"feed_setup_blocked"})
@@ -246,6 +256,24 @@ impl Controller {
                         activity,
                         Some(&mut store),
                     )?;
+                    // Full-feed merge hook for held instruments outside the cash universe.
+                    if settings.full_depth() && !fallback {
+                        for position in self.p.positions.values().filter(|position| {
+                            !u.instruments
+                                .iter()
+                                .any(|instrument| instrument.key == position.instrument.key)
+                        }) {
+                            super::super::super::market_feed::observe_cache(
+                                &mut self.scan,
+                                std::slice::from_ref(&position.instrument),
+                                &points,
+                                settings,
+                                feed_now,
+                                activity,
+                                None,
+                            )?;
+                        }
+                    }
                     feed_fresh = !fallback;
                     if c.index_feeds.enabled {
                         // Non-tradeable index context: separate store so
@@ -541,6 +569,19 @@ impl Controller {
                 "stale":projection["stale_count"]
             });
             self.depth_candidates = super::super::super::discovery::candidates(&projection);
+            // Full-feed promotion hook. Ranking supplies spare slots after holdings.
+            if let Some(worker) = &self.feed_worker {
+                let held: Vec<_> = self
+                    .p
+                    .positions
+                    .values()
+                    .map(|position| position.instrument.clone())
+                    .collect();
+                worker.set_promoted_keys(
+                    &held,
+                    self.depth_candidates.iter().map(|(key, _)| key.clone()),
+                )?;
+            }
             checkpoint_scanner(&self.db, &self.scan)?;
         }
         Ok(())
@@ -603,6 +644,17 @@ impl Controller {
             .take(settings.shortlist_size)
             .map(|(key, _)| key.as_str())
             .filter(|key| !held_keys.contains(key))
+            .filter(|key| {
+                !settings.full_depth()
+                    || !self
+                        .scan
+                        .samples
+                        .get(*key)
+                        .and_then(|sample| sample.executable.as_ref())
+                        .is_some_and(|quote| {
+                            quote.fresh(now, nivra_core::market::MAX_FINANCIAL_AGE_MS)
+                        })
+            })
             .collect::<Vec<_>>();
         // The tape shares this read: one request whatever its key count, so
         // only the batch and request key limits bound it, never the shortlist.

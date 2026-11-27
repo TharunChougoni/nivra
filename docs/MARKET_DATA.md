@@ -62,8 +62,9 @@ An executable quote must be no more than 2 seconds old by both its source time
 and its receipt time. A quote with a receipt time in the future also fails.
 The limit is `MAX_FINANCIAL_AGE` in `rust/nivra-core/src/market.rs`. Validation,
 fills and protection check it. Nivra keeps the original receipt time and never
-replaces it with a later clock reading. Feed prices, index levels and candles
-never pass this gate.
+replaces it with a later clock reading. LTPC prices, index levels, and candles
+provide screening context. A full-feed touch can pass the gate with valid
+prices and sizes on both sides.
 
 ## The v3 feed
 
@@ -72,49 +73,48 @@ To turn on the feed, merge
 into the planner `discovery` settings. Without a `market_feed` block,
 `mode` is `rest` and scanning uses REST quotes only.
 
-The V3 socket carries three subscription modes per key: `ltpc` (last price,
-its trade time and size, previous close), `firstLevelWithGreeks` (that plus one
-level of depth and the greeks) and `fullFeed` (that plus the five level book).
-The wire format for all three is in
-[MarketDataFeed.proto](../rust/nivra-cli/src/runtime/market_feed/MarketDataFeed.proto).
-Nivra decodes the `ltpc` variant only, so the feed is screening only and
-executable depth comes from REST. The pools are 5,000 keys in `ltpc` mode and
-2,000 in full mode per connection. [Feed review](reference/FEED_REVIEW.md)
-records what the other modes would buy and what the host measures today.
+Upstox V3 supports separate subscription modes for keys on the same socket.
+For LTPC alone, the user limit is 5,000 keys. With mixed modes, one user can
+subscribe to 2,000 LTPC keys and 1,500 full keys across all connections.
+[Upstox V3 feed documentation](https://upstox.com/developer/api-documentation/v3/get-market-data-feed/)
 
-With `mode` set to `ltpc`, the feed works as follows:
+Nivra opens one socket and uses the following modes:
 
-1. Nivra calls `GET https://api.upstox.com/v3/feed/market-data-feed/authorize`
-   for a single-use WSS URL on every connection attempt. It never logs the URL.
-2. It opens one connection and subscribes the whole cash universe in LTPC
-   mode, at most 5,000 keys. It decodes frames with
-   [MarketDataFeed.proto](../rust/nivra-cli/src/runtime/market_feed/MarketDataFeed.proto).
-   `subscription_plan.rs` holds older per-tier defaults (1,900 LTPC keys, 100
-   full keys). That module is not consumed by the feed and is not a provider
-   limit.
-3. REST full quotes refresh screening metadata every `metadata_poll_ms`.
-   Metadata includes volume and circuit bands, which LTPC lacks. REST depth
-   reads cover the shortlist, held positions and outstanding model actions.
-   See [Research quote tape](#research-quote-tape) for the top-K names the
-   shortlist read also carries.
-4. Every `tick_ms`, the scanner ranks the cached prices. It computes the market
-   median from all fresh prices before it filters or truncates.
+- With `mode: "ltpc"` and `depth_mode: "rest"`, the socket carries the entire
+  validated cash universe and the configured index keys. REST provides
+  executable depth.
+- With `mode: "ltpc"` and `depth_mode: "full"`, the socket keeps a stable
+  LTPC pool with priority for configured index keys. Every held key receives
+  full mode. The ranker's leading candidates fill the remaining
+  `shortlist_size` slots. A promoted key moves out of LTPC. REST rotation
+  supplies prices for the rest of the universe.
 
-An LTPC price stays eligible for screening while the connection has had a
-heartbeat or message within `scan_activity_timeout_ms`. The feed reports
-`screening_only: true` because an LTPC point carries no bid, ask or displayed
-size, and the execution gate needs all three. REST samples use
-`max_scan_age_ms` instead. An invalid price, such as `ltp` 0 before the first
-trade, skips that instrument.
+The [wire format](../rust/nivra-cli/src/runtime/market_feed/MarketDataFeed.proto)
+defines `ltpc`, `fullFeed.marketFF`, and `firstLevelWithGreeks`. Nivra
+decodes all three. Full frames provide the first level's bid, ask, and sizes,
+average traded price, cumulative traded volume, and total buy and sell
+quantities. Nivra uses frame `currentTs` as the depth source time and records
+the local receipt time separately. `ltt` describes the last trade.
 
-The feed worker keeps LTPC screening prices in memory. The market archive
-stores REST quote receipts and their original receipt times.
+REST refreshes circuit bands and other metadata every `metadata_poll_ms`.
+The shortlist depth read skips names with a fresh executable quote in full
+mode. REST still serves tape watches, held-position protection, and model
+actions. The paper archive stores those REST receipts for replay. The socket
+cache lives in memory.
+
+An LTPC price remains eligible for screening while the connection has had a
+heartbeat or message within `scan_activity_timeout_ms`. Executable quotes
+must satisfy the two-second limit on both clocks. During fallback, the
+controller returns to rate-limited REST reads. The feed health object reports
+`depth_mode`, `full_subscribed_keys`, and `full_fresh_keys`.
 
 Main `market_feed` settings:
 
 | Key | Default | Effect |
 |---|---:|---|
 | `mode` | `rest` | `rest` or `ltpc`. |
+| `depth_mode` | `rest` | Set to `full` with `mode: "ltpc"` to stream depth for promoted keys. |
+| `shortlist_size` | 40 | Target size of the full pool, including holdings. All holdings stay pinned up to the provider limit. |
 | `tick_ms` | 2000 | Time between scanner ranks. |
 | `scan_activity_timeout_ms` | 30000 | Connection activity window for price eligibility. |
 | `heartbeat_timeout_ms` | 30000 | Silence before a reconnect. |

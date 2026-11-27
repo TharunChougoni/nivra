@@ -89,6 +89,7 @@ fn shadow_inputs_use_receipt_minutes_and_skip_missing_references() {
             receipt: now + 180_000,
             last_trade: now + 180_000,
             prior_close: None,
+            depth: None,
         },
     )]);
     super::super::super::market_feed::observe_cache(
@@ -232,6 +233,7 @@ fn shadow_inputs_use_receipt_minutes_and_skip_missing_references() {
                 receipt: index_at,
                 last_trade: index_at,
                 prior_close: Some(Price::parse(&format!("{prior}")).unwrap()),
+                depth: None,
             },
         );
     }

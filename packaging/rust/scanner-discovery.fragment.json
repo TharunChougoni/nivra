@@ -20,7 +20,7 @@
   },
   "market_feed": {
     "mode": "ltpc",
-    "depth_mode": "rest",
+    "depth_mode": "full",
     "max_connections": 1,
     "max_connect_addresses": 2,
     "connect_timeout_ms": 3000,

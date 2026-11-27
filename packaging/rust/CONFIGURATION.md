@@ -14,6 +14,19 @@ never in a template.
 See [agent](../../docs/AGENT.md) for the lane keys and
 [operations](../../docs/OPERATIONS.md) for how to apply a config change.
 
+## Stream executable depth
+
+Set `discovery.market_feed.mode` to `"ltpc"` and
+`discovery.market_feed.depth_mode` to `"full"` in the planner file.
+The [discovery fragment](scanner-discovery.fragment.json) uses one socket
+for both modes. `shortlist_size` defaults to 40 and accepts 1 to 200.
+Holdings take priority, followed by the ranker's candidates.
+
+Apply the planner file through the reviewed procedure. During the next open
+session, verify that `market_feed.depth_mode` is `full` and
+`market_feed.full_fresh_keys` reports keys with fresh depth in
+`/api/v1/summary`. [Planner policy changes](../../docs/OPERATIONS.md#change-the-planner-policy)
+
 ## F&O gate triggers
 
 The gate lane screens Nifty options. Its thresholds live in the pi `agent`

@@ -773,20 +773,35 @@ fn extract_window(
                 );
             }
         }
+        let intraday = s
+            .intraday
+            .as_ref()
+            .filter(|data| data.fresh(now, metadata_max_age));
         if let Some(fields) = s.market_fields.as_ref().filter(|_| {
             s.reason != "missing_market_fields"
                 && (legacy_screening
+                    || intraday.is_some_and(|_| {
+                        s.market_fields_receipt.is_some_and(|receipt| {
+                            crate::intraday::Clock {
+                                source: receipt,
+                                receipt,
+                            }
+                            .same_session(now)
+                        })
+                    })
                     || s.market_fields_receipt.is_some_and(|t| {
                         now.checked_sub(t)
                             .is_some_and(|a| a >= 0 && a <= metadata_max_age)
                     }))
         }) {
             if !legacy_screening
+                && s.intraday.is_none()
                 && let Some(vwap) = fields.session_vwap.filter(|v| v.is_finite() && *v > 0.0)
             {
                 features.insert(Feature::SessionVwap, vwap);
             }
-            if let Some(settings) = settings
+            if s.intraday.is_none()
+                && let Some(settings) = settings
                 && let Some(value) = settings.relative_volume(
                     fields.volume,
                     s.avg_daily_volume,
@@ -798,7 +813,7 @@ fn extract_window(
             {
                 features.insert(Feature::RelVolumeTod, value);
             }
-            if !legacy_screening {
+            if !legacy_screening && s.intraday.is_none() {
                 let bid = fields.best_bid.filter(|v| v.is_finite() && *v > 0.0);
                 let ask = fields.best_ask.filter(|v| v.is_finite() && *v > 0.0);
                 for (feature, value) in [
@@ -832,7 +847,9 @@ fn extract_window(
                     }
                 }
             }
-            features.insert(Feature::TradedValue, current * fields.volume as f64);
+            if legacy_screening || s.intraday.is_none() {
+                features.insert(Feature::TradedValue, current * fields.volume as f64);
+            }
             if let (Ok(lo), Ok(hi)) = (
                 fields.lower_circuit_limit.to_string().parse::<f64>(),
                 fields.upper_circuit_limit.to_string().parse::<f64>(),
@@ -843,6 +860,24 @@ fn extract_window(
                     Feature::CircuitDistanceBps,
                     ((current - lo).min(hi - current)) / current * 10000.0,
                 );
+            }
+        }
+        if let (Some(data), Some(settings)) = (intraday, settings) {
+            features.extend(data.touch_features());
+            features.extend(data.vwap.map(|value| (Feature::SessionVwap, value)));
+            features.extend(data.imbalance.map(|value| (Feature::BookImbalance, value)));
+            if let Some(volume) = data.volume {
+                features.insert(Feature::TradedValue, current * volume as f64);
+                if let Some(value) = settings.relative_volume(
+                    volume,
+                    s.avg_daily_volume,
+                    crate::execution::minutes_since_open(
+                        data.clock.source,
+                        scanner.settings.session_start_minute,
+                    ),
+                ) {
+                    features.insert(Feature::RelVolumeTod, value);
+                }
             }
         }
         features.retain(|_, v| v.is_finite());

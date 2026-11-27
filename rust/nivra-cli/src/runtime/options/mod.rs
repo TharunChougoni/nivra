@@ -212,6 +212,7 @@ mod tests {
                 receipt,
                 last_trade: source,
                 prior_close: None,
+                depth: None,
             };
             let points = [(c.nifty_options.underlying_key.clone(), point)].into();
             super::super::wide::IndexContext::capture(
