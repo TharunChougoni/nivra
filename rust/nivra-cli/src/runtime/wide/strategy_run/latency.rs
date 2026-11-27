@@ -33,6 +33,8 @@ pub(super) struct Timing {
     /// Newest executable receipt in the observation. Each gate sample below
     /// carries the exact quote for its action.
     quote: Option<QuoteTime>,
+    #[serde(default)]
+    pub switch_requested_at_ms: Option<i64>,
     pub submitted_at_ms: Option<i64>,
     pub reply_received_at_ms: Option<i64>,
     pub book_locked_at_ms: Option<i64>,
@@ -53,6 +55,7 @@ impl Timing {
                 .values()
                 .max_by_key(|q| (q.receipt, q.source))
                 .map(QuoteTime::from),
+            switch_requested_at_ms: None,
             submitted_at_ms: None,
             reply_received_at_ms: None,
             book_locked_at_ms: None,
@@ -81,7 +84,7 @@ pub(super) fn summary(db: &Connection) -> Result<Value> {
         [],
         |row| row.get(0),
     )?;
-    let mut hops: [(&str, Vec<i64>); 8] = [
+    let mut hops: [(&str, Vec<i64>); 9] = [
         ("quote_source_to_receipt", Vec::new()),
         ("receipt_to_observation", Vec::new()),
         ("observation_to_submit", Vec::new()),
@@ -90,6 +93,7 @@ pub(super) fn summary(db: &Connection) -> Result<Value> {
         ("book_lock_to_gate", Vec::new()),
         ("reply_to_gate", Vec::new()),
         ("quote_source_to_gate", Vec::new()),
+        ("switch_to_first_call", Vec::new()),
     ];
     let mut calls = 0;
     if present {
@@ -115,6 +119,7 @@ pub(super) fn summary(db: &Connection) -> Result<Value> {
             add(2, Some(call.observed_at_ms), call.submitted_at_ms);
             add(3, call.submitted_at_ms, call.reply_received_at_ms);
             add(4, call.reply_received_at_ms, call.book_locked_at_ms);
+            add(8, call.switch_requested_at_ms, call.submitted_at_ms);
             for gate in call.gates {
                 add(5, call.book_locked_at_ms, Some(gate.decided_at_ms));
                 add(6, call.reply_received_at_ms, Some(gate.decided_at_ms));

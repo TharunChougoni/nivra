@@ -467,13 +467,21 @@ fn a_fallback_runs_labelled_until_a_strategy_is_accepted_and_honours_stand_down(
     let gen1 = status["activation_generation"].as_u64().unwrap();
     assert!(gen1 >= 1);
     assert!(tape.failures().is_empty(), "{:?}", tape.failures());
-    // An accepted version takes over via non-blocking hot swap at the next library read.
+    // A library notification brings the accepted worker in before the cache expires.
     let params: Value = serde_json::from_str::<Value>(PARAMETERS).unwrap()["params"].clone();
     let id = register(&tape.library(), SOURCE, params, |_| {});
-    for step in 1..tape.events.len() {
-        let at = tape.protect(step) + 30_000;
-        tape.scan(&mut run, at.max(first + 30_000));
-    }
+    let switched = tape.protect(1);
+    assert!(switched - first < 30_000);
+    run.refresh_choice(&tape.db, &tape.c, switched, true)
+        .unwrap();
+    let first_call = tape.protect(2);
+    tape.scan(&mut run, first_call);
+    let timing = run.status(&tape.db, &tape.p);
+    assert_eq!(timing["latency"]["switch_to_first_call"]["p50_ms"], 0);
+    assert_eq!(
+        timing["latency"]["switch_to_first_call"]["p99_ms"],
+        first_call - switched
+    );
     let status = run.status(&tape.db, &tape.p);
     assert_eq!(status["strategy"]["basis"], "accepted", "{status}");
     assert_eq!(status["strategy"]["strategy_id"], id.as_str());
@@ -481,12 +489,14 @@ fn a_fallback_runs_labelled_until_a_strategy_is_accepted_and_honours_stand_down(
     let gen2 = status["activation_generation"].as_u64().unwrap();
     assert!(gen2 > gen1, "hot swap must bump activation_generation");
     // Stand-down revokes the live worker and bumps activation_generation immediately.
+    let revoked = tape.protect(3);
     tape.library()
-        .select_by_lane(None, &policy, "stand down", None, first + 65_000)
+        .select_by_lane(None, &policy, "stand down", None, revoked)
+        .unwrap();
+    run.refresh_choice(&tape.db, &tape.c, revoked, true)
         .unwrap();
     assert_eq!(
-        run.settle_startup(&tape.db, &tape.c, first + 65_000)
-            .unwrap(),
+        run.settle_startup(&tape.db, &tape.c, revoked).unwrap(),
         None
     );
     let status = run.status(&tape.db, &tape.p);
@@ -496,4 +506,91 @@ fn a_fallback_runs_labelled_until_a_strategy_is_accepted_and_honours_stand_down(
     );
     assert_eq!(status["reason"], "strategy_lane_stood_down");
     assert!(status["activation_generation"].as_u64().unwrap() > gen2);
+}
+
+#[test]
+fn busy_updates_request_one_call_with_the_latest_receipt() {
+    let mut tape = Tape::new();
+    let library = tape.library();
+    let params: Value = serde_json::from_str::<Value>(PARAMETERS).unwrap()["params"].clone();
+    register(&library, SOURCE, params, |_| {});
+    let worker = worker_config().expect("fixture requires python3");
+    let mut run = StrategyRun::new(library, worker, Default::default(), None);
+    let first = tape.protect(0);
+    assert!(
+        run.settle_startup(&tape.db, &tape.c, first)
+            .unwrap()
+            .is_some()
+    );
+    run.request_observation();
+    assert!(
+        run.take_observation(&tape.db, &tape.c, first)
+            .unwrap()
+            .is_some()
+    );
+    run.start(tape.frozen(first), &tape.p, &|| first);
+    for step in [1, 3] {
+        let now = tape.protect(step);
+        run.request_observation();
+        assert_eq!(run.take_observation(&tape.db, &tape.c, now).unwrap(), None);
+    }
+
+    let latest = tape.events[3]["at"].as_i64().unwrap();
+    run.wait();
+    run.poll(&mut tape.db, &tape.c, &mut tape.p, &mut tape.scan, &|| {
+        latest
+    })
+    .unwrap();
+    assert!(
+        tape.p.fills.is_empty(),
+        "the first observation was superseded"
+    );
+
+    assert!(
+        run.take_observation(&tape.db, &tape.c, latest)
+            .unwrap()
+            .is_some()
+    );
+    run.start(tape.frozen(latest), &tape.p, &|| latest);
+    run.wait();
+    run.poll(&mut tape.db, &tape.c, &mut tape.p, &mut tape.scan, &|| {
+        latest
+    })
+    .unwrap();
+    assert_eq!(
+        run.take_observation(&tape.db, &tape.c, latest).unwrap(),
+        None
+    );
+    assert_eq!(tape.p.fills.len(), 1);
+    assert_eq!(tape.p.fills[0].price, Price::parse("100.50").unwrap());
+    let status = run.status(&tape.db, &tape.p);
+    assert_eq!(status["calls"], 2);
+    assert_eq!(status["skipped"], 1);
+}
+
+#[test]
+fn a_published_stand_down_fences_a_reply_before_notification_dispatch() {
+    let mut tape = Tape::new();
+    let library = tape.library();
+    let policy = crate::runtime::strategy_library::choice::ChoicePolicy::default();
+    let params: Value = serde_json::from_str::<Value>(PARAMETERS).unwrap()["params"].clone();
+    register(&library, SOURCE, params, |_| {});
+    let worker = worker_config().expect("fixture requires python3");
+    let mut run = StrategyRun::new(tape.library(), worker, policy.clone(), None);
+    let now = tape.protect(0);
+    assert!(
+        run.settle_startup(&tape.db, &tape.c, now)
+            .unwrap()
+            .is_some()
+    );
+    run.start(tape.frozen(now), &tape.p, &|| now);
+    run.wait();
+    library
+        .select_by_lane(None, &policy, "stand down", None, now)
+        .unwrap();
+    run.poll(&mut tape.db, &tape.c, &mut tape.p, &mut tape.scan, &|| now)
+        .unwrap();
+    assert!(tape.p.fills.is_empty());
+    assert!(recent_actions(&tape.db).unwrap().is_empty());
+    assert_eq!(tape.failures(), ["\"strategy_activation_stale\""]);
 }

@@ -25,7 +25,7 @@ use std::{
     collections::BTreeSet,
     fs,
     io::Write,
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     process::ExitCode,
     sync::atomic::{AtomicU64, Ordering},
@@ -40,6 +40,18 @@ const ENTRY_VERSION: u32 = 2;
 const MAX_ENTRY_BYTES: u64 = 65_536;
 const MAX_SOURCE_BYTES: u64 = 262_144;
 const MAX_CONTROLS_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Identity of the atomically published strategy choices. Sources and reports
+/// are content-addressed and verified when the controller resolves a choice.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ChoiceRevision([Option<PublishedFile>; 2]);
+
+#[derive(Debug, PartialEq, Eq)]
+struct PublishedFile {
+    identity: (u64, u64),
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
 
 /// Who wrote the strategy, where known.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -506,6 +518,22 @@ impl Library {
             return Err("strategy_controls_invalid".into());
         }
         Ok(log.controls)
+    }
+
+    pub(crate) fn choice_revision(&self) -> Result<ChoiceRevision> {
+        let identity = |name| match fs::metadata(self.root.join(name)) {
+            Ok(metadata) => Ok(Some(PublishedFile {
+                identity: (metadata.dev(), metadata.ino()),
+                modified: (metadata.mtime(), metadata.mtime_nsec()),
+                changed: (metadata.ctime(), metadata.ctime_nsec()),
+            })),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err("strategy_choice_revision_unavailable"),
+        };
+        Ok(ChoiceRevision([
+            identity("controls.json")?,
+            identity("entries")?,
+        ]))
     }
 
     /// The library as the owner sees it, every lane choice included.

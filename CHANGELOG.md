@@ -38,6 +38,9 @@ and strategies get fresh quotes and complete features for their candidates.
   An update during a call requests one follow-up on the latest state. Each
   call includes at most 20 prospects plus holdings. Archive replay uses
   the same nomination and receipt-triggered selection rules.
+- Strategy choice publications trigger background worker startup. The first
+  call for a replacement waits for its ready event. A stand-down revokes the
+  active call immediately. The summary reports switch-to-first-call latency.
 - Quote tapes preserve the archived VWAP, book totals, and touch. Archive-backed
   tapes include pre-session average daily volumes. Rebuild tapes to pick up
   these fields. The execution tape ceiling is now 32 MiB.

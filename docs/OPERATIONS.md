@@ -270,9 +270,12 @@ day, once history is prepared, the decision lane chooses the day's strategy
 and research searches for one when none is accepted.
 Adding it changes the policy hash, so apply it as in
 [change the planner policy](#change-the-planner-policy). A running
-controller picks up a pin, disable or rollback within 30 seconds. To stop
-strategy execution at once, disable the active version. How the executor runs
-is in [research](RESEARCH.md#in-the-paper-controller).
+controller reads a pin, disable, rollback, or lane choice on publication.
+The replacement starts in the background and takes over when it reports
+ready. A lane stand-down revokes the active choice as soon as the controller
+receives it, subject to owner pins. If file notifications are unavailable,
+the controller checks the library every 30 seconds. See
+[how the executor runs](RESEARCH.md#in-the-paper-controller).
 
 ## Change paper costs
 

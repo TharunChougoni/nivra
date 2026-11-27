@@ -25,7 +25,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicI32, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering},
         mpsc::{self, Receiver, SyncSender, TryRecvError},
     },
     thread::{self, JoinHandle},
@@ -270,7 +270,7 @@ fn spawn_process(
     config: &WorkerConfig,
     generation: u64,
     stderr: Arc<Mutex<StderrRing>>,
-    notify: Option<Notify>,
+    on_event: impl Fn() + Send + 'static,
 ) -> Result<RunningProcess, &'static str> {
     config.validate()?;
     if source.is_empty() || source.len() > 262_144 {
@@ -389,10 +389,8 @@ fn spawn_process(
         .name(format!("strategy-io-{generation}"))
         .spawn(move || {
             let publish = |event| {
-                if event_tx.send(event).is_ok()
-                    && let Some(notify) = &notify
-                {
-                    notify.signal(Event::Strategy);
+                if event_tx.send(event).is_ok() {
+                    on_event();
                 }
             };
             let mut line = Vec::new();
@@ -494,6 +492,19 @@ fn parse_reply(
     Ok((bytes, msg.elapsed_us.unwrap_or(0)))
 }
 
+type SpawnResult = Result<RunningProcess, &'static str>;
+
+struct PendingStart {
+    result: Receiver<SpawnResult>,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl Drop for PendingStart {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+}
+
 /// One persistent strategy worker owning a `python3 -I -S -B` process.
 pub(crate) struct Worker {
     source: Vec<u8>,
@@ -506,6 +517,8 @@ pub(crate) struct Worker {
     failure_times: VecDeque<i64>,
     stderr: Arc<Mutex<StderrRing>>,
     process: Option<RunningProcess>,
+    pending_start: Option<PendingStart>,
+    startup_gate: Option<Arc<Mutex<()>>>,
     notify: Option<Notify>,
     last_elapsed_us: Option<u64>,
 }
@@ -519,8 +532,35 @@ impl Worker {
         now_ms: i64,
         notify: Option<Notify>,
     ) -> Result<Self, &'static str> {
+        let mut worker = Self::new(source, params, config, notify, None);
+        worker.spawn_next(now_ms);
+        Ok(worker)
+    }
+
+    /// Prepare the process off the book thread. The host serializes startup
+    /// so a cancelled launch is reaped before a replacement can spawn.
+    pub(super) fn start_background(
+        source: Vec<u8>,
+        params: Value,
+        config: WorkerConfig,
+        now_ms: i64,
+        notify: Option<Notify>,
+        startup_gate: Arc<Mutex<()>>,
+    ) -> Self {
+        let mut worker = Self::new(source, params, config, notify, Some(startup_gate));
+        worker.spawn_next(now_ms);
+        worker
+    }
+
+    fn new(
+        source: Vec<u8>,
+        params: Value,
+        config: WorkerConfig,
+        notify: Option<Notify>,
+        startup_gate: Option<Arc<Mutex<()>>>,
+    ) -> Self {
         let stderr = Arc::new(Mutex::new(StderrRing::default()));
-        let mut worker = Self {
+        Self {
             source,
             params,
             config,
@@ -531,11 +571,11 @@ impl Worker {
             failure_times: VecDeque::new(),
             stderr,
             process: None,
+            pending_start: None,
+            startup_gate,
             notify,
             last_elapsed_us: None,
-        };
-        worker.spawn_next(now_ms);
-        Ok(worker)
+        }
     }
 
     #[cfg(test)]
@@ -555,21 +595,84 @@ impl Worker {
         if let Ok(mut guard) = self.stderr.lock() {
             guard.bytes.clear();
         }
-        match spawn_process(
-            &self.source,
-            &self.params,
-            &self.config,
-            self.generation,
-            self.stderr.clone(),
-            self.notify.clone(),
-        ) {
+        let Some(startup_gate) = self.startup_gate.clone() else {
+            let notify = self.notify.clone();
+            let result = spawn_process(
+                &self.source,
+                &self.params,
+                &self.config,
+                self.generation,
+                self.stderr.clone(),
+                move || {
+                    if let Some(notify) = &notify {
+                        notify.signal(Event::Strategy);
+                    }
+                },
+            );
+            self.accept_start(result, now_ms);
+            return;
+        };
+        let (send, result) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancel = cancelled.clone();
+        let source = self.source.clone();
+        let params = self.params.clone();
+        let config = self.config.clone();
+        let generation = self.generation;
+        let stderr = self.stderr.clone();
+        let notify = self.notify.clone();
+        let start = thread::Builder::new()
+            .name("strategy-start".into())
+            .spawn(move || {
+                let _slot = startup_gate
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                if cancel.load(Ordering::Acquire) {
+                    return;
+                }
+                // Ready can arrive before process ownership moves to the host.
+                // Defer that notification until the host can read both results.
+                const SPAWN_PUBLISHED: u8 = 1;
+                const EVENT_PENDING: u8 = 2;
+                let publication = Arc::new(AtomicU8::new(0));
+                let process_publication = publication.clone();
+                let process_notify = notify.clone();
+                let started =
+                    spawn_process(&source, &params, &config, generation, stderr, move || {
+                        if let Some(notify) = &process_notify
+                            && process_publication.fetch_or(EVENT_PENDING, Ordering::AcqRel)
+                                & SPAWN_PUBLISHED
+                                != 0
+                        {
+                            notify.signal(Event::Strategy);
+                        }
+                    });
+                let failed = started.is_err();
+                if send.send(started).is_ok()
+                    && let Some(notify) = notify
+                    && (failed
+                        || publication.fetch_or(SPAWN_PUBLISHED, Ordering::AcqRel) & EVENT_PENDING
+                            != 0)
+                {
+                    notify.signal(Event::Strategy);
+                }
+            });
+        match start {
+            Ok(_) => {
+                self.state = WorkerState::Starting;
+                self.pending_start = Some(PendingStart { result, cancelled });
+            }
+            Err(_) => self.record_failure("strategy_worker_setup", now_ms),
+        }
+    }
+
+    fn accept_start(&mut self, result: SpawnResult, now_ms: i64) {
+        match result {
             Ok(process) => {
                 self.process = Some(process);
                 self.state = WorkerState::Starting;
             }
-            Err(reason) => {
-                self.record_failure(reason, now_ms);
-            }
+            Err(reason) => self.record_failure(reason, now_ms),
         }
     }
 
@@ -613,6 +716,15 @@ impl Worker {
 
     /// Non-blocking internal drain of worker events into `state` / `pending_reply`.
     fn drain_events(&mut self, now_ms: i64) {
+        if let Some(start) = &self.pending_start {
+            let result = match start.result.try_recv() {
+                Ok(result) => result,
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => Err("strategy_worker_setup"),
+            };
+            self.pending_start = None;
+            self.accept_start(result, now_ms);
+        }
         let events: Vec<WorkerEvent> = if let Some(process) = &self.process {
             let mut items = Vec::new();
             loop {
@@ -800,6 +912,10 @@ impl Worker {
         if matches!(self.state, WorkerState::Failed { retry_at_ms, .. } if now_ms >= retry_at_ms) {
             self.spawn_next(now_ms);
         }
+        if let Some(start) = self.pending_start.take() {
+            let result = start.result.recv().unwrap_or(Err("strategy_worker_setup"));
+            self.accept_start(result, now_ms);
+        }
         while matches!(self.state, WorkerState::Starting) {
             let Some(process) = &self.process else {
                 return Err("strategy_worker_unavailable");
@@ -878,9 +994,9 @@ impl Worker {
     }
 
     pub(crate) fn stop(&mut self) {
-        if let Some(mut process) = self.process.take() {
-            process.terminate();
-        }
+        self.pending_start = None;
+        // RunningProcess reaps the child when dropped.
+        self.process = None;
     }
 }
 

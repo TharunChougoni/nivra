@@ -29,7 +29,11 @@ impl ChoiceWatch {
             .mode(0o700)
             .create(&entries)?;
         let fd = inotify::init(CreateFlags::CLOEXEC | CreateFlags::NONBLOCK)?;
-        let control = inotify::add_watch(&fd, root, WatchFlags::MOVED_TO | WatchFlags::DELETE)?;
+        let control = inotify::add_watch(
+            &fd,
+            root,
+            WatchFlags::MOVED_TO | WatchFlags::DELETE | WatchFlags::CLOSE_WRITE,
+        )?;
         let entries = inotify::add_watch(
             &fd,
             &entries,

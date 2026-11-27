@@ -5,15 +5,16 @@
 #[cfg(test)]
 use super::worker::WorkerState;
 use super::worker::{Worker, WorkerConfig, WorkerKey};
-use crate::runtime::{controller_events::Notify, strategy_library::review};
+use crate::runtime::controller_events::Notify;
 use nivra_core::replay::digest;
 use serde_json::Value;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
-const MAX_POOL_WORKERS: usize = 4;
+const MAX_POOL_WORKERS: usize = 2;
 const RETIRE_GRACE_MS: i64 = 60_000;
 
 /// Reserved shadow slot shape for follow-up research shadow tools.
@@ -29,7 +30,7 @@ pub(crate) struct StrategyHost {
     config: WorkerConfig,
     notify: Option<Notify>,
     workers: BTreeMap<WorkerKey, Worker>,
-    reviewed_static: BTreeSet<String>,
+    startup_gate: Arc<Mutex<()>>,
     live: Option<WorkerKey>,
     desired_live: Option<WorkerKey>,
     activation_generation: u64,
@@ -43,7 +44,7 @@ impl StrategyHost {
             config,
             notify,
             workers: BTreeMap::new(),
-            reviewed_static: BTreeSet::new(),
+            startup_gate: Arc::default(),
             live: None,
             desired_live: None,
             activation_generation: 0,
@@ -85,20 +86,6 @@ impl StrategyHost {
         self.workers.len()
     }
 
-    fn verify_static(&mut self, source_sha256: &str, source: &[u8]) -> Result<(), &'static str> {
-        if self.reviewed_static.contains(source_sha256) {
-            return Ok(());
-        }
-        review::static_check(
-            &self.config.python_path,
-            source,
-            self.config.env_dir.is_some(),
-        )
-        .map_err(|_| "strategy_review_unsafe")?;
-        self.reviewed_static.insert(source_sha256.to_owned());
-        Ok(())
-    }
-
     fn evict_unused(&mut self, now_ms: i64) {
         let expired: Vec<WorkerKey> = self
             .retiring
@@ -116,33 +103,30 @@ impl StrategyHost {
                 worker.stop();
             }
         }
-        while self.workers.len() > MAX_POOL_WORKERS {
-            let candidate = self
-                .retiring
-                .iter()
-                .min_by_key(|&(_, &until)| until)
-                .map(|(key, _)| key.clone())
-                .or_else(|| {
-                    self.workers
-                        .keys()
-                        .find(|key| {
-                            self.live.as_ref() != Some(*key)
-                                && self.desired_live.as_ref() != Some(*key)
-                                && !self.shadows.iter().any(|s| &s.key == *key)
-                        })
-                        .cloned()
-                });
-            let Some(key) = candidate else {
-                break;
-            };
-            self.retiring.remove(&key);
-            if let Some(mut worker) = self.workers.remove(&key) {
-                worker.stop();
-            }
-        }
     }
 
-    /// Synchronize the desired live strategy with the pool.
+    fn reserve_slot(&mut self) -> Result<(), &'static str> {
+        if self.workers.len() < MAX_POOL_WORKERS {
+            return Ok(());
+        }
+        let key = self
+            .workers
+            .keys()
+            .find(|key| {
+                self.live.as_ref() != Some(*key)
+                    && self.desired_live.as_ref() != Some(*key)
+                    && !self.shadows.iter().any(|s| &s.key == *key)
+            })
+            .cloned()
+            .ok_or("strategy_worker_pool_full")?;
+        self.retiring.remove(&key);
+        if let Some(mut worker) = self.workers.remove(&key) {
+            worker.stop();
+        }
+        Ok(())
+    }
+
+    /// Synchronize a reviewed choice with the pool.
     ///
     /// - `desired = None` (stand-down, disable, or blocked) revokes the live
     ///   worker immediately and bumps `activation_generation`.
@@ -184,95 +168,59 @@ impl StrategyHost {
             source_sha256: source_sha256.clone(),
             params_sha256: digest(&params_bytes),
         };
-        if let Err(reason) = self.verify_static(&source_sha256, source) {
-            self.sync_desired(None, now_ms)?;
-            return Err(reason);
-        }
-
         if self.desired_live.as_ref() != Some(&key) {
             self.desired_live = Some(key.clone());
             self.retiring.remove(&key);
             if !self.workers.contains_key(&key) {
                 self.evict_unused(now_ms);
-                let worker = Worker::start(
-                    key.clone(),
+                self.reserve_slot()?;
+                let worker = Worker::start_background(
                     source.to_vec(),
                     params.clone(),
                     self.config.clone(),
                     now_ms,
                     self.notify.clone(),
-                )?;
+                    self.startup_gate.clone(),
+                );
                 self.workers.insert(key.clone(), worker);
             }
         }
 
-        if let Some(worker) = self.workers.get_mut(&key) {
-            let desired_ready = worker.ensure_ready(now_ms);
-            if self.live.as_ref() != Some(&key) && matches!(desired_ready, Ok(true)) {
-                let previous = self.live.replace(key.clone());
-                self.activation_generation = self.activation_generation.wrapping_add(1);
-                if let Some(old) = previous
-                    && old != key
-                {
-                    self.retiring
-                        .insert(old, now_ms.saturating_add(RETIRE_GRACE_MS));
-                }
-            } else if let Err(reason) = desired_ready
-                && self.live.as_ref() == Some(&key)
-            {
-                return Err(reason);
-            }
-        }
-        self.evict_unused(now_ms);
         Ok(())
     }
 
-    pub(crate) fn advance_activation(&mut self, now_ms: i64) {
+    pub(crate) fn advance_activation(&mut self, now_ms: i64) -> Result<bool, &'static str> {
         self.evict_unused(now_ms);
-        if let Some(desired) = self.desired_live.clone()
-            && self.live.as_ref() != Some(&desired)
-            && let Some(worker) = self.workers.get_mut(&desired)
-            && matches!(worker.ensure_ready(now_ms), Ok(true))
-        {
-            let previous = self.live.replace(desired.clone());
-            self.activation_generation = self.activation_generation.wrapping_add(1);
-            if let Some(old) = previous
-                && old != desired
-            {
+        let Some(desired) = self.desired_live.clone() else {
+            return Ok(false);
+        };
+        let worker = self
+            .workers
+            .get_mut(&desired)
+            .ok_or("strategy_worker_unavailable")?;
+        if !worker.ensure_ready(now_ms)? {
+            return Ok(false);
+        }
+        if self.live.as_ref() != Some(&desired) {
+            if let Some(old) = self.live.replace(desired) {
                 self.retiring
                     .insert(old, now_ms.saturating_add(RETIRE_GRACE_MS));
             }
+            self.activation_generation = self.activation_generation.wrapping_add(1);
         }
+        Ok(true)
     }
 
     pub(crate) fn time_until_due(&self, now_ms: i64) -> Option<Duration> {
-        self.live
+        self.desired_live
             .iter()
-            .chain(&self.desired_live)
             .filter_map(|key| self.workers.get(key)?.time_until_due(now_ms))
             .min()
     }
 
     /// True when the active live worker is ready to accept an observation.
     pub(crate) fn live_ready(&mut self, now_ms: i64) -> Result<bool, &'static str> {
-        self.advance_activation(now_ms);
-        let Some(live_key) = self.live.clone() else {
-            return match self
-                .desired_live
-                .as_ref()
-                .and_then(|k| self.workers.get_mut(k))
-            {
-                Some(worker) => match worker.ensure_ready(now_ms) {
-                    Ok(_) => Ok(false),
-                    Err(reason) => Err(reason),
-                },
-                None => Ok(false),
-            };
-        };
-        let Some(worker) = self.workers.get_mut(&live_key) else {
-            return Ok(false);
-        };
-        worker.ensure_ready(now_ms)
+        self.advance_activation(now_ms)
     }
 
     /// Submit `observation_json` to the live worker. Returns `(generation, seq)`.

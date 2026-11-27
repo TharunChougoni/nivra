@@ -13,7 +13,7 @@ use crate::runtime::strategy::{
     selection::{Screen, Selection, executable},
 };
 use crate::runtime::strategy_library::{
-    Library,
+    ChoiceRevision, Library,
     choice::{self, Running},
 };
 use serde::{Deserialize, Serialize};
@@ -178,6 +178,8 @@ pub(super) struct StrategyRun {
     active: Option<Active>,
     known: BTreeMap<WorkerKey, ActiveMeta>,
     resolved_at: Option<i64>,
+    choice_revision: Option<ChoiceRevision>,
+    switch_requested_at: Option<i64>,
     /// Why no accepted version runs: no active entry, a build mismatch, a
     /// stand-down or a library read failure. Set beside a fallback too.
     blocked: Option<&'static str>,
@@ -205,6 +207,8 @@ impl StrategyRun {
             active: None,
             known: BTreeMap::new(),
             resolved_at: None,
+            choice_revision: None,
+            switch_requested_at: None,
             blocked: None,
             in_flight: None,
             last_failure: None,
@@ -327,10 +331,16 @@ impl StrategyRun {
         }
         if self.resolved_at.is_none_or(|at| now - at >= RESOLVE_MS) {
             self.resolved_at = Some(now);
-            self.active = None;
+            let previous = self.active.take();
             self.blocked = None;
-            match self.resolve() {
-                Ok((active, reason)) => {
+            self.choice_revision = None;
+            match self
+                .library
+                .choice_revision()
+                .and_then(|revision| self.resolve().map(|resolved| (revision, resolved)))
+            {
+                Ok((revision, (active, reason))) => {
+                    self.choice_revision = Some(revision);
                     let quiet = matches!(
                         reason,
                         None | Some("no_active_strategy" | "strategy_lane_stood_down")
@@ -345,6 +355,12 @@ impl StrategyRun {
                     self.blocked = Some("strategy_library_unavailable");
                     let reason = failure_code(error.as_ref());
                     self.fail(db, c, now, None, &reason)?;
+                }
+            }
+            if previous.as_ref().map(|active| active.run_id.as_str()) != self.desired_id() {
+                self.switch_requested_at = self.active.as_ref().map(|_| now);
+                if self.has_call() {
+                    self.record_revoked(db, now)?;
                 }
             }
             match &self.active {
@@ -375,7 +391,7 @@ impl StrategyRun {
             }
             self.prune_known();
         }
-        self.host.advance_activation(now);
+        let _ = self.host.advance_activation(now);
         if self
             .in_flight
             .as_ref()
@@ -491,6 +507,7 @@ impl StrategyRun {
             Ok((activation_generation, seq)) => {
                 flight.activation_generation = activation_generation;
                 flight.seq = seq;
+                flight.timing.switch_requested_at_ms = self.switch_requested_at.take();
             }
             Err(reason) => flight.immediate_error = Some(reason),
         }
@@ -584,6 +601,7 @@ impl StrategyRun {
         }
         self.host.sync_desired(None, now)?;
         self.active = None;
+        self.switch_requested_at = None;
         self.dirty = false;
         self.known.clear();
         Ok(())
@@ -699,13 +717,8 @@ impl StrategyRun {
         if flight.activation_generation != self.host.activation_generation() {
             return Err("strategy_activation_stale".into());
         }
-        let authoritative = choice::choose(&self.library, &self.policy)?;
-        if authoritative
-            .running
-            .as_ref()
-            .map(Running::run_id)
-            .as_deref()
-            != Some(strategy_id.as_str())
+        if self.desired_id() != Some(strategy_id.as_str())
+            || self.choice_revision.as_ref() != Some(&self.library.choice_revision()?)
         {
             return Err("strategy_activation_stale".into());
         }
