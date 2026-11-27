@@ -85,6 +85,7 @@ impl Tape {
         let mut p = Portfolio::with_capital(a("5000"));
         c.paper_costs = Some(serde_json::from_value(manifest["paper_costs"].clone()).unwrap());
         p.costs = c.paper_costs.clone();
+        p.sizing = Some(c.sleeves.policies());
         p.model_led = true;
         let db = open_book(&c).unwrap();
         Self {

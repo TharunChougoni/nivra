@@ -6,13 +6,55 @@ never in a template.
 
 | File | Contents |
 | --- | --- |
-| `paper-current.example.json` | Runtime paper config: account, session, paths, quota journal, capital and `paper_costs` |
+| `paper-current.example.json` | Runtime paper config: account, session, paths, quota journal, capital, `sleeves` and `paper_costs` |
 | `agent-settings.example.json` | The pi `agent` block: `node`, `entry`, `agent_dir` and one model and budget per lane |
 | `updater.example.json` | Updater remote and paper config path |
 | `*.fragment.json` | Optional blocks to merge into a reviewed config |
 
 See [agent](../../docs/AGENT.md) for the lane keys and
 [operations](../../docs/OPERATIONS.md) for how to apply a config change.
+
+## Capital sleeves and sizing
+
+The book splits its capital into two sleeves. The cash sleeve funds the
+cash-equity action strategies and cash plans. The options sleeve funds Nifty
+option plans. A buy spends only its own sleeve's cash, and the book refuses
+it with `insufficient_cash` when that sleeve cannot pay. `capital` must equal
+the sum of the sleeve capitals, or the config fails with
+`sleeve_capital_sum_mismatch`. A config without `sleeves` is invalid.
+
+```json
+"capital": "10000",
+"sleeves": {
+  "cash":    {"capital": "5000", "risk_per_trade_bps": 50,   "max_position_bps": 4000,
+              "max_positions": 3, "min_order_rupees": "200"},
+  "options": {"capital": "5000", "risk_per_trade_bps": 3000, "max_position_bps": 10000,
+              "max_positions": 1, "min_order_rupees": "200"}
+}
+```
+
+| Key | Range | Meaning |
+| --- | --- | --- |
+| `capital` | >= 0 | Rupees allocated to the sleeve when a fresh book opens. 0 leaves it unfunded |
+| `risk_per_trade_bps` | 1 to 10000 | Sleeve equity one buy may lose if its stop fills, fees and exit slippage included |
+| `max_position_bps` | 1 to 10000 | Largest single position, in bps of sleeve equity |
+| `max_positions` | >= 1 | Open positions the sleeve may hold |
+| `min_order_rupees` | >= 0 | A sized buy below this notional is refused with `size_below_min_order` |
+
+The runtime sizes every buy from these numbers and the live book. A buy must
+carry a stop below its `max_price`. Its units are the most whole lots that
+the risk budget, the position cap, the sleeve's cash and the displayed depth
+allow. A Nifty option uses the contract lot; cash equity uses one share. A
+strategy buy never names units. A decision-lane plan may name units; the
+runtime refuses units above the policy with `sizing_policy_exceeded`. Other
+refusals are `sleeve_positions_full`, `size_below_lot`,
+`sleeve_cash_insufficient` and `size_stop_not_below_price`.
+
+The sleeve policies are runtime config, like `execution`. The allocation
+ledger is book state: a fresh book records one entry per funded sleeve, and
+each sleeve's cash is its allocation plus its sells, minus its buys and fees.
+Reconciliation refuses a buy that overdrew its sleeve
+(`sleeve_cash_overdrawn`). Drawdown halts stay book-level.
 
 ## Stream executable depth
 
@@ -71,7 +113,8 @@ starting capital. Keep the original account and its evidence as an archive.
 		--agent-settings AGENT_SETTINGS_JSON \
 		--config-directory NEW_CONFIG_DIRECTORY \
 		--state-directory NEW_STATE_DIRECTORY \
-		--capital PAPER_CAPITAL --confirm-fresh-paper
+		--cash-capital CASH_SLEEVE_CAPITAL \
+		--options-capital OPTIONS_SLEEVE_CAPITAL --confirm-fresh-paper
 	```
 
 Setup writes private `paper.json`, `planner.json` and `setup.json` with

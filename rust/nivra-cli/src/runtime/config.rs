@@ -742,6 +742,8 @@ pub struct Config {
     pub strategy: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capital: Option<nivra_core::finance::Amount>,
+    /// Capital and sizing policy per sleeve; capitals add up to `capital`.
+    pub sleeves: nivra_core::sleeve::SleeveConfigs,
 }
 pub(crate) fn default_model_readiness_check_interval_ms() -> i64 {
     60_000
@@ -859,6 +861,7 @@ impl Config {
             .as_ref()
             .ok_or("paper_costs_required")?
             .validate()?;
+        self.sleeves.validate(self.allocation()?)?;
         if self
             .paper_costs_by_segment
             .contains_key(&nivra_core::market::Segment::NseEq)

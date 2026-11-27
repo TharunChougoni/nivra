@@ -17,7 +17,7 @@ pub(crate) fn portfolio(head: &str, view: &Arc<Mutex<serde_json::Value>>) -> Res
     body["equity"] = portfolio_equity(p)
         .map(serde_json::Value::String)
         .unwrap_or(serde_json::Value::Null);
-    body["initial_allocation"] = p["initial_allocation"].clone();
+    body["allocations"] = p["allocations"].clone();
     body["high_water"] = p["high_water"].clone();
     body["stopped"] = p["stopped"].clone();
     body["halted"] = p["halted"].clone();

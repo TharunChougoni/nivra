@@ -2,6 +2,7 @@
 //! No data acquisition, storage, credentials, models or orders.
 use crate::finance::{Amount, FeeArithmetic, FeeSchedule, Money, Price, Side};
 use crate::market::{MAX_FINANCIAL_AGE_MS, OptionCatalog, Segment};
+use crate::sleeve::{Allocation, Sleeve, SleevePolicies};
 use chrono::{DateTime, FixedOffset, NaiveDate, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -248,13 +249,17 @@ pub struct Portfolio {
     /// Never serialized into the cash book.
     #[serde(skip)]
     pub options: Option<OptionCatalog>,
+    /// Runtime-only per-sleeve sizing policy from the paper config.
+    #[serde(skip)]
+    pub sizing: Option<SleevePolicies>,
     pub policy: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub costs: Option<FeeArithmetic>,
     #[serde(default)]
     pub model_led: bool,
     pub cash: Amount,
-    pub initial_allocation: Amount,
+    /// Append-only allocation ledger; each sleeve's cash derives from it.
+    pub allocations: Vec<Allocation>,
     pub high_water: Amount,
     pub halted: bool,
     pub stopped: bool,
@@ -278,16 +283,31 @@ impl Portfolio {
     pub fn new() -> Self {
         Self::with_capital(a("5000"))
     }
+    /// A book whose whole capital is the cash-equity sleeve.
     pub fn with_capital(capital: Amount) -> Self {
+        Self::with_allocations(vec![Allocation {
+            at_ms: 0,
+            sleeve: Sleeve::Cash,
+            amount: capital,
+            reason: "initial".into(),
+        }])
+    }
+    /// A fresh book funded by `allocations`; cash is their sum.
+    pub fn with_allocations(allocations: Vec<Allocation>) -> Self {
+        let capital = allocations
+            .iter()
+            .try_fold(Amount::ZERO, |sum, a| sum.checked_add(a.amount))
+            .unwrap_or(Amount::ZERO);
         Self {
             settings: ExecutionSettings::default(),
             fee_schedule: None,
             options: None,
+            sizing: None,
             policy: POLICY.into(),
             costs: None,
             model_led: false,
             cash: capital,
-            initial_allocation: capital,
+            allocations,
             high_water: capital,
             halted: false,
             stopped: false,
@@ -361,11 +381,57 @@ impl Portfolio {
             })
             .collect()
     }
+    /// Total book capital: the sum of the allocation ledger.
     pub fn allocation(&self) -> Result<Amount> {
-        if self.initial_allocation <= Amount::ZERO {
-            return Err("invalid_initial_allocation".into());
+        if self.allocations.is_empty() || self.allocations.iter().any(|a| a.amount <= Amount::ZERO)
+        {
+            return Err("invalid_allocation".into());
         }
-        Ok(self.initial_allocation)
+        self.allocations
+            .iter()
+            .try_fold(Amount::ZERO, |sum, a| Ok(sum.checked_add(a.amount)?))
+    }
+    pub fn sleeve_allocation(&self, sleeve: Sleeve) -> Result<Amount> {
+        self.allocations
+            .iter()
+            .filter(|a| a.sleeve == sleeve)
+            .try_fold(Amount::ZERO, |sum, a| Ok(sum.checked_add(a.amount)?))
+    }
+    /// The sleeve's allocation plus its sells, minus its buys and all their fees.
+    pub fn sleeve_cash(&self, sleeve: Sleeve) -> Result<Amount> {
+        self.fills
+            .iter()
+            .filter(|f| Sleeve::of_key(&f.instrument.key) == sleeve)
+            .try_fold(self.sleeve_allocation(sleeve)?, |cash, f| {
+                let n = f
+                    .price
+                    .amount()
+                    .checked_mul(Amount::from_unsigned(f.units))?;
+                Ok(if f.buy {
+                    cash.checked_sub(n.checked_add(f.fee)?)?
+                } else {
+                    cash.checked_add(n.checked_sub(f.fee)?)?
+                })
+            })
+    }
+    /// Sleeve cash plus the marks of the sleeve's positions.
+    pub fn sleeve_equity(&self, sleeve: Sleeve) -> Result<Amount> {
+        self.positions
+            .values()
+            .filter(|p| Sleeve::of_key(&p.instrument.key) == sleeve)
+            .try_fold(self.sleeve_cash(sleeve)?, |v, p| {
+                Ok(v.checked_add(
+                    p.mark
+                        .amount()
+                        .checked_mul(Amount::from_unsigned(p.units))?,
+                )?)
+            })
+    }
+    pub fn sleeve_positions(&self, sleeve: Sleeve) -> usize {
+        self.positions
+            .keys()
+            .filter(|key| Sleeve::of_key(key) == sleeve)
+            .count()
     }
     /// Exact fee policy for one instrument key. A runtime per-segment schedule
     /// selects `paper_costs` for `NSE_EQ` and the configured `NSE_FO` entry for
@@ -404,8 +470,15 @@ impl Portfolio {
             return Err("portfolio_policy_or_bounds".into());
         }
         let mut cash = self.allocation()?;
+        let mut sleeves = BTreeMap::new();
+        for sleeve in Sleeve::ALL {
+            sleeves.insert(sleeve, self.sleeve_allocation(sleeve)?);
+        }
         let mut held = BTreeMap::<String, (u64, Price, Instrument)>::new();
         for f in &self.fills {
+            let sleeve = sleeves
+                .get_mut(&Sleeve::of_key(&f.instrument.key))
+                .ok_or("fill_sleeve_unknown")?;
             if f.units == 0 {
                 return Err("zero_fill".into());
             }
@@ -439,8 +512,14 @@ impl Portfolio {
                     (units, entry, f.instrument.clone()),
                 );
                 cash = cash.checked_sub(n.checked_add(f.fee)?)?;
+                *sleeve = sleeve.checked_sub(n.checked_add(f.fee)?)?;
                 if cash < Amount::ZERO {
                     return Err("cash_overdrawn".into());
+                }
+                // A protective sell may cost more than it returns; only a buy
+                // may never spend past its own sleeve.
+                if *sleeve < Amount::ZERO {
+                    return Err("sleeve_cash_overdrawn".into());
                 }
             } else {
                 let old = held
@@ -453,9 +532,17 @@ impl Portfolio {
                     held.insert(f.instrument.key.clone(), (old.0 - f.units, old.1, old.2));
                 }
                 cash = cash.checked_add(n.checked_sub(f.fee)?)?;
+                *sleeve = sleeve.checked_add(n.checked_sub(f.fee)?)?;
             }
         }
-        if cash != self.cash || cash < Amount::ZERO || held.len() != self.positions.len() {
+        let split = sleeves
+            .values()
+            .try_fold(Amount::ZERO, |sum, v| sum.checked_add(*v))?;
+        if cash != self.cash
+            || cash < Amount::ZERO
+            || split != cash
+            || held.len() != self.positions.len()
+        {
             return Err("cash_reconciliation".into());
         }
         for (key, p) in &self.positions {
@@ -858,12 +945,13 @@ impl Portfolio {
                 };
                 return refuse(InsufficientDepth, facts);
             }
-            let affordable = self.size_with_costs(i, q, self.cash)?;
+            let sleeve_cash = self.sleeve_cash(Sleeve::of_key(&i.key))?;
+            let affordable = self.size_with_costs(i, q, sleeve_cash)?;
             if units > affordable {
                 let facts = RefusalFacts {
                     affordable_units: Some(affordable),
                     price_with_costs: Some(price.amount().to_string()),
-                    cash: Some(self.cash.to_string()),
+                    cash: Some(sleeve_cash.to_string()),
                     ..units_only
                 };
                 return refuse(InsufficientCash, facts);
@@ -903,9 +991,10 @@ impl Portfolio {
             let charge = policy
                 .charge(Side::Sell, Money::try_from(notional)?)?
                 .amount();
-            if self.cash.checked_add(notional)?.checked_sub(charge)? < Amount::ZERO {
+            let sleeve_cash = self.sleeve_cash(Sleeve::of_key(&i.key))?;
+            if sleeve_cash.checked_add(notional)?.checked_sub(charge)? < Amount::ZERO {
                 let facts = RefusalFacts {
-                    cash: Some(self.cash.to_string()),
+                    cash: Some(sleeve_cash.to_string()),
                     ..units_only
                 };
                 return refuse(SellCashNegative, facts);
@@ -945,7 +1034,7 @@ impl Portfolio {
         {
             return Ok(false);
         }
-        let budget = self.cash;
+        let budget = self.sleeve_cash(Sleeve::of_key(&i.key))?;
         let units = self.size_with_costs(i, q, budget)?;
         if units == 0 {
             return Ok(false);
@@ -1014,7 +1103,7 @@ impl Refusal {
             Self::InsufficientDepth => ("insufficient_depth", "the quote showed too few units"),
             Self::InsufficientCash => (
                 "insufficient_cash",
-                "cash after costs could not pay for the units",
+                "the sleeve's cash after costs could not pay for the units",
             ),
             Self::StalePositionMark => (
                 "stale_position_mark",

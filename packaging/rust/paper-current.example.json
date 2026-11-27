@@ -17,7 +17,23 @@
   "read_journal_device": "${ORIGINAL_DEVICE_AS_INTEGER}",
   "read_journal_inode": "${ORIGINAL_INODE_AS_INTEGER}",
   "strategy": "model_planner_v1",
-  "capital": "${ORIGINAL_CONFIG_CAPITAL}",
+  "capital": "10000",
+  "sleeves": {
+    "cash": {
+      "capital": "5000",
+      "risk_per_trade_bps": 50,
+      "max_position_bps": 4000,
+      "max_positions": 3,
+      "min_order_rupees": "200"
+    },
+    "options": {
+      "capital": "5000",
+      "risk_per_trade_bps": 3000,
+      "max_position_bps": 10000,
+      "max_positions": 1,
+      "min_order_rupees": "200"
+    }
+  },
   "paper_costs": {
     "per_order": "0.01",
     "buy_bps": "5",

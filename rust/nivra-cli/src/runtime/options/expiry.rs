@@ -149,7 +149,12 @@ mod tests {
             "slippage_bps":"10","rounding_increment":"0.05"
         }))
         .unwrap();
-        let mut p = Portfolio::with_capital(a("5000"));
+        let mut p = Portfolio::with_allocations(vec![nivra_core::sleeve::Allocation {
+            at_ms: 0,
+            sleeve: nivra_core::sleeve::Sleeve::Options,
+            amount: a("5000"),
+            reason: "fixture".into(),
+        }]);
         p.costs = Some(cash.clone());
         p.fee_schedule = Some(FeeSchedule::new(cash).with_segment(Segment::NseFo, fo));
         p.options = Some(

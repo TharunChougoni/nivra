@@ -18,8 +18,12 @@ pub(crate) struct Args {
     /// New private state root. Must not already exist.
     #[arg(long)]
     state_directory: PathBuf,
+    /// Capital of the cash-equity strategy sleeve.
     #[arg(long)]
-    capital: Amount,
+    cash_capital: Amount,
+    /// Capital of the Nifty options sleeve. Zero leaves options unfunded.
+    #[arg(long)]
+    options_capital: Amount,
     /// A fresh account is a separate explicit disposition, never an upgrade/reset.
     #[arg(long)]
     confirm_fresh_paper: bool,
@@ -73,7 +77,12 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 fn prepare(args: &Args) -> Result<()> {
-    if !args.confirm_fresh_paper || args.capital <= Amount::ZERO {
+    let capital = args.cash_capital.checked_add(args.options_capital)?;
+    if !args.confirm_fresh_paper
+        || args.cash_capital < Amount::ZERO
+        || args.options_capital < Amount::ZERO
+        || capital <= Amount::ZERO
+    {
         return Err("setup_explicit_fresh_paper_and_positive_capital_required".into());
     }
     let source_bytes = private(&args.paper)?;
@@ -145,7 +154,9 @@ fn prepare(args: &Args) -> Result<()> {
                 .remove(key);
         }
     }
-    paper["capital"] = json!(args.capital.to_string());
+    paper["capital"] = json!(capital.to_string());
+    paper["sleeves"]["cash"]["capital"] = json!(args.cash_capital.to_string());
+    paper["sleeves"]["options"]["capital"] = json!(args.options_capital.to_string());
     paper["directory"] = json!(state.join(source.session.to_string()));
     paper["sessions_root"] = json!(state.join("sessions"));
     paper["planner_config"] = json!(config.join("planner.json"));
@@ -184,7 +195,7 @@ fn prepare(args: &Args) -> Result<()> {
             "version":env!("CARGO_PKG_VERSION"),"source_config_sha256":digest(source_bytes.as_bytes()),
             "paper_config_sha256":digest(&serde_json::to_vec_pretty(&paper)?),
             "planner_policy_sha256":digest(&planner::policy_bytes(&loaded)?),
-            "capital":args.capital,"session":source.session,"activated":false,
+            "capital":capital,"session":source.session,"activated":false,
             "shared_read_journal_preserved":true,"credential_files_modified":false
         }))?,
     )?;
@@ -233,7 +244,8 @@ pub(super) fn exercise() {
         agent_settings,
         config_directory: root.path().join("config"),
         state_directory: root.path().join("state"),
-        capital: Amount::parse("5000").unwrap(),
+        cash_capital: Amount::parse("5000").unwrap(),
+        options_capital: Amount::parse("5000").unwrap(),
         confirm_fresh_paper: false,
     };
     assert!(prepare(&args).is_err());
@@ -261,7 +273,8 @@ pub(super) fn exercise() {
     let generated: Value =
         serde_json::from_slice(&fs::read(args.config_directory.join("paper.json")).unwrap())
             .unwrap();
-    assert_eq!(generated["capital"], "5000");
+    assert_eq!(generated["capital"], "10000");
+    assert_eq!(generated["sleeves"]["options"]["capital"], "5000");
     assert_eq!(generated["read_journal"], json!(source.read_journal));
     assert_eq!(generated["read_journal_inode"], source.read_journal_inode);
     assert_eq!(generated["read_journal_device"], source.read_journal_device);

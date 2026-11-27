@@ -43,6 +43,11 @@ fn write_config(
         "read_journal_device": device,
         "read_journal_inode": inode,
         "strategy": "model_planner_v1",
+        "capital": "5000",
+        "sleeves": {
+            "cash": {"capital":"5000","risk_per_trade_bps":50,"max_position_bps":4000,"max_positions":3,"min_order_rupees":"200"},
+            "options": {"capital":"0","risk_per_trade_bps":3000,"max_position_bps":10000,"max_positions":1,"min_order_rupees":"200"}
+        },
         "paper_costs": {"per_order":"0.01","buy_bps":"5","sell_bps":"7","slippage_bps":"5","rounding_increment":"0.01"},
     });
     fs::write(&path, serde_json::to_vec(&body).unwrap()).unwrap();

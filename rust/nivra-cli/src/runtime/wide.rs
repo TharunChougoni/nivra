@@ -314,6 +314,7 @@ pub(super) fn stored_portfolio(db: &Connection, c: &Config) -> Result<Option<Por
     }
     let mut p: Portfolio = serde_json::from_str(&body)?;
     p.settings = c.execution.clone();
+    p.sizing = Some(c.sleeves.policies());
     p.reconcile()?;
     if c.paper_costs.is_none() || c.paper_costs != p.costs {
         return Err("paper_cost_policy_changed".into());
@@ -351,6 +352,7 @@ pub(super) fn load_wide(db: &mut Connection, c: &Config) -> Result<Portfolio> {
             rollover::record_protective_carry(db, &value, millis())?;
         }
         p.settings = c.execution.clone();
+        p.sizing = Some(c.sleeves.policies());
         p.reconcile()?;
         // Cash keeps `paper_costs`; the schedule lookup is the single fee source.
         p.costs = Some(c.fee_schedule()?.cash().clone());
@@ -359,9 +361,11 @@ pub(super) fn load_wide(db: &mut Connection, c: &Config) -> Result<Portfolio> {
     if rollover::published_decision(c)["carry_required"] == true {
         return Err("carry_missing_no_capital_reset".into());
     }
-    let mut p = Portfolio::with_capital(c.allocation()?);
+    c.sleeves.validate(c.allocation()?)?;
+    let mut p = Portfolio::with_allocations(c.sleeves.allocations(millis()));
     let schedule = c.fee_schedule()?;
     p.settings = c.execution.clone();
+    p.sizing = Some(c.sleeves.policies());
     p.costs = Some(schedule.cash().clone());
     // Runtime authority comes from the explicit selector, not the offline legacy constructor.
     p.model_led = c.strategy == "model_planner_v1"

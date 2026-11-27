@@ -8,6 +8,7 @@ pub(super) fn test_costs() -> nivra_core::finance::FeeArithmetic {
 pub(super) fn test_portfolio() -> nivra_core::execution::Portfolio {
     let mut p = nivra_core::execution::Portfolio::new();
     p.costs = Some(test_costs());
+    p.sizing = Some(test_sleeves("5000", "0").policies());
     p
 }
 pub(super) fn config(dir: &Path) -> Config {
@@ -57,7 +58,18 @@ pub(super) fn config(dir: &Path) -> Config {
         read_journal_inode: 0,
         strategy: "model_planner_v1".into(),
         capital: Some(nivra_core::execution::a("5000")),
+        sleeves: test_sleeves("5000", "0"),
     }
+}
+/// Sleeves whose capitals are `cash` and `options`, with the shipped policies.
+pub(crate) fn test_sleeves(cash: &str, options: &str) -> nivra_core::sleeve::SleeveConfigs {
+    serde_json::from_value(serde_json::json!({
+        "cash": {"capital": cash, "risk_per_trade_bps": 50, "max_position_bps": 4000,
+                 "max_positions": 3, "min_order_rupees": "200"},
+        "options": {"capital": options, "risk_per_trade_bps": 3000, "max_position_bps": 10000,
+                    "max_positions": 1, "min_order_rupees": "200"}
+    }))
+    .unwrap()
 }
 #[test]
 fn execution_preparation_defaults_and_validation() {
@@ -72,7 +84,6 @@ fn execution_preparation_defaults_and_validation() {
     template["previous_session"] = serde_json::json!("2026-10-15");
     template["read_journal_device"] = serde_json::json!(0);
     template["read_journal_inode"] = serde_json::json!(0);
-    template["capital"] = serde_json::json!("5000");
     template["market_archive"] = serde_json::json!({
         "url": "postgresql://nivra@localhost/nivra_market",
         "password_file": "/private/archive-password",

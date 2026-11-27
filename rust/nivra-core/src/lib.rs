@@ -22,4 +22,5 @@ pub mod replay;
 
 pub mod daily_research;
 
+pub mod sleeve;
 pub mod strategy;
