@@ -1075,6 +1075,7 @@ mod tests {
         cfg.strategy_execution = Some(planner::StrategyExecution {
             enabled: true,
             fallback: vec!["vwap_trend".into()],
+            ..Default::default()
         });
         let mut service = LaneService::start(&cfg).unwrap();
         let portfolio = crate::runtime::tests::test_portfolio();
@@ -1334,6 +1335,7 @@ mod tests {
         cfg.strategy_execution = Some(planner::StrategyExecution {
             enabled: true,
             fallback: vec!["vwap_trend".into()],
+            ..Default::default()
         });
         let agent = cfg.agent.as_mut().unwrap();
         agent.mode = AgentMode::Shadow;

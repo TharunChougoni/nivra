@@ -50,7 +50,7 @@ async function harness(
 ) {
   const dir = mkdtempSync(join(tmpdir(), "nivra-agent-test-"));
   const runtime = await ModelRuntime.create({ authPath: join(dir, "auth.json"), modelsPath: null, allowModelNetwork: false, refreshOnCreate: false });
-  const beforeTurn = installFake(runtime, script);
+  const { beforeTurn, beforeReview } = installFake(runtime, script);
   const sent: Outbound[] = [];
   const done = new Map<string, (message: Outbound) => void>();
   let agent: LaneAgent;
@@ -62,15 +62,32 @@ async function harness(
         agent.handle(parseInbound(JSON.stringify({ v: PROTOCOL_VERSION, type: "tool_result", turn_id: message.turn_id, call_id: message.call_id, ...reply }))),
       );
     }
-    if (message.type === "turn_result") done.get(message.id)?.(message);
+    if (message.type === "turn_result" || message.type === "review_strategy_result") done.get(message.id)?.(message);
   };
-  agent = new LaneAgent({ runtime, promptsDir: prompts, send, beforeTurn, ...options });
+  agent = new LaneAgent({ runtime, promptsDir: prompts, send, beforeTurn, beforeReview, ...options });
   const run = (request: TurnRequest) =>
     new Promise<Extract<Outbound, { type: "turn_result" }>>((resolve) => {
       done.set(request.id, (message) => resolve(message as Extract<Outbound, { type: "turn_result" }>));
       agent.handle(request);
     });
-  return { dir, agent, sent, run };
+  const review = (source: string, source_sha256: string, id = "rev-1") =>
+    new Promise<Extract<Outbound, { type: "review_strategy_result" }>>((resolve) => {
+      done.set(id, (message) => resolve(message as Extract<Outbound, { type: "review_strategy_result" }>));
+      agent.handle(
+        parseInbound(
+          JSON.stringify({
+            v: PROTOCOL_VERSION,
+            type: "review_strategy",
+            id,
+            model: { provider: FAKE_PROVIDER, id: FAKE_MODEL, thinking: "off" },
+            fallback: { provider: FAKE_PROVIDER, id: FAKE_FALLBACK_MODEL, thinking: "off" },
+            source,
+            source_sha256,
+          }),
+        ),
+      );
+    });
+  return { dir, agent, sent, run, review };
 }
 
 test("a decision turn bridges every Rust tool call and reports usage, model and events", async () => {
@@ -434,5 +451,41 @@ test("malformed and colliding skills produce diagnostics without failing the tur
   assert.equal(emitted.length, diagnostics.length);
   // Default skills still loaded cleanly.
   assert.equal(agent.loadedSkills("review").length, 5);
+  agent.dispose();
+});
+
+test("review_strategy returns structured verdicts, supports fallback, and fails closed on invalid output", async () => {
+  const script: FakeScript = {
+    turns: [],
+    reviews: [
+      { text: '{"verdict":"safe","reasons":[]}' },
+      { text: '{"verdict":"unsafe","reasons":["attempts socket connect"]}' },
+      { error: "429 quota exceeded" },
+      { text: '{"verdict":"safe","reasons":[]}' },
+      { text: "not json at all" },
+    ],
+  };
+  const { agent, review } = await harness(script, () => ({ ok: true, output: {} }));
+
+  const safe = await review("def on_observation(obs):\n    return {'actions': []}\n", "sha-safe", "r1");
+  assert.equal(safe.status, "ok");
+  assert.equal(safe.verdict, "safe");
+  assert.deepEqual(safe.reasons, []);
+
+  const unsafe = await review("import socket", "sha-unsafe", "r2");
+  assert.equal(unsafe.status, "ok");
+  assert.equal(unsafe.verdict, "unsafe");
+  assert.deepEqual(unsafe.reasons, ["attempts socket connect"]);
+
+  const viaFallback = await review("def on_observation(obs):\n    return {'actions': []}\n", "sha-fb", "r3");
+  assert.equal(viaFallback.status, "ok");
+  assert.equal(viaFallback.verdict, "safe");
+  assert.equal(viaFallback.model, FAKE_FALLBACK_MODEL);
+
+  const malformed = await review("def on_observation(obs):\n    return {'actions': []}\n", "sha-bad", "r4");
+  assert.equal(malformed.status, "ok");
+  assert.equal(malformed.verdict, "unsafe");
+  assert.deepEqual(malformed.reasons, ["strategy_review_output_invalid"]);
+
   agent.dispose();
 });

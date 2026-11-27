@@ -24,6 +24,13 @@ impl ReferenceAction {
     pub(crate) fn run_id(&self) -> String {
         format!("{FALLBACK_PREFIX}{}", self.name)
     }
+
+    /// Build-time embedded action strategies are verified by the static AST
+    /// unit test (`reference_action_strategies_pass_static_review`). Here we
+    /// re-verify the static check is satisfied before running as fallback.
+    pub(crate) fn is_reviewed(&self, python_path: &std::path::Path) -> bool {
+        super::review::static_check(python_path, self.source, false).is_ok()
+    }
 }
 
 fn file(path: &str) -> Option<&'static [u8]> {
@@ -59,4 +66,38 @@ pub(crate) fn validate_fallback(names: &[String]) -> Result<()> {
         return Err("strategy_fallback_invalid".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reference_action_strategies_pass_static_review() {
+        let python = std::path::Path::new("/usr/bin/python3");
+        if !python.is_file() {
+            return;
+        }
+        let mut count = 0;
+        for (path, _) in FILES {
+            let Some(name) = path.strip_suffix(".py") else {
+                continue;
+            };
+            if name.contains('/') {
+                continue;
+            }
+            let Some(reference) = action(name) else {
+                continue;
+            };
+            count += 1;
+            assert!(
+                reference.is_reviewed(python),
+                "shipped action reference {name} failed static AST review"
+            );
+        }
+        assert!(
+            count >= 8,
+            "expected shipped action references, found {count}"
+        );
+    }
 }

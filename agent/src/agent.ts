@@ -26,6 +26,7 @@ import {
   type ModelSpec,
   type Outbound,
   PROTOCOL_VERSION,
+  type ReviewStrategyRequest,
   type ToolSpec,
   type TurnRequest,
   type TurnStatus,
@@ -41,6 +42,8 @@ export interface AgentOptions {
   send: (message: Outbound) => void;
   /** Test and fake-provider hook, called before a turn prompts the model. */
   beforeTurn?: (turn: TurnRequest) => void;
+  /** Test and fake-provider hook, called before a strategy review prompts the model. */
+  beforeReview?: (request: ReviewStrategyRequest) => void;
 }
 
 interface LaneSession {
@@ -156,6 +159,58 @@ function resourceLoader(
   };
 }
 
+const STRATEGY_REVIEW_SYSTEM_PROMPT = `You are a strict security reviewer for Nivra strategy_actions_v1 Python scripts.
+Scripts run in a persistent hardened Python worker (python3 -I -S -B) without bubblewrap.
+Inspect the candidate source for any attempt to:
+- escape the sandbox or access files, environment variables, OS, subprocesses, sockets, network, signals, ctypes, or FFI
+- perform dynamic execution (eval, exec, compile, __import__, importlib), dunder/frame/subclass traversal, or obfuscated payloads
+- exhaust memory/CPU unconditionally on normal input, monkey-patch globals/builtins, or tamper with the runner loop.
+A safe strategy only defines pure deterministic trading logic in on_observation(obs) returning {"actions": [...]}.
+Reply strictly with one JSON object and no surrounding text:
+{"verdict":"safe","reasons":[]}
+or
+{"verdict":"unsafe","reasons":["short_snake_or_sentence_reason"]}`;
+
+function reviewResourceLoader(systemPrompt: string): ResourceLoader {
+  return {
+    getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
+    getSkills: () => ({ skills: [], diagnostics: [] }),
+    getPrompts: () => ({ prompts: [], diagnostics: [] }),
+    getThemes: () => ({ themes: [], diagnostics: [] }),
+    getAgentsFiles: () => ({ agentsFiles: [] }),
+    getSystemPrompt: () => systemPrompt,
+    getSystemPromptSource: () => undefined,
+    getAppendSystemPrompt: () => [],
+    getAppendSystemPromptSources: () => [],
+    extendResources: () => {},
+    reload: async () => {},
+  };
+}
+
+function parseReviewVerdict(text: string): { verdict: "safe" | "unsafe"; reasons: string[] } {
+  const trimmed = text.trim();
+  const body = trimmed.startsWith("```")
+    ? trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim()
+    : trimmed;
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { verdict: "unsafe", reasons: ["strategy_review_output_invalid"] };
+    }
+    const obj = parsed as { verdict?: unknown; reasons?: unknown };
+    if (obj.verdict !== "safe" && obj.verdict !== "unsafe") {
+      return { verdict: "unsafe", reasons: ["strategy_review_output_invalid"] };
+    }
+    const reasons = Array.isArray(obj.reasons)
+      ? obj.reasons.filter((r): r is string => typeof r === "string" && r.length > 0).slice(0, 16)
+      : [];
+    if (obj.verdict === "unsafe" && reasons.length === 0) reasons.push("strategy_review_model_unsafe");
+    return { verdict: obj.verdict, reasons };
+  } catch {
+    return { verdict: "unsafe", reasons: ["strategy_review_output_invalid"] };
+  }
+}
+
 /**
  * Runs one lane turn at a time on pi. Every tool is a Rust tool: the agent only
  * forwards calls and returns Rust's answer. pi's built-in tools are never enabled.
@@ -190,6 +245,9 @@ export class LaneAgent {
           this.active.pending.clear();
           void this.sessions.get(this.active.request.lane)?.session.abort();
         }
+        return;
+      case "review_strategy":
+        void this.runReviewStrategy(message);
         return;
       case "shutdown":
         this.dispose();
@@ -536,6 +594,79 @@ export class LaneAgent {
     } finally {
       unsubscribe();
       this.active = undefined;
+    }
+  }
+
+  private async runReviewStrategy(request: ReviewStrategyRequest): Promise<void> {
+    let used: ModelSpec = request.model;
+    const reply = (status: TurnStatus, verdict: "safe" | "unsafe", reasons: string[], error?: string) =>
+      this.send({
+        v: PROTOCOL_VERSION,
+        type: "review_strategy_result",
+        id: request.id,
+        status,
+        ...(error === undefined ? {} : { error }),
+        verdict,
+        reasons,
+        model: used.id,
+        provider: used.provider,
+      });
+    const model = this.options.runtime.getModel(request.model.provider, request.model.id);
+    if (!model) {
+      reply("error", "unsafe", ["agent_model_unknown"], "agent_model_unknown");
+      return;
+    }
+    const fallbackModel = request.fallback && this.options.runtime.getModel(request.fallback.provider, request.fallback.id);
+    if (request.fallback && !fallbackModel) {
+      reply("error", "unsafe", ["agent_fallback_model_unknown"], "agent_fallback_model_unknown");
+      return;
+    }
+    let session: AgentSession | undefined;
+    try {
+      const created = await createAgentSession({
+        cwd: process.cwd(),
+        agentDir: process.cwd(),
+        model,
+        thinkingLevel: request.model.thinking ?? "low",
+        modelRuntime: this.options.runtime,
+        resourceLoader: reviewResourceLoader(STRATEGY_REVIEW_SYSTEM_PROMPT),
+        tools: [],
+        customTools: [],
+        sessionManager: SessionManager.inMemory(),
+        settingsManager: SettingsManager.inMemory({ retry: { enabled: true, maxRetries: 1 } }),
+      });
+      session = created.session;
+      const prompt = `Review strategy source (sha256=${request.source_sha256}):\n\`\`\`python\n${request.source}\n\`\`\``;
+      const runPrompt = async (): Promise<Failure | undefined> => {
+        this.options.beforeReview?.(request);
+        try {
+          await session!.prompt(prompt);
+        } catch (error) {
+          return { error: error instanceof Error ? error.message : String(error), providerAnswered: false };
+        }
+        const last = session!.messages.findLast((message) => message.role === "assistant");
+        return last?.role === "assistant" && last.stopReason === "error"
+          ? { error: last.errorMessage ?? "provider_error", providerAnswered: true }
+          : undefined;
+      };
+      let failure = await runPrompt();
+      if (failure && request.fallback && fallbackModel && fallbackReason(failure.error, failure.providerAnswered)) {
+        await useModel(session, fallbackModel, request.fallback.thinking ?? "low");
+        used = request.fallback;
+        failure = await runPrompt();
+      }
+      if (failure) {
+        reply("error", "unsafe", [failure.error], failure.error);
+        return;
+      }
+      const text = session.getLastAssistantText() ?? "";
+      const parsed = parseReviewVerdict(text);
+      reply("ok", parsed.verdict, parsed.reasons);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      reply("error", "unsafe", [msg], msg);
+    } finally {
+      session?.dispose();
     }
   }
 }

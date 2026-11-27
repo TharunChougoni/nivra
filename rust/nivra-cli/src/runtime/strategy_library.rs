@@ -34,8 +34,9 @@ use std::{
 pub(crate) mod acceptance;
 pub(crate) mod choice;
 pub(crate) mod reference;
+pub(crate) mod review;
 
-const ENTRY_VERSION: u32 = 1;
+const ENTRY_VERSION: u32 = 2;
 const MAX_ENTRY_BYTES: u64 = 65_536;
 const MAX_SOURCE_BYTES: u64 = 262_144;
 const MAX_CONTROLS_BYTES: u64 = 4 * 1024 * 1024;
@@ -66,6 +67,7 @@ pub(crate) struct Entry {
     pub summary: Value,
     pub tape_dates: Vec<String>,
     pub acceptance: EntryAcceptance,
+    pub review: review::EntryReview,
     pub registered_at_ms: i64,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -284,14 +286,41 @@ impl Library {
         Self { root }
     }
 
+    /// Read the cached safe review for `source_sha256` if it matches the
+    /// current runner and review-policy versions.
+    pub(crate) fn cached_review(&self, source_sha256: &str) -> Option<review::EntryReview> {
+        let path = self
+            .root
+            .join("reviews")
+            .join(format!("{source_sha256}.json"));
+        let bytes = crate::read_bounded(&path, MAX_ENTRY_BYTES).ok()?;
+        let parsed: review::EntryReview = serde_json::from_slice(&bytes).ok()?;
+        parsed.is_current(source_sha256).then_some(parsed)
+    }
+
+    pub(crate) fn save_review(&self, review: &review::EntryReview) -> Result<()> {
+        let dir = self.dir("reviews")?;
+        let name = format!("{}.json", review.source_sha256);
+        let bytes = artifact_bytes(review)?;
+        let tmp = write_temp(&dir, &name, &bytes)?;
+        fs::rename(tmp, dir.join(&name))?;
+        fs::File::open(&dir)?.sync_all()?;
+        Ok(())
+    }
+
     /// A replay for this build may replace an older build's acceptance under
     /// the same strategy id. A repeat on the current build keeps the first report.
+    /// Requires a current passing `review` bound to `accepted.source_sha256`.
     pub(crate) fn register(
         &self,
         accepted: &Accepted<'_>,
+        review: &review::EntryReview,
         author: Author,
         now: i64,
     ) -> Result<Registration> {
+        if !review.is_current(&accepted.source_sha256) {
+            return Err("strategy_review_required".into());
+        }
         let id = strategy_id(&accepted.source_sha256, &accepted.params)?;
         let entries = self.dir("entries")?;
         let lock = fs::OpenOptions::new()
@@ -306,6 +335,7 @@ impl Library {
         if let Some(entry) = &previous
             && (self.entry_build_mismatch(entry)?.is_none()
                 || build_mismatch(&serde_json::from_slice(accepted.report)?).is_some())
+            && entry.review.is_current(&entry.source_sha256)
         {
             return Ok(Registration {
                 entry: entry.clone(),
@@ -324,6 +354,7 @@ impl Library {
             &format!("{}.json", accepted.report_sha256),
             accepted.report,
         )?;
+        self.save_review(review)?;
         let entry = Entry {
             entry_version: ENTRY_VERSION,
             strategy_id: id.clone(),
@@ -338,6 +369,7 @@ impl Library {
                 verdict: "accepted".into(),
                 thresholds: accepted.thresholds.clone(),
             },
+            review: review.clone(),
             registered_at_ms: now,
         };
         // The entry is the commit point: its sources and report exist first.
@@ -362,6 +394,22 @@ impl Library {
         self.report(entry).map(|report| build_mismatch(&report))
     }
 
+    pub(crate) fn entry_review_mismatch(
+        &self,
+        entry: &Entry,
+        python_path: &Path,
+        allow_research_env: bool,
+    ) -> Result<Option<&'static str>> {
+        if !entry.review.is_current(&entry.source_sha256) {
+            return Ok(Some("strategy_review_changed"));
+        }
+        let source = self.source(entry)?;
+        if review::static_check(python_path, &source, allow_research_env).is_err() {
+            return Ok(Some("strategy_review_unsafe"));
+        }
+        Ok(None)
+    }
+
     /// Read and verify one entry, its source and its report.
     pub(crate) fn get(&self, id: &str) -> Result<Option<Entry>> {
         if id.len() != 64 || !id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
@@ -380,6 +428,8 @@ impl Library {
             || entry.strategy_id != id
             || strategy_id(&entry.source_sha256, &entry.params)? != id
             || digest(&self.source(&entry)?) != entry.source_sha256
+            || entry.review.verdict != "safe"
+            || entry.review.source_sha256 != entry.source_sha256
             || !self.report_verifies(&entry)
         {
             return Err(invalid().into());
@@ -519,6 +569,10 @@ impl Library {
                 if !fallback.iter().any(|f| f == name) {
                     return Err("strategy_fallback_not_configured".into());
                 }
+                let reference = reference::action(name).ok_or("strategy_fallback_invalid")?;
+                if !reference.is_reviewed(&policy.python_path) {
+                    return Err("strategy_review_unsafe".into());
+                }
                 Some(id.to_owned())
             }
             Some(id) => {
@@ -532,6 +586,13 @@ impl Library {
                     .find(|e| e.strategy_id == full)
                     .ok_or("strategy_not_found")?;
                 if let Some(reason) = self.entry_build_mismatch(entry)? {
+                    return Err(reason.into());
+                }
+                if let Some(reason) = self.entry_review_mismatch(
+                    entry,
+                    &policy.python_path,
+                    policy.allow_research_env,
+                )? {
                     return Err(reason.into());
                 }
                 Some(full)
@@ -629,6 +690,11 @@ fn listing(resolved: &Resolved, entry: &Entry) -> Value {
         "net_pnl": entry.summary["net_pnl"],
         "worst_drawdown": entry.summary["worst_drawdown"],
         "tape_dates": entry.tape_dates,
+        "review": {
+            "verdict": entry.review.verdict,
+            "model": entry.review.model,
+            "source_sha256": entry.review.source_sha256,
+        },
     })
 }
 

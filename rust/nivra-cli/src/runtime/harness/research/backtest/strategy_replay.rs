@@ -4,7 +4,7 @@ use crate::runtime::paper_replay::{
     execution_tape_bounded_with_stop,
 };
 use crate::runtime::strategy::{self, replay};
-use crate::runtime::strategy_library::{self, Author, Library, acceptance};
+use crate::runtime::strategy_library::{self, Author, Library, acceptance, review};
 use std::os::unix::fs::DirBuilderExt;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
@@ -124,9 +124,20 @@ pub(super) fn strategy_backtest(
         from_ms: Some(args.selection_from_ms),
         to_ms: Some(args.selection_to_ms),
     };
-    let sandbox = cfg.effective_sandbox(&candidate.sandbox);
+    let worker = cfg.effective_strategy_worker();
+    if let Err(reasons) = review::static_check(
+        &worker.python_path,
+        args.source.as_bytes(),
+        worker.env_dir.is_some(),
+    ) {
+        return Ok(json!({
+            "status": "not_dispatched",
+            "reason": "strategy_review_unsafe",
+            "reasons": reasons,
+        }));
+    }
     let mut report = match replay::run(
-        &sandbox,
+        &worker,
         args.source.as_bytes(),
         &parameters,
         &tape.manifest,
@@ -182,7 +193,7 @@ pub(super) fn strategy_backtest(
         "hypothesis":args.hypothesis,
         "report_sha256":report_sha256,
         "source_sha256":report["source_sha256"],
-        "env_sha256":report["sandbox"]["env_sha256"],
+        "env_sha256":report["worker"]["env_sha256"],
         "summary":report["summary"],
         "tape":report["tape"],
         "action_outcomes":report["action_outcomes"],
@@ -262,8 +273,8 @@ fn build_tape(
     }
 }
 
-/// Run the acceptance check and register an accepted strategy. The verdict
-/// goes back to the model; a registration failure is reported, never hidden.
+/// Run acceptance, review gate (AST + model review), and register an accepted
+/// strategy. The verdict goes back to the model; failures are reported, never hidden.
 fn accept_and_register(
     c: &Config,
     cfg: &PlannerConfig,
@@ -280,14 +291,64 @@ fn accept_and_register(
             return json!({"verdict":"rejected","reasons":reasons,"thresholds":thresholds});
         }
     };
-    let registered = strategy_library::root(c)
-        .map(Library::at)
-        .and_then(|library| library.register(&accepted, author, now));
-    match registered {
+    let library = match strategy_library::root(c).map(Library::at) {
+        Ok(library) => library,
+        Err(error) => {
+            return json!({
+                "verdict": "accepted",
+                "registration": "failed",
+                "reason": crate::runtime::failure_code(error.as_ref()),
+                "thresholds": thresholds,
+            });
+        }
+    };
+    let worker = cfg.effective_strategy_worker();
+    let cached = library.cached_review(&accepted.source_sha256);
+    let entry_review = if let Some(cached) = cached {
+        cached
+    } else {
+        let (Some(agent_settings), Some(target)) =
+            (cfg.agent.as_ref(), cfg.strategy_review_target())
+        else {
+            return json!({
+                "verdict": "accepted",
+                "registration": "failed",
+                "reason": "strategy_review_model_unavailable",
+                "thresholds": thresholds,
+            });
+        };
+        let mut reviewer = review::PiModelReviewer {
+            settings: agent_settings,
+            target: &target,
+            request_id: format!("review-{}-{now}", &accepted.source_sha256[..12]),
+            source_sha256: accepted.source_sha256.clone(),
+        };
+        match review::review_source(
+            &worker.python_path,
+            source,
+            worker.env_dir.is_some(),
+            None,
+            &mut reviewer,
+            now,
+        ) {
+            Ok(review) => review,
+            Err(reasons) => {
+                return json!({
+                    "verdict": "accepted",
+                    "registration": "failed",
+                    "reason": "strategy_review_unsafe",
+                    "review_reasons": reasons,
+                    "thresholds": thresholds,
+                });
+            }
+        }
+    };
+    match library.register(&accepted, &entry_review, author, now) {
         Ok(registration) => json!({
             "verdict":"accepted",
             "strategy_id":registration.entry.strategy_id,
             "registration":registration.status,
+            "review_model":entry_review.model,
             "thresholds":thresholds
         }),
         Err(error) => json!({

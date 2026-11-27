@@ -62,7 +62,7 @@ if (values.check !== undefined) {
   process.exit(0);
 }
 
-const beforeTurn = values.fake ? installFake(runtime, JSON.parse(readFileSync(values.fake, "utf8")) as FakeScript) : undefined;
+const fakeHooks = values.fake ? installFake(runtime, JSON.parse(readFileSync(values.fake, "utf8")) as FakeScript) : undefined;
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const agent = new LaneAgent({
   runtime,
@@ -70,7 +70,7 @@ const agent = new LaneAgent({
   skillsDir: values.skills ?? join(packageRoot, "skills"),
   ...(values["workspace-skills"] ? { workspaceSkillsDir: values["workspace-skills"] } : {}),
   send,
-  ...(beforeTurn ? { beforeTurn } : {}),
+  ...(fakeHooks ? { beforeTurn: fakeHooks.beforeTurn, beforeReview: fakeHooks.beforeReview } : {}),
 });
 
 send({ v: PROTOCOL_VERSION, type: "ready", pi_version: VERSION, node: process.version, pid: process.pid });

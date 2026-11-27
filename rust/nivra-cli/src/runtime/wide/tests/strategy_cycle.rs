@@ -1,7 +1,10 @@
 use super::super::strategy_run::{Frozen, StrategyRun, recent_actions};
 use super::*;
-use crate::runtime::strategy_library::build_mismatch;
-use crate::runtime::strategy_library::{Author, Library, acceptance};
+use crate::runtime::strategy::WorkerConfig;
+use crate::runtime::strategy_library::{
+    Author, Library, acceptance, build_mismatch,
+    review::{EntryReview, review_policy_sha256},
+};
 use nivra_core::execution::ExitIntent;
 use serde_json::{Value, json};
 
@@ -10,17 +13,9 @@ const EVENTS: &str = include_str!("../../../../../../fixtures/strategy/events.js
 const SOURCE: &[u8] = include_bytes!("../../../../../../fixtures/strategy/strategy.py");
 const PARAMETERS: &str = include_str!("../../../../../../fixtures/strategy/parameters.json");
 
-/// The real no-network sandbox, or a skip where the host has none.
-fn sandbox() -> Option<nivra_sandbox::SandboxConfig> {
-    let c = nivra_sandbox::SandboxConfig::default();
-    let ready = c.bwrap_path.is_file()
-        && c.python_path.is_file()
-        && nivra_sandbox::run_document(&c, b"print('{}')", &json!({})).is_ok();
-    assert!(
-        ready || !nivra_sandbox::sandbox_required(),
-        "strategy sandbox required but unavailable"
-    );
-    ready.then_some(c)
+fn worker_config() -> Option<WorkerConfig> {
+    let c = WorkerConfig::default();
+    c.python_path.is_file().then_some(c)
 }
 
 /// Register `source` with a report naming this build, edited by `edit`.
@@ -32,15 +27,25 @@ fn register(library: &Library, source: &[u8], params: Value, edit: fn(&mut Value
     });
     edit(&mut report);
     let report = nivra_cli::canonical_json::bytes(&report).unwrap();
+    let source_sha256 = digest(source);
     let accepted = acceptance::Accepted {
         report: &report,
         report_sha256: digest(&report),
         source,
-        source_sha256: digest(source),
+        source_sha256: source_sha256.clone(),
         params,
         summary: json!({"trades": 12, "net_pnl": "41.5"}),
         tape_dates: vec!["2026-11-25".into()],
         thresholds: acceptance::Thresholds::default(),
+    };
+    let review = EntryReview {
+        verdict: "safe".into(),
+        model: "fixture".into(),
+        source_sha256,
+        runner_sha256: crate::runtime::strategy::runner_sha256(),
+        policy_sha256: review_policy_sha256(),
+        reasons: Vec::new(),
+        reviewed_at_ms: 1,
     };
     let author = Author {
         lane: "research".into(),
@@ -50,7 +55,7 @@ fn register(library: &Library, source: &[u8], params: Value, edit: fn(&mut Value
         session: None,
     };
     library
-        .register(&accepted, author, 1)
+        .register(&accepted, &review, author, 1)
         .unwrap()
         .entry
         .strategy_id
@@ -136,9 +141,9 @@ impl Tape {
                 .collect(),
         }
     }
-    /// One scan: start a call, let it finish and apply it at `at`.
+    /// One scan: wait for startup/hot-swap if settling, start a call, wait and apply.
     fn scan(&mut self, run: &mut StrategyRun, at: i64) {
-        if run.ready(&self.db, &self.c, at).unwrap().is_some() {
+        if run.settle_startup(&self.db, &self.c, at).unwrap().is_some() {
             run.start(self.frozen(at));
             run.wait();
         }
@@ -158,11 +163,13 @@ impl Tape {
 
 #[test]
 fn active_strategy_fills_refuses_and_exits_through_the_gate() {
-    let Some(sandbox) = sandbox() else { return };
+    let Some(worker) = worker_config() else {
+        return;
+    };
     let mut tape = Tape::new();
     let params: Value = serde_json::from_str::<Value>(PARAMETERS).unwrap()["params"].clone();
     let id = register(&tape.library(), SOURCE, params, |_| {});
-    let mut run = StrategyRun::new(tape.library(), sandbox, Default::default());
+    let mut run = StrategyRun::new(tape.library(), worker, Default::default());
     for step in 0..tape.events.len() {
         let at = tape.protect(step);
         tape.scan(&mut run, at);
@@ -238,7 +245,9 @@ fn active_strategy_fills_refuses_and_exits_through_the_gate() {
 
 #[test]
 fn failed_strategy_calls_trade_nothing_and_protection_continues() {
-    let Some(sandbox) = sandbox() else { return };
+    let Some(worker) = worker_config() else {
+        return;
+    };
     let mut tape = Tape::new();
     let at = tape.protect(0);
     // A held position with a stop at 100.00, as an earlier fill left it.
@@ -253,8 +262,13 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
         .execute_plan(at, &a, &q, true, 10, max, exit, "seed")
         .unwrap()
         .unwrap();
-    register(&tape.library(), b"raise SystemExit(3)\n", json!({}), |_| {});
-    let mut crash = StrategyRun::new(tape.library(), sandbox.clone(), Default::default());
+    register(
+        &tape.library(),
+        b"def on_observation(obs):\n    return {'actions': []}\nraise SystemExit(3)\n",
+        json!({}),
+        |_| {},
+    );
+    let mut crash = StrategyRun::new(tape.library(), worker.clone(), Default::default());
     tape.scan(&mut crash, at);
     for step in 1..3 {
         let at = tape.protect(step);
@@ -265,17 +279,27 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
     assert_eq!(crash.status(&tape.db, &tape.p)["failures"], 3);
     let diagnostics = fs::read_to_string(tape.c.directory.join(diagnostics::FILE)).unwrap();
     assert_eq!(diagnostics.matches("\"stage\":\"strategy\"").count(), 1);
-    // A call past the wall bound: the next scan is skipped, not queued, and
+    // A call past the deadline: the next scan is skipped, not queued, and
     // the stop still executes while the call runs.
-    let slow = nivra_sandbox::SandboxConfig {
-        wall_ms: 300,
-        ..sandbox
+    let slow = WorkerConfig {
+        call_deadline_ms: 150,
+        ..worker
     };
     let library = Library::at(tape.c.directory.join("slow-library"));
-    register(&library, b"while True:\n    pass\n", json!({}), |_| {});
+    register(
+        &library,
+        b"def on_observation(obs):\n    while True:\n        pass\n",
+        json!({}),
+        |_| {},
+    );
     let mut timeout = StrategyRun::new(library, slow, Default::default());
     let at = tape.protect(3);
-    assert!(timeout.ready(&tape.db, &tape.c, at).unwrap().is_some());
+    assert!(
+        timeout
+            .settle_startup(&tape.db, &tape.c, at)
+            .unwrap()
+            .is_some()
+    );
     timeout.start(tape.frozen(at));
     assert_eq!(timeout.ready(&tape.db, &tape.c, at).unwrap(), None);
     let at = tape.protect(4);
@@ -294,11 +318,7 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
     register(&library, SOURCE, json!({}), |r| {
         r["engine_sha256"] = json!("0".repeat(64))
     });
-    let mut old = StrategyRun::new(
-        library,
-        nivra_sandbox::SandboxConfig::default(),
-        Default::default(),
-    );
+    let mut old = StrategyRun::new(library, WorkerConfig::default(), Default::default());
     assert_eq!(old.ready(&tape.db, &tape.c, at).unwrap(), None);
     assert_eq!(
         old.status(&tape.db, &tape.p)["reason"],
@@ -315,17 +335,17 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
 }
 
 #[test]
-fn a_fallback_runs_labelled_until_a_strategy_is_accepted() {
-    let Some(sandbox) = sandbox() else { return };
+fn a_fallback_runs_labelled_until_a_strategy_is_accepted_and_honours_stand_down() {
+    let Some(worker) = worker_config() else {
+        return;
+    };
     let mut tape = Tape::new();
-    let mut run = StrategyRun::new(
-        tape.library(),
-        sandbox,
-        crate::runtime::strategy_library::choice::ChoicePolicy {
-            fallback: vec!["vwap_trend".into()],
-            policy_sha256: String::new(),
-        },
-    );
+    let policy = crate::runtime::strategy_library::choice::ChoicePolicy {
+        fallback: vec!["vwap_trend".into()],
+        policy_sha256: String::new(),
+        ..Default::default()
+    };
+    let mut run = StrategyRun::new(tape.library(), worker, policy.clone());
     let first = tape.protect(0);
     tape.scan(&mut run, first);
     let status = run.status(&tape.db, &tape.p);
@@ -334,8 +354,10 @@ fn a_fallback_runs_labelled_until_a_strategy_is_accepted() {
     assert_eq!(status["strategy"]["basis"], "fallback");
     assert_eq!(status["strategy"]["strategy_id"], "fallback:vwap_trend");
     assert_eq!(status["calls"], 1);
+    let gen1 = status["activation_generation"].as_u64().unwrap();
+    assert!(gen1 >= 1);
     assert!(tape.failures().is_empty(), "{:?}", tape.failures());
-    // An accepted version takes over at the next library read.
+    // An accepted version takes over via non-blocking hot swap at the next library read.
     let params: Value = serde_json::from_str::<Value>(PARAMETERS).unwrap()["params"].clone();
     let id = register(&tape.library(), SOURCE, params, |_| {});
     for step in 1..tape.events.len() {
@@ -346,4 +368,22 @@ fn a_fallback_runs_labelled_until_a_strategy_is_accepted() {
     assert_eq!(status["strategy"]["basis"], "accepted", "{status}");
     assert_eq!(status["strategy"]["strategy_id"], id.as_str());
     assert_eq!(status["reason"], Value::Null);
+    let gen2 = status["activation_generation"].as_u64().unwrap();
+    assert!(gen2 > gen1, "hot swap must bump activation_generation");
+    // Stand-down revokes the live worker and bumps activation_generation immediately.
+    tape.library()
+        .select_by_lane(None, &policy, "stand down", None, first + 65_000)
+        .unwrap();
+    assert_eq!(
+        run.settle_startup(&tape.db, &tape.c, first + 65_000)
+            .unwrap(),
+        None
+    );
+    let status = run.status(&tape.db, &tape.p);
+    assert!(
+        run.host().live_key().is_none(),
+        "stand-down revokes live worker"
+    );
+    assert_eq!(status["reason"], "strategy_lane_stood_down");
+    assert!(status["activation_generation"].as_u64().unwrap() > gen2);
 }

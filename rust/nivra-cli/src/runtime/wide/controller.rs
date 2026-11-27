@@ -257,12 +257,12 @@ fn strategy_runner(
     if !cfg.is_some_and(planner::PlannerConfig::runs_strategies) {
         return Ok(None);
     }
-    let sandbox = cfg
-        .map(|policy| policy.effective_sandbox(&nivra_sandbox::SandboxConfig::default()))
+    let worker = cfg
+        .map(planner::PlannerConfig::effective_strategy_worker)
         .unwrap_or_default();
     Ok(Some(super::strategy_run::StrategyRun::new(
         super::super::strategy_library::Library::at(super::super::strategy_library::root(c)?),
-        sandbox,
+        worker,
         cfg.map(planner::PlannerConfig::strategy_policy)
             .transpose()?
             .unwrap_or_default(),

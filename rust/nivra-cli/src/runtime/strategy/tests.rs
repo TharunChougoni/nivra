@@ -6,24 +6,14 @@ const MANIFEST: &[u8] = include_bytes!("../../../../../fixtures/strategy/manifes
 const EVENTS: &[u8] = include_bytes!("../../../../../fixtures/strategy/events.jsonl");
 const PARAMETERS: &[u8] = include_bytes!("../../../../../fixtures/strategy/parameters.json");
 
-/// The real no-network sandbox, or a skip where the host has none.
-fn sandbox() -> Option<SandboxConfig> {
-    let c = SandboxConfig::default();
-    let ready = c.bwrap_path.is_file()
-        && c.python_path.is_file()
-        && nivra_sandbox::run_document(&c, b"print('{}')", &json!({})).is_ok();
-    if !ready {
-        assert!(
-            !nivra_sandbox::sandbox_required(),
-            "strategy sandbox required but unavailable"
-        );
-    }
-    ready.then_some(c)
+fn worker_config() -> Option<WorkerConfig> {
+    let c = WorkerConfig::default();
+    c.python_path.is_file().then_some(c)
 }
 
 #[test]
 fn fixture_strategy_replays_with_hand_checked_fills_and_fees() {
-    let Some(c) = sandbox() else { return };
+    let Some(c) = worker_config() else { return };
     let parameters: replay::Parameters = serde_json::from_slice(PARAMETERS).unwrap();
     let report = replay::run(&c, SOURCE, &parameters, MANIFEST, EVENTS, &|| None)
         .unwrap()
@@ -97,7 +87,7 @@ fn fixture_strategy_replays_with_hand_checked_fills_and_fees() {
 
 #[test]
 fn invalid_strategy_output_fails_with_a_reason_and_no_actions() {
-    let Some(c) = sandbox() else { return };
+    let Some(c) = worker_config() else { return };
     let instrument: Instrument = serde_json::from_value(
         json!({"key":"NSE_EQ|TESTA","symbol":"TESTA","series":"EQ","tick":"0.05"}),
     )
@@ -117,7 +107,7 @@ fn invalid_strategy_output_fails_with_a_reason_and_no_actions() {
     let observation = Observation::new(1_000, &params, &[], &quotes, &portfolio, &universe, &costs);
     let buy = |key: &str| {
         format!(
-            r#"print('{{"actions":[{{"instrument_key":"{key}","side":"buy","units":1,"rupees":null,"max_price":"100","rationale":"","exit_intent":{{}}}}]}}')"#
+            "def on_observation(obs):\n    return {{\"actions\":[{{\"instrument_key\":\"{key}\",\"side\":\"buy\",\"units\":1,\"rupees\":None,\"max_price\":\"100\",\"rationale\":\"\",\"exit_intent\":{{}}}}]}}\n"
         )
     };
     assert_eq!(
@@ -129,23 +119,74 @@ fn invalid_strategy_output_fails_with_a_reason_and_no_actions() {
     for (source, reason) in [
         (buy("NSE_EQ|UNKNOWN"), "strategy_unknown_instrument"),
         (
-            "import json\nprint(json.dumps({'actions':[{'instrument_key':'NSE_EQ|TESTA','units':float('nan')}]}))".into(),
+            "def on_observation(obs):\n    return {'actions':[{'instrument_key':'NSE_EQ|TESTA','units':float('nan')}]}\n".into(),
             "strategy_output_non_finite",
         ),
-        ("print('x' * 70000)".into(), "strategy_output_limit"),
         (
-            "import socket\nsocket.create_connection(('1.1.1.1', 80), timeout=1)\nprint('{\"actions\":[]}')".into(),
+            "def on_observation(obs):\n    return {'actions': ['x' * 70000]}\n".into(),
+            "strategy_output_limit",
+        ),
+        (
+            "import socket\ndef on_observation(obs):\n    return {'actions':[]}\n".into(),
+            "strategy_review_unsafe",
+        ),
+        (
+            "def on_observation(obs):\n    raise SystemExit(3)\n".into(),
             "strategy_exit",
         ),
-        ("print('{\"actions\":[], \"notes\":1}')".into(), "strategy_output_schema"),
+        (
+            "def on_observation(obs):\n    return {'actions':[], 'notes':1}\n".into(),
+            "strategy_output_schema",
+        ),
     ] {
         assert_eq!(call(&c, source.as_bytes(), &observation), Err(reason), "{source}");
     }
+    let slow_cfg = WorkerConfig {
+        call_deadline_ms: 100,
+        ..c.clone()
+    };
+    assert_eq!(
+        call(
+            &slow_cfg,
+            b"def on_observation(obs):\n    while True:\n        pass\n",
+            &observation
+        ),
+        Err("strategy_wall_timeout")
+    );
+    // OS hardening blocks file reads, file writes, sockets, and forks even if
+    // a Worker is started directly without the AST review gate.
+    let mut hardened = Worker::start(
+        WorkerKey {
+            source_sha256: "test".into(),
+            params_sha256: "test".into(),
+        },
+        br#"import os, socket
+def on_observation(obs):
+    results = []
+    for fn in (lambda: open('/etc/passwd').read(), lambda: socket.socket(), lambda: os.fork()):
+        try:
+            fn()
+            results.append('ALLOWED')
+        except OSError:
+            results.append('blocked')
+    return {'actions': results}
+"#
+        .to_vec(),
+        json!({}),
+        c,
+        1_000,
+    )
+    .unwrap();
+    let raw = hardened
+        .call_sync(&serde_json::to_vec(&observation).unwrap(), 1_000)
+        .unwrap();
+    let parsed: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(parsed["actions"], json!(["blocked", "blocked", "blocked"]));
 }
 
 #[test]
 fn tape_dates_count_only_sessions_the_strategy_ran_on() {
-    let Some(c) = sandbox() else { return };
+    let Some(c) = worker_config() else { return };
     let mut parameters: replay::Parameters = serde_json::from_slice(PARAMETERS).unwrap();
     // The window opens after the last receipt, so the strategy never runs.
     parameters.from_ms = Some(1_795_578_700_000);

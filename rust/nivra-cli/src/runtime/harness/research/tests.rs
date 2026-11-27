@@ -253,12 +253,11 @@ fn candidate_strategy_contract(
     let mut settings = candidate_settings(&dir, base_settings);
     let (c, cfg) = candidate_config(&dir, base_policy, settings.clone());
     candidate_execution_book(&c);
-    let source = r#"import json,sys
-o=json.load(open(sys.argv[1]))
-a=[{"instrument_key":k,"side":"buy","units":1,"rupees":None,"max_price":"120","rationale":"",
-    "exit_intent":{"time":o["at_ms"]+500}} for k,q in o["quotes"].items()
-   if k.endswith("INE000000001") and k not in o["positions"]]
-print(json.dumps({"actions":a}))"#;
+    let source = r#"def on_observation(o):
+    a=[{"instrument_key":k,"side":"buy","units":1,"rupees":None,"max_price":"120","rationale":"",
+        "exit_intent":{"time":o["at_ms"]+500}} for k,q in o["quotes"].items()
+       if k.endswith("INE000000001") and k not in o["positions"]]
+    return {"actions":a}"#;
     let submit = |cfg: &PlannerConfig| {
         let args = candidate_submit_args("candidate-strategy", source);
         backtest_submit(
@@ -369,7 +368,7 @@ fn strategy_replay_contracts() {
 }
 
 #[test]
-#[ignore = "requires TimescaleDB at NIVRA_ARCHIVE_TEST_URL and bubblewrap"]
+#[ignore = "requires TimescaleDB at NIVRA_ARCHIVE_TEST_URL"]
 fn archive_strategy_replay_pins_quotes_across_sessions() -> Result<()> {
     use crate::runtime::{
         market_archive,
@@ -429,8 +428,10 @@ fn archive_strategy_replay_pins_quotes_across_sessions() -> Result<()> {
         max_tape_bytes: limits.max_tape_bytes,
     });
     assert!(
-        candidate_sandbox_ready(&research),
-        "fixture needs bubblewrap"
+        crate::runtime::strategy::WorkerConfig::default()
+            .python_path
+            .is_file(),
+        "fixture needs python3"
     );
     let (mut c, cfg) = candidate_config(dir, &base, research);
     c.session = days[3].parse()?;

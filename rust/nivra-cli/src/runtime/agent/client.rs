@@ -561,7 +561,8 @@ impl AgentClient {
                 // recorded and dropped; its tool call is never served.
                 FromAgent::ToolCall { turn_id, .. }
                 | FromAgent::Event { turn_id, .. }
-                | FromAgent::TurnResult { id: turn_id, .. } => {
+                | FromAgent::TurnResult { id: turn_id, .. }
+                | FromAgent::ReviewStrategyResult { id: turn_id, .. } => {
                     if partial.events.len() < MAX_EVENTS {
                         partial
                             .events
@@ -569,6 +570,65 @@ impl AgentClient {
                     }
                 }
                 FromAgent::Ready { .. } => return Err("agent_protocol_invalid".into()),
+            }
+        }
+    }
+
+    /// Ask the agent to evaluate strategy source safety in an ephemeral
+    /// tool-less session.
+    pub(crate) fn review_strategy(
+        &mut self,
+        id: &str,
+        model: &ModelSpec,
+        fallback: Option<&ModelSpec>,
+        source: &str,
+        source_sha256: &str,
+        timeout: Duration,
+    ) -> Result<(
+        String,
+        crate::runtime::strategy_library::review::ReviewVerdict,
+    )> {
+        self.send(&ToAgent::ReviewStrategy {
+            v: VERSION,
+            id,
+            model,
+            fallback,
+            source,
+            source_sha256,
+        })?;
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err("strategy_review_timeout".into());
+            }
+            match self.next(remaining.min(POLL))? {
+                Some(FromAgent::ReviewStrategyResult {
+                    id: reply_id,
+                    status,
+                    error,
+                    verdict,
+                    reasons,
+                    model,
+                    provider,
+                    ..
+                }) if reply_id == id => {
+                    if status != TurnStatus::Ok {
+                        let code = error.unwrap_or_else(|| "strategy_review_model_error".into());
+                        return Err(code.into());
+                    }
+                    return Ok((
+                        format!("{provider}:{model}"),
+                        crate::runtime::strategy_library::review::ReviewVerdict {
+                            verdict,
+                            reasons,
+                        },
+                    ));
+                }
+                Some(FromAgent::Error { error, .. }) => return Err(error.into()),
+                Some(FromAgent::Ready { .. }) => return Err("agent_protocol_invalid".into()),
+                Some(_) => {}
+                None => {}
             }
         }
     }

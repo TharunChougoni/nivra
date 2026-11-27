@@ -351,9 +351,9 @@ pub(super) fn run_plan(
         });
         tapes.push((plan_tape, window, tape));
     }
-    let sandbox = nivra_sandbox::SandboxConfig {
-        wall_ms: 30_000,
-        ..nivra_sandbox::SandboxConfig::default()
+    let worker = crate::runtime::strategy::WorkerConfig {
+        call_deadline_ms: 250,
+        ..crate::runtime::strategy::WorkerConfig::default()
     };
     let mut sources = BTreeMap::<String, (Vec<u8>, Value)>::new();
     for variant in &plan.variants {
@@ -396,7 +396,7 @@ pub(super) fn run_plan(
                         to_ms: Some(window.to_ms),
                     };
                     let outcome = match replay::run(
-                        &sandbox,
+                        &worker,
                         source,
                         &parameters,
                         &tape.manifest,
@@ -599,7 +599,7 @@ fn json_report(results: &Results) -> Value {
 /// without a password), `NIVRA_ACTION_BENCH_PASSWORD_FILE` and
 /// `NIVRA_ACTION_BENCH_OUT` (directory for `leaderboard.md` and `results.json`).
 #[test]
-#[ignore = "requires an archive with quote tapes, bubblewrap and python; see strategies/BENCHMARK.md"]
+#[ignore = "requires an archive with quote tapes and python; see strategies/BENCHMARK.md"]
 fn action_bench() -> Res<()> {
     let var = |name: &str| std::env::var(name).map_err(|_| format!("{name} is required"));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -625,7 +625,7 @@ fn action_bench() -> Res<()> {
 /// quote receipts, then the bench reads them back through the archive window,
 /// replays the strategy in the sandbox and ranks it.
 #[test]
-#[ignore = "requires TimescaleDB at NIVRA_ARCHIVE_TEST_URL and bubblewrap"]
+#[ignore = "requires TimescaleDB at NIVRA_ARCHIVE_TEST_URL"]
 fn action_bench_runs_a_strategy_over_a_fixture_archive() -> Res<()> {
     use nivra_store::market_archive::{init, write_quotes};
     const MANIFEST: &str = include_str!("../../../../../../../fixtures/strategy/manifest.json");

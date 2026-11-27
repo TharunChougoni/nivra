@@ -28,6 +28,15 @@ pub(crate) enum ToAgent<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         compact_at_tokens: Option<u64>,
     },
+    ReviewStrategy {
+        v: u32,
+        id: &'a str,
+        model: &'a ModelSpec,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fallback: Option<&'a ModelSpec>,
+        source: &'a str,
+        source_sha256: &'a str,
+    },
     ToolResult {
         v: u32,
         turn_id: &'a str,
@@ -130,6 +139,18 @@ pub(crate) enum FromAgent {
         #[serde(default)]
         fallback: Option<Box<Fallback>>,
     },
+    ReviewStrategyResult {
+        v: u32,
+        id: String,
+        status: TurnStatus,
+        #[serde(default)]
+        error: Option<String>,
+        verdict: String,
+        #[serde(default)]
+        reasons: Vec<String>,
+        model: String,
+        provider: String,
+    },
     Error {
         v: u32,
         error: String,
@@ -143,6 +164,7 @@ impl FromAgent {
             | Self::ToolCall { v, .. }
             | Self::Event { v, .. }
             | Self::TurnResult { v, .. }
+            | Self::ReviewStrategyResult { v, .. }
             | Self::Error { v, .. } => *v,
         }
     }

@@ -62,7 +62,7 @@ pub(crate) struct ModelSpec {
 impl ModelSpec {
     /// The agent refuses any other thinking level as a protocol error, which
     /// would leave the turn waiting for its deadline.
-    fn valid(&self) -> bool {
+    pub(crate) fn valid(&self) -> bool {
         !self.provider.is_empty()
             && !self.id.is_empty()
             && self.thinking.as_deref().is_none_or(|level| {

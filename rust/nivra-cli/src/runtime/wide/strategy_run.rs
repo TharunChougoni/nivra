@@ -6,15 +6,16 @@
 //! receipts. A failed call produces no actions and never halts the book.
 //! Paper only.
 use super::*;
-use crate::runtime::strategy::{self, ActionResult, Observation, Prospect};
+use crate::runtime::strategy::{
+    self, ActionResult, Observation, Prospect, WorkerConfig, WorkerKey, host::StrategyHost,
+};
 use crate::runtime::strategy_library::{
     Library,
     choice::{self, Running},
 };
 use nivra_core::market::MAX_FINANCIAL_AGE_MS;
-use nivra_sandbox::SandboxConfig;
 use serde_json::{Value, json};
-use std::thread::JoinHandle;
+use std::collections::BTreeMap;
 
 /// How often the library is read again, so a pin, disable or new entry takes
 /// effect without a restart.
@@ -133,24 +134,32 @@ impl Frozen {
     }
 }
 
-type Called = (
-    std::result::Result<Vec<Value>, &'static str>,
-    Vec<Instrument>,
-);
+#[derive(Clone)]
+struct ActiveMeta {
+    run_id: String,
+    params: Value,
+    top_n: usize,
+    status_json: Value,
+}
 
 struct InFlight {
+    worker_key: WorkerKey,
+    activation_generation: u64,
+    seq: u64,
     strategy_id: String,
     observed_at: i64,
     quotes: BTreeMap<String, Quote>,
-    handle: JoinHandle<Called>,
+    instruments: Vec<Instrument>,
+    immediate_error: Option<&'static str>,
 }
 
 pub(super) struct StrategyRun {
     library: Library,
-    sandbox: SandboxConfig,
+    host: StrategyHost,
     /// Reference strategies to run, best first, while no accepted one can.
     policy: choice::ChoicePolicy,
     active: Option<Active>,
+    known: BTreeMap<WorkerKey, ActiveMeta>,
     resolved_at: Option<i64>,
     /// Why no accepted version runs: no active entry, a build mismatch, a
     /// stand-down or a library read failure. Set beside a fallback too.
@@ -167,14 +176,15 @@ pub(super) struct StrategyRun {
 impl StrategyRun {
     pub(super) fn new(
         library: Library,
-        sandbox: SandboxConfig,
+        worker: WorkerConfig,
         policy: choice::ChoicePolicy,
     ) -> Self {
         Self {
             library,
-            sandbox,
+            host: StrategyHost::new(worker),
             policy,
             active: None,
+            known: BTreeMap::new(),
             resolved_at: None,
             blocked: None,
             in_flight: None,
@@ -183,6 +193,28 @@ impl StrategyRun {
             failures: 0,
             skipped: 0,
             last_call_at_ms: None,
+        }
+    }
+
+    fn worker_key(source: &[u8], params: &Value) -> Result<WorkerKey> {
+        let params_bytes = serde_json::to_vec(params)?;
+        Ok(WorkerKey {
+            source_sha256: digest(source),
+            params_sha256: digest(&params_bytes),
+        })
+    }
+
+    fn status_json(running: &Running, run_id: &str) -> Value {
+        match running {
+            Running::Accepted { entry: e, .. } => json!({
+                "strategy_id": e.strategy_id, "basis": "accepted", "author": e.author,
+                "summary": e.summary, "tape_dates": e.tape_dates,
+                "registered_at_ms": e.registered_at_ms,
+            }),
+            Running::Fallback(reference) => json!({
+                "strategy_id": run_id, "basis": "fallback", "name": reference.name,
+                "source_sha256": digest(reference.source),
+            }),
         }
     }
 
@@ -203,9 +235,16 @@ impl StrategyRun {
         Ok((active, choice.reason))
     }
 
+    fn prune_known(&mut self) {
+        let live = self.host.live_key().cloned();
+        let desired = self.host.desired_key().cloned();
+        self.known
+            .retain(|key, _| live.as_ref() == Some(key) || desired.as_ref() == Some(key));
+    }
+
     /// The prospect count for a call to start now, or `None` when none may:
-    /// no runnable entry, or the previous call is still running. A running
-    /// call skips this scan; nothing queues.
+    /// no runnable entry, worker warming/in backoff, or the previous call is
+    /// still running. Never blocks on the worker; skips rather than queues.
     pub(super) fn ready(&mut self, db: &Connection, c: &Config, now: i64) -> Result<Option<usize>> {
         if self.resolved_at.is_none_or(|at| now - at >= RESOLVE_MS) {
             self.resolved_at = Some(now);
@@ -229,63 +268,181 @@ impl StrategyRun {
                     self.fail(db, c, now, None, &reason)?;
                 }
             }
+            match &self.active {
+                Some(active) => {
+                    let key = Self::worker_key(&active.source, active.running.params())?;
+                    self.known.insert(
+                        key,
+                        ActiveMeta {
+                            run_id: active.run_id.clone(),
+                            params: active.running.params().clone(),
+                            top_n: active.top_n,
+                            status_json: Self::status_json(&active.running, &active.run_id),
+                        },
+                    );
+                    if let Err(reason) = self
+                        .host
+                        .sync_desired(Some((&active.source, active.running.params())), now)
+                    {
+                        let run_id = active.run_id.clone();
+                        self.blocked = Some(reason);
+                        self.active = None;
+                        self.prune_known();
+                        self.fail(db, c, now, Some(&run_id), reason)?;
+                        return Ok(None);
+                    }
+                }
+                None => {
+                    let _ = self.host.sync_desired(None, now);
+                }
+            }
+            self.prune_known();
         }
-        let Some(active) = &self.active else {
+        if self
+            .in_flight
+            .as_ref()
+            .is_some_and(|flight| flight.activation_generation != self.host.activation_generation())
+        {
+            self.in_flight = None;
+        }
+        if self.active.is_none() {
             return Ok(None);
-        };
+        }
         if self.in_flight.is_some() {
             self.skipped += 1;
             return Ok(None);
         }
-        Ok(Some(active.top_n))
-    }
-
-    /// Start one sandboxed call on `frozen`. Call [`Self::ready`] first.
-    pub(super) fn start(&mut self, frozen: Frozen) {
-        let Some(active) = &self.active else { return };
-        if self.in_flight.is_some() {
-            return;
+        match self.host.live_ready(now) {
+            Ok(true) => {
+                self.prune_known();
+                let top_n = self
+                    .host
+                    .live_key()
+                    .and_then(|key| self.known.get(key))
+                    .map(|meta| meta.top_n)
+                    .or_else(|| self.active.as_ref().map(|a| a.top_n));
+                Ok(top_n)
+            }
+            Ok(false) => Ok(None),
+            Err(reason) => {
+                let run_id = self
+                    .host
+                    .live_key()
+                    .or_else(|| self.host.desired_key())
+                    .and_then(|key| self.known.get(key))
+                    .map(|meta| meta.run_id.clone())
+                    .or_else(|| self.active.as_ref().map(|a| a.run_id.clone()));
+                self.fail(db, c, now, run_id.as_deref(), reason)?;
+                Ok(None)
+            }
         }
-        let sandbox = self.sandbox.clone();
-        let source = active.source.clone();
-        let params = active.running.params().clone();
-        let quotes = frozen.quotes.clone();
-        let handle = std::thread::spawn(move || {
-            let costs = frozen.portfolio.costs.clone();
-            let Some(costs) = costs else {
-                return (Err("paper_costs_required"), Vec::new());
-            };
-            let observation = Observation::new(
-                frozen.at_ms,
-                &params,
-                &frozen.prospects,
-                &frozen.quotes,
-                &frozen.portfolio,
-                &frozen.universe,
-                &costs,
-            );
-            let called = strategy::call(&sandbox, &source, &observation);
-            let instruments = observation.instruments().cloned().collect();
-            (called, instruments)
-        });
-        self.calls += 1;
-        self.last_call_at_ms = Some(frozen.at_ms);
-        self.in_flight = Some(InFlight {
-            strategy_id: active.run_id.clone(),
-            observed_at: frozen.at_ms,
-            quotes,
-            handle,
-        });
     }
 
     #[cfg(test)]
-    pub(super) fn wait(&self) {
-        while self
-            .in_flight
-            .as_ref()
-            .is_some_and(|f| !f.handle.is_finished())
-        {
-            std::thread::sleep(std::time::Duration::from_millis(5));
+    pub(super) fn settle_startup(
+        &mut self,
+        db: &Connection,
+        c: &Config,
+        now: i64,
+    ) -> Result<Option<usize>> {
+        let top_n = self.ready(db, c, now)?;
+        if self.host.desired_starting() {
+            let _ = self.host.wait_live_ready(now);
+            self.prune_known();
+            if top_n.is_none() {
+                return self.ready(db, c, now);
+            }
+        }
+        Ok(top_n)
+    }
+
+    #[cfg(test)]
+    pub(super) fn host(&self) -> &StrategyHost {
+        &self.host
+    }
+
+    /// Submit `frozen` non-blockingly to the live worker. Call [`Self::ready`] first.
+    pub(super) fn start(&mut self, frozen: Frozen) {
+        if self.in_flight.is_some() {
+            return;
+        }
+        let Some(live_key) = self.host.live_key().cloned() else {
+            return;
+        };
+        let Some(meta) = self.known.get(&live_key) else {
+            return;
+        };
+        let strategy_id = meta.run_id.clone();
+        let params = meta.params.clone();
+        let quotes = frozen.quotes.clone();
+        let Some(costs) = frozen.portfolio.costs.clone() else {
+            self.calls += 1;
+            self.last_call_at_ms = Some(frozen.at_ms);
+            self.in_flight = Some(InFlight {
+                worker_key: live_key,
+                activation_generation: self.host.activation_generation(),
+                seq: 0,
+                strategy_id,
+                observed_at: frozen.at_ms,
+                quotes,
+                instruments: Vec::new(),
+                immediate_error: Some("paper_costs_required"),
+            });
+            return;
+        };
+        let observation = Observation::new(
+            frozen.at_ms,
+            &params,
+            &frozen.prospects,
+            &frozen.quotes,
+            &frozen.portfolio,
+            &frozen.universe,
+            &costs,
+        );
+        let instruments: Vec<Instrument> = observation.instruments().cloned().collect();
+        let outcome = serde_json::to_vec(&observation)
+            .map_err(|_| "strategy_input_limit")
+            .and_then(|bytes| self.host.submit_live(&bytes, frozen.at_ms));
+        self.calls += 1;
+        self.last_call_at_ms = Some(frozen.at_ms);
+        match outcome {
+            Ok((activation_generation, seq)) => {
+                self.in_flight = Some(InFlight {
+                    worker_key: live_key,
+                    activation_generation,
+                    seq,
+                    strategy_id,
+                    observed_at: frozen.at_ms,
+                    quotes,
+                    instruments,
+                    immediate_error: None,
+                });
+            }
+            Err(reason) => {
+                self.in_flight = Some(InFlight {
+                    worker_key: live_key,
+                    activation_generation: self.host.activation_generation(),
+                    seq: 0,
+                    strategy_id,
+                    observed_at: frozen.at_ms,
+                    quotes,
+                    instruments,
+                    immediate_error: Some(reason),
+                });
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn wait(&mut self) {
+        while let Some(flight) = &self.in_flight {
+            if flight.immediate_error.is_some()
+                || flight.activation_generation != self.host.activation_generation()
+                || self.host.is_call_finished(&flight.worker_key, i64::MAX)
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
         }
     }
 
@@ -298,35 +455,43 @@ impl StrategyRun {
         p: &mut Portfolio,
         clock: &dyn Fn() -> i64,
     ) -> Result<()> {
-        if !self
-            .in_flight
-            .as_ref()
-            .is_some_and(|f| f.handle.is_finished())
-        {
-            return Ok(());
-        }
-        let Some(flight) = self.in_flight.take() else {
+        let Some(flight) = &self.in_flight else {
             return Ok(());
         };
-        let (strategy_id, observed_at) = (flight.strategy_id.clone(), flight.observed_at);
-        let (called, instruments) = flight
-            .handle
-            .join()
-            .unwrap_or((Err("strategy_call_panicked"), Vec::new()));
-        let outcome = match called {
+        if flight.activation_generation != self.host.activation_generation() {
+            self.in_flight = None;
+            return Ok(());
+        }
+        if let Some(reason) = flight.immediate_error {
+            let flight = self.in_flight.take().expect("in_flight checked");
+            return self.fail(db, c, clock(), Some(&flight.strategy_id), reason);
+        }
+        let poll_now = clock();
+        let Some(reply) = self
+            .host
+            .poll_call(&flight.worker_key, flight.seq, poll_now)
+        else {
+            return Ok(());
+        };
+        let flight = self.in_flight.take().expect("in_flight checked");
+        let strategy_id = flight.strategy_id.clone();
+        let outcome = match reply {
             Err(reason) => Err(reason.to_owned()),
-            Ok(actions) => apply_cycle(
-                db,
-                c,
-                p,
-                &strategy_id,
-                observed_at,
-                flight.quotes,
-                &instruments,
-                actions,
-                clock,
-            )
-            .map_err(|error| failure_code(error.as_ref())),
+            Ok(bytes) => match strategy::parse_actions(&bytes, &flight.instruments) {
+                Err(reason) => Err(reason.to_owned()),
+                Ok(actions) => apply_cycle(
+                    db,
+                    c,
+                    p,
+                    &self.library,
+                    &self.policy,
+                    &self.host,
+                    flight,
+                    actions,
+                    clock,
+                )
+                .map_err(|error| failure_code(error.as_ref())),
+            },
         };
         match outcome {
             Ok(()) => self.last_failure = None,
@@ -358,11 +523,12 @@ impl StrategyRun {
                 json!({"strategy_id":strategy_id,"reason":reason}).to_string()
             ],
         )?;
+        let stderr_tail = self.host.stderr_tail(None);
         diagnostics::note(
             &c.directory,
             now,
             "failure",
-            json!({"stage":"strategy","strategy_id":strategy_id,"reason":reason}),
+            json!({"stage":"strategy","strategy_id":strategy_id,"reason":reason,"stderr_tail":stderr_tail}),
         );
         Ok(())
     }
@@ -370,35 +536,31 @@ impl StrategyRun {
     /// The dashboard's view: the active entry, the counters, and the latest
     /// actions, gate refusals and fills.
     pub(super) fn status(&self, db: &Connection, p: &Portfolio) -> Value {
+        let live_meta = self.host.live_key().and_then(|key| self.known.get(key));
         let state = if self.in_flight.is_some() {
             "calling"
-        } else if self.active.is_some() {
+        } else if live_meta.is_some() || self.active.is_some() {
             "ready"
         } else {
             "blocked"
         };
-        let fills: Vec<_> = self
-            .active
-            .as_ref()
-            .map(|a| {
+        let live_id = live_meta
+            .map(|m| m.run_id.as_str())
+            .or_else(|| self.active.as_ref().map(|a| a.run_id.as_str()));
+        let fills: Vec<_> = live_id
+            .map(|id| {
                 p.fills
                     .iter()
                     .rev()
-                    .filter(|f| f.decision_id.as_deref() == Some(a.run_id.as_str()))
+                    .filter(|f| f.decision_id.as_deref() == Some(id))
                     .take(RECENT)
                     .collect()
             })
             .unwrap_or_default();
-        let strategy = self.active.as_ref().map(|a| match &a.running {
-            Running::Accepted { entry: e, .. } => json!({
-                "strategy_id": e.strategy_id, "basis": "accepted", "author": e.author,
-                "summary": e.summary, "tape_dates": e.tape_dates,
-                "registered_at_ms": e.registered_at_ms,
-            }),
-            Running::Fallback(reference) => json!({
-                "strategy_id": a.run_id, "basis": "fallback", "name": reference.name,
-                "source_sha256": digest(reference.source),
-            }),
+        let strategy = live_meta.map(|m| m.status_json.clone()).or_else(|| {
+            self.active
+                .as_ref()
+                .map(|a| Self::status_json(&a.running, &a.run_id))
         });
         json!({
             "enabled": true,
@@ -406,6 +568,9 @@ impl StrategyRun {
             "reason": self.blocked,
             "strategy": strategy,
             "fallback": self.policy.fallback,
+            "activation_generation": self.host.activation_generation(),
+            "pool_size": self.host.pool_len(),
+            "stderr_tail": self.host.stderr_tail(None),
             "calls": self.calls, "failures": self.failures, "skipped": self.skipped,
             "last_call_at_ms": self.last_call_at_ms, "last_failure": self.last_failure,
             "actions": recent_actions(db).unwrap_or_default(),
@@ -420,22 +585,37 @@ impl StrategyRun {
     }
 }
 
-#[allow(clippy::too_many_arguments)] // One call's frozen inputs and the post-lock clock.
+#[allow(clippy::too_many_arguments)] // One call's frozen inputs and generation verification.
 fn apply_cycle(
     db: &mut Connection,
     c: &Config,
     p: &mut Portfolio,
-    strategy_id: &str,
-    observed_at: i64,
-    mut quotes: BTreeMap<String, Quote>,
-    instruments: &[Instrument],
+    library: &Library,
+    policy: &choice::ChoicePolicy,
+    host: &StrategyHost,
+    mut flight: InFlight,
     actions: Vec<Value>,
     clock: &dyn Fn() -> i64,
 ) -> Result<()> {
     if actions.is_empty() {
         return Ok(());
     }
+    let strategy_id = &flight.strategy_id;
+    let observed_at = flight.observed_at;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    if flight.activation_generation != host.activation_generation() {
+        return Err("strategy_activation_stale".into());
+    }
+    let authoritative = choice::choose(library, policy)?;
+    if authoritative
+        .running
+        .as_ref()
+        .map(Running::run_id)
+        .as_deref()
+        != Some(strategy_id.as_str())
+    {
+        return Err("strategy_activation_stale".into());
+    }
     let now = clock();
     ensure_actions(&tx)?;
     tx.execute_batch(ACTION_TABLE)?;
@@ -443,8 +623,8 @@ fn apply_cycle(
     let results = strategy::apply(
         &mut next,
         now,
-        &mut quotes,
-        instruments,
+        &mut flight.quotes,
+        &flight.instruments,
         actions,
         strategy_id,
     )?;

@@ -1213,7 +1213,7 @@ fn decision_lane_supervises_strategies_and_refuses_cash_buys_while_active() {
     .unwrap();
     let library = Library::at(crate::runtime::strategy_library::root(&c).unwrap());
     let register = |n: u64, at: i64| {
-        let source = b"print('{\"actions\":[]}')\n";
+        let source = b"def on_observation(obs):\n    return {'actions': []}\n";
         let params = json!({"n": n});
         let report = artifact_bytes(&json!({
             "engine_sha256": nivra_core::replay::engine_fingerprint(),
@@ -1221,15 +1221,25 @@ fn decision_lane_supervises_strategies_and_refuses_cash_buys_while_active() {
             "parameters": {"version": 1, "top_n": 20, "params": params},
         }))
         .unwrap();
+        let source_sha256 = crate::runtime::digest(source);
         let accepted = acceptance::Accepted {
             report: &report,
             report_sha256: crate::runtime::digest(&report),
             source,
-            source_sha256: crate::runtime::digest(source),
+            source_sha256: source_sha256.clone(),
             params,
             summary: json!({"trades": 14, "net_pnl": "62.50", "worst_drawdown": "35.00"}),
             tape_dates: vec!["2026-10-15".into()],
             thresholds: acceptance::Thresholds::default(),
+        };
+        let review = crate::runtime::strategy_library::review::EntryReview {
+            verdict: "safe".into(),
+            model: "fixture".into(),
+            source_sha256,
+            runner_sha256: crate::runtime::strategy::runner_sha256(),
+            policy_sha256: crate::runtime::strategy_library::review::review_policy_sha256(),
+            reasons: Vec::new(),
+            reviewed_at_ms: at,
         };
         let author = Author {
             lane: "research".into(),
@@ -1239,7 +1249,7 @@ fn decision_lane_supervises_strategies_and_refuses_cash_buys_while_active() {
             session: Some(c.session),
         };
         library
-            .register(&accepted, author, at)
+            .register(&accepted, &review, author, at)
             .unwrap()
             .entry
             .strategy_id

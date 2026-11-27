@@ -1,24 +1,31 @@
-//! `strategy_actions_v1`: a sandboxed Python strategy called once per
-//! observation. It reads one frozen [`Observation`] and prints zero or more
-//! planner actions. Deterministic code validates them with the planner's
+//! `strategy_actions_v1`: a persistent Python strategy worker (`on_observation(obs)`)
+//! hardened with empty env, private cwd, OS rlimits, Landlock, and seccomp.
+//! Deterministic code validates returned planner actions with the planner's
 //! checks and executes them through `Portfolio::execute_plan`, exactly as it
 //! executes a model plan. A strategy owns no cash, fill or protection logic.
 use super::Result;
 use super::planner::{self, PlanSide};
+#[cfg(test)]
+use crate::runtime::strategy_library::review;
+#[cfg(test)]
+use nivra_core::replay::digest;
 use nivra_core::{
     execution::{ExitIntent, Instrument, Portfolio, Quote, Refused, Scanner},
     finance::{Amount, FeeArithmetic, Price},
     market::MAX_FINANCIAL_AGE_MS,
     strategy::{Feature, StrategySpec, evaluate, extract_features_with_lookback},
 };
-use nivra_sandbox::{Failure, SandboxConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::BTreeMap, io::Write, os::unix::fs::OpenOptionsExt, path::Path, process::ExitCode,
 };
 
+pub(crate) mod host;
 pub(crate) mod replay;
+pub(crate) mod worker;
+
+pub(crate) use worker::{Worker, WorkerConfig, WorkerKey, runner_sha256};
 
 pub(crate) const ABI: &str = "strategy_actions_v1";
 /// Actions one call may return; more refuses the whole output.
@@ -147,29 +154,47 @@ impl<'a> Observation<'a> {
     }
 }
 
-fn failure_code(failure: Failure) -> &'static str {
-    match failure {
-        Failure::Config => "strategy_sandbox_config",
-        Failure::Input => "strategy_input_limit",
-        Failure::Setup => "strategy_sandbox_setup",
-        Failure::Unavailable => "strategy_sandbox_unavailable",
-        Failure::Exit => "strategy_exit",
-        Failure::WallTimeout => "strategy_wall_timeout",
-        Failure::OutputLimit => "strategy_output_limit",
-        Failure::OutputInvalid => "strategy_output_invalid",
-    }
-}
-
-/// Run the strategy once. `Err` is the explicit reason the whole call produced
-/// no actions; `Ok` holds raw actions for [`apply`].
+/// Run the strategy once through a persistent `Worker` (used by one-off tests).
+/// `Err` is the explicit reason the whole call produced no actions; `Ok` holds
+/// raw actions for [`apply`].
+#[cfg(test)]
 pub(crate) fn call(
-    sandbox: &SandboxConfig,
+    config: &WorkerConfig,
     source: &[u8],
     observation: &Observation<'_>,
 ) -> std::result::Result<Vec<Value>, &'static str> {
-    let input = serde_json::to_value(observation).map_err(|_| "strategy_input_limit")?;
-    let bytes = nivra_sandbox::run_document(sandbox, source, &input).map_err(failure_code)?;
-    parse(&bytes, observation)
+    review::static_check(&config.python_path, source, config.env_dir.is_some())
+        .map_err(|_| "strategy_review_unsafe")?;
+    let input = serde_json::to_vec(observation).map_err(|_| "strategy_input_limit")?;
+    let params_bytes =
+        serde_json::to_vec(observation.params).map_err(|_| "strategy_input_limit")?;
+    let key = WorkerKey {
+        source_sha256: digest(source),
+        params_sha256: digest(&params_bytes),
+    };
+    let mut worker = Worker::start(
+        key,
+        source.to_vec(),
+        observation.params.clone(),
+        config.clone(),
+        observation.at_ms,
+    )?;
+    let bytes = worker.call_sync(&input, observation.at_ms)?;
+    parse_output(&bytes, observation)
+}
+
+pub(crate) fn parse_output(
+    bytes: &[u8],
+    observation: &Observation<'_>,
+) -> std::result::Result<Vec<Value>, &'static str> {
+    parse(bytes, |key| observation.instruments.contains_key(key))
+}
+
+pub(crate) fn parse_actions(
+    bytes: &[u8],
+    instruments: &[Instrument],
+) -> std::result::Result<Vec<Value>, &'static str> {
+    parse(bytes, |key| instruments.iter().any(|i| i.key == key))
 }
 
 #[derive(Deserialize)]
@@ -180,7 +205,7 @@ struct Output {
 
 fn parse(
     bytes: &[u8],
-    observation: &Observation<'_>,
+    has_instrument: impl Fn(&str) -> bool,
 ) -> std::result::Result<Vec<Value>, &'static str> {
     let value: Value = serde_json::from_slice(bytes).map_err(|_| {
         // Python's json module prints these bare tokens for non-finite floats.
@@ -198,7 +223,7 @@ fn parse(
     if actions.iter().any(|action| {
         action["instrument_key"]
             .as_str()
-            .is_some_and(|key| !observation.instruments.contains_key(key))
+            .is_some_and(|key| !has_instrument(key))
     }) {
         return Err("strategy_unknown_instrument");
     }
@@ -335,7 +360,7 @@ pub(crate) fn replay_entry(
         let parameters: replay::Parameters = serde_json::from_slice(&read(parameters, 65_536)?)
             .map_err(|_| "strategy_replay_parameters_invalid")?;
         let report = replay::run(
-            &SandboxConfig::default(),
+            &WorkerConfig::default(),
             &read(source, 262_144)?,
             &parameters,
             &read(manifest, 512 * 1024)?,

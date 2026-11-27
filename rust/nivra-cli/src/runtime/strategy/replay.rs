@@ -3,8 +3,12 @@
 //! order: held exits first (`Portfolio::apply_at`), then one strategy call,
 //! then its actions through the planner checks and `execute_plan`. Only
 //! original receipts fill; nothing is interpolated or carried forward.
-use super::{ABI, ActionResult, MAX_PROSPECTS, Observation, apply, call};
+use super::{
+    ABI, ActionResult, MAX_PROSPECTS, Observation, Worker, WorkerConfig, WorkerKey, apply,
+    parse_output,
+};
 use crate::runtime::Result;
+use crate::runtime::strategy_library::review;
 use chrono::{DateTime, FixedOffset, NaiveDate, Timelike};
 use nivra_core::{
     execution::{ExitIntent, ExitPolicy, Instrument, Portfolio, Quote, Scanner},
@@ -13,7 +17,6 @@ use nivra_core::{
     market::MAX_FINANCIAL_AGE_MS,
     replay::digest,
 };
-use nivra_sandbox::SandboxConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -136,14 +139,18 @@ fn median(mut values: Vec<Amount>) -> std::result::Result<Option<Amount>, &'stat
     }))
 }
 
-/// The hash of the code that turns strategy actions into fills: this file and
-/// the contract beside it. The paper controller runs an entry only when its
-/// report names this build's hash.
+/// The hash of the code that turns strategy actions into fills: this file, the
+/// contract beside it, and the Python worker runner. The paper controller runs
+/// an entry only when its report names this build's hash.
 pub(crate) fn adapter_sha256() -> String {
     digest(
-        [include_str!("mod.rs"), include_str!("replay.rs")]
-            .concat()
-            .as_bytes(),
+        [
+            include_str!("mod.rs"),
+            include_str!("replay.rs"),
+            include_str!("runner.py"),
+        ]
+        .concat()
+        .as_bytes(),
     )
 }
 
@@ -155,12 +162,12 @@ pub(crate) struct Stopped {
     pub last_at_ms: Option<i64>,
 }
 
-/// Replay `source` over the tape. The report is deterministic for the same
-/// source, parameters, tape, engine and sandbox limits, holds no floats, and
-/// is hashed with the canonical artifact encoding. `stop` is asked before
-/// each strategy call; a reason ends the replay with no report.
+/// Replay `source` over the tape on a persistent strategy worker. The report is
+/// deterministic for the same source, parameters, tape, engine and worker limits,
+/// holds no floats, and is hashed with the canonical artifact encoding. `stop`
+/// is asked before each strategy call; a reason ends the replay with no report.
 pub(crate) fn run(
-    sandbox: &SandboxConfig,
+    worker_config: &WorkerConfig,
     source: &[u8],
     parameters: &Parameters,
     manifest: &[u8],
@@ -174,6 +181,13 @@ pub(crate) fn run(
         || events.len() > 16 * 1024 * 1024
     {
         return Err("strategy_replay_input_limit".into());
+    }
+    if let Err(reasons) = review::static_check(
+        &worker_config.python_path,
+        source,
+        worker_config.env_dir.is_some(),
+    ) {
+        return Err(format!("strategy_review_unsafe: {}", reasons.join(",")).into());
     }
     let (first_day, last_day, universe) =
         nivra_cli::strategy_archive::archive_identity(manifest, events)?;
@@ -196,9 +210,27 @@ pub(crate) fn run(
     costs
         .validate()
         .map_err(|_| "strategy_replay_costs_required")?;
-    let env_sha256 =
-        nivra_sandbox::env_sha256(sandbox).map_err(|_| "strategy_replay_env_invalid")?;
+    let env_sha256 = worker_config
+        .env_sha256()
+        .map_err(|_| "strategy_replay_env_invalid")?;
     let source_sha256 = digest(source);
+    let params_bytes =
+        serde_json::to_vec(&parameters.params).map_err(|_| "strategy_replay_parameters_invalid")?;
+    let replay_worker_cfg = WorkerConfig {
+        backoff_base_ms: 0,
+        quarantine_failures: 0,
+        ..worker_config.clone()
+    };
+    let mut worker = Worker::start(
+        WorkerKey {
+            source_sha256: source_sha256.clone(),
+            params_sha256: digest(&params_bytes),
+        },
+        source.to_vec(),
+        parameters.params.clone(),
+        replay_worker_cfg,
+        tape.first().map(|e| e.at).unwrap_or(0),
+    )?;
     let mut portfolio = Portfolio::with_capital(capital);
     portfolio.costs = Some(costs.clone());
     portfolio.model_led = true;
@@ -300,7 +332,10 @@ pub(crate) fn run(
                 &universe,
                 &costs,
             );
-            let called = call(sandbox, source, &observation);
+            let called = serde_json::to_vec(&observation)
+                .map_err(|_| "strategy_input_limit")
+                .and_then(|input| worker.call_sync(&input, now))
+                .and_then(|bytes| parse_output(&bytes, &observation));
             let instruments: Vec<Instrument> = observation
                 .instruments
                 .values()
@@ -419,12 +454,12 @@ pub(crate) fn run(
         "events_sha256": digest(events),
         "engine_sha256": nivra_core::replay::engine_fingerprint(),
         "adapter_sha256": adapter_sha256(),
-        "sandbox": {
-            "cpu_seconds": sandbox.cpu_seconds,
-            "memory_mb": sandbox.memory_mb,
-            "wall_ms": sandbox.wall_ms,
-            "max_output_bytes": sandbox.max_output_bytes,
+        "worker": {
+            "call_deadline_ms": worker_config.call_deadline_ms,
+            "memory_mb": worker_config.memory_mb,
+            "max_output_bytes": worker_config.max_output_bytes,
             "env_sha256": env_sha256,
+            "runner_sha256": super::runner_sha256(),
         },
         "capital": capital,
         "costs": costs,

@@ -261,7 +261,8 @@ fn workspace_ranker_with_research_env_and_report_hashes() {
     let probe = nivra_sandbox::SandboxConfig::default();
     if !probe.bwrap_path.is_file()
         || !probe.python_path.is_file()
-        || nivra_sandbox::run_document(&probe, b"print('{}')", &json!({})).is_err()
+        || nivra_sandbox::score_source(&Default::default(), b"print('{}')", &Default::default())
+            .is_err()
     {
         assert!(!nivra_sandbox::sandbox_required());
         return;
@@ -367,7 +368,12 @@ print(json.dumps({k: numpy.score(v["move_bps"]) for k, v in rows.items()}))
     );
 
     // Strategy replay report records the environment hash.
-    let sandbox = env.apply_to(&nivra_sandbox::SandboxConfig::default());
+    let worker_config = crate::runtime::strategy::WorkerConfig {
+        env_dir: Some(env.env_dir.clone()),
+        env_sha256: Some(env_sha256.clone()),
+        memory_mb: env.memory_mb,
+        ..crate::runtime::strategy::WorkerConfig::default()
+    };
     let manifest = include_bytes!("../../../../../fixtures/strategy/manifest.json");
     let events = include_bytes!("../../../../../fixtures/strategy/events.jsonl");
     let params: crate::runtime::strategy::replay::Parameters = serde_json::from_slice(
@@ -375,8 +381,8 @@ print(json.dumps({k: numpy.score(v["move_bps"]) for k, v in rows.items()}))
     )
     .unwrap();
     let strategy_report = crate::runtime::strategy::replay::run(
-        &sandbox,
-        b"import numpy, json\nprint(json.dumps({'actions': []}))\n",
+        &worker_config,
+        b"import numpy\ndef on_observation(obs):\n    return {'actions': []}\n",
         &params,
         manifest,
         events,
@@ -384,5 +390,5 @@ print(json.dumps({k: numpy.score(v["move_bps"]) for k, v in rows.items()}))
     )
     .unwrap()
     .unwrap();
-    assert_eq!(strategy_report["sandbox"]["env_sha256"], json!(env_sha256));
+    assert_eq!(strategy_report["worker"]["env_sha256"], json!(env_sha256));
 }

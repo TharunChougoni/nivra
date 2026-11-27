@@ -46,10 +46,23 @@ impl Running {
 
 /// What the planner policy says about strategy choice: the configured
 /// fallbacks, and the planner policy hash that each lane choice is bound to.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(crate) struct ChoicePolicy {
     pub fallback: Vec<String>,
     pub policy_sha256: String,
+    pub python_path: std::path::PathBuf,
+    pub allow_research_env: bool,
+}
+
+impl Default for ChoicePolicy {
+    fn default() -> Self {
+        Self {
+            fallback: Vec::new(),
+            policy_sha256: String::new(),
+            python_path: std::path::PathBuf::from("/usr/bin/python3"),
+            allow_research_env: false,
+        }
+    }
 }
 
 pub(crate) struct Choice {
@@ -87,7 +100,12 @@ pub(crate) fn choose(library: &Library, policy: &ChoicePolicy) -> Result<Choice>
                 .ok_or("strategy_not_found")?
                 .clone();
             let report = library.report(&entry)?;
-            match build_mismatch(&report) {
+            let mismatch = build_mismatch(&report).or(library.entry_review_mismatch(
+                &entry,
+                &policy.python_path,
+                policy.allow_research_env,
+            )?);
+            match mismatch {
                 None => {
                     return Ok(Choice {
                         resolved,
@@ -124,6 +142,7 @@ pub(crate) fn choose(library: &Library, policy: &ChoicePolicy) -> Result<Choice>
     let running = preferred
         .or(fallback.first().map(String::as_str))
         .and_then(reference::action)
+        .filter(|reference| reference.is_reviewed(&policy.python_path))
         .map(Running::Fallback);
     Ok(Choice {
         resolved,

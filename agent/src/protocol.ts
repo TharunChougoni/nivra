@@ -58,7 +58,16 @@ export interface ShutdownMessage {
   type: "shutdown";
 }
 
-export type Inbound = TurnRequest | ToolResultMessage | AbortMessage | ShutdownMessage;
+export interface ReviewStrategyRequest {
+  type: "review_strategy";
+  id: string;
+  model: ModelSpec;
+  fallback?: ModelSpec;
+  source: string;
+  source_sha256: string;
+}
+
+export type Inbound = TurnRequest | ReviewStrategyRequest | ToolResultMessage | AbortMessage | ShutdownMessage;
 
 export interface Usage {
   input: number;
@@ -100,6 +109,17 @@ export type Outbound =
       session_file: string | null;
       prompt_sha256: string;
       fallback?: Fallback;
+    }
+  | {
+      v: number;
+      type: "review_strategy_result";
+      id: string;
+      status: TurnStatus;
+      error?: string;
+      verdict: "safe" | "unsafe";
+      reasons: string[];
+      model: string;
+      provider: string;
     }
   | { v: number; type: "error"; error: string };
 
@@ -178,6 +198,15 @@ export function parseInbound(line: string): Inbound {
       };
     case "abort":
       return { type: "abort", turn_id: str(value.turn_id, "turn_id"), reason: str(value.reason, "reason") };
+    case "review_strategy":
+      return {
+        type: "review_strategy",
+        id: str(value.id, "id"),
+        model: modelSpec(value.model, "model"),
+        ...(value.fallback == null ? {} : { fallback: modelSpec(value.fallback, "fallback") }),
+        source: str(value.source, "source"),
+        source_sha256: str(value.source_sha256, "source_sha256"),
+      };
     case "shutdown":
       return { type: "shutdown" };
     default:

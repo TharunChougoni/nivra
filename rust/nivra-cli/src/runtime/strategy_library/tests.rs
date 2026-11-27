@@ -1,13 +1,28 @@
 use super::acceptance::{Reason, Thresholds, accept};
+use super::review::{EntryReview, review_policy_sha256};
 use super::*;
 
-const SOURCE: &[u8] = b"print('{\"actions\":[]}')\n";
+const SOURCE: &[u8] = b"def on_observation(obs):\n    return {'actions': []}\n";
+
+fn review_for(source: &[u8], now: i64) -> EntryReview {
+    EntryReview {
+        verdict: "safe".into(),
+        model: "fixture".into(),
+        source_sha256: digest(source),
+        runner_sha256: crate::runtime::strategy::runner_sha256(),
+        policy_sha256: review_policy_sha256(),
+        reasons: Vec::new(),
+        reviewed_at_ms: now,
+    }
+}
 
 /// A planner policy with these fallbacks; `tag` stands in for its digest.
 fn policy(fallback: &[&str], tag: char) -> choice::ChoicePolicy {
     choice::ChoicePolicy {
         fallback: fallback.iter().map(|f| (*f).to_owned()).collect(),
         policy_sha256: tag.to_string().repeat(64),
+        python_path: std::path::PathBuf::from("/usr/bin/python3"),
+        allow_research_env: false,
     }
 }
 
@@ -179,9 +194,11 @@ fn a_current_build_replay_refreshes_a_stale_acceptance_under_the_same_strategy_i
             r["adapter_sha256"] = json!(adapter);
         });
         let accepted = accept(&bytes, &sha, SOURCE, &Thresholds::default()).unwrap();
+        let rev = review_for(SOURCE, now);
         library
             .register(
                 &accepted,
+                &rev,
                 Author {
                     lane: "research".into(),
                     model: None,
@@ -237,7 +254,10 @@ fn registration_is_immutable_and_controls_change_the_active_strategy() {
             r["adapter_sha256"] = json!(super::super::strategy::replay::adapter_sha256());
         });
         let accepted = accept(&bytes, &sha, SOURCE, &Thresholds::default()).unwrap();
-        library.register(&accepted, author.clone(), at).unwrap()
+        let rev = review_for(SOURCE, at);
+        library
+            .register(&accepted, &rev, author.clone(), at)
+            .unwrap()
     };
     let first = register(1, 1_000);
     assert_eq!(first.status, RegistrationStatus::Registered);
@@ -426,8 +446,9 @@ fn a_configured_fallback_runs_only_until_an_accepted_version_can() {
             r["adapter_sha256"] = json!(super::super::strategy::replay::adapter_sha256());
         });
         let accepted = accept(&bytes, &sha, SOURCE, &Thresholds::default()).unwrap();
+        let rev = review_for(SOURCE, at);
         library
-            .register(&accepted, author.clone(), at)
+            .register(&accepted, &rev, author.clone(), at)
             .unwrap()
             .entry
             .strategy_id
@@ -558,4 +579,55 @@ fn a_lane_choice_counts_only_under_the_policy_it_was_made_under() {
         choice.running.map(|r| r.run_id()).as_deref(),
         Some("fallback:vwap_trend")
     );
+}
+
+#[test]
+fn unreviewed_or_stale_review_entries_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::at(dir.path().join("strategy-library"));
+    let (bytes, sha) = report(|r| {
+        r["engine_sha256"] = json!(nivra_core::replay::engine_fingerprint());
+        r["adapter_sha256"] = json!(super::super::strategy::replay::adapter_sha256());
+    });
+    let accepted = accept(&bytes, &sha, SOURCE, &Thresholds::default()).unwrap();
+    let author = Author {
+        lane: "research".into(),
+        model: None,
+        model_revision: None,
+        turn_id: None,
+        session: None,
+    };
+    let mut bad_review = review_for(SOURCE, 1);
+    bad_review.source_sha256 = digest(b"different source");
+    assert!(
+        library
+            .register(&accepted, &bad_review, author.clone(), 1)
+            .is_err()
+    );
+
+    let ok_review = review_for(SOURCE, 1);
+    let reg = library.register(&accepted, &ok_review, author, 1).unwrap();
+    let py = std::path::Path::new("/usr/bin/python3");
+    assert_eq!(
+        library
+            .entry_review_mismatch(&reg.entry, py, false)
+            .unwrap(),
+        None
+    );
+
+    // Tampering with the stored entry's review policy version refuses execution in choice::choose.
+    let mut entry = reg.entry.clone();
+    entry.review.policy_sha256 = "0".repeat(64);
+    assert_eq!(
+        library.entry_review_mismatch(&entry, py, false).unwrap(),
+        Some("strategy_review_changed")
+    );
+    let path = dir
+        .path()
+        .join("strategy-library/entries")
+        .join(format!("{}.json", entry.strategy_id));
+    fs::write(&path, artifact_bytes(&entry).unwrap()).unwrap();
+    let chosen = super::choice::choose(&library, &policy(&[], 'a')).unwrap();
+    assert!(chosen.running.is_none());
+    assert_eq!(chosen.reason, Some("strategy_review_changed"));
 }

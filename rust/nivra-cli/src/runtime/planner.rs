@@ -139,13 +139,58 @@ pub(crate) struct PlannerConfig {
     /// leaves the paper controller exactly as it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strategy_execution: Option<StrategyExecution>,
+    /// Model settings for the strategy code-review gate. When absent, falls
+    /// back to `agent.lanes.gate`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy_review: Option<StrategyReviewSettings>,
     /// Optional read-only Python research environment (`nivra research-env build`).
     /// Omitted when absent so existing policy bytes and stdlib-only behaviour are unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub research_env: Option<super::research_env::ResearchEnvSettings>,
 }
+const DEFAULT_STRATEGY_CALL_DEADLINE_MS: u64 = 250;
+fn default_strategy_call_deadline_ms() -> u64 {
+    DEFAULT_STRATEGY_CALL_DEADLINE_MS
+}
+fn is_default_strategy_call_deadline_ms(value: &u64) -> bool {
+    *value == DEFAULT_STRATEGY_CALL_DEADLINE_MS
+}
+const DEFAULT_STRATEGY_REVIEW_TIMEOUT_MS: u64 = 30_000;
+fn default_strategy_review_timeout_ms() -> u64 {
+    DEFAULT_STRATEGY_REVIEW_TIMEOUT_MS
+}
+/// Dedicated model settings for the strategy review gate.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StrategyReviewSettings {
+    pub model: super::agent::ModelSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<super::agent::ModelSpec>,
+    #[serde(
+        default = "default_strategy_review_timeout_ms",
+        skip_serializing_if = "is_default_strategy_review_timeout_ms"
+    )]
+    pub timeout_ms: u64,
+}
+fn is_default_strategy_review_timeout_ms(value: &u64) -> bool {
+    *value == DEFAULT_STRATEGY_REVIEW_TIMEOUT_MS
+}
+impl StrategyReviewSettings {
+    pub(crate) fn validate(&self) -> Result<()> {
+        if !self.model.valid()
+            || self.fallback.as_ref().is_some_and(|fallback| {
+                !fallback.valid()
+                    || (&fallback.provider, &fallback.id) == (&self.model.provider, &self.model.id)
+            })
+            || !(1_000..=120_000).contains(&self.timeout_ms)
+        {
+            return Err("strategy_review_settings_invalid".into());
+        }
+        Ok(())
+    }
+}
 /// The owner's switch for the strategy executor. Paper only.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct StrategyExecution {
     pub enabled: bool,
@@ -154,6 +199,30 @@ pub(crate) struct StrategyExecution {
     /// this build. Empty runs nothing until a version is accepted.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub fallback: Vec<String>,
+    /// Per-call monotonic deadline for the persistent strategy worker.
+    #[serde(
+        default = "default_strategy_call_deadline_ms",
+        skip_serializing_if = "is_default_strategy_call_deadline_ms"
+    )]
+    pub call_deadline_ms: u64,
+}
+impl Default for StrategyExecution {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            fallback: Vec::new(),
+            call_deadline_ms: DEFAULT_STRATEGY_CALL_DEADLINE_MS,
+        }
+    }
+}
+impl StrategyExecution {
+    pub(crate) fn validate(&self) -> Result<()> {
+        super::strategy_library::reference::validate_fallback(&self.fallback)?;
+        if !(10..=5_000).contains(&self.call_deadline_ms) {
+            return Err("strategy_execution_deadline_invalid".into());
+        }
+        Ok(())
+    }
 }
 /// Operational allowances do not change the frozen trading policy. Shadow-only
 /// selector diagnostics remain excluded; live ranking participates in the policy.
@@ -188,19 +257,39 @@ impl Default for PlannerConfig {
             exit_policy: None,
             strategy_acceptance: None,
             strategy_execution: None,
+            strategy_review: None,
             research_env: None,
         }
     }
 }
 impl PlannerConfig {
-    pub(crate) fn effective_sandbox(
-        &self,
-        base: &nivra_sandbox::SandboxConfig,
-    ) -> nivra_sandbox::SandboxConfig {
-        match &self.research_env {
-            Some(env) => env.apply_to(base),
-            None => base.clone(),
+    pub(crate) fn effective_strategy_worker(&self) -> super::strategy::WorkerConfig {
+        let mut cfg = super::strategy::WorkerConfig::default();
+        if let Some(exec) = &self.strategy_execution {
+            cfg.call_deadline_ms = exec.call_deadline_ms;
         }
+        if let Some(env) = &self.research_env {
+            cfg.env_dir = Some(env.env_dir.clone());
+            cfg.env_sha256 = env.env_sha256.clone();
+            if cfg.python_path == Path::new("/usr/bin/python3") {
+                cfg.python_path = env.python_path.clone();
+            }
+            cfg.memory_mb = cfg.memory_mb.max(env.memory_mb);
+        }
+        cfg
+    }
+    pub(crate) fn strategy_review_target(&self) -> Option<StrategyReviewSettings> {
+        if let Some(review) = &self.strategy_review {
+            return Some(review.clone());
+        }
+        self.agent
+            .as_ref()
+            .and_then(|agent| agent.lanes.get(&super::agent::Lane::Gate))
+            .map(|gate| StrategyReviewSettings {
+                model: gate.model.clone(),
+                fallback: gate.fallback.clone(),
+                timeout_ms: gate.turn_timeout_ms.min(60_000),
+            })
     }
     pub(crate) fn runs_strategies(&self) -> bool {
         self.strategy_execution.as_ref().is_some_and(|s| s.enabled)
@@ -211,6 +300,12 @@ impl PlannerConfig {
         Ok(super::strategy_library::choice::ChoicePolicy {
             fallback: self.strategy_fallback().to_vec(),
             policy_sha256: digest(&policy_bytes(self)?),
+            python_path: self
+                .research_env
+                .as_ref()
+                .map(|e| e.python_path.clone())
+                .unwrap_or_else(|| PathBuf::from("/usr/bin/python3")),
+            allow_research_env: self.research_env.is_some(),
         })
     }
     pub(crate) fn strategy_fallback(&self) -> &[String] {
@@ -332,7 +427,10 @@ impl PlannerConfig {
             thresholds.validate()?;
         }
         if let Some(execution) = &c.strategy_execution {
-            super::strategy_library::reference::validate_fallback(&execution.fallback)?;
+            execution.validate()?;
+        }
+        if let Some(review) = &c.strategy_review {
+            review.validate()?;
         }
         if let Some(env) = &c.research_env {
             env.validate()?;
