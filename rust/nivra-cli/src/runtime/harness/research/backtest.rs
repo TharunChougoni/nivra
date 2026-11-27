@@ -6,6 +6,8 @@ use super::*;
 use nivra_core::finance::Amount;
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(test)]
+mod action_bench;
 mod archive_bars;
 mod recent_archive;
 mod strategy_replay;
