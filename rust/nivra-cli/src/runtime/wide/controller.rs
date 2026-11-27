@@ -1,11 +1,17 @@
 //! Dated paper loop and worker orchestration; financial helpers remain in wide.
 use super::*;
-use crate::runtime::market_archive::capture;
+use crate::runtime::{
+    controller_events::{Event as ControllerEvent, Events, Inbox, Notify},
+    market_archive::capture,
+};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+mod choice_watch;
 mod close;
+mod dispatch;
 mod prepare;
+mod quotes;
 mod trading;
 mod view;
 
@@ -24,11 +30,12 @@ pub(crate) fn research_context_status(unavailable: bool) -> serde_json::Value {
     }
 }
 
-pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
-    let mut controller = Controller::start(c, client)?;
+pub(in crate::runtime) fn run(c: &Config) -> Result<()> {
+    let mut controller = Controller::start(c)?;
     controller.note_session("startup");
+    let mut events = Events::default();
     loop {
-        match controller.tick() {
+        match controller.tick(&events) {
             Ok(Flow::Continue) => {}
             Ok(Flow::Stopped { at }) => return controller.stop(at),
             Err(error) => {
@@ -36,6 +43,7 @@ pub(in crate::runtime) fn run(c: &Config, client: &data::Client) -> Result<()> {
                 return Err(error);
             }
         }
+        events = controller.events.wait(controller.time_until_due());
     }
 }
 
@@ -65,8 +73,16 @@ struct Now {
 /// State the paper loop carries across passes. Fields are declared in reverse
 /// of their acquisition order so they drop like the former loop locals: workers
 /// and the alert sender first, then the book, then the session and root locks.
-struct Controller<'a> {
-    client: &'a data::Client,
+struct Controller {
+    pending_universe: Option<prepare::Preparation<Universe>>,
+    pending_options: Option<prepare::Preparation<options::OptionUniverse>>,
+    events: Inbox,
+    next_maintenance: i64,
+    active: bool,
+    _choice_watch: Option<choice_watch::ChoiceWatch>,
+    quote_reads: quotes::QuoteReads,
+    strategy_dirty: bool,
+    depth_candidates: Vec<(String, Option<f64>)>,
     volume_history_loaded: bool,
     last_history_check: i64,
     last_readiness: i64,
@@ -87,6 +103,7 @@ struct Controller<'a> {
     shadow_scorer: ShadowScorer,
     shadow_selection: ShadowSelection,
     feed_fallback_seen: bool,
+    checked_feed_retry: i64,
     index_context: super::IndexContext,
     feed_health: serde_json::Value,
     scan_telemetry: serde_json::Value,
@@ -147,17 +164,18 @@ struct Controller<'a> {
 /// Session end as exchange-local epoch millis, or `None` when the configured
 /// minute does not name a time on the session date.
 fn session_end_ms(c: &Config) -> Option<i64> {
-    chrono::NaiveTime::from_num_seconds_from_midnight_opt(
-        c.execution.session_end_minute.saturating_mul(60),
-        0,
-    )
-    .and_then(|time| {
-        c.session
-            .and_time(time)
-            .and_local_timezone(chrono::FixedOffset::east_opt(19800)?)
-            .single()
-    })
-    .map(|stamp| stamp.timestamp_millis())
+    session_minute_ms(c, c.execution.session_end_minute)
+}
+
+fn session_minute_ms(c: &Config, minute: u32) -> Option<i64> {
+    chrono::NaiveTime::from_num_seconds_from_midnight_opt(minute.saturating_mul(60), 0)
+        .and_then(|time| {
+            c.session
+                .and_time(time)
+                .and_local_timezone(chrono::FixedOffset::east_opt(19800)?)
+                .single()
+        })
+        .map(|stamp| stamp.timestamp_millis())
 }
 
 /// Bounded shortlist over the fresh cash rows; returns the dashboard status.
@@ -253,6 +271,7 @@ fn dashboard_token(c: &Config) -> Result<String> {
 fn strategy_runner(
     c: &Config,
     cfg: Option<&planner::PlannerConfig>,
+    notify: Notify,
 ) -> Result<Option<super::strategy_run::StrategyRun>> {
     if !cfg.is_some_and(planner::PlannerConfig::runs_strategies) {
         return Ok(None);
@@ -266,7 +285,25 @@ fn strategy_runner(
         cfg.map(planner::PlannerConfig::strategy_policy)
             .transpose()?
             .unwrap_or_default(),
+        Some(notify),
     )))
+}
+
+fn watch_strategy_choices(
+    c: &Config,
+    strategy: &Option<super::strategy_run::StrategyRun>,
+    notify: Notify,
+) -> Option<choice_watch::ChoiceWatch> {
+    strategy.as_ref()?;
+    let watch = super::super::strategy_library::root(c)
+        .and_then(|root| choice_watch::ChoiceWatch::start(&root, notify));
+    match watch {
+        Ok(watch) => Some(watch),
+        Err(_) => {
+            eprintln!("strategy_choice_watch_unavailable");
+            None
+        }
+    }
 }
 
 fn load_pi_policy(c: &Config) -> Result<planner::PlannerConfig> {
@@ -371,8 +408,8 @@ fn start_archive(c: &Config) -> Result<capture::Writer> {
     )
 }
 
-impl<'a> Controller<'a> {
-    fn start(c: &Config, client: &'a data::Client) -> Result<Self> {
+impl Controller {
+    fn start(c: &Config) -> Result<Self> {
         c.archive_settings()?;
         let _daily_lock = rollover::controller_lock(c)?;
         let config = c.clone();
@@ -402,7 +439,10 @@ impl<'a> Controller<'a> {
             planner_incident(&mut db, c, &mut p, millis())?;
         }
         let (event_config, agent, event_config_reason) = attach_policy(&mut db, c, &mut p, policy)?;
-        let strategy = strategy_runner(c, event_config.as_ref())?;
+        let events = Inbox::new();
+        let strategy = strategy_runner(c, event_config.as_ref(), events.notify())?;
+        let choice_watch = watch_strategy_choices(c, &strategy, events.notify());
+        let quote_reads = quotes::QuoteReads::start(c, events.notify())?;
         persist(&mut db, c, &p, millis(), None, None, "wide_reconciled")?;
         let token = dashboard_token(c)?;
         let view = Arc::new(Mutex::new(serde_json::json!({"status":"starting"})));
@@ -465,7 +505,15 @@ impl<'a> Controller<'a> {
         let history_attempt = HistoryAttempts::load(&config)?;
         let archive = Some(start_archive(c)?);
         Ok(Self {
-            client,
+            pending_universe: None,
+            pending_options: None,
+            events,
+            next_maintenance: 0,
+            active: false,
+            _choice_watch: choice_watch,
+            quote_reads,
+            strategy_dirty: false,
+            depth_candidates: Vec::new(),
             volume_history_loaded: false,
             last_history_check: 0,
             last_readiness: 0,
@@ -486,6 +534,7 @@ impl<'a> Controller<'a> {
             shadow_scorer: ShadowScorer::default(),
             shadow_selection: ShadowSelection::default(),
             feed_fallback_seen: false,
+            checked_feed_retry: 0,
             index_context: super::IndexContext::default(),
             feed_health: serde_json::json!({"mode":"rest","fallback":false}),
             scan_telemetry: serde_json::json!({}),
@@ -536,80 +585,6 @@ impl<'a> Controller<'a> {
             config,
             _daily_lock,
         })
-    }
-
-    /// One loop pass. Phase order is the journal and clock order.
-    fn tick(&mut self) -> Result<Flow> {
-        self.record_archive_gaps()?;
-        self.shadow_scorer.poll();
-        let now = millis();
-        let t = Now {
-            now,
-            day: local(now).date_naive(),
-            m: minute(now),
-        };
-        let session_end_ms = session_end_ms(&self.config);
-        let research_context_unavailable = self.event_config.is_some() && session_end_ms.is_none();
-        if research_context_unavailable {
-            self.research_tasks_status = serde_json::json!({
-                "status":"unavailable",
-                "reason":"controller_session_end_unavailable",
-                "action":"none"
-            });
-        }
-        if self.stopping.load(Ordering::Relaxed) {
-            return Ok(Flow::Stopped { at: now });
-        }
-        self.prepare_universe(t)?;
-        self.prepare_options(t)?;
-        self.prepare_history(t)?;
-        self.check_readiness(t);
-        let active = self.session_active(t)?;
-        let mut status = if self.universe.is_some() {
-            "sleeping_until_configured_session"
-        } else {
-            "sleeping_waiting_for_d1_universe"
-        }
-        .to_owned();
-        self.track_feed_activity(now, active);
-        let history_admitted = self.history_admitted();
-        if active {
-            status = self.trade_session(t, history_admitted)?.to_owned();
-        }
-        if let Some(closed) = self.close_session(t)? {
-            status = closed;
-        }
-        self.owner_research(now, research_context_unavailable);
-        let agent_now = millis();
-        self.agent_tick(
-            Now {
-                now: agent_now,
-                day: local(agent_now).date_naive(),
-                m: minute(agent_now),
-            },
-            active && history_admitted && self.universe.is_some() && self.read_failure.is_none(),
-            history_admitted && self.universe.is_some() && self.read_failure.is_none(),
-        );
-        if t.day > self.config.session {
-            match self.rollover(t)? {
-                Advance::Adopted => return Ok(Flow::Continue),
-                Advance::Idle(idle) => status = idle.to_owned(),
-            }
-        }
-        if self.p.stopped {
-            status = "stopped_operator_review_required".to_owned();
-        }
-        self.emit_transitions(t, active)?;
-        self.note_health(now);
-        let interval_ms = self.publish(
-            t,
-            status,
-            active,
-            history_admitted,
-            research_context_unavailable,
-        )?;
-        thread::sleep(Duration::from_millis(interval_ms));
-        Ok(Flow::Continue)
     }
 
     /// Feed this pass to the pi lanes. A lane failure is reported and never
@@ -786,6 +761,9 @@ impl<'a> Controller<'a> {
     /// Cancel workers, then settle the book for an operator or service stop.
     fn stop(mut self, now: i64) -> Result<()> {
         self.stop_archive()?;
+        if let Some(run) = &mut self.strategy {
+            run.retire_call(&self.db, now)?;
+        }
         let mut intent = shutdown::intent(&self.config, now);
         if let Some(worker) = self.history_worker.take() {
             worker.cancel();

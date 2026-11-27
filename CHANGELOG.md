@@ -2,9 +2,20 @@
 
 ## Unreleased
 
+### Upgrade an installed paper host
+
+1. Install the updated binary. The book creates its bounded strategy timing
+   table on the first completed call.
+2. Re-backtest and register action strategies against the new strategy
+   adapter digest. Existing entries keep their history and need new reports
+   before they can run on this build.
+
+### Changed
+
+- Strategy replies notify the paper controller as soon as they arrive.
+  Held-quote reads use a separate worker. Rank, scan, and depth reads keep
+  their configured cadences.
 - The summary API reports strategy latency percentiles from quote to gate.
-  Install the updated binary. The book creates its bounded timing table on
-  the first completed call.
 
 ## 0.16.0 — 2026-11-27
 

@@ -812,7 +812,13 @@ fn a_depth_read_attaches_the_quote_and_open_interest_it_read() {
     assert_eq!(scan.samples[key].open_interest, Some(125_000));
     // A key the scanner does not sample gains nothing; a row without OI clears it.
     assert!(!scan.samples.contains_key("NSE_FO|26100CE"));
+    let sample = scan.samples.get_mut(key).unwrap();
+    sample.executable.as_mut().unwrap().ask_units = 1;
+    let late = [(key.to_owned(), quote(start() - 1, 50))].into();
     let without = serde_json::json!({"x":{"instrument_token":key}});
+    attach_depth(&mut scan, &late, without.as_object().unwrap());
+    assert_eq!(scan.samples[key].open_interest, Some(125_000));
     attach_depth(&mut scan, &quotes, without.as_object().unwrap());
     assert_eq!(scan.samples[key].open_interest, None);
+    assert_eq!(scan.samples[key].executable.as_ref().unwrap().ask_units, 1);
 }

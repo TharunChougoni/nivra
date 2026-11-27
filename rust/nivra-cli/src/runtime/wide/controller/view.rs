@@ -1,7 +1,7 @@
 //! Alerts, planner status and the published dashboard view.
 use super::*;
 
-impl Controller<'_> {
+impl Controller {
     pub(super) fn emit_transitions(&mut self, t: Now, active: bool) -> Result<()> {
         let Now { now, day, m } = t;
         let c = &self.config;

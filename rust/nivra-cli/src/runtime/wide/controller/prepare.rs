@@ -1,7 +1,42 @@
 //! Pre-open universe, option and history preparation.
 use super::*;
+use std::sync::mpsc::{Receiver, TryRecvError, sync_channel};
 
-impl Controller<'_> {
+pub(super) struct Preparation<T>(Receiver<std::result::Result<T, String>>);
+
+impl<T: Send + 'static> Preparation<T> {
+    fn spawn(
+        c: &Config,
+        notify: Notify,
+        work: impl FnOnce(&data::Client, &Config) -> Result<T> + Send + 'static,
+    ) -> Result<Self> {
+        let c = c.clone();
+        let (tx, rx) = sync_channel(1);
+        thread::Builder::new()
+            .name("instrument-preparation".into())
+            .spawn(move || {
+                let result = data::Client::new(&c.market_data_transport)
+                    .and_then(|client| work(&client, &c))
+                    .map_err(|error| failure_code(error.as_ref()));
+                if tx.send(result).is_ok() {
+                    notify.signal(ControllerEvent::Preparation);
+                }
+            })?;
+        Ok(Self(rx))
+    }
+
+    fn take(pending: &mut Option<Self>) -> Option<std::result::Result<T, String>> {
+        let result = match pending.as_ref()?.0.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return None,
+            Err(TryRecvError::Disconnected) => Err("instrument_preparation_exited".into()),
+        };
+        *pending = None;
+        Some(result)
+    }
+}
+
+impl Controller {
     /// A service stop waits briefly for the cancelled preparation so its attempt
     /// is recorded failed, and retryable in the window, instead of left
     /// interrupted for review. A worker that does not finish stays interrupted.
@@ -29,29 +64,40 @@ impl Controller<'_> {
     pub(super) fn prepare_universe(&mut self, t: Now) -> Result<()> {
         let Now { now, day, .. } = t;
         let c = &self.config;
+        if let Some(result) = Preparation::take(&mut self.pending_universe) {
+            self.retry = millis() + c.universe_prepare_retry_ms as i64;
+            match result {
+                Ok(prepared) => {
+                    self.tradable = prepared.instruments.clone();
+                    self.tradable
+                        .extend(self.option_instruments.iter().cloned());
+                    if let Ok(mut catalog) = self.instrument_catalog.lock() {
+                        *catalog = Some(super::super::super::instrument_display::Catalog::new(
+                            prepared.dashboard_projection(),
+                        ));
+                    }
+                    super::super::super::instrument_display::start(
+                        c,
+                        &self.instrument_catalog,
+                        &self.display_catalog_started,
+                    );
+                    self.universe = Some(Rc::new(prepared));
+                    self.volume_history_loaded = false;
+                }
+                Err(reason) => eprintln!("universe_prepare_failed reason={reason}"),
+            }
+        }
         if self.universe.is_none()
+            && self.pending_universe.is_none()
             && day <= c.session
             && c.is_trading_day(day)?
             && now >= self.retry
         {
-            self.universe = universe::prepare(self.client, c).ok().map(Rc::new);
-            if let Some(prepared) = &self.universe {
-                self.tradable = prepared.instruments.clone();
-                self.tradable
-                    .extend(self.option_instruments.iter().cloned());
-            }
-            if let Ok(mut catalog) = self.instrument_catalog.lock() {
-                *catalog = self.universe.as_deref().map(|u| {
-                    super::super::super::instrument_display::Catalog::new(u.dashboard_projection())
-                });
-            }
-            super::super::super::instrument_display::start(
+            self.pending_universe = Some(Preparation::spawn(
                 c,
-                &self.instrument_catalog,
-                &self.display_catalog_started,
-            );
-            self.volume_history_loaded = false;
-            self.retry = millis() + c.universe_prepare_retry_ms as i64;
+                self.events.notify(),
+                universe::prepare,
+            )?);
         }
         Ok(())
     }
@@ -59,55 +105,60 @@ impl Controller<'_> {
     pub(super) fn prepare_options(&mut self, t: Now) -> Result<()> {
         let Now { now, day, .. } = t;
         let c = &self.config;
+        if let Some(result) = Preparation::take(&mut self.pending_options) {
+            match result {
+                Ok(prepared) => {
+                    let catalog = prepared.catalog()?;
+                    let instruments = prepared.instruments()?;
+                    self.p.options = Some(catalog);
+                    self.p.fee_schedule = Some(c.fee_schedule()?);
+                    self.tradable.extend(instruments.iter().cloned());
+                    self.option_instruments = instruments;
+                    self.option_status = prepared.dashboard_projection();
+                    self.option_universe = Some(prepared);
+                    let session_date =
+                        nivra_core::time::ExchangeDate::parse(&c.session.to_string())?;
+                    if let Err(reason) = options::expiry::resume_guard(&self.p, session_date)
+                        && !self.p.halted
+                    {
+                        self.p.halted = true;
+                        self.p.health = reason.to_string();
+                        persist(
+                            &mut self.db,
+                            c,
+                            &self.p,
+                            millis(),
+                            None,
+                            None,
+                            "option_expiry_guard",
+                        )?;
+                    }
+                }
+                Err(reason) => {
+                    self.option_status =
+                        serde_json::json!({"status":"unavailable","reason":reason});
+                }
+            }
+        }
         if c.nifty_options.enabled
             && self.option_universe.is_none()
+            && self.pending_options.is_none()
             && self.universe.is_some()
             && day == c.session
             && now >= self.option_retry
         {
             self.option_retry = millis() + 15_000;
-            match options::spot_quote(&self.index_context, c, now) {
-                Some(spot) => match options::prepare(self.client, c, spot, now) {
-                    Ok(prepared) => {
-                        let catalog = prepared.catalog()?;
-                        let instruments = prepared.instruments()?;
-                        self.p.options = Some(catalog);
-                        self.p.fee_schedule = Some(c.fee_schedule()?);
-                        self.tradable.extend(instruments.iter().cloned());
-                        self.option_instruments = instruments;
-                        self.option_status = prepared.dashboard_projection();
-                        self.option_universe = Some(prepared);
-                        let session_date =
-                            nivra_core::time::ExchangeDate::parse(&c.session.to_string())?;
-                        if let Err(reason) = options::expiry::resume_guard(&self.p, session_date)
-                            && !self.p.halted
-                        {
-                            self.p.halted = true;
-                            self.p.health = reason.to_string();
-                            persist(
-                                &mut self.db,
-                                c,
-                                &self.p,
-                                millis(),
-                                None,
-                                None,
-                                "option_expiry_guard",
-                            )?;
-                        }
-                    }
-                    Err(error) => {
-                        self.option_status = serde_json::json!({
-                            "status":"unavailable",
-                            "reason":failure_code(error.as_ref()),
-                        });
-                    }
-                },
-                None => {
-                    self.option_status = serde_json::json!({
-                        "status":"waiting_for_spot",
-                        "reason":"option_spot_unavailable",
-                    });
-                }
+            if let Some(spot) = options::spot_quote(&self.index_context, c, now) {
+                self.pending_options = Some(Preparation::spawn(
+                    c,
+                    self.events.notify(),
+                    move |client, c| options::prepare(client, c, spot, now),
+                )?);
+            } else {
+                self.option_status = serde_json::json!({
+                    "status":"waiting_for_spot",
+                    "reason":"option_spot_unavailable",
+                });
             }
         }
         Ok(())

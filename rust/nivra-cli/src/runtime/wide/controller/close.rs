@@ -1,7 +1,7 @@
 //! Session close, sealed report, rollover and successor adoption.
 use super::*;
 
-impl Controller<'_> {
+impl Controller {
     /// Session close: settle the owner attempt, close the book and report once.
     /// Returns the closed book's health as the pass status.
     pub(super) fn close_session(&mut self, t: Now) -> Result<Option<String>> {
@@ -9,6 +9,9 @@ impl Controller<'_> {
         let c = &self.config;
         if !(day > c.session || (day == c.session && m >= c.execution.session_end_minute)) {
             return Ok(None);
+        }
+        if let Some(run) = &mut self.strategy {
+            run.retire_call(&self.db, now)?;
         }
         if let Some(agent) = &mut self.agent
             && let Err(error) = agent.cancel_decision(&mut self.db, c)
@@ -168,6 +171,8 @@ impl Controller<'_> {
         self.history_status =
             serde_json::json!({"status":"UNKNOWN","reason":"preparation_not_started"});
         self.universe = None;
+        self.pending_universe = None;
+        self.pending_options = None;
         self.tradable.clear();
         if let Ok(mut catalog) = self.instrument_catalog.lock() {
             *catalog = None;
@@ -177,6 +182,7 @@ impl Controller<'_> {
         self.display_catalog_status = serde_json::json!({"status":"not_prepared"});
         self.volume_history_loaded = false;
         self.feed_worker = None;
+        self.checked_feed_retry = 0;
         if let Ok(mut series) = self.equity_series.lock() {
             series.reset();
         }
@@ -184,6 +190,13 @@ impl Controller<'_> {
         self.shadow_scorer = ShadowScorer::default();
         self.prefilter_previous.clear();
         self.prefilter_status = None;
+        self.active = false;
+        self.next_maintenance = 0;
+        self.quote_reads = quotes::QuoteReads::start(&self.config, self.events.notify())?;
+        self.strategy_dirty = false;
+        self.depth_candidates.clear();
+        self.last_protection_read = 0;
+        self.last_plan_read = 0;
         self.last_rank = 0;
         self.last_depth = 0;
         self.retry = 0;
@@ -210,7 +223,13 @@ impl Controller<'_> {
         self.event_config = event_config;
         self.agent = agent;
         // A call still running for the previous book is dropped with it.
-        self.strategy = strategy_runner(&self.config, self.event_config.as_ref())?;
+        self.strategy = strategy_runner(
+            &self.config,
+            self.event_config.as_ref(),
+            self.events.notify(),
+        )?;
+        self._choice_watch =
+            watch_strategy_choices(&self.config, &self.strategy, self.events.notify());
         self.event_config_reason = event_config_reason;
         let SessionEvidence {
             scan,

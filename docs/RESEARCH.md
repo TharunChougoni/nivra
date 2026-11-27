@@ -504,9 +504,12 @@ does not read it.
 
 With `strategy_execution` enabled in the planner config (see
 [operations](OPERATIONS.md#manage-action-strategies)), the paper controller
-runs the active version on each rank pass:
+runs the active version on rank passes, executable quote receipts, and
+strategy selection changes:
 
-1. Held stops, targets and time exits run on every quote read, as before.
+1. The controller handles completed held-quote reads and strategy revocations
+   before it applies returned strategy actions. A dedicated quote reader
+   fetches held depth on its own two-second deadline.
 2. The controller freezes one observation: the built-in prospects (the
    report's `top_n`), the depth quotes still within two seconds of their
    original receipt, held positions with their exit intents, cash and costs.
@@ -515,12 +518,14 @@ runs the active version on each rank pass:
    changes and immediate revocation on stand-down or disable), keeping the main
    controller loop unblocked and bounded per call by
    `strategy_execution.call_deadline_ms` (default 250 ms). While a call is in
-   flight, later scans start none.
-4. When the call finishes, the controller takes the book transaction, verifies
-   both the worker's `activation_generation` and `choice::choose` inside the
-   transaction, and runs its actions through the planner checks and the execution
-   gate (with original quote receipt-age rechecks) against the book at that moment.
-   A fill records the `strategy_id` where a model fill records a decision ID.
+   flight, the controller keeps one pending observation request and takes a
+   fresh snapshot when the worker can accept it.
+4. A worker reply notifies the controller immediately. The controller takes
+   the book transaction, rechecks the current choice and the worker generation,
+   and applies actions against the current book. The gate checks the original
+   source and receipt ages after the lock. An action can use only the remaining
+   units on its original receipt. A fill records the `strategy_id` where a
+   model fill records a decision ID.
 
 The summary API reports the last 256 completed calls under
 `strategy_execution.latency`. Each hop reports its sample count and p50, p95,
@@ -533,8 +538,9 @@ The controller runs a version only when its report names this build's
 `source_sha256`, `runner_sha256` and `review_policy_sha256` (plus passes the
 static AST check). Otherwise it reports `strategy_engine_changed`,
 `strategy_adapter_changed`, `strategy_review_changed` or
-`strategy_review_unsafe`. It reads the library again every 30 seconds, so a pin,
-disable or rollback takes effect without a restart.
+`strategy_review_unsafe`. Published decisions and library changes notify the
+controller to resolve the selection again. A 30-second refresh covers missed
+notifications.
 
 #### Fallback strategies
 

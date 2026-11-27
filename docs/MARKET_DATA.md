@@ -164,8 +164,10 @@ Each name that enters the top `top_k` of the live ranking (see
 until 30 minutes after it last ranked there. The names share the existing
 request every `depth_poll_ms` (8 s), after the shortlist, so they use no
 extra reads. Held names are skipped because the protection read covers them
-every 2 s. The journal records ordinary `wide_quotes` with the original
-receipt times used by the two-second gate.
+every 2 s. Held and shortlist requests run on separate workers. The paper
+controller commits their results and gives completed held reads priority.
+The journal records ordinary `wide_quotes` with the original receipt times
+used by the two-second gate.
 
 With the default 40-name shortlist, 160 keys are left for watched names
 before the 200-key batch is full. Nivra never adds a read to cover a gap. It

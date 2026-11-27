@@ -1,12 +1,16 @@
 use super::super::strategy_run::{Frozen, StrategyRun, recent_actions};
 use super::*;
-use crate::runtime::strategy::WorkerConfig;
 use crate::runtime::strategy_library::{
     Author, Library, acceptance, build_mismatch,
     review::{EntryReview, review_policy_sha256},
 };
+use crate::runtime::{
+    controller_events::{Event as ControllerEvent, Inbox},
+    strategy::WorkerConfig,
+};
 use nivra_core::execution::ExitIntent;
 use serde_json::{Value, json};
+use std::time::Instant;
 
 const MANIFEST: &str = include_str!("../../../../../../fixtures/strategy/manifest.json");
 const EVENTS: &str = include_str!("../../../../../../fixtures/strategy/events.jsonl");
@@ -69,7 +73,7 @@ struct Tape {
     db: Connection,
     p: Portfolio,
     universe: Vec<Instrument>,
-    depth: BTreeMap<String, Quote>,
+    scan: Scanner,
     events: Vec<Value>,
 }
 impl Tape {
@@ -89,7 +93,7 @@ impl Tape {
             db,
             p,
             universe: serde_json::from_value(manifest["universe"].clone()).unwrap(),
-            depth: BTreeMap::new(),
+            scan: Scanner::default(),
             events: EVENTS
                 .lines()
                 .map(|l| serde_json::from_str(l).unwrap())
@@ -101,12 +105,20 @@ impl Tape {
     }
     /// Commit receipt `step` and return its time.
     fn protect(&mut self, step: usize) -> i64 {
+        let at = self.events[step]["at"].as_i64().unwrap();
+        self.protect_at(step, at);
+        at
+    }
+
+    fn protect_at(&mut self, step: usize, at: i64) {
         let event = &self.events[step];
-        let at = event["at"].as_i64().unwrap();
+        let shift = at - event["at"].as_i64().unwrap();
         for o in event["observations"].as_array().unwrap() {
             let key = o["key"].as_str().unwrap().to_owned();
-            self.depth
-                .insert(key, serde_json::from_value(o["quote"].clone()).unwrap());
+            let mut quote: Quote = serde_json::from_value(o["quote"].clone()).unwrap();
+            quote.source += shift;
+            quote.receipt += shift;
+            self.scan.samples.entry(key).or_default().executable = Some(quote);
         }
         let fresh = self.fresh(at);
         commit_quotes(
@@ -119,13 +131,15 @@ impl Tape {
             || at,
         )
         .unwrap();
-        at
     }
     fn fresh(&self, at: i64) -> BTreeMap<String, Quote> {
-        self.depth
+        self.scan
+            .samples
             .iter()
-            .filter(|(_, q)| q.fresh(at, 2000))
-            .map(|(k, q)| (k.clone(), q.clone()))
+            .filter_map(|(key, sample)| {
+                let q = sample.executable.as_ref()?.clone();
+                q.fresh(at, 2000).then(|| (key.clone(), q))
+            })
             .collect()
     }
     fn frozen(&self, at: i64) -> Frozen {
@@ -147,7 +161,7 @@ impl Tape {
             run.start(self.frozen(at), &|| at);
             run.wait();
         }
-        run.poll(&mut self.db, &self.c, &mut self.p, &|| at)
+        run.poll(&mut self.db, &self.c, &mut self.p, &mut self.scan, &|| at)
             .unwrap();
     }
     fn failures(&self) -> Vec<String> {
@@ -169,7 +183,7 @@ fn active_strategy_fills_refuses_and_exits_through_the_gate() {
     let mut tape = Tape::new();
     let params: Value = serde_json::from_str::<Value>(PARAMETERS).unwrap()["params"].clone();
     let id = register(&tape.library(), SOURCE, params, |_| {});
-    let mut run = StrategyRun::new(tape.library(), worker, Default::default());
+    let mut run = StrategyRun::new(tape.library(), worker, Default::default(), None);
     for step in 0..tape.events.len() {
         let at = tape.protect(step);
         tape.scan(&mut run, at);
@@ -249,6 +263,55 @@ fn active_strategy_fills_refuses_and_exits_through_the_gate() {
 }
 
 #[test]
+fn worker_reply_applies_fixture_on_one_notification() {
+    let worker = worker_config().expect("fixture requires python3");
+    let mut tape = Tape::new();
+    let start_ms = millis() + 200;
+    let mut params = serde_json::from_str::<Value>(PARAMETERS).unwrap()["params"].clone();
+    params["start_ms"] = json!(start_ms);
+    let library = tape.library();
+    register(&library, SOURCE, params, |_| {});
+    let inbox = Inbox::new();
+    let mut run = StrategyRun::new(library, worker, Default::default(), Some(inbox.notify()));
+    run.ready(&tape.db, &tape.c, millis()).unwrap();
+    assert!(
+        inbox
+            .wait(Duration::from_secs(3))
+            .contains(ControllerEvent::Strategy)
+    );
+    assert!(run.ready(&tape.db, &tape.c, millis()).unwrap().is_some());
+
+    thread::sleep(Duration::from_millis(
+        start_ms.saturating_sub(millis()).max(0) as u64,
+    ));
+    let at = millis();
+    tape.c.session = local(at).date_naive();
+    tape.p.settings.session_start_minute = 0;
+    tape.p.settings.session_end_minute = 1440;
+    tape.protect_at(0, at);
+    run.start(tape.frozen(at), &millis);
+    assert!(
+        inbox
+            .wait(Duration::from_secs(1))
+            .contains(ControllerEvent::Strategy)
+    );
+    run.poll(&mut tape.db, &tape.c, &mut tape.p, &mut tape.scan, &millis)
+        .unwrap();
+
+    let actions = recent_actions(&tape.db).unwrap();
+    assert_eq!(actions[0]["outcome"], "price_above_max");
+    assert_eq!(actions[1]["outcome"], "filled");
+    assert_eq!(tape.p.fills.len(), 1);
+    let status = run.status(&tape.db, &tape.p);
+    assert_eq!(status["failures"], 0);
+    let latency = &status["latency"];
+    assert_eq!(latency["submit_to_reply"]["samples"], 1);
+    assert_eq!(latency["reply_to_gate"]["samples"], 2);
+    assert!(latency["reply_to_gate"]["p99_ms"].as_i64().unwrap() < 1000);
+    eprintln!("fixture_strategy_latency {latency}");
+}
+
+#[test]
 fn failed_strategy_calls_trade_nothing_and_protection_continues() {
     let Some(worker) = worker_config() else {
         return;
@@ -273,7 +336,7 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
         json!({}),
         |_| {},
     );
-    let mut crash = StrategyRun::new(tape.library(), worker.clone(), Default::default());
+    let mut crash = StrategyRun::new(tape.library(), worker.clone(), Default::default(), None);
     tape.scan(&mut crash, at);
     for step in 1..3 {
         let at = tape.protect(step);
@@ -287,7 +350,7 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
     // A call past the deadline: the next scan is skipped, not queued, and
     // the stop still executes while the call runs.
     let slow = WorkerConfig {
-        call_deadline_ms: 150,
+        call_deadline_ms: 600,
         ..worker
     };
     let library = Library::at(tape.c.directory.join("slow-library"));
@@ -297,7 +360,8 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
         json!({}),
         |_| {},
     );
-    let mut timeout = StrategyRun::new(library, slow, Default::default());
+    let inbox = Inbox::new();
+    let mut timeout = StrategyRun::new(library, slow, Default::default(), Some(inbox.notify()));
     let at = tape.protect(3);
     assert!(
         timeout
@@ -305,13 +369,30 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
             .unwrap()
             .is_some()
     );
+    assert!(
+        inbox
+            .wait(Duration::ZERO)
+            .contains(ControllerEvent::Strategy)
+    );
     timeout.start(tape.frozen(at), &|| at);
     assert_eq!(timeout.ready(&tape.db, &tape.c, at).unwrap(), None);
+    let due = Instant::now() + Duration::from_millis(40);
+    let wait = due.saturating_duration_since(Instant::now());
+    assert!(!inbox.wait(wait).contains(ControllerEvent::Strategy));
+    assert!(Instant::now() >= due);
     let at = tape.protect(4);
-    assert!(tape.p.positions.is_empty(), "protection waits for no call");
-    timeout.wait();
+    assert!(
+        tape.p.positions.is_empty(),
+        "stop executes at the protection deadline"
+    );
+    assert!(timeout.has_call());
+    assert!(
+        inbox
+            .wait(Duration::from_secs(3))
+            .contains(ControllerEvent::Strategy)
+    );
     timeout
-        .poll(&mut tape.db, &tape.c, &mut tape.p, &|| at)
+        .poll(&mut tape.db, &tape.c, &mut tape.p, &mut tape.scan, &|| at)
         .unwrap();
     assert_eq!(timeout.status(&tape.db, &tape.p)["skipped"], 1);
     assert_eq!(
@@ -323,7 +404,7 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
     register(&library, SOURCE, json!({}), |r| {
         r["engine_sha256"] = json!("0".repeat(64))
     });
-    let mut old = StrategyRun::new(library, WorkerConfig::default(), Default::default());
+    let mut old = StrategyRun::new(library, WorkerConfig::default(), Default::default(), None);
     assert_eq!(old.ready(&tape.db, &tape.c, at).unwrap(), None);
     assert_eq!(
         old.status(&tape.db, &tape.p)["reason"],
@@ -350,7 +431,7 @@ fn a_fallback_runs_labelled_until_a_strategy_is_accepted_and_honours_stand_down(
         policy_sha256: String::new(),
         ..Default::default()
     };
-    let mut run = StrategyRun::new(tape.library(), worker, policy.clone());
+    let mut run = StrategyRun::new(tape.library(), worker, policy.clone(), None);
     let first = tape.protect(0);
     tape.scan(&mut run, first);
     let status = run.status(&tape.db, &tape.p);

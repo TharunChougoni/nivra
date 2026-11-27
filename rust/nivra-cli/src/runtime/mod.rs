@@ -2,6 +2,7 @@
 pub mod activity_attribution;
 pub(crate) mod agent;
 pub mod closed_incident;
+mod controller_events;
 mod data;
 mod decision;
 mod decision_evidence;
@@ -576,9 +577,9 @@ fn run(path: &Path, probe: bool) -> Result<()> {
             Fail::new("invalid_paper_mandate")
         }
     })?;
-    let client = data::Client::new(&c.market_data_transport)
-        .map_err(|_| Fail::new("http_client_unavailable"))?;
     if probe {
+        let client = data::Client::new(&c.market_data_transport)
+            .map_err(|_| Fail::new("http_client_unavailable"))?;
         let (_, _, raw) = client.quote(&c)?;
         let valid = data::parse(&raw, millis()).is_ok();
         println!(
@@ -596,7 +597,7 @@ fn run(path: &Path, probe: bool) -> Result<()> {
         );
         return Ok(());
     }
-    wide::run(&rollover::current(&c)?, &client)
+    wide::run(&rollover::current(&c)?)
 }
 
 #[cfg(test)]

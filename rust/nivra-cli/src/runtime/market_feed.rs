@@ -425,6 +425,8 @@ struct Cache {
     invalid_ltpc: u64,
     ticks_total: u64,
     tick_buckets: VecDeque<(i64, u64)>,
+    // Notify the book writer after a decoded batch or connection transition.
+    controller_notify: Option<super::controller_events::Notify>,
 }
 impl Cache {
     fn record_ticks(&mut self, receipt: i64, count: u64, window: i64) {
@@ -489,6 +491,9 @@ impl Controller {
             cache.last_error = Some(reason);
             cache.next_retry = now.saturating_add(self.retry_ms);
             cache.reconnects = cache.reconnects.saturating_add(1);
+            if let Some(notify) = &cache.controller_notify {
+                notify.signal(super::controller_events::Event::FeedState);
+            }
         }
         self.retry_ms = self
             .retry_ms
@@ -596,9 +601,14 @@ impl Controller {
                         }
                         if accepted > 0 {
                             c.record_ticks(receipt, accepted, self.settings.telemetry_window_ms);
+                            let first = c.last_tick.is_none();
                             c.last_tick = Some(receipt);
                             c.last_error = None;
                             self.retry_ms = self.settings.reconnect_initial_ms;
+                            if let Some(notify) = &c.controller_notify {
+                                use super::controller_events::Event;
+                                notify.signal(if first { Event::FeedState } else { Event::Feed });
+                            }
                         }
                     }
                 }
@@ -658,12 +668,18 @@ pub(super) struct Worker {
     pub settings: Settings,
 }
 impl Worker {
-    pub fn start(c: &Config, instruments: &[Instrument], settings: Settings) -> Result<Self> {
+    pub fn start(
+        c: &Config,
+        instruments: &[Instrument],
+        settings: Settings,
+        notify: super::controller_events::Notify,
+    ) -> Result<Self> {
         settings.validate()?;
         let keys = subscription_keys(c, instruments)?;
         let permit = ConnectionPermit::acquire(settings.max_connections)?;
         let cache = Arc::new(Mutex::new(Cache {
             screening_keys: instruments.iter().map(|i| i.key.clone()).collect(),
+            controller_notify: Some(notify),
             ..Cache::default()
         }));
         let cancelled = Arc::new(AtomicBool::new(false));

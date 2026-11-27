@@ -230,6 +230,7 @@ pub(crate) fn run(
         parameters.params.clone(),
         replay_worker_cfg,
         tape.first().map(|e| e.at).unwrap_or(0),
+        None,
     )?;
     let mut portfolio = Portfolio::with_capital(capital);
     portfolio.costs = Some(costs.clone());

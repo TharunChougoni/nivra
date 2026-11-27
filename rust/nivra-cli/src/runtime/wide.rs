@@ -18,7 +18,6 @@ mod projection;
 mod reads;
 #[cfg(test)]
 use reads::*;
-pub(super) use reads::{QuoteReadTarget, read_executable_quotes, read_scanner_metadata};
 mod shadow;
 mod shutdown;
 pub(in crate::runtime) mod strategy_run;

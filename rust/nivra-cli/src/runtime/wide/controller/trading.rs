@@ -1,52 +1,142 @@
 //! In-session market reads, scanning, ranking and depth reads.
 use super::*;
 
-impl Controller<'_> {
-    /// Market reads, scanning, ranking and the owner tick inside the session.
-    pub(super) fn trade_session(&mut self, t: Now, history_admitted: bool) -> Result<&'static str> {
-        let Now { now, m, .. } = t;
-        let Some(u) = self.universe.clone() else {
-            return Ok("waiting_for_d1_universe");
-        };
-        // No plan yet with nothing to decide is a no-op, not a failure
-        // (#221). The planner status names the reason.
-        let mut status =
-            if self.planner_status["status"].as_str() == Some(planner::NO_DECISION_WORK) {
-                planner::NO_DECISION_WORK
-            } else {
-                "model_plan_unavailable_no_trades"
-            };
-        let feed_settings = self
-            .event_config
+use super::quotes::ReadKind;
+use crate::runtime::controller_events::{Event as ControllerEvent, Events};
+
+const QUOTE_POLL_MS: i64 = 2000;
+
+impl Controller {
+    fn feed_settings(&self) -> Option<&market_feed::Settings> {
+        self.event_config
+            .as_ref()?
+            .discovery
+            .as_ref()?
+            .market_feed
             .as_ref()
-            .and_then(|cfg| cfg.discovery.as_ref())
-            .and_then(|d| d.market_feed.clone())
-            .filter(|s| s.mode == super::super::super::market_feed::Mode::Ltpc);
-        self.scan.screens = Some(
+            .filter(|settings| settings.mode == market_feed::Mode::Ltpc)
+    }
+
+    fn scan_interval(&self) -> i64 {
+        if let Some(settings) = self.feed_settings() {
+            settings
+                .rest_interval_ms(self.feed_fallback_seen || self.feed_health["fallback"] == true)
+        } else {
             self.event_config
                 .as_ref()
                 .and_then(|cfg| cfg.discovery.as_ref())
-                .and_then(|d| d.screens.clone())
-                .unwrap_or_else(nivra_core::execution::ScreenPolicy::recommended),
+                .and_then(|d| d.scan_interval_ms)
+                .unwrap_or(8000)
+        }
+    }
+
+    fn rank_interval(&self) -> i64 {
+        self.feed_settings()
+            .map_or_else(|| self.scan_interval(), |s| s.tick_ms)
+    }
+
+    fn feed_retry_deadline(&self) -> Option<i64> {
+        if self.feed_health["connected"] != false {
+            return None;
+        }
+        self.feed_health["next_retry_ms"]
+            .as_i64()
+            .filter(|&at| at > self.checked_feed_retry)
+    }
+
+    pub(super) fn trade_wait(&self, now: i64) -> Option<Duration> {
+        let mut at = None;
+        let mut include = |eligible, last: i64, interval: i64| {
+            if eligible {
+                let deadline = last.saturating_add(interval);
+                at = Some(at.map_or(deadline, |a: i64| a.min(deadline)));
+            }
+        };
+        include(
+            !self.p.positions.is_empty() && !self.quote_reads.pending(ReadKind::Held),
+            self.last_protection_read,
+            QUOTE_POLL_MS,
         );
-        let (feed_fallback, _) = self.poll_feed(&u, now, feed_settings.as_ref())?;
-        // Held instruments always read and committed before any scanner request.
-        let held: Vec<_> = self
-            .p
-            .positions
-            .values()
-            .map(|p| p.instrument.clone())
-            .collect();
-        self.protection_read(&held, now)?;
-        self.plan_read(history_admitted, now)?;
+        if !self.p.halted && self.universe.is_some() {
+            include(
+                self.history_admitted()
+                    && self.read_failure.is_none()
+                    && !self.quote_reads.pending(ReadKind::Plan),
+                self.last_plan_read,
+                QUOTE_POLL_MS,
+            );
+            include(
+                !self.quote_reads.pending(ReadKind::Scanner {
+                    metadata_only: false,
+                    end: 0,
+                }),
+                self.last_scan,
+                self.scan_interval(),
+            );
+            include(
+                !self.option_instruments.is_empty() && !self.quote_reads.pending(ReadKind::Options),
+                self.last_option_depth,
+                QUOTE_POLL_MS,
+            );
+            include(true, self.last_rank, self.rank_interval());
+            if let Some(settings) = self.feed_settings() {
+                if let Some(at) = self.feed_retry_deadline() {
+                    include(true, at, 0);
+                }
+                include(
+                    !self.quote_reads.pending(ReadKind::Depth),
+                    self.last_depth,
+                    settings.depth_poll_ms,
+                );
+            }
+        }
+        let reads = at.map(|at| Duration::from_millis(at.saturating_sub(now).max(0) as u64));
+        let worker = self
+            .strategy
+            .as_ref()
+            .filter(|run| (!self.p.halted && self.universe.is_some()) || run.has_call())
+            .map(|run| run.time_until_due(now));
+        reads.into_iter().chain(worker).min()
+    }
+
+    pub(super) fn service_strategy_reply(&mut self, now: i64, changed: bool) -> Result<()> {
+        self.commit_protection()?;
+        self.protection_read(now)?;
+        if let Some(run) = &mut self.strategy {
+            run.refresh_choice(&self.db, &self.config, now, changed)?;
+            run.poll(
+                &mut self.db,
+                &self.config,
+                &mut self.p,
+                &mut self.scan,
+                &millis,
+            )?;
+        }
+        self.strategy_dirty |= changed;
+        Ok(())
+    }
+
+    pub(super) fn trade_session(
+        &mut self,
+        t: Now,
+        history_admitted: bool,
+        events: &Events,
+        maintenance: bool,
+    ) -> Result<()> {
+        let Now { now, m, .. } = t;
+        self.service_strategy_reply(now, events.contains(ControllerEvent::Choice))?;
+        self.commit_market_reads()?;
+        if self.p.halted {
+            return Ok(());
+        }
+        let Some(u) = self.universe.clone() else {
+            return Ok(());
+        };
+        let feed_settings = self.feed_settings().cloned();
         let discovery = self
             .event_config
             .as_ref()
             .and_then(|cfg| cfg.discovery.as_ref());
-        let scan_interval = feed_settings
-            .as_ref()
-            .map(|s| s.rest_interval_ms(feed_fallback))
-            .unwrap_or_else(|| discovery.and_then(|d| d.scan_interval_ms).unwrap_or(8000));
         let scan_batch = feed_settings
             .as_ref()
             .map(|s| s.rest_batch_size)
@@ -61,8 +151,26 @@ impl Controller<'_> {
         let freshness = discovery
             .and_then(|d| d.quote_freshness_ms)
             .unwrap_or(super::super::super::discovery::MAX_QUOTE_FRESHNESS_MS);
-        if !self.p.halted
-            && now - self.last_scan >= scan_interval
+        let rank_due = now - self.last_rank >= self.rank_interval();
+        let mut feed_fallback = self.feed_health["fallback"] != false;
+        let due_retry = self.feed_retry_deadline().filter(|&at| at <= now);
+        if maintenance
+            || rank_due
+            || due_retry.is_some()
+            || events.contains(ControllerEvent::FeedState)
+        {
+            if let Some(at) = due_retry {
+                self.checked_feed_retry = at;
+            }
+            self.scan.screens = Some(
+                discovery
+                    .and_then(|d| d.screens.clone())
+                    .unwrap_or_else(nivra_core::execution::ScreenPolicy::recommended),
+            );
+            (feed_fallback, _) = self.poll_feed(&u, now, feed_settings.as_ref())?;
+        }
+        self.plan_read(history_admitted, now)?;
+        if now - self.last_scan >= self.scan_interval()
             && m < self.config.execution.session_end_minute
         {
             self.scan_batch(
@@ -74,21 +182,24 @@ impl Controller<'_> {
             )?;
         }
         self.option_depth_read(now)?;
-        let rank_interval = feed_settings
-            .as_ref()
-            .map(|s| s.tick_ms)
-            .unwrap_or(scan_interval);
-        let ranked = !self.p.halted && now - self.last_rank >= rank_interval;
-        if ranked {
-            self.rank(&u, now, feed_settings.as_ref(), feed_fallback, &held)?;
+        if rank_due {
+            self.rank(&u, now)?;
             self.last_rank = now;
+            self.strategy_dirty = true;
         }
-        self.strategy_cycle(ranked)?;
-        if self.p.halted {
-            status = "risk_halted_protective_exits_only";
+        if let Some(settings) = feed_settings.as_ref()
+            && now - self.last_depth >= settings.depth_poll_ms
+            && !self.quote_reads.pending(ReadKind::Depth)
+        {
+            self.last_depth = now;
+            if !feed_fallback {
+                self.depth_read(&u, now, settings)?;
+            } else if !self.tape.is_empty() {
+                self.tape_gap(now, "feed_fallback", 0)?;
+            }
         }
         self.clear_read_block(freshness)?;
-        Ok(status)
+        Ok(())
     }
 
     /// Returns `(fallback, fresh)` for this pass's market feed.
@@ -107,6 +218,7 @@ impl Controller<'_> {
                     c,
                     &u.instruments,
                     settings.clone(),
+                    self.events.notify(),
                 ) {
                     Ok(worker) => self.feed_worker = Some(worker),
                     Err(_) => {
@@ -216,27 +328,19 @@ impl Controller<'_> {
         Ok(())
     }
 
-    pub(super) fn protection_read(&mut self, held: &[Instrument], now: i64) -> Result<()> {
-        let c = &self.config;
-        if !held.is_empty() && now - self.last_protection_read >= 2000 {
+    fn protection_read(&mut self, now: i64) -> Result<()> {
+        if !self.p.positions.is_empty()
+            && now - self.last_protection_read >= QUOTE_POLL_MS
+            && !self.quote_reads.pending(ReadKind::Held)
+        {
+            let held = self
+                .p
+                .positions
+                .values()
+                .map(|p| p.instrument.clone())
+                .collect();
+            self.quote_reads.request(ReadKind::Held, held)?;
             self.last_protection_read = now;
-            // A strategy observes held depth too, so it can sell what it holds.
-            let depth_sink = self.strategy.is_some().then_some(&mut self.scan);
-            match read_executable_quotes(
-                self.client,
-                c,
-                &mut self.db,
-                &mut self.p,
-                held,
-                &mut self.last_fresh_receipt,
-                self.event_config.as_ref(),
-                &self.feature_store,
-                QuoteReadTarget::Held { depth_sink },
-                self.archive.as_ref(),
-            )? {
-                Some(reason) => self.read_failure = Some(reason),
-                None => self.read_failure = None,
-            }
         }
         Ok(())
     }
@@ -246,9 +350,13 @@ impl Controller<'_> {
         if history_admitted
             && self.read_failure.is_none()
             && !self.p.halted
-            && let Some(plan) = redecision::active_plan(&self.db, c)?
-            && now - self.last_plan_read >= 2000
+            && now - self.last_plan_read >= QUOTE_POLL_MS
+            && !self.quote_reads.pending(ReadKind::Plan)
         {
+            self.last_plan_read = now;
+            let Some(plan) = redecision::active_plan(&self.db, c)? else {
+                return Ok(());
+            };
             let actions: Vec<planner::Verdict> = serde_json::from_value(plan["verdicts"].clone())?;
             let mut pending = Vec::new();
             for a in actions {
@@ -278,19 +386,7 @@ impl Controller<'_> {
                 .cloned()
                 .collect();
             if !planned.is_empty() {
-                self.last_plan_read = now;
-                self.read_failure = read_executable_quotes(
-                    self.client,
-                    c,
-                    &mut self.db,
-                    &mut self.p,
-                    &planned,
-                    &mut self.last_fresh_receipt,
-                    self.event_config.as_ref(),
-                    &self.feature_store,
-                    QuoteReadTarget::Plan,
-                    self.archive.as_ref(),
-                )?;
+                self.quote_reads.request(ReadKind::Plan, planned)?;
             }
         }
         Ok(())
@@ -304,100 +400,42 @@ impl Controller<'_> {
         ranking_window: i64,
         feed_live: bool,
     ) -> Result<()> {
-        let c = &self.config;
-        if self.scan.cursor >= u.instruments.len() {
-            return Err(Fail::new("scanner_cursor_identity").into());
-        }
         let end = self
             .scan
             .cursor
             .saturating_add(scan_batch)
             .min(u.instruments.len());
-        let batch = &u.instruments[self.scan.cursor..end];
+        let kind = ReadKind::Scanner {
+            metadata_only: feed_live,
+            end,
+        };
+        if self.quote_reads.pending(kind) {
+            return Ok(());
+        }
+        if self.scan.cursor >= u.instruments.len() {
+            return Err(Fail::new("scanner_cursor_identity").into());
+        }
         self.scan
             .ranking
             .retain(|(_, _, at)| now - *at <= ranking_window);
-        let outcome = if feed_live {
-            read_scanner_metadata(
-                self.client,
-                c,
-                &mut self.db,
-                &mut self.p,
-                batch,
-                &mut self.scan,
-                self.event_config.as_ref(),
-                self.archive.as_ref(),
-            )?
-        } else {
-            read_executable_quotes(
-                self.client,
-                c,
-                &mut self.db,
-                &mut self.p,
-                batch,
-                &mut self.last_fresh_receipt,
-                self.event_config.as_ref(),
-                &self.feature_store,
-                QuoteReadTarget::Scan(&mut self.scan),
-                self.archive.as_ref(),
-            )?
-        };
-        match outcome {
-            Some(reason) => {
-                self.read_failure = Some(reason);
-                self.last_scan = millis();
-            }
-            None => {
-                self.read_failure = None;
-                self.scan
-                    .ranking
-                    .sort_by(|x, y| y.0.cmp(&x.0).then(x.1.cmp(&y.1)));
-                self.scan.cursor = if end >= u.instruments.len() { 0 } else { end };
-                checkpoint_scanner(&self.db, &self.scan)?;
-                self.last_scan = millis();
-            }
-        }
-        Ok(())
+        self.quote_reads
+            .request(kind, u.instruments[self.scan.cursor..end].to_vec())
     }
 
-    /// Bounded option shortlist REST depth: the same executable read path cash
-    /// uses, on option keys only. Cash liquidity/circuit screens never apply to
-    /// premiums.
-    pub(super) fn option_depth_read(&mut self, now: i64) -> Result<()> {
-        let c = &self.config;
-        if self.option_universe.is_some()
-            && !self.option_instruments.is_empty()
-            && !self.p.halted
-            && now - self.last_option_depth >= 2000
+    fn option_depth_read(&mut self, now: i64) -> Result<()> {
+        if !self.option_instruments.is_empty()
+            && now - self.last_option_depth >= QUOTE_POLL_MS
+            && !self.quote_reads.pending(ReadKind::Options)
         {
+            self.quote_reads
+                .request(ReadKind::Options, self.option_instruments.clone())?;
             self.last_option_depth = now;
-            self.read_failure = read_executable_quotes(
-                self.client,
-                c,
-                &mut self.db,
-                &mut self.p,
-                &self.option_instruments,
-                &mut self.last_fresh_receipt,
-                self.event_config.as_ref(),
-                &self.feature_store,
-                QuoteReadTarget::Depth {
-                    scan: &mut self.scan,
-                },
-                self.archive.as_ref(),
-            )?;
         }
         Ok(())
     }
 
     /// Rank the entire dated universe before truncating prospects.
-    pub(super) fn rank(
-        &mut self,
-        u: &Universe,
-        now: i64,
-        feed_settings: Option<&super::super::super::market_feed::Settings>,
-        feed_fallback: bool,
-        held: &[Instrument],
-    ) -> Result<()> {
+    fn rank(&mut self, u: &Universe, now: i64) -> Result<()> {
         let c = &self.config;
         let discovery = self
             .event_config
@@ -502,46 +540,31 @@ impl Controller<'_> {
                 "eligible":projection["eligible_count"],
                 "stale":projection["stale_count"]
             });
-            let candidates = super::super::super::discovery::candidates(&projection);
+            self.depth_candidates = super::super::super::discovery::candidates(&projection);
             checkpoint_scanner(&self.db, &self.scan)?;
-            if let Some(settings) = feed_settings
-                && now - self.last_depth >= settings.depth_poll_ms
-            {
-                if !feed_fallback {
-                    self.depth_read(u, now, settings, held, &candidates)?;
-                } else if !self.tape.is_empty() {
-                    // The fallback scan rotates through the universe; the
-                    // watched names lose their depth cadence until recovery.
-                    self.last_depth = now;
-                    self.tape_gap(now, "feed_fallback", 0)?;
-                }
-            }
         }
         Ok(())
     }
 
-    /// Apply a finished strategy call, then start one on this scan when the
-    /// rank pass ran. The call runs on its own thread; protection and fills
-    /// never wait for it.
-    pub(super) fn strategy_cycle(&mut self, ranked: bool) -> Result<()> {
+    pub(super) fn observe_strategy(&mut self) -> Result<()> {
         let Some(run) = self.strategy.as_mut() else {
             return Ok(());
         };
-        if !self
-            .event_config
-            .as_ref()
-            .is_some_and(planner::PlannerConfig::runs_strategies)
+        if self.p.halted
+            || self.p.stopped
+            || self.p.closed
+            || self.universe.is_none()
+            || (!self.strategy_dirty && run.has_call())
         {
-            return Ok(());
-        }
-        run.poll(&mut self.db, &self.config, &mut self.p, &millis)?;
-        if !ranked || self.p.halted || self.p.stopped || self.p.closed {
             return Ok(());
         }
         let now = millis();
         let Some(top_n) = run.ready(&self.db, &self.config, now)? else {
             return Ok(());
         };
+        if !std::mem::take(&mut self.strategy_dirty) {
+            return Ok(());
+        }
         match super::super::strategy_run::Frozen::capture(
             &self.scan,
             now,
@@ -562,16 +585,20 @@ impl Controller<'_> {
     }
 
     /// Order-book depth for the leading candidates the book does not hold.
-    pub(super) fn depth_read(
+    fn depth_read(
         &mut self,
         u: &Universe,
         now: i64,
-        settings: &super::super::super::market_feed::Settings,
-        held: &[Instrument],
-        candidates: &[(String, Option<f64>)],
+        settings: &market_feed::Settings,
     ) -> Result<()> {
-        let held_keys = held.iter().map(|i| i.key.as_str()).collect::<BTreeSet<_>>();
-        let shortlist_keys = candidates
+        let held_keys = self
+            .p
+            .positions
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let shortlist_keys = self
+            .depth_candidates
             .iter()
             .take(settings.shortlist_size)
             .map(|(key, _)| key.as_str())
@@ -591,23 +618,8 @@ impl Controller<'_> {
         if dropped > 0 {
             self.tape_gap(now, "depth_batch_full", dropped)?;
         }
-        let c = &self.config;
         if !shortlist.is_empty() {
-            self.last_depth = now;
-            self.read_failure = read_executable_quotes(
-                self.client,
-                c,
-                &mut self.db,
-                &mut self.p,
-                &shortlist,
-                &mut self.last_fresh_receipt,
-                self.event_config.as_ref(),
-                &self.feature_store,
-                QuoteReadTarget::Depth {
-                    scan: &mut self.scan,
-                },
-                self.archive.as_ref(),
-            )?;
+            self.quote_reads.request(ReadKind::Depth, shortlist)?;
         }
         Ok(())
     }

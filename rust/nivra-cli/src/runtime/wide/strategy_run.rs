@@ -6,6 +6,7 @@
 //! receipts. A failed call produces no actions and never halts the book.
 //! Paper only.
 use super::*;
+use crate::runtime::controller_events::Notify;
 use crate::runtime::strategy::{
     self, ActionResult, Observation, Prospect, WorkerConfig, WorkerKey, host::StrategyHost,
 };
@@ -157,6 +158,13 @@ struct InFlight {
     timing: latency::Timing,
 }
 
+struct StrategyBook<'a> {
+    db: &'a mut Connection,
+    c: &'a Config,
+    p: &'a mut Portfolio,
+    scan: &'a mut Scanner,
+}
+
 pub(super) struct StrategyRun {
     library: Library,
     host: StrategyHost,
@@ -182,10 +190,11 @@ impl StrategyRun {
         library: Library,
         worker: WorkerConfig,
         policy: choice::ChoicePolicy,
+        notify: Option<Notify>,
     ) -> Self {
         Self {
             library,
-            host: StrategyHost::new(worker),
+            host: StrategyHost::new(worker, notify),
             policy,
             active: None,
             known: BTreeMap::new(),
@@ -246,10 +255,37 @@ impl StrategyRun {
             .retain(|key, _| live.as_ref() == Some(key) || desired.as_ref() == Some(key));
     }
 
-    /// The prospect count for a call to start now, or `None` when none may:
-    /// no runnable entry, worker warming/in backoff, or the previous call is
-    /// still running. Never blocks on the worker; skips rather than queues.
-    pub(super) fn ready(&mut self, db: &Connection, c: &Config, now: i64) -> Result<Option<usize>> {
+    pub(super) fn time_until_due(&self, now: i64) -> Duration {
+        if self
+            .in_flight
+            .as_ref()
+            .is_some_and(|flight| flight.immediate_error.is_some())
+        {
+            return Duration::ZERO;
+        }
+        let until_refresh = self
+            .resolved_at
+            .map(|at| at.saturating_add(RESOLVE_MS).saturating_sub(now).max(0) as u64)
+            .map_or(Duration::ZERO, Duration::from_millis);
+        self.host
+            .time_until_due(now)
+            .map_or(until_refresh, |d| d.min(until_refresh))
+    }
+
+    pub(super) fn has_call(&self) -> bool {
+        self.in_flight.is_some()
+    }
+
+    pub(super) fn refresh_choice(
+        &mut self,
+        db: &Connection,
+        c: &Config,
+        now: i64,
+        changed: bool,
+    ) -> Result<()> {
+        if changed {
+            self.resolved_at = None;
+        }
         if self.resolved_at.is_none_or(|at| now - at >= RESOLVE_MS) {
             self.resolved_at = Some(now);
             self.active = None;
@@ -293,15 +329,14 @@ impl StrategyRun {
                         self.active = None;
                         self.prune_known();
                         self.fail(db, c, now, Some(&run_id), reason)?;
-                        return Ok(None);
+                        return Ok(());
                     }
                 }
-                None => {
-                    let _ = self.host.sync_desired(None, now);
-                }
+                None => self.retire_call(db, now)?,
             }
             self.prune_known();
         }
+        self.host.advance_activation(now);
         if self
             .in_flight
             .as_ref()
@@ -309,6 +344,12 @@ impl StrategyRun {
         {
             self.record_revoked(db, now)?;
         }
+        Ok(())
+    }
+
+    /// The prospect count for a call to start now, if the live worker is ready.
+    pub(super) fn ready(&mut self, db: &Connection, c: &Config, now: i64) -> Result<Option<usize>> {
+        self.refresh_choice(db, c, now, false)?;
         if self.active.is_none() {
             return Ok(None);
         }
@@ -377,71 +418,48 @@ impl StrategyRun {
             return;
         };
         let strategy_id = meta.run_id.clone();
-        let params = meta.params.clone();
-        let mut timing = latency::Timing::new(strategy_id.clone(), frozen.at_ms, &frozen.quotes);
-        let Some(costs) = frozen.portfolio.costs.clone() else {
-            self.calls += 1;
-            self.last_call_at_ms = Some(frozen.at_ms);
-            self.in_flight = Some(InFlight {
-                worker_key: live_key,
-                activation_generation: self.host.activation_generation(),
-                seq: 0,
-                strategy_id,
-                observed_at: frozen.at_ms,
-                quotes: frozen.quotes,
-                instruments: Vec::new(),
-                immediate_error: Some("paper_costs_required"),
-                timing,
-            });
-            return;
+        let mut flight = InFlight {
+            worker_key: live_key,
+            activation_generation: self.host.activation_generation(),
+            seq: 0,
+            timing: latency::Timing::new(strategy_id.clone(), frozen.at_ms, &frozen.quotes),
+            strategy_id,
+            observed_at: frozen.at_ms,
+            quotes: frozen.quotes,
+            instruments: Vec::new(),
+            immediate_error: None,
         };
-        let observation = Observation::new(
-            frozen.at_ms,
-            &params,
-            &frozen.prospects,
-            &frozen.quotes,
-            &frozen.portfolio,
-            &frozen.universe,
-            &costs,
-        );
-        let instruments: Vec<Instrument> = observation.instruments().cloned().collect();
-        let outcome = serde_json::to_vec(&observation)
-            .map_err(|_| "strategy_input_limit")
-            .and_then(|bytes| {
+        let outcome = frozen
+            .portfolio
+            .costs
+            .as_ref()
+            .ok_or("paper_costs_required")
+            .and_then(|costs| {
+                let observation = Observation::new(
+                    frozen.at_ms,
+                    &meta.params,
+                    &frozen.prospects,
+                    &flight.quotes,
+                    &frozen.portfolio,
+                    &frozen.universe,
+                    costs,
+                );
+                flight.instruments = observation.instruments().cloned().collect();
+                let bytes = serde_json::to_vec(&observation).map_err(|_| "strategy_input_limit")?;
                 let now = clock();
-                timing.submitted_at_ms = Some(now);
+                flight.timing.submitted_at_ms = Some(now);
                 self.host.submit_live(&bytes, now)
             });
-        self.calls += 1;
-        self.last_call_at_ms = Some(frozen.at_ms);
         match outcome {
             Ok((activation_generation, seq)) => {
-                self.in_flight = Some(InFlight {
-                    worker_key: live_key,
-                    activation_generation,
-                    seq,
-                    strategy_id,
-                    observed_at: frozen.at_ms,
-                    quotes: frozen.quotes,
-                    instruments,
-                    immediate_error: None,
-                    timing,
-                });
+                flight.activation_generation = activation_generation;
+                flight.seq = seq;
             }
-            Err(reason) => {
-                self.in_flight = Some(InFlight {
-                    worker_key: live_key,
-                    activation_generation: self.host.activation_generation(),
-                    seq: 0,
-                    strategy_id,
-                    observed_at: frozen.at_ms,
-                    quotes: frozen.quotes,
-                    instruments,
-                    immediate_error: Some(reason),
-                    timing,
-                });
-            }
+            Err(reason) => flight.immediate_error = Some(reason),
         }
+        self.calls += 1;
+        self.last_call_at_ms = Some(frozen.at_ms);
+        self.in_flight = Some(flight);
     }
 
     #[cfg(test)]
@@ -464,6 +482,7 @@ impl StrategyRun {
         db: &mut Connection,
         c: &Config,
         p: &mut Portfolio,
+        scan: &mut Scanner,
         clock: &dyn Fn() -> i64,
     ) -> Result<()> {
         let Some(flight) = &self.in_flight else {
@@ -491,12 +510,19 @@ impl StrategyRun {
                 flight.timing.record(db)?;
                 self.last_failure = None;
             }
-            Ok(actions) => match apply_cycle(db, c, p, self, &mut flight, actions, clock) {
-                Ok(()) => self.last_failure = None,
-                Err(error) => {
-                    self.record_failed_call(db, c, clock(), flight, &failure_code(error.as_ref()))?
+            Ok(actions) => {
+                match self.apply_cycle(StrategyBook { db, c, p, scan }, &mut flight, actions, clock)
+                {
+                    Ok(()) => self.last_failure = None,
+                    Err(error) => self.record_failed_call(
+                        db,
+                        c,
+                        clock(),
+                        flight,
+                        &failure_code(error.as_ref()),
+                    )?,
                 }
-            },
+            }
             Err(reason) => self.record_failed_call(db, c, clock(), flight, &reason)?,
         }
         Ok(())
@@ -513,6 +539,16 @@ impl StrategyRun {
         flight.timing.outcome = reason.to_owned();
         flight.timing.record(db)?;
         self.fail(db, c, now, Some(&flight.strategy_id), reason)
+    }
+
+    pub(super) fn retire_call(&mut self, db: &Connection, now: i64) -> Result<()> {
+        if self.has_call() {
+            self.record_revoked(db, now)?;
+        }
+        self.host.sync_desired(None, now)?;
+        self.active = None;
+        self.known.clear();
+        Ok(())
     }
 
     fn record_revoked(&mut self, db: &Connection, now: i64) -> Result<()> {
@@ -609,109 +645,134 @@ impl StrategyRun {
             "fills": fills,
         })
     }
-}
 
-fn apply_cycle(
-    db: &mut Connection,
-    c: &Config,
-    p: &mut Portfolio,
-    run: &StrategyRun,
-    flight: &mut InFlight,
-    actions: Vec<Value>,
-    clock: &dyn Fn() -> i64,
-) -> Result<()> {
-    let strategy_id = &flight.strategy_id;
-    let observed_at = flight.observed_at;
-    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    flight.timing.book_locked_at_ms = Some(clock());
-    if flight.activation_generation != run.host.activation_generation() {
-        return Err("strategy_activation_stale".into());
-    }
-    let authoritative = choice::choose(&run.library, &run.policy)?;
-    if authoritative
-        .running
-        .as_ref()
-        .map(Running::run_id)
-        .as_deref()
-        != Some(strategy_id.as_str())
-    {
-        return Err("strategy_activation_stale".into());
-    }
-    let now = clock();
-    ensure_actions(&tx)?;
-    tx.execute_batch(ACTION_TABLE)?;
-    let mut next = p.clone();
-    let results = strategy::apply(
-        &mut next,
-        clock,
-        &mut flight.quotes,
-        &flight.instruments,
-        actions,
-        strategy_id,
-    )?;
-    for ActionResult {
-        index,
-        key,
-        side,
-        units,
-        outcome,
-        max_price,
-        refused,
-        gate_at_ms,
-    } in &results
-    {
-        if let Some((quote, decided_at_ms)) = key
-            .as_ref()
-            .and_then(|key| flight.quotes.get(key))
-            .zip(*gate_at_ms)
-        {
-            flight.timing.gates.push(latency::GateTime {
-                index: *index,
-                quote: quote.into(),
-                decided_at_ms,
-            });
+    fn apply_cycle(
+        &self,
+        book: StrategyBook<'_>,
+        flight: &mut InFlight,
+        actions: Vec<Value>,
+        clock: &dyn Fn() -> i64,
+    ) -> Result<()> {
+        let StrategyBook { db, c, p, scan } = book;
+        let strategy_id = &flight.strategy_id;
+        let observed_at = flight.observed_at;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        flight.timing.book_locked_at_ms = Some(clock());
+        if flight.activation_generation != self.host.activation_generation() {
+            return Err("strategy_activation_stale".into());
         }
-        let at = gate_at_ms.unwrap_or(now);
-        tx.execute(
+        let authoritative = choice::choose(&self.library, &self.policy)?;
+        if authoritative
+            .running
+            .as_ref()
+            .map(Running::run_id)
+            .as_deref()
+            != Some(strategy_id.as_str())
+        {
+            return Err("strategy_activation_stale".into());
+        }
+        flight.quotes.retain(|key, frozen| {
+            let Some(current) = scan
+                .samples
+                .get(key)
+                .and_then(|sample| sample.executable.as_ref())
+            else {
+                return false;
+            };
+            if (current.receipt, current.source) != (frozen.receipt, frozen.source) {
+                return false;
+            }
+            // Use only the units left on this receipt after earlier actions.
+            frozen.bid_units = frozen.bid_units.min(current.bid_units);
+            frozen.ask_units = frozen.ask_units.min(current.ask_units);
+            true
+        });
+        let now = clock();
+        ensure_actions(&tx)?;
+        tx.execute_batch(ACTION_TABLE)?;
+        let mut next = p.clone();
+        let results = strategy::apply(
+            &mut next,
+            clock,
+            &mut flight.quotes,
+            &flight.instruments,
+            actions,
+            strategy_id,
+        )?;
+        for ActionResult {
+            index,
+            key,
+            side,
+            units,
+            outcome,
+            max_price,
+            refused,
+            gate_at_ms,
+        } in &results
+        {
+            if let Some((quote, decided_at_ms)) = key
+                .as_ref()
+                .and_then(|key| flight.quotes.get(key))
+                .zip(*gate_at_ms)
+            {
+                flight.timing.gates.push(latency::GateTime {
+                    index: *index,
+                    quote: quote.into(),
+                    decided_at_ms,
+                });
+            }
+            let at = gate_at_ms.unwrap_or(now);
+            tx.execute(
             "INSERT INTO strategy_action(at,observed_at,strategy_id,idx,instrument_key,side,units,outcome) VALUES(?,?,?,?,?,?,?,?)",
             rusqlite::params![at, observed_at, strategy_id, *index as i64, key, side, *units as i64, outcome],
         )?;
-        if let (Some(refused), Some(key), Some(side), Some(max_price)) =
-            (refused, key, side, max_price)
-        {
-            let action = RefusedAction {
-                side,
-                instrument_key: key,
-                units: *units,
-                max_price: max_price.amount().to_string(),
-            };
-            let source = RefusalSource::Strategy {
-                id: strategy_id,
-                observed_at,
-            };
-            record_refusal(&tx, at, source, *index, &action, refused)?;
+            if let (Some(refused), Some(key), Some(side), Some(max_price)) =
+                (refused, key, side, max_price)
+            {
+                let action = RefusedAction {
+                    side,
+                    instrument_key: key,
+                    units: *units,
+                    max_price: max_price.amount().to_string(),
+                };
+                let source = RefusalSource::Strategy {
+                    id: strategy_id,
+                    observed_at,
+                };
+                record_refusal(&tx, at, source, *index, &action, refused)?;
+            }
         }
-    }
-    next.reconcile()?;
-    tx.execute(
-        "INSERT INTO ticks(at,receipt,body,event) VALUES(?,NULL,?,'strategy_actions')",
-        rusqlite::params![
-            now,
-            json!({"strategy_id":strategy_id,"observed_at_ms":observed_at,
+        next.reconcile()?;
+        tx.execute(
+            "INSERT INTO ticks(at,receipt,body,event) VALUES(?,NULL,?,'strategy_actions')",
+            rusqlite::params![
+                now,
+                json!({"strategy_id":strategy_id,"observed_at_ms":observed_at,
                 "basis":if choice::is_fallback(strategy_id) { "fallback" } else { "accepted" },
                 "outcomes":results.iter().map(|r| r.outcome.as_str()).collect::<Vec<_>>()})
-            .to_string()
-        ],
-    )?;
-    tx.execute(
-        "INSERT INTO state VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
-        rusqlite::params![book_binding(c)?, serde_json::to_string(&next)?],
-    )?;
-    flight.timing.outcome = "actions_applied".into();
-    flight.timing.record(&tx)?;
-    tx.commit()?;
-    *p = next;
-    Ok(())
+                .to_string()
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO state VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
+            rusqlite::params![book_binding(c)?, serde_json::to_string(&next)?],
+        )?;
+        flight.timing.outcome = "actions_evaluated".into();
+        flight.timing.record(&tx)?;
+        tx.commit()?;
+        for (key, quote) in flight.quotes.iter() {
+            if let Some(current) = scan
+                .samples
+                .get_mut(key)
+                .and_then(|sample| sample.executable.as_mut())
+            {
+                current.bid_units = quote.bid_units;
+                current.ask_units = quote.ask_units;
+            }
+        }
+        *p = next;
+        Ok(())
+    }
 }
 
 /// The latest strategy actions with their outcomes, newest first. A book

@@ -175,6 +175,7 @@ def on_observation(obs):
         json!({}),
         c,
         1_000,
+        None,
     )
     .unwrap();
     let raw = hardened

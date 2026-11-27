@@ -178,6 +178,7 @@ pub(crate) fn call(
         observation.params.clone(),
         config.clone(),
         observation.at_ms,
+        None,
     )?;
     let bytes = worker.call_sync(&input, observation.at_ms)?;
     parse_output(&bytes, observation)

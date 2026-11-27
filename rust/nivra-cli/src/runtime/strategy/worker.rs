@@ -1,7 +1,10 @@
 //! Persistent Python strategy worker (`python3 -I -S -B` with one I/O thread,
 //! bounded NDJSON exchange via `nivra_sandbox::stream::Stream`, continuous
 //! stderr drain, monotonic per-call deadline, backoff, and quarantine).
-use crate::runtime::millis;
+use crate::runtime::{
+    controller_events::{Event, Notify},
+    millis,
+};
 use nivra_core::replay::digest;
 use nivra_sandbox::{
     Failure,
@@ -267,6 +270,7 @@ fn spawn_process(
     config: &WorkerConfig,
     generation: u64,
     stderr: Arc<Mutex<StderrRing>>,
+    notify: Option<Notify>,
 ) -> Result<RunningProcess, &'static str> {
     config.validate()?;
     if source.is_empty() || source.len() > 262_144 {
@@ -384,6 +388,13 @@ fn spawn_process(
     let io_thread = thread::Builder::new()
         .name(format!("strategy-io-{generation}"))
         .spawn(move || {
+            let publish = |event| {
+                if event_tx.send(event).is_ok()
+                    && let Some(notify) = &notify
+                {
+                    notify.signal(Event::Strategy);
+                }
+            };
             let mut line = Vec::new();
             let ready = (|| -> Result<(), &'static str> {
                 stream
@@ -411,10 +422,10 @@ fn spawn_process(
                     io_pgid.store(0, Ordering::Release);
                     drop(stream);
                 }
-                let _ = event_tx.send(WorkerEvent::Failed { generation, reason });
+                publish(WorkerEvent::Failed { generation, reason });
                 return;
             }
-            let _ = event_tx.send(WorkerEvent::Ready { generation });
+            publish(WorkerEvent::Ready { generation });
 
             while let Ok(req) = req_rx.recv() {
                 line.clear();
@@ -428,7 +439,7 @@ fn spawn_process(
                     Err(failure) => (Err(map_failure(failure)), 0),
                 };
                 let failed = outcome.is_err();
-                let _ = event_tx.send(WorkerEvent::Reply {
+                publish(WorkerEvent::Reply {
                     generation,
                     reply: WorkerReply {
                         seq: req.seq,
@@ -495,6 +506,7 @@ pub(crate) struct Worker {
     failure_times: VecDeque<i64>,
     stderr: Arc<Mutex<StderrRing>>,
     process: Option<RunningProcess>,
+    notify: Option<Notify>,
     last_elapsed_us: Option<u64>,
 }
 
@@ -505,6 +517,7 @@ impl Worker {
         params: Value,
         config: WorkerConfig,
         now_ms: i64,
+        notify: Option<Notify>,
     ) -> Result<Self, &'static str> {
         let stderr = Arc::new(Mutex::new(StderrRing::default()));
         let mut worker = Self {
@@ -518,6 +531,7 @@ impl Worker {
             failure_times: VecDeque::new(),
             stderr,
             process: None,
+            notify,
             last_elapsed_us: None,
         };
         worker.spawn_next(now_ms);
@@ -547,6 +561,7 @@ impl Worker {
             &self.config,
             self.generation,
             self.stderr.clone(),
+            self.notify.clone(),
         ) {
             Ok(process) => {
                 self.process = Some(process);
@@ -605,10 +620,24 @@ impl Worker {
                     Ok(ev) => items.push(ev),
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
-                        items.push(WorkerEvent::Failed {
-                            generation: self.generation,
-                            reason: "strategy_exit",
-                        });
+                        if !matches!(
+                            items.last(),
+                            Some(
+                                WorkerEvent::Failed { .. }
+                                    | WorkerEvent::Reply {
+                                        reply: WorkerReply {
+                                            outcome: Err(_),
+                                            ..
+                                        },
+                                        ..
+                                    }
+                            )
+                        ) {
+                            items.push(WorkerEvent::Failed {
+                                generation: self.generation,
+                                reason: "strategy_exit",
+                            });
+                        }
                         break;
                     }
                 }
@@ -690,7 +719,7 @@ impl Worker {
     /// `Ok(true)` when ready to accept a call, `Ok(false)` while starting/busy,
     /// or `Err(reason)` if quarantined or waiting on backoff.
     pub(crate) fn ensure_ready(&mut self, now_ms: i64) -> Result<bool, &'static str> {
-        let _ = self.poll(now_ms);
+        self.drain_events(now_ms);
         match self.state {
             WorkerState::Ready => Ok(true),
             WorkerState::Starting | WorkerState::Busy { .. } => Ok(false),
@@ -707,6 +736,18 @@ impl Worker {
                     Ok(false)
                 }
             }
+        }
+    }
+
+    pub(crate) fn time_until_due(&self, now_ms: i64) -> Option<Duration> {
+        match self.state {
+            WorkerState::Busy { deadline, .. } => Some(
+                (deadline + Duration::from_millis(50)).saturating_duration_since(Instant::now()),
+            ),
+            WorkerState::Failed { retry_at_ms, .. } => Some(Duration::from_millis(
+                retry_at_ms.saturating_sub(now_ms).max(0) as u64,
+            )),
+            _ => None,
         }
     }
 

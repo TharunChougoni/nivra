@@ -78,7 +78,7 @@ pub(super) fn scan_rest_rows(
     }
     Ok(())
 }
-struct FetchedQuoteRows {
+pub(super) struct FetchedQuoteRows {
     requested: i64,
     receipt: i64,
     raw: String,
@@ -95,95 +95,71 @@ pub(super) fn stage_quote(
     Ok(nivra_store::market_archive::quote_reference(purpose, raw))
 }
 
-pub(in crate::runtime) enum QuoteReadTarget<'a> {
+pub(super) enum QuoteReadTarget<'a> {
     Held { depth_sink: Option<&'a mut Scanner> },
     Plan,
     Depth { scan: &'a mut Scanner },
     Scan(&'a mut Scanner),
 }
 
-fn fetch_quote_rows(
+pub(super) enum QuoteReadError {
+    Transport(String),
+    Invalid { receipt: i64, reason: &'static str },
+}
+
+pub(super) fn fetch_quote_rows(
     client: &data::Client,
     c: &Config,
-    db: &mut Connection,
-    p: &mut Portfolio,
     instruments: &[Instrument],
-    event_config: Option<&planner::PlannerConfig>,
-) -> Result<std::result::Result<FetchedQuoteRows, String>> {
+) -> std::result::Result<FetchedQuoteRows, QuoteReadError> {
     let keys = instruments
         .iter()
         .map(|i| i.key.as_str())
         .collect::<Vec<_>>();
-    let (requested, receipt, raw) = match client.quotes(c, &keys) {
-        Ok(v) => v,
-        Err(error) => {
-            let reason = failure_code(error.as_ref());
-            if event_config.is_some() {
-                block_read_failure(db, c, p, &reason);
-            }
-            p.health = "read_unavailable_no_financial_action".into();
-            persist(db, c, p, millis(), None, None, "read_unavailable")?;
-            return Ok(Err(reason));
-        }
-    };
-    let body: serde_json::Value = match serde_json::from_str(&raw) {
-        Ok(v) => v,
-        Err(_) => {
-            if event_config.is_some() {
-                block_data_failure(db, c, p);
-            }
-            persist(
-                db,
-                c,
-                p,
-                millis(),
-                Some(receipt),
-                None,
-                "invalid_quote_json",
-            )?;
-            return Ok(Err("invalid_quote_json".into()));
-        }
-    };
+    let (requested, receipt, raw) = client
+        .quotes(c, &keys)
+        .map_err(|error| QuoteReadError::Transport(failure_code(error.as_ref())))?;
+    let invalid = |reason| QuoteReadError::Invalid { receipt, reason };
+    let mut body: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|_| invalid("invalid_quote_json"))?;
     if body["status"] != "success" {
-        if event_config.is_some() {
-            block_data_failure(db, c, p);
-        }
-        persist(
-            db,
-            c,
-            p,
-            millis(),
-            Some(receipt),
-            None,
-            "invalid_quote_status",
-        )?;
-        return Ok(Err("invalid_quote_status".into()));
+        return Err(invalid("invalid_quote_status"));
     }
-    if !body["data"].is_object() {
-        if event_config.is_some() {
-            block_data_failure(db, c, p);
-        }
-        persist(
-            db,
-            c,
-            p,
-            millis(),
-            Some(receipt),
-            None,
-            "invalid_quote_data",
-        )?;
-        return Ok(Err("invalid_quote_data".into()));
-    }
-    let rows = body["data"]
-        .as_object()
-        .ok_or("invalid_quote_data")?
-        .clone();
-    Ok(Ok(FetchedQuoteRows {
+    let serde_json::Value::Object(rows) = body["data"].take() else {
+        return Err(invalid("invalid_quote_data"));
+    };
+    Ok(FetchedQuoteRows {
         requested,
         receipt,
         raw,
         rows,
-    }))
+    })
+}
+
+pub(super) fn record_read_failure(
+    error: QuoteReadError,
+    db: &mut Connection,
+    c: &Config,
+    p: &mut Portfolio,
+    supervised: bool,
+) -> Result<String> {
+    match error {
+        QuoteReadError::Transport(reason) => {
+            if supervised {
+                block_read_failure(db, c, p, &reason);
+            }
+            p.health = "read_unavailable_no_financial_action".into();
+            persist(db, c, p, millis(), None, None, "read_unavailable")?;
+            Ok(reason)
+        }
+        QuoteReadError::Invalid { receipt, reason } => {
+            if supervised {
+                block_data_failure(db, c, p);
+            }
+            persist(db, c, p, millis(), Some(receipt), None, reason)?;
+            Ok(reason.into())
+        }
+    }
 }
 
 pub(super) fn update_regime_references(
@@ -221,8 +197,8 @@ pub(super) fn update_regime_references(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(in crate::runtime) fn read_scanner_metadata(
-    client: &data::Client,
+pub(super) fn apply_scanner_metadata(
+    fetched: FetchedQuoteRows,
     c: &Config,
     db: &mut Connection,
     p: &mut Portfolio,
@@ -236,10 +212,7 @@ pub(in crate::runtime) fn read_scanner_metadata(
         receipt,
         raw,
         rows,
-    } = match fetch_quote_rows(client, c, db, p, instruments, event_config)? {
-        Ok(fetched) => fetched,
-        Err(reason) => return Ok(Some(reason)),
-    };
+    } = fetched;
     if scan_rest_rows(
         scan,
         instruments,
@@ -293,7 +266,13 @@ pub(super) fn attach_depth(
         let Some(sample) = scan.samples.get_mut(key) else {
             continue;
         };
-        sample.executable = Some(quote.clone());
+        let stamp = (quote.receipt, quote.source);
+        match sample.executable.as_ref().map(|q| (q.receipt, q.source)) {
+            Some(current) if current > stamp => continue,
+            // Preserve any depth already used on this receipt.
+            Some(current) if current == stamp => {}
+            _ => sample.executable = Some(quote.clone()),
+        }
         sample.open_interest = rows
             .values()
             .find(|row| row["instrument_token"] == key.as_str())
@@ -304,8 +283,8 @@ pub(super) fn attach_depth(
 }
 
 #[allow(clippy::too_many_arguments)] // Explicit original receipt tracking; never resample it.
-pub(in crate::runtime) fn read_executable_quotes(
-    client: &data::Client,
+pub(super) fn apply_executable_quotes(
+    fetched: FetchedQuoteRows,
     c: &Config,
     db: &mut Connection,
     p: &mut Portfolio,
@@ -321,10 +300,7 @@ pub(in crate::runtime) fn read_executable_quotes(
         receipt,
         raw,
         rows,
-    } = match fetch_quote_rows(client, c, db, p, instruments, event_config)? {
-        Ok(fetched) => fetched,
-        Err(reason) => return Ok(Some(reason)),
-    };
+    } = fetched;
     let mut quotes = BTreeMap::new();
     let mut duplicate = BTreeSet::new();
     for row in rows.values() {

@@ -5,10 +5,13 @@
 #[cfg(test)]
 use super::worker::WorkerState;
 use super::worker::{Worker, WorkerConfig, WorkerKey};
-use crate::runtime::strategy_library::review;
+use crate::runtime::{controller_events::Notify, strategy_library::review};
 use nivra_core::replay::digest;
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 
 const MAX_POOL_WORKERS: usize = 4;
 const RETIRE_GRACE_MS: i64 = 60_000;
@@ -24,6 +27,7 @@ pub(crate) struct ShadowSlot {
 
 pub(crate) struct StrategyHost {
     config: WorkerConfig,
+    notify: Option<Notify>,
     workers: BTreeMap<WorkerKey, Worker>,
     reviewed_static: BTreeSet<String>,
     live: Option<WorkerKey>,
@@ -34,9 +38,10 @@ pub(crate) struct StrategyHost {
 }
 
 impl StrategyHost {
-    pub(crate) fn new(config: WorkerConfig) -> Self {
+    pub(crate) fn new(config: WorkerConfig, notify: Option<Notify>) -> Self {
         Self {
             config,
+            notify,
             workers: BTreeMap::new(),
             reviewed_static: BTreeSet::new(),
             live: None,
@@ -195,6 +200,7 @@ impl StrategyHost {
                     params.clone(),
                     self.config.clone(),
                     now_ms,
+                    self.notify.clone(),
                 )?;
                 self.workers.insert(key.clone(), worker);
             }
@@ -221,8 +227,7 @@ impl StrategyHost {
         Ok(())
     }
 
-    /// True when the active live worker is `Ready` to accept an observation.
-    pub(crate) fn live_ready(&mut self, now_ms: i64) -> Result<bool, &'static str> {
+    pub(crate) fn advance_activation(&mut self, now_ms: i64) {
         self.evict_unused(now_ms);
         if let Some(desired) = self.desired_live.clone()
             && self.live.as_ref() != Some(&desired)
@@ -238,6 +243,19 @@ impl StrategyHost {
                     .insert(old, now_ms.saturating_add(RETIRE_GRACE_MS));
             }
         }
+    }
+
+    pub(crate) fn time_until_due(&self, now_ms: i64) -> Option<Duration> {
+        self.live
+            .iter()
+            .chain(&self.desired_live)
+            .filter_map(|key| self.workers.get(key)?.time_until_due(now_ms))
+            .min()
+    }
+
+    /// True when the active live worker is ready to accept an observation.
+    pub(crate) fn live_ready(&mut self, now_ms: i64) -> Result<bool, &'static str> {
+        self.advance_activation(now_ms);
         let Some(live_key) = self.live.clone() else {
             return match self
                 .desired_live
