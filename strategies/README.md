@@ -10,9 +10,9 @@ fallback, while no accepted version can run. See
 `<name>.params.json` file holds its parameters. All strategies are long
 only, because the paper book holds cash equity.
 
-- **Action strategies** (`strategy_actions_v1`) run on each live or
-  replayed observation. See
-  [Action strategies](../docs/RESEARCH.md#action-strategies).
+- **Action strategies** (`strategy_actions_v1`) define `on_observation(obs)`
+  and run on each live or replayed observation inside the persistent hardened
+  Python worker. See [Action strategies](../docs/RESEARCH.md#action-strategies).
 - **Bar strategies** (`archive_bars_v1`) run over archived daily or minute
   bars. See [archived bars](../docs/RESEARCH.md#backtest-years-of-archived-bars).
   [BENCHMARK.md](BENCHMARK.md) holds their results on real NSE data.

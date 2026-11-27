@@ -256,13 +256,15 @@ The paper controller runs the active version only when the planner config
 holds:
 
 ```json
-"strategy_execution": {"enabled": true, "fallback": ["vwap_trend"]}
+"strategy_execution": {"enabled": true, "fallback": ["vwap_trend"], "call_deadline_ms": 250}
 ```
 
 The block is absent by default, and then the controller runs no strategy.
 `fallback` names shipped action strategies from `strategies/`, best first,
 that run labelled as fallback while no accepted version can run (see
-[research](RESEARCH.md#fallback-strategies)). It defaults to empty. At
+[research](RESEARCH.md#fallback-strategies)). It defaults to empty. Accepting a
+new script requires passing both the static Python AST check and the
+`strategy_review` (or `agent.lanes.gate`) model review. At
 `agent.triggers.decision.pre_open_minute` (540, 09:00 IST) on the session
 day, once history is prepared, the decision lane chooses the day's strategy
 and research searches for one when none is accepted.

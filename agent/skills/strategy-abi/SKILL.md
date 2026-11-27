@@ -5,7 +5,7 @@ description: How to write a strategy_actions_v1 Python strategy (observation sch
 
 # `strategy_actions_v1` Strategy ABI
 
-Write self-contained Python 3 scripts (no network, no state across calls; run as `python3 -I -S -B`). Read one JSON observation from `sys.argv[1]` and print `{"actions": [...]}` to stdout. Use `decimal.Decimal` for all prices and rupee amounts; never emit `NaN` or `Infinity`.
+Write self-contained Python 3 scripts (no network, no OS/file access; run in a persistent `python3 -I -S -B` worker). Define a top-level `on_observation(obs)` function receiving one observation dict and returning `{"actions": [...]}` (no stdout JSON printing, no file reads). Modules must pass the AST import allowlist and model security review. Use `decimal.Decimal` for all prices and rupee amounts; never emit `NaN` or `Infinity`.
 
 ## Observation Fields
 

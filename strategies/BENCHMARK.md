@@ -146,8 +146,8 @@ describes.
 
 Every `strategy_actions_v1` script in this directory, replayed over
 archived NSE quote receipts through the production research-lane path:
-`archive_window_tape`, then `strategy::replay::run` in the bubblewrap
-sandbox (each depth receipt is one strategy call; held exits run first), then
+`archive_window_tape`, then `strategy::replay::run` in the persistent hardened Python
+worker (each depth receipt is one `on_observation(obs)` call; held exits run first), then
 `strategy_library::acceptance::accept` with the default thresholds. The
 bench is the ignored test `action_bench` in
 `rust/nivra-cli/src/runtime/harness/research/backtest/action_bench.rs`. It
@@ -209,7 +209,7 @@ export NIVRA_ACTION_BENCH_PLAN=strategies/action-bench.plan.json \
 It writes `leaderboard.md` and `results.json` to the output directory. The
 run took 19 minutes for 54 replays on 20 cores. The behavioural test is
 `action_bench_runs_a_strategy_over_a_fixture_archive`; it needs
-`NIVRA_ARCHIVE_TEST_URL` (see [TESTING](../docs/TESTING.md)) and bubblewrap.
+`NIVRA_ARCHIVE_TEST_URL` (see [TESTING](../docs/TESTING.md)).
 
 ### Leaderboard
 

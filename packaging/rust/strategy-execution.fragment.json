@@ -1,6 +1,7 @@
 {
 	"strategy_execution": {
 		"enabled": true,
-		"fallback": []
+		"fallback": [],
+		"call_deadline_ms": 250
 	}
 }

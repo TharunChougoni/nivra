@@ -94,14 +94,20 @@ the open.
 | --- | --- | --- |
 | `strategy_execution.enabled` | absent (off) | Run the library's active strategy on each scan |
 | `strategy_execution.fallback` | `[]` | Shipped action strategies (`strategies/<name>.py`), best first, that run labelled as fallback while no accepted version can run |
+| `strategy_execution.call_deadline_ms` | `250` | Per-call monotonic deadline (ms, `10..=30000`) enforced on the persistent hardened Python strategy worker (no bubblewrap) |
+| `strategy_review.model` | absent (falls back to `agent.lanes.gate.model`) | Model spec (`provider`, `id`, optional `thinking`) used for the security review gate before a candidate `strategy_actions_v1` script is registered |
+| `strategy_review.fallback` | absent (falls back to `agent.lanes.gate.fallback`) | Optional fallback model for strategy review on pre-output quota/auth/rejected errors |
+| `strategy_review.timeout_ms` | `30000` (or `gate.turn_timeout_ms.min(60000)`) | Per-review timeout in milliseconds (`1000..=120000`) |
 | `agent.triggers.decision.pre_open_minute` | 540 (09:00 IST) | Minute of the pre-open strategy choice, after history preparation |
 | `research_tools.candidate_compute.strategy.recent_archive_sessions` | 3 | Closed sessions in the rolling `recent_archive` replay dataset (3 to 20) |
 
 ```json
 {
-	"strategy_execution": {"enabled": true, "fallback": ["vwap_trend"]}
+	"strategy_execution": {"enabled": true, "fallback": ["vwap_trend"], "call_deadline_ms": 250}
 }
 ```
+
+> **Owner override of sandbox guard:** `strategy_actions_v1` strategies no longer run under per-call bubblewrap (`bwrap`); they run inside a persistent hardened Python worker (`python3 -I -S -B`, rlimits, Landlock, seccomp) after passing a static Python AST check and `strategy_review` model review. See [research](../../docs/RESEARCH.md#sandbox-and-action-worker).
 
 `packaging/rust/strategy-execution.fragment.json` holds the block with an
 empty fallback list. A fallback name that is not a shipped

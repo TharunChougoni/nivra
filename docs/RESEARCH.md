@@ -72,16 +72,40 @@ feature with no evidence is absent, never zero.
 The key `params` is reserved. When present, it holds the strategy's parameter
 object, not an instrument.
 
-### Sandbox
+### Sandbox and action worker
 
-Every ranker and `strategy_actions_v1` strategy runs as `python3 -I -S -B` under
-`bwrap --unshare-all` with a cleared environment. It sees only read-only mounts
-of the system Python, the script, the input and (when configured) the research
-Python environment. It has no network, home, credentials or book. A seccomp
-filter denies `fork`, `vfork`, `clone` and `clone3`. CPU, memory, open files,
-output and wall time are limited. Missing `bwrap`, Python or a configured
-environment is a failure, never a fallback to an unconfined process. A failure
-returns a typed error and no scores.
+Rankers and research bar scripts continue to run as one-shot `python3 -I -S -B`
+processes under `bwrap --unshare-all` with a cleared environment, read-only
+mounts of the system Python, script, input and optional research environment,
+no network, seccomp denying `fork`/`vfork`/`clone`/`clone3`, and bounded CPU,
+memory, open files, output and wall time. Missing `bwrap`, Python or a
+configured environment fails closed with a typed error.
+
+**Owner override for action strategies (`strategy_actions_v1`):** by owner
+decision, action strategies no longer run under per-call bubblewrap (`bwrap`
+user-namespace `clone` failed with `EPERM` when launched by the controller on
+the paper host, and added ~30–130 ms of startup overhead per scan). Instead,
+they run in a **persistent hardened Python worker** (`python3 -I -S -B` with an
+empty env, private `0700` working directory, closed file descriptors `>= 3`,
+dedicated process group, `PR_SET_NO_NEW_PRIVS`, rlimits for `RLIMIT_AS`,
+`RLIMIT_FSIZE`, `RLIMIT_NOFILE`, `RLIMIT_CORE` — no `RLIMIT_CPU` on the
+persistent process — Landlock read-only FS + TCP bind/connect denial when
+supported, seccomp blocking sockets, `fork`/`clone` and `ptrace`, monotonic
+Rust per-call deadlines (`strategy_execution.call_deadline_ms`, default 250 ms),
+bounded NDJSON framing, and backoff/quarantine on repeated failures). Safety
+also moves up-front to a **two-stage review gate**:
+
+1. **Deterministic Python AST check** (`ast_check.py`): import allowlist
+   (standard numeric/collection modules plus `numpy`/`pandas` only when
+   `research_env` is active; `sys` restricted to `argv`/`stdin`/`stdout`), and
+   rejection of `open`, `exec`, `eval`, `compile`, `__import__`, `globals`,
+   `locals`, dunder attribute escapes and format-string attribute traversal.
+2. **Model security review** (`strategy_review`, or fallback to
+   `agent.lanes.gate`): an ephemeral tool-less review checking for escapes or
+   unbounded loops, returning `{verdict, reasons}` bound to the exact
+   `source_sha256`, `runner_sha256` and `review_policy_sha256` in library
+   entries (`entry_version: 2`). Both static and review currency are re-verified
+   before replay and execution.
 
 Without `research_env` (or `env_dir`), the sandbox runs standard library only
 with the historical defaults (`memory_mb` 128, `cpu_seconds` 1, `wall_ms` 2,000
@@ -172,10 +196,12 @@ The turn uses the research lane's budget.
 
 ## Action strategies
 
-An action strategy reads one observation from the JSON file named by
-`sys.argv[1]` and prints `{"actions":[...]}`. It runs in the ranker
-[sandbox](#sandbox), with the same limits, once per observation. It keeps no
-state between calls.
+An action strategy defines a top-level `on_observation(obs)` function that
+receives the decoded observation dict and returns `{"actions":[...]}`. It runs
+inside the persistent hardened [action worker](#sandbox-and-action-worker)
+(reused across scans/steps per `(source_sha256, params_sha256)`), after
+passing the AST check and model review gate. Strategies must treat each
+`on_observation(obs)` call as deterministic and stateless.
 
 The observation holds:
 
@@ -211,8 +237,9 @@ shared execution gate, the same path as a model plan. A failed call produces
 no actions and one reason: `strategy_exit` (a crash or a blocked network
 call), `strategy_wall_timeout`, `strategy_output_limit`,
 `strategy_output_invalid`, `strategy_output_non_finite`,
-`strategy_output_schema`, `strategy_too_many_actions` or
-`strategy_unknown_instrument`.
+`strategy_output_schema`, `strategy_too_many_actions`,
+`strategy_unknown_instrument`, `strategy_missing_on_observation`,
+`strategy_review_unsafe` or `strategy_worker_quarantined`.
 
 ### Strategy replay
 
@@ -453,9 +480,10 @@ The library sits beside the dated session books, at
 
 | Path | Contents |
 | --- | --- |
-| `entries/<strategy_id>.json` | Source and report hashes, `params`, author lane, model and turn, summary, tape dates, verdict and thresholds |
+| `entries/<strategy_id>.json` | Schema v2: source, report, review hashes & verdict, `params`, author lane, model and turn, summary, tape dates, verdict and thresholds |
 | `sources/<source_sha256>.py` | The exact source bytes |
 | `reports/<report_sha256>.json` | The accepted replay report |
+| `reviews/<source_sha256>.json` | Cached passing model review bound to source, runner and review-policy digests |
 | `controls.json` | The owner's pin, disable, enable and rollback log, plus decision-lane `lane_select` entries |
 
 `strategy_id` is the SHA-256 of the canonical `{abi, source_sha256, params}`.
@@ -482,17 +510,25 @@ runs the active version on each rank pass:
 2. The controller freezes one observation: the built-in prospects (the
    report's `top_n`), the depth quotes still within two seconds of their
    original receipt, held positions with their exit intents, cash and costs.
-3. The strategy runs on a worker thread, with the default sandbox limits and
-   outside the book transaction. While a call runs, later scans start none.
-4. When the call finishes, the controller takes the book transaction and runs
-   its actions through the planner checks and the execution gate against the
-   book at that moment. A fill records the `strategy_id` where a model fill
-   records a decision ID.
+3. The controller dispatches the observation non-blockingly to a `StrategyHost`
+   pool holding the active live worker (with non-blocking hot swap on strategy
+   changes and immediate revocation on stand-down or disable), keeping the main
+   controller loop unblocked and bounded per call by
+   `strategy_execution.call_deadline_ms` (default 250 ms). While a call is in
+   flight, later scans start none.
+4. When the call finishes, the controller takes the book transaction, verifies
+   both the worker's `activation_generation` and `choice::choose` inside the
+   transaction, and runs its actions through the planner checks and the execution
+   gate (with original quote receipt-age rechecks) against the book at that moment.
+   A fill records the `strategy_id` where a model fill records a decision ID.
 
 The controller runs a version only when its report names this build's
-`engine_sha256` and `adapter_sha256`. Otherwise it reports
-`strategy_engine_changed` or `strategy_adapter_changed`. It reads the library
-again every 30 seconds, so a pin or disable takes effect without a restart.
+`engine_sha256` and `adapter_sha256` AND its review record matches the current
+`source_sha256`, `runner_sha256` and `review_policy_sha256` (plus passes the
+static AST check). Otherwise it reports `strategy_engine_changed`,
+`strategy_adapter_changed`, `strategy_review_changed` or
+`strategy_review_unsafe`. It reads the library again every 30 seconds, so a pin,
+disable or rollback takes effect without a restart.
 
 #### Fallback strategies
 

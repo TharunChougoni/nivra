@@ -4,8 +4,9 @@ Nivra runs one continuing paper account. It trades long-only NSE cash equities
 and ETFs, and buy-only long-premium Nifty weekly options. The objective is
 profit. Futures, stock options, short options and live orders are out of scope.
 
-With `strategy_execution` enabled and an accepted active strategy, the paper
-controller executes cash strategies on every scan while the pi decision lane
+With `strategy_execution` enabled and an accepted active strategy (passing the
+AST + model review gate and executing on the persistent hardened Python worker),
+the paper controller executes cash strategies on every scan while the pi decision lane
 supervises strategy selection, exceptions and Nifty options. Otherwise, the
 decision lane chooses each paper action, size and holding period. Only a
 completed turn with a validated `TradePlan` reaches the paper plan.

@@ -2,10 +2,41 @@
 
 ## 0.15.1 — 2026-11-27
 
-**Fixed:** a decision-lane strategy choice now counts only under the planner
-policy it was made under. A stand-down recorded before fallbacks were
-configured kept blocking them after `config-apply`. Each `lane_select` records
-the policy digest; older records count under no policy. No upgrade step.
+### Upgrade an installed paper host (breaking)
+
+1. Deploy both the rebuilt `nivra` binary and updated `agent/` runtime (`npm run build --prefix agent`).
+2. **Owner override of sandbox guard:** `strategy_actions_v1` scripts now
+   require a top-level `on_observation(obs)` entry point (adapter digest changed)
+   and run on a persistent hardened Python worker (`python3 -I -S -B`, rlimits,
+   Landlock, seccomp, no bubblewrap) instead of per-call `bwrap`. Remove old
+   v1 entries under `<sessions_root>/strategy-library/entries/` (or re-backtest
+   strategies so `entry_version: 2` entries with passing `reviews/` records are
+   written).
+3. Ensure `strategy_review` or `agent.lanes.gate` is configured in the planner
+   so the review gate can approve new candidate strategies. Optionally tune
+   `strategy_execution.call_deadline_ms` (default `250`).
+
+### Changed
+
+- **Persistent hardened strategy worker & `StrategyHost` pool.** Replaced per-call
+  bubblewrap spawning for `strategy_actions_v1` with persistent `python3 -I -S -B`
+  workers (`on_observation(obs)`), lockstep sequence-checked NDJSON framing,
+  one-time OS hardening in `pre_exec` (closed fds `>= 3`, `setpgid`, memory/fd/fsize/core
+  rlimits without lifetime `RLIMIT_CPU`, `PR_SET_NO_NEW_PRIVS`, Landlock, and
+  seccomp), monotonic per-call deadlines, exponential backoff/quarantine, and
+  a `StrategyHost` pool with non-blocking hot swap and in-transaction
+  `activation_generation` + `choice::choose` verification.
+- **Two-stage strategy review gate.** Every `strategy_actions_v1` script must
+  pass a deterministic Python AST import/attribute check (`ast_check.py`) plus
+  an ephemeral tool-less model security review (`strategy_review` / `gate` lane),
+  bound to exact `source_sha256`, `runner_sha256` and `review_policy_sha256`
+  digests (`entry_version: 2`).
+- **Removed** `nivra_sandbox::run_document` (one-shot action-strategy bubblewrap helper).
+- **Fixed:** a decision-lane strategy choice now counts only under the planner
+  policy it was made under. A stand-down recorded before fallbacks were
+  configured kept blocking them after `config-apply`. Each `lane_select` records
+  the policy digest; older records count under no policy. No upgrade step for
+  controls alone.
 
 ## 0.15.0 — 2026-11-27
 

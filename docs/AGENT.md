@@ -149,8 +149,11 @@ schedule trigger, go straight to the decision lane. When the gate budget is
 spent, F&O batches bypass the gate. When the decision budget is spent, the
 gate does not run.
 
-While `strategy_execution` is enabled and a strategy runs, an accepted library
-version or a configured fallback, the strategy owns cash entries: cash
+While `strategy_execution` is enabled and a strategy runs (an accepted
+`entry_version: 2` library version that has passed the AST + `strategy_review`
+gate and runs in the persistent hardened Python worker without bubblewrap — an
+owner override documented in [research](RESEARCH.md#sandbox-and-action-worker)
+— or a configured fallback), the strategy owns cash entries: cash
 `entry_candidate` and `hourly_top_k_changed` triggers do not fire, and strategy
 fills do not trigger `fill` decision turns. The decision lane keeps `open`,
 `regime_changed`, `position_risk`, gated `fo_signal` batches, non-strategy
