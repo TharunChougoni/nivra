@@ -12,9 +12,7 @@ times the round-trip cost. Skip the first `avoid_open_minutes`, when VWAP is
 still unstable. Exit by `hold_ms` or `flat_minute` IST, whichever first.
 Long only: the paper book holds cash equity.
 """
-import json
 import math
-import sys
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, InvalidOperation
 
 IST_MS = 19800000
@@ -95,15 +93,15 @@ def spread_bps(obs, key):
     return (ask - bid) / ((ask + bid) / 2) * BPS, ask
 
 
-def run(select):
+def run_select(obs, select):
     """Shared driver: gates time and slots, then lets `select` propose entries."""
     try:
-        with open(sys.argv[1], encoding='utf-8') as source:
-            obs = json.load(source)
+        if not isinstance(obs, dict):
+            return {'actions': []}
         # Params are strings or integers: the replay report allows no floats.
         p = {k: float(v) if isinstance(v, str) else v
              for k, v in (obs.get('params') or {}).items()}
-        obs['params'] = p
+        obs = {**obs, 'params': p}
         at = obs.get('at_ms')
         actions = []
         if type(at) is int and at < ist_cutoff_ms(at, int(p['last_entry_minute'])):
@@ -117,9 +115,9 @@ def run(select):
                 if action is not None:
                     actions.append(action)
                     slots -= 1
-    except (OSError, ValueError, KeyError, TypeError, AttributeError, ArithmeticError):
+    except (ValueError, KeyError, TypeError, AttributeError, ArithmeticError):
         actions = []
-    print(json.dumps({'actions': actions}))
+    return {'actions': actions}
 
 
 
@@ -151,4 +149,5 @@ def select(obs, p):
         yield key, entry(obs, p, key, 'vwap reversion', target, ask * (1 - stop_bps / BPS))
 
 
-run(select)
+def on_observation(obs):
+    return run_select(obs, select)

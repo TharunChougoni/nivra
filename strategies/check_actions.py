@@ -60,12 +60,24 @@ def observation(params, features, bid='499.95', ask='500.00', bid_units=900):
     }
 
 
+HARNESS = (
+    "import json, sys\n"
+    "ns = {'__name__': 'strategy_script'}\n"
+    "exec(compile(open(sys.argv[1]).read(), sys.argv[1], 'exec'), ns)\n"
+    "raw = sys.stdin.read()\n"
+    "try:\n"
+    "    obs = json.loads(raw)\n"
+    "except ValueError:\n"
+    "    obs = None\n"
+    "print(json.dumps(ns['on_observation'](obs)))\n"
+)
+
+
 def run(script, payload):
+    text = payload if isinstance(payload, str) else json.dumps(payload)
     with tempfile.TemporaryDirectory() as tmp:
-        path = pathlib.Path(tmp) / 'obs.json'
-        path.write_text(payload if isinstance(payload, str) else json.dumps(payload))
-        args = [sys.executable, '-I', '-S', '-B', str(script), str(path)]
-        done = subprocess.run(args, capture_output=True, text=True, timeout=10, cwd=tmp)
+        args = [sys.executable, '-I', '-S', '-B', '-c', HARNESS, str(script)]
+        done = subprocess.run(args, input=text, capture_output=True, text=True, timeout=10, cwd=tmp)
     if done.returncode != 0:
         raise AssertionError(f'exit {done.returncode}: {done.stderr.strip()[-300:]}')
     return json.loads(done.stdout)['actions']
