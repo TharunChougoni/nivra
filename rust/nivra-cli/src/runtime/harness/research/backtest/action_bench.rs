@@ -601,6 +601,11 @@ fn json_report(results: &Results) -> Value {
 #[test]
 #[ignore = "requires an archive with quote tapes and python; see strategies/BENCHMARK.md"]
 fn action_bench() -> Res<()> {
+    // A runner, not a check: without a plan it has nothing to run.
+    if std::env::var_os("NIVRA_ACTION_BENCH_PLAN").is_none() {
+        println!("action_bench skipped: NIVRA_ACTION_BENCH_PLAN is not set");
+        return Ok(());
+    }
     let var = |name: &str| std::env::var(name).map_err(|_| format!("{name} is required"));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let plan: Plan = serde_json::from_slice(&std::fs::read(var("NIVRA_ACTION_BENCH_PLAN")?)?)?;
