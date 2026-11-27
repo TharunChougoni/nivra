@@ -1,6 +1,11 @@
 # Strategy library seeds
 
-The research lane uses these scripts as references and fallbacks. Each
+The research lane uses these scripts as references and fallbacks. Every
+build embeds this directory and seeds it read-only into the lane workspace
+under `reference/strategies/`. The planner's `strategy_execution.fallback`
+list names the action strategies the paper controller may run, labelled as
+fallback, while no accepted version can run. See
+[fallback strategies](../docs/RESEARCH.md#fallback-strategies). Each
 `<name>.py` is self-contained and uses the standard library only. Its
 `<name>.params.json` file holds its parameters. All strategies are long
 only, because the paper book holds cash equity.

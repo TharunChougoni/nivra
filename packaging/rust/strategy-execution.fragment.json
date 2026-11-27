@@ -1,0 +1,6 @@
+{
+	"strategy_execution": {
+		"enabled": true,
+		"fallback": []
+	}
+}

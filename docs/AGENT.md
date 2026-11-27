@@ -64,10 +64,12 @@ trigger aborts a running research or review turn with `agent_preempted`.
 | `position_risk` | Decision | A held position comes within `proximity_bps` (50) of its stop or target, falls `adverse_move_bps` (150) since the last decision turn, or ranks below `exit_score` (off by default) |
 | `fill` | Decision | New fills appear |
 | `entry_candidate` | Decision | An unheld instrument stays in the top `top_k` (5) with score at least `entry_score` (10) for `persist_cycles` (2) scans; then `cooldown_ms` (15 min) per instrument (suppressed while an active strategy owns cash entries) |
-| `schedule` | Decision | Within 30 minutes of the open, at `pre_close_minute` (15:00), on `regime_changed` when `strategy_execution` is enabled with eligible strategies (`regime_cooldown_ms`, 5 min), and on the hour when `material_change` (2) new names entered the top K (skipped while a strategy is active) |
+| `pre_open` | Decision | Once per session at `pre_open_minute` (09:00 IST) before the open, with `strategy_execution` enabled, once history, universe and book are ready. The turn chooses today's strategy (`strategy_select`) or asks research for one; it holds no paper claim and cannot trade |
+| `schedule` | Decision | Within 30 minutes of the open, at `pre_close_minute` (15:00), on `regime_changed` when `strategy_execution` is enabled (`regime_cooldown_ms`, 5 min), and on the hour when `material_change` (2) new names entered the top K (skipped while a strategy is active) |
 | `request` | Research | The decision lane queued a research request |
 | `after_close` | Research | Once per session, after the seal, when the review turn has finished, failed or been skipped |
 | `quiet` | Research | No decision turn for `quiet_ms` (30 min) during the session, with research budget left |
+| `strategy_search` | Research | Once per session, with the `pre_open` turn or the open, when no accepted strategy runs and research budget is left. The task carries the `recent_archive` window; research replays the shipped references and registers what passes (skill `strategy-library`) |
 | `agenda` | Research | The review finished and left text |
 | `seal` | Review | The session is reported and sealed |
 
@@ -99,8 +101,8 @@ position risk or schedule trigger goes straight to the decision lane. When the
 gate budget is spent, batches bypass the gate. When the decision budget is
 spent, the gate does not run.
 
-While `strategy_execution` is enabled and an active runnable strategy exists in
-the library, the strategy owns cash entries: cash `entry_candidate` and
+While `strategy_execution` is enabled and a strategy runs, an accepted library
+version or a configured fallback, the strategy owns cash entries: cash `entry_candidate` and
 `hourly_top_k_changed` triggers do not fire, the gate never runs on cash entries,
 and strategy fills do not trigger `fill` decision turns. The decision lane keeps
 `open`, `regime_changed`, `position_risk`, Nifty options, non-strategy fills and
@@ -120,7 +122,7 @@ config enables. A call to a tool outside the lane fails with
 | `analysis`, `research_status`, `research_result` | Decision, research, review | Queue and read registered analysis tasks and research answers |
 | `list`, `read` | Decision, research, review | Read the workspace |
 | `plan` | Decision | Submit the paper plan (cash buys refused with `agent_paper_strategy_owns_cash_entries` while an active strategy runs) |
-| `strategy_select` | Decision | Pick an eligible action strategy from the library (or `null` to stand down) with a reason; only with `strategy_execution.enabled`. Owner pins and disables always win |
+| `strategy_select` | Decision | Pick an eligible action strategy from the library, a configured fallback as `fallback:<name>`, or `null` to stand down, with a reason; only with `strategy_execution.enabled`. Owner pins and disables always win, and a runnable accepted version wins over a fallback |
 | `research` | Decision | Queue a research request with up to eight `refs` |
 | `verdict` | Gate | Escalate the batch or drop it |
 | `write`, `install`, `run` | Research | Write workspace files, install an allowlisted, hash-matched file into `tools/`, run a `scripts/<name>.py` ranker in the no-network sandbox |

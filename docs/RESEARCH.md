@@ -488,9 +488,32 @@ runs the active version on each rank pass:
    records a decision ID.
 
 The controller runs a version only when its report names this build's
-`engine_sha256` and `adapter_sha256`. Otherwise it runs nothing and reports
+`engine_sha256` and `adapter_sha256`. Otherwise it reports
 `strategy_engine_changed` or `strategy_adapter_changed`. It reads the library
 again every 30 seconds, so a pin or disable takes effect without a restart.
+
+#### Fallback strategies
+
+`strategy_execution.fallback` lists shipped action strategies from
+`strategies/`, best first. While no accepted version can run on this build,
+the controller runs one of them: the decision lane's choice
+(`fallback:<name>`) when it is still listed, else the first. A fallback has
+not passed acceptance, so it is labelled everywhere: its actions, fills and
+refusals carry `fallback:<name>` in place of a `strategy_id`, the
+`strategy_actions` tick records `"basis":"fallback"`, the decision brief
+shows `active_basis: "fallback"` with the reason no accepted version runs, and
+the dashboard says so. It goes through the same planner checks, execution
+gate, costs and freshness checks as an accepted version.
+
+The fallback stops at the next library read once an accepted version can run.
+An owner pin still wins; a pin on a version that cannot run here runs
+nothing. A lane stand-down (`null`) runs nothing, fallback included. An empty
+list, the default, runs nothing until a version is accepted. The planner
+refuses a name that is not a shipped `strategy_actions_v1` script with
+`strategy_fallback_invalid`.
+
+Every build embeds `strategies/`. The lane workspace holds a read-only copy
+under `reference/strategies/`, rewritten when the shipped bytes change.
 
 A failed call, or a failure to read the library, trades nothing and never
 halts the book. Each change of failure reason adds one `strategy_failure` row
@@ -516,6 +539,13 @@ null.
 
 - A `current_session_features` or `archive_window` dataset runs a
   [strategy replay](#strategy-replay) inside the call and returns the report.
+- `recent_archive` is a rolling archive window over the most recent
+  `candidate_compute.strategy.recent_archive_sessions` (3, at most 20) closed
+  trading sessions within `max_archive_window_days`. It needs no dated
+  dataset. The selection window must fall inside those sessions; the
+  `strategy_search` task gives the exact `selection_from_ms` and
+  `selection_to_ms`. A replay on the current build replaces an acceptance
+  made on an older engine or adapter under the same `strategy_id`.
 - `archive_bars` queues a [bar job](#backtest-years-of-archived-bars). Poll
   it with `backtest_status` and read it with `backtest_result`.
 

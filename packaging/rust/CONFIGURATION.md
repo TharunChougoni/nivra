@@ -61,6 +61,28 @@ These optional runtime keys control pre-open history preparation.
 
 Authentication, quota and malformed-response failures stop a pass at once.
 
+## Strategy execution settings
+
+These planner keys run an action strategy on each scan and choose it before
+the open.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `strategy_execution.enabled` | absent (off) | Run the library's active strategy on each scan |
+| `strategy_execution.fallback` | `[]` | Shipped action strategies (`strategies/<name>.py`), best first, that run labelled as fallback while no accepted version can run |
+| `agent.triggers.decision.pre_open_minute` | 540 (09:00 IST) | Minute of the pre-open strategy choice, after history preparation |
+| `research_tools.candidate_compute.strategy.recent_archive_sessions` | 3 | Closed sessions in the rolling `recent_archive` replay dataset (3 to 20) |
+
+```json
+{
+	"strategy_execution": {"enabled": true, "fallback": ["vwap_trend"]}
+}
+```
+
+`packaging/rust/strategy-execution.fragment.json` holds the block with an
+empty fallback list. A fallback name that is not a shipped
+`strategy_actions_v1` script refuses with `strategy_fallback_invalid`.
+
 ## Market archive
 
 Set this block before starting the paper controller or running archive-backed
