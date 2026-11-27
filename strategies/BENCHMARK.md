@@ -154,8 +154,7 @@ bench is the ignored test `action_bench` in
 shares the `backtest` tool's replay and acceptance code and skips only the
 model call, library registration and the tool's admission caps.
 
-**Result: nothing is profitable after costs, and the data cannot show
-otherwise.** Seven of the eight strategies, and all six variants of them,
+**Baseline result.** Seven of the eight strategies, and all six variants of them,
 placed no order in two full sessions and part of a third (no filled and no refused action). Only
 `bollinger_reversion` traded: two round trips, both winners, +₹10.18 net on
 ₹1,000 clips. Two trades are noise. Every replay is rejected by the default
@@ -175,10 +174,10 @@ them, because one session holds one tape date and the bar is 10 trades over
   the one in its quote receipts and its tick is the greatest common divisor of
   every price it displayed. Nothing is invented; a name with no priced level is
   dropped.
-- Why 250: the tape builder allows at most 100,000 observations and 16 MiB.
+- Why 250: the tape builder allows at most 100,000 observations and 32 MiB.
   A session over the whole 2,760-name scan is about 500,000 observations, so the
   research lane's `backtest` cannot replay one full unfiltered session. At 250
-  names a session fits: 13.5 and 15.1 MiB.
+  names the enriched full-session tapes fit in 16.6 and 18.6 MB.
 - Costs: the paper schedule in
   [`packaging/rust/paper-costs.fragment.json`](../packaging/rust/paper-costs.fragment.json)
   (₹0.01 per order, 5 bps buy, 7 bps sell, 5 bps slippage). Capital ₹5,000
@@ -207,9 +206,43 @@ export NIVRA_ACTION_BENCH_PLAN=strategies/action-bench.plan.json \
 ```
 
 It writes `leaderboard.md` and `results.json` to the output directory. The
-run took 19 minutes for 54 replays on 20 cores. The behavioural test is
+original run took 19 minutes for 54 replays on 20 cores. The behavioural test is
 `action_bench_runs_a_strategy_over_a_fixture_archive`; it needs
 `NIVRA_ARCHIVE_TEST_URL` (see [TESTING](../docs/TESTING.md)).
+
+### Effect of carrying depth features through replay
+
+Reran the same 54 replays on the 250-key archive universe and unchanged costs.
+Both runs completed with zero strategy worker failures. Every replay was
+rejected under the default acceptance thresholds. The counts below cover
+the two full sessions and the partial session on 27 November.
+
+| Default strategy | Closed trades before | Closed trades with archived features |
+| --- | ---: | ---: |
+| `bollinger_reversion` | 2 | 50 |
+| `circuit_magnet` | 0 | 2 |
+| `opening_range_breakout` | 0 | 8 |
+| `order_book_imbalance` | 0 | 56 |
+| `relative_strength` | 0 | 29 |
+| `volume_climax_reversal` | 0 | 4 |
+| `vwap_reversion` | 0 | 34 |
+| `vwap_trend` | 0 | 25 |
+
+Across the two full sessions, `bollinger_reversion` went from 4,069 calls
+and 31,130 prospect rows to 8,322 calls and 104,422 prospect rows. The larger
+call count includes archived screening reads that carried executable depth.
+
+| Coverage among prospects offered to a call | Before | With archived features |
+| --- | ---: | ---: |
+| Fresh executable quote | 315 (1.01%) | 104,419 (99.997%) |
+| VWAP, book imbalance, each touch field and spread | 0 | 104,422 (100%) each |
+| Relative volume | 0 | 102,909 (98.55%) |
+| Volatility | 30,805 (98.96%) | 103,685 (99.29%) |
+| Range position | 30,759 (98.81%) | 103,561 (99.18%) |
+| Price, move, absolute move, relative move, absolute relative move, traded value, circuit distance, minutes since open | 31,130 (100%) each | 104,422 (100%) each |
+
+The after-change run used archived REST depth. A live socket session will
+determine how often the promoted keys receive fresh executable depth.
 
 ### Leaderboard
 

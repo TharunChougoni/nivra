@@ -89,6 +89,47 @@ impl ArchiveWindow {
     }
 }
 
+/// Average daily volume per universe key over the 35 calendar days before `before`,
+/// from the archive's prepared daily bars, mirroring the live history
+/// preparation (`history_avg_daily_volume_min_sessions`, default 10). A name
+/// without enough prepared sessions stays absent and its `rel_volume_tod` is
+/// missing, exactly as live (#52).
+pub(super) fn prepared_daily_volumes(
+    db: &mut nivra_store::market_archive::ArchiveClient,
+    keys: &[&str],
+    before: NaiveDate,
+) -> std::result::Result<BTreeMap<String, nivra_cli::strategy_archive::AverageDailyVolume>, String>
+{
+    let mut start = before;
+    for _ in 0..35 {
+        start = start.pred_opt().ok_or("candidate_archive_window_invalid")?;
+    }
+    let end = before
+        .pred_opt()
+        .ok_or("candidate_archive_window_invalid")?;
+    let bars = nivra_store::market_archive::daily_bars(db, keys, Some(start), Some(end))
+        .map_err(|_| "archive_quote_read_failed".to_string())?;
+    let mut volumes = BTreeMap::<String, (f64, u32)>::new();
+    for bar in bars {
+        let entry = volumes.entry(bar.key).or_default();
+        entry.0 += bar.volume as f64;
+        entry.1 += 1;
+    }
+    Ok(volumes
+        .into_iter()
+        .filter(|(_, (sum, sessions))| *sessions >= 10 && *sum > 0.0)
+        .map(|(key, (sum, sessions))| {
+            (
+                key,
+                nivra_cli::strategy_archive::AverageDailyVolume {
+                    average: sum / f64::from(sessions),
+                    sessions,
+                },
+            )
+        })
+        .collect())
+}
+
 fn retain_pinned_receipts(ids: &mut Vec<(i64, i64)>, from: i64, to: i64, watermark: i64) {
     ids.retain(|&(received, id)| (from..=to).contains(&received) && id <= watermark);
 }
@@ -179,11 +220,16 @@ pub(crate) fn archive_window_tape(
     check_tape_stop(stop)?;
     let first = report.sessions[0];
     let last = *report.sessions.last().expect("nonempty sessions");
+    // Prepared average volumes feed `rel_volume_tod` as the live history
+    // preparation does (#52).
+    let keys = universe.keys().map(String::as_str).collect::<Vec<_>>();
+    let avg_daily_volumes = prepared_daily_volumes(&mut db, &keys, first)?;
     // Paper manifests use previous_session as the lower bound for event dates.
     let tape = builder.finish(
         last,
         (first < last).then_some(first),
         universe.into_values().collect(),
+        avg_daily_volumes,
         json!({
             "source":"market_archive_read_only",
             "archive_window":report,
@@ -237,7 +283,7 @@ mod tests {
             .unwrap();
             let universe = serde_json::from_value(manifest["universe"].clone()).unwrap();
             let day = manifest["session"].as_str().unwrap().parse().unwrap();
-            tape.finish(day, None, universe, json!({}), true)
+            tape.finish(day, None, universe, BTreeMap::new(), json!({}), true)
                 .unwrap()
                 .events_sha256
         };

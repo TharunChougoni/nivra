@@ -243,16 +243,24 @@ call), `strategy_wall_timeout`, `strategy_output_limit`,
 
 ### Strategy replay
 
-The replay treats each depth receipt on the tape as one scan, in the paper
-controller's order:
+The replay processes original, validated, two-sided quotes from archived REST
+reads. This includes archived scanner metadata reads with executable depth.
+A screen-only legacy tape event updates the scanner.
 
-1. Held stops, targets and time exits fill on the receipt, as in the paper
-   book.
-2. The strategy runs on the observation.
-3. Its actions are validated, filled or refused. A fill uses up depth on that
-   receipt.
+1. Feed the quoted touch, VWAP, volume, and book totals through the same
+   per-instrument reducer as the paper scanner.
+2. Run held stops, targets, and time exits on the receipt.
+3. Call the strategy with the latest prospects and fresh quotes.
+4. Validate and apply the actions. Each fill consumes the displayed depth
+   available on that receipt.
 
-Screening receipts update the features and the built-in prospect ranking.
+Archive-window tapes carry `avg_daily_volumes` from the 35 calendar days
+before the first session. A key needs at least 10 sessions to produce
+`rel_volume_tod`. The reducer uses the quote's source minute to estimate the
+expected cumulative volume. Quotes must be within two seconds of both their
+source and receipt times. The report includes the number of prospect rows
+with each feature and a fresh quote.
+
 The report is canonical JSON with no floats, so its SHA-256 identifies it. It
 holds the input hashes, the session dates the strategy ran on, every fill, every trade with its exit
 reason and net P&L, and every refusal code. Its `summary` gives the trade
@@ -285,7 +293,7 @@ In the research lane, enable `candidate_compute.strategy`:
 
 ```json
 "strategy": {"enabled": true, "abi": "strategy_actions_v1", "max_wall_ms": 20000,
-  "max_quote_events": 10000, "max_observations": 100000, "max_tape_bytes": 16777216}
+  "max_quote_events": 10000, "max_observations": 100000, "max_tape_bytes": 33554432}
 ```
 
 Register an archive window in `candidate_compute.datasets`. This example spans

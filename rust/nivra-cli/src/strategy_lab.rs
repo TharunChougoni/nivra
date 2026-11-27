@@ -11,7 +11,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
 };
-const INPUT_LIMIT: u64 = 16 * 1024 * 1024;
+const INPUT_LIMIT: u64 = crate::strategy_archive::MAX_EXECUTION_TAPE_BYTES as u64;
 #[derive(Subcommand)]
 pub enum Commands {
     /// Simulate explicit entry sizes and holding periods against archived executable quotes.

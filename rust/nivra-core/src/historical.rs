@@ -57,6 +57,12 @@ pub struct Observation {
     pub lower_circuit_limit: Amount,
     pub upper_circuit_limit: Amount,
     pub volume: u64,
+    #[serde(default)]
+    pub session_vwap: Option<f64>,
+    #[serde(default)]
+    pub total_buy_quantity: Option<u64>,
+    #[serde(default)]
+    pub total_sell_quantity: Option<u64>,
     /// Original archived receipt SHA for THIS observation. A multi-key tape
     /// never shares one global archive SHA. Omitted for legacy tapes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -72,13 +78,13 @@ pub struct Observation {
 impl Observation {
     pub fn fields(&self) -> crate::execution::MarketFields {
         crate::execution::MarketFields {
-            session_vwap: None,
-            best_bid: None,
-            best_bid_qty: None,
-            best_ask: None,
-            best_ask_qty: None,
-            total_buy_quantity: None,
-            total_sell_quantity: None,
+            session_vwap: self.session_vwap,
+            best_bid: self.quote.bid.amount().to_string().parse().ok(),
+            best_bid_qty: Some(self.quote.bid_units).filter(|q| *q > 0),
+            best_ask: self.quote.ask.amount().to_string().parse().ok(),
+            best_ask_qty: Some(self.quote.ask_units).filter(|q| *q > 0),
+            total_buy_quantity: self.total_buy_quantity,
+            total_sell_quantity: self.total_sell_quantity,
             lower_circuit_limit: self.lower_circuit_limit,
             upper_circuit_limit: self.upper_circuit_limit,
             volume: self.volume,

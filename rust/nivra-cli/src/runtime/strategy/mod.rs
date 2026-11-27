@@ -372,7 +372,10 @@ pub(crate) fn replay_entry(
             &read(source, 262_144)?,
             &parameters,
             &read(manifest, 512 * 1024)?,
-            &read(events, 16 * 1024 * 1024)?,
+            &read(
+                events,
+                nivra_cli::strategy_archive::MAX_EXECUTION_TAPE_BYTES as u64,
+            )?,
             &|| None,
         )?
         .map_err(|stopped| stopped.reason)?;

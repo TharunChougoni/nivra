@@ -153,7 +153,7 @@ pub fn evaluate(
     if source.len() > 2 * 1024 * 1024
         || parameters.len() > 16 * 1024
         || manifest.len() > 512 * 1024
-        || events.len() > 16 * 1024 * 1024
+        || events.len() > crate::strategy_archive::MAX_EXECUTION_TAPE_BYTES
     {
         return Err("action_replay_input_limit".into());
     }

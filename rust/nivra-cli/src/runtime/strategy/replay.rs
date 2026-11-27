@@ -1,5 +1,5 @@
 //! After-cost replay of a `strategy_actions_v1` strategy over a recorded quote
-//! tape. Each depth receipt is one scan, handled in the paper controller's
+//! tape. Each executable receipt is one scan, handled in the paper controller's
 //! order: held exits first (`Portfolio::apply_at`), then one strategy call,
 //! then its actions through the planner checks and `execute_plan`. Only
 //! original receipts fill; nothing is interpolated or carried forward.
@@ -16,6 +16,7 @@ use nivra_core::{
     historical::EventKind,
     market::MAX_FINANCIAL_AGE_MS,
     replay::digest,
+    strategy::Feature,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -95,6 +96,35 @@ struct Refusal {
 struct CallFailure {
     at_ms: i64,
     reason: &'static str,
+}
+
+#[derive(Default, Serialize)]
+struct Coverage {
+    prospects: u64,
+    fresh_quote: u64,
+    calls_with_prospects: u64,
+    calls_with_fresh_quote: u64,
+    feature_rows: BTreeMap<Feature, u64>,
+}
+
+impl Coverage {
+    fn observe(&mut self, prospects: &[super::Prospect], quotes: &BTreeMap<String, Quote>) {
+        self.prospects += prospects.len() as u64;
+        self.calls_with_prospects += u64::from(!prospects.is_empty());
+        let mut quoted = 0;
+        for prospect in prospects {
+            quoted += u64::from(
+                quotes
+                    .get(&prospect.key)
+                    .is_some_and(|quote| quote.bid_units > 0 && quote.ask_units > 0),
+            );
+            for feature in prospect.features.keys() {
+                *self.feature_rows.entry(*feature).or_default() += 1;
+            }
+        }
+        self.fresh_quote += quoted;
+        self.calls_with_fresh_quote += u64::from(quoted > 0);
+    }
 }
 
 const MAX_LISTED: usize = 2_000;
@@ -178,7 +208,7 @@ pub(crate) fn run(
     if source.is_empty()
         || source.len() > 262_144
         || manifest.len() > 512 * 1024
-        || events.len() > 16 * 1024 * 1024
+        || events.len() > nivra_cli::strategy_archive::MAX_EXECUTION_TAPE_BYTES
     {
         return Err("strategy_replay_input_limit".into());
     }
@@ -237,6 +267,8 @@ pub(crate) fn run(
     portfolio.model_led = true;
     portfolio.settings.exit_policy = parameters.exit_policy.clone();
     let mut scanner = Scanner::default();
+    nivra_cli::strategy_archive::load_daily_volume_baselines(&mut scanner, manifest)?;
+    let mut coverage = Coverage::default();
     // Remaining depth of the latest original receipt per key.
     let mut depth = BTreeMap::<String, Quote>::new();
     let mut dates = BTreeSet::<NaiveDate>::new();
@@ -259,23 +291,37 @@ pub(crate) fn run(
                 last_at_ms: last_call_at,
             }));
         }
+        let screening = matches!(event.kind, EventKind::Screen);
+        let mut executable = !screening;
         for o in &event.observations {
-            let instrument = &universe[&o.key];
-            if matches!(event.kind, EventKind::Screen) {
-                scanner.observe_fields(now, instrument, &o.quote, &o.fields())?;
+            if scanner
+                .samples
+                .get(&o.key)
+                .and_then(|sample| sample.intraday.as_ref())
+                .is_none_or(|previous| {
+                    o.quote.receipt > previous.clock.receipt
+                        && o.quote.source >= previous.clock.source
+                })
+            {
+                let instrument = &universe[&o.key];
+                if screening || o.archive_sha256.is_some() {
+                    scanner.observe_fields(now, instrument, &o.quote, &o.fields())?;
+                }
+            }
+            // Archive screen rows are validated two-sided REST quotes. Legacy
+            // screen-only inputs do not convey execution authority.
+            if screening && o.archive_sha256.is_none() {
                 continue;
             }
+            executable = true;
             match depth.get(&o.key) {
-                Some(old) if o.quote.receipt < old.receipt || o.quote.source < old.source => {
-                    return Err("strategy_replay_quote_regressed".into());
-                }
-                Some(old) if o.quote.receipt == old.receipt => {}
+                Some(old) if o.quote.receipt <= old.receipt || o.quote.source < old.source => {}
                 _ => {
                     depth.insert(o.key.clone(), o.quote.clone());
                 }
             }
         }
-        if matches!(event.kind, EventKind::Screen) {
+        if !executable {
             continue;
         }
         depth_events += 1;
@@ -333,6 +379,7 @@ pub(crate) fn run(
                 &universe,
                 &costs,
             );
+            coverage.observe(&prospects, &fresh);
             let called = serde_json::to_vec(&observation)
                 .map_err(|_| "strategy_input_limit")
                 .and_then(|input| worker.call_sync(&input, now))
@@ -471,6 +518,7 @@ pub(crate) fn run(
             "events": tape.len(),
             "depth_events": depth_events,
             "strategy_calls": calls,
+            "observation_coverage": coverage,
         },
         "summary": {
             "trades": realised.len(),

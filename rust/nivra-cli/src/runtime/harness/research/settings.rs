@@ -121,7 +121,8 @@ impl CandidateStrategySettings {
             || !(3..=20).contains(&self.recent_archive_sessions)
             || !(1..=10_000).contains(&self.max_quote_events)
             || !(1..=100_000).contains(&self.max_observations)
-            || !(1..=16 * 1024 * 1024).contains(&self.max_tape_bytes)
+            || !(1..=nivra_cli::strategy_archive::MAX_EXECUTION_TAPE_BYTES as u64)
+                .contains(&self.max_tape_bytes)
         {
             return Err("candidate_strategy_invalid");
         }
@@ -496,7 +497,7 @@ impl Artifact {
         match self {
             Self::Code => 262144,
             Self::Runtime => 32 * 1024 * 1024,
-            Self::Input => 16 * 1024 * 1024,
+            Self::Input => nivra_cli::strategy_archive::MAX_EXECUTION_TAPE_BYTES as u64,
         }
     }
 }

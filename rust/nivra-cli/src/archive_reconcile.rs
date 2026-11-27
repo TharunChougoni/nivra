@@ -72,7 +72,7 @@ fn quote_as_of<'a>(tape: &'a [Event], key: &str, at: i64) -> Option<&'a Quote> {
 /// Residual holdings leave marked equity and net P&L unknown.
 pub fn reconcile(manifest: &[u8], events: &[u8], fills: &[u8]) -> Result<Value, String> {
     if manifest.len() > 512 * 1024
-        || events.len() > 16 * 1024 * 1024
+        || events.len() > crate::strategy_archive::MAX_EXECUTION_TAPE_BYTES
         || fills.len() > 2 * 1024 * 1024
     {
         return Err("archive_reconcile_input_limit".into());

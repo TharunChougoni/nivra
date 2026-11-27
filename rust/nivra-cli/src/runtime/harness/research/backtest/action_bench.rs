@@ -36,7 +36,7 @@ pub(super) struct Plan {
     pub capital: Amount,
     /// Keep the N most liquid names by 20-session traded value before
     /// `universe_before`, or every name seen when 0. The tape builder caps a
-    /// replay at 100,000 observations and 16 MiB, so a full session needs this.
+    /// replay at 100,000 observations and 32 MiB, so a full session needs this.
     pub universe_size: usize,
     pub universe_before: Option<NaiveDate>,
     pub tapes: Vec<TapePlan>,
@@ -78,6 +78,7 @@ pub(super) struct Metrics {
     pub entry_notional: f64,
     pub worst_drawdown: f64,
     pub calls: u64,
+    pub observation_coverage: Value,
     pub failures: u64,
     pub open_positions: u64,
     /// Entry and exit actions the replay filled, and those it refused.
@@ -249,6 +250,7 @@ fn metrics(report: &Value, bytes: &[u8], source: &[u8]) -> Metrics {
         entry_notional,
         worst_drawdown: dec(&summary["worst_drawdown"]),
         calls: report["tape"]["strategy_calls"].as_u64().unwrap_or(0),
+        observation_coverage: report["tape"]["observation_coverage"].clone(),
         failures: report["strategy_failures"]
             .as_object()
             .map_or(0, |m| m.values().filter_map(Value::as_u64).sum()),
@@ -322,7 +324,7 @@ pub(super) fn run_plan(
     let limits = TapeLimits {
         max_quote_events: 10_000,
         max_observations: 100_000,
-        max_tape_bytes: 16 * 1024 * 1024,
+        max_tape_bytes: nivra_cli::strategy_archive::MAX_EXECUTION_TAPE_BYTES as u64,
     };
     let no_stop = || None;
     let mut tapes = Vec::new();
@@ -588,7 +590,7 @@ fn json_report(results: &Results) -> Value {
         "universe": results.universe,
         "tapes": results.tapes.iter().map(|t| json!({"name":t.name,"events":t.events,"observations":t.observations,"bytes":t.bytes,"events_sha256":t.events_sha256,"sessions":t.sessions,"missing":t.missing})).collect::<Vec<_>>(),
         "runs": results.runs.iter().map(|r| match &r.outcome {
-            Ok(m) => json!({"variant":r.variant,"tape":r.tape,"trades":m.trades,"wins":m.wins,"net_pnl":m.net_pnl,"fees":m.fees,"entry_notional":m.entry_notional,"worst_drawdown":m.worst_drawdown,"calls":m.calls,"failures":m.failures,"open_positions":m.open_positions,"filled":m.filled,"refused":m.refused,"verdict":m.verdict,"reasons":m.reasons,"report_sha256":m.report_sha256}),
+            Ok(m) => json!({"variant":r.variant,"tape":r.tape,"trades":m.trades,"wins":m.wins,"net_pnl":m.net_pnl,"fees":m.fees,"entry_notional":m.entry_notional,"worst_drawdown":m.worst_drawdown,"calls":m.calls,"observation_coverage":m.observation_coverage,"failures":m.failures,"open_positions":m.open_positions,"filled":m.filled,"refused":m.refused,"verdict":m.verdict,"reasons":m.reasons,"report_sha256":m.report_sha256}),
             Err(e) => json!({"variant":r.variant,"tape":r.tape,"error":e}),
         }).collect::<Vec<_>>(),
     })
@@ -660,6 +662,7 @@ fn action_bench_runs_a_strategy_over_a_fixture_archive() -> Res<()> {
                 let row = json!({
                     "instrument_token":key,"symbol":key.trim_start_matches("NSE_EQ|"),"timestamp":at-100,
                     "last_price":price("bid"),"volume":o["volume"],"lower_circuit_limit":10,"upper_circuit_limit":1000,
+                    "average_price":99.5,"total_buy_quantity":300.0,"total_sell_quantity":100.0,
                     "depth":{
                         "buy":[{"price":price("bid"),"quantity":o["quote"]["bid_units"]}],
                         "sell":[{"price":price("ask"),"quantity":o["quote"]["ask_units"]}]
@@ -679,6 +682,13 @@ fn action_bench_runs_a_strategy_over_a_fixture_archive() -> Res<()> {
             &crate::runtime::market_archive::normalize::capture_quotes(&raw)?,
         )?;
     }
+    writer.execute(
+        "INSERT INTO daily_bars(instrument_id, day, o, h, l, c, volume, oi, receipt_id)
+         SELECT i.id, $1::date - n, 9950, 10000, 9900, 9950, 150000, 0, r.id
+         FROM instruments i CROSS JOIN generate_series(1, 10) AS days(n)
+         CROSS JOIN (SELECT id FROM receipts ORDER BY id LIMIT 1) r",
+        &[&day],
+    )?;
     let manifest: Value = serde_json::from_str(MANIFEST)?;
     std::fs::create_dir_all(dir.join("strategies"))?;
     std::fs::write(dir.join("strategies/fixture.py"), SOURCE)?;
@@ -707,6 +717,21 @@ fn action_bench_runs_a_strategy_over_a_fixture_archive() -> Res<()> {
     assert_eq!(
         (run.variant.as_str(), m.calls, m.failures),
         ("fixture", 6, 0)
+    );
+    let coverage = &m.observation_coverage;
+    let count = coverage["prospects"].as_u64().unwrap();
+    assert!(count > 0);
+    for feature in ["session_vwap", "book_imbalance", "best_bid", "best_ask"] {
+        assert_eq!(
+            coverage["feature_rows"][feature].as_u64(),
+            Some(count),
+            "{feature}"
+        );
+    }
+    assert!(
+        coverage["feature_rows"]["rel_volume_tod"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
     );
     assert_eq!(m.trades, 2, "{:?}", m.reasons);
     assert_eq!(m.verdict, "rejected");

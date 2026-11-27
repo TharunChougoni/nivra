@@ -300,10 +300,10 @@ fn candidate_strategy_contract(
     assert!(!c.directory.join("model/strategy-replays").exists());
     let done = submit(&cfg);
     assert_eq!(done["status"], "completed", "{done}");
-    // One call in the 09:21-09:22 window buys AAA near 110.05; its time exit
-    // sells at the next receipt's 110 bid, outside the window.
-    assert_eq!(done["tape"]["strategy_calls"], 1, "{done}");
-    assert_eq!(done["summary"]["trades"], 1, "{done}");
+    // The three archived reads in the window each supply executable depth.
+    // AAA's final time exit still runs on the following read outside the window.
+    assert_eq!(done["tape"]["strategy_calls"], 3, "{done}");
+    assert_eq!(done["summary"]["trades"], 3, "{done}");
     assert_eq!(done["trades"][0]["exit_reason"], "time");
     let sha = done["report_sha256"].as_str().unwrap();
     let kept = fs::read(
@@ -312,8 +312,7 @@ fn candidate_strategy_contract(
     )
     .unwrap();
     assert_eq!(digest(&kept), sha);
-    // One losing trade misses the default bars; the model is told why and
-    // nothing is registered.
+    // The losing tape misses the default acceptance thresholds.
     assert_eq!(done["acceptance"]["verdict"], "rejected", "{done}");
     assert_eq!(
         done["acceptance"]["reasons"],

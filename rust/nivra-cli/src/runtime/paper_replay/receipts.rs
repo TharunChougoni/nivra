@@ -1,5 +1,6 @@
 use super::*;
 
+use nivra_cli::strategy_archive::{AverageDailyVolume, MAX_EXECUTION_TAPE_BYTES};
 use nivra_store::market_archive::{MAX_QUOTE_BODY_BYTES, QuoteBodies};
 
 #[derive(Clone, Copy)]
@@ -11,6 +12,19 @@ pub(crate) struct QuoteSource<'a> {
 impl<'a> QuoteSource<'a> {
     pub(crate) fn new(directory: &'a Path, archive: Option<&'a MarketArchiveSettings>) -> Self {
         Self { directory, archive }
+    }
+
+    pub(super) fn average_daily_volumes(
+        self,
+        keys: &[&str],
+        before: NaiveDate,
+    ) -> std::result::Result<BTreeMap<String, AverageDailyVolume>, String> {
+        let Some(archive) = self.archive else {
+            return Ok(BTreeMap::new());
+        };
+        let mut db = super::super::market_archive::connect(archive)
+            .map_err(|_| "archive_quote_read_failed")?;
+        super::archive_window::prepared_daily_volumes(&mut db, keys, before)
     }
 
     pub(super) fn rows(
@@ -306,20 +320,28 @@ fn archived_receipt_filtered(
         ) else {
             continue;
         };
-        let (Some(lower), Some(upper), Some(volume)) = (
-            row["lower_circuit_limit"].as_number(),
-            row["upper_circuit_limit"].as_number(),
-            row["volume"].as_u64(),
-        ) else {
+        let Ok(fields) = nivra_core::execution::MarketFields::from_row(row) else {
             continue;
         };
         let sha = archive_sha256.get_or_insert_with(|| nivra_core::replay::digest(raw.as_bytes()));
-        observations.push(json!({
+        let mut observation = json!({
             "key":instrument.key,"quote":quote,
-            "lower_circuit_limit":lower.to_string(),"upper_circuit_limit":upper.to_string(),"volume":volume,
+            "lower_circuit_limit":fields.lower_circuit_limit,
+            "upper_circuit_limit":fields.upper_circuit_limit,
+            "volume":fields.volume,
             "archive_sha256":sha,
             "purpose":kind.archive_str()
-        }));
+        });
+        if let Some(vwap) = fields.session_vwap {
+            observation["session_vwap"] = json!(vwap);
+        }
+        if let Some(quantity) = fields.total_buy_quantity {
+            observation["total_buy_quantity"] = json!(quantity);
+        }
+        if let Some(quantity) = fields.total_sell_quantity {
+            observation["total_sell_quantity"] = json!(quantity);
+        }
+        observations.push(observation);
     }
     Ok(QuoteReceipt {
         at_ms: at,
@@ -371,10 +393,17 @@ pub(crate) fn execution_tape_bounded_with_stop(
     if builder.events.is_empty() {
         return Err(SNAPSHOT_UNAVAILABLE.into());
     }
+    let keys = instruments
+        .iter()
+        .map(|instrument| instrument.key.as_str())
+        .collect::<Vec<_>>();
+    let avg_daily_volumes =
+        source.average_daily_volumes(&keys, previous_session.unwrap_or(session))?;
     builder.finish(
         session,
         previous_session,
         instruments,
+        avg_daily_volumes,
         json!({
             "source":"original_paper_quote_journal_read_only"
         }),
@@ -399,7 +428,7 @@ impl ExecutionTapeBuilder {
         if capital <= Amount::ZERO
             || !(1..=10_000).contains(&limits.max_quote_events)
             || !(1..=100_000).contains(&limits.max_observations)
-            || !(1..=16 * 1024 * 1024).contains(&limits.max_tape_bytes)
+            || !(1..=MAX_EXECUTION_TAPE_BYTES as u64).contains(&limits.max_tape_bytes)
         {
             return Err("candidate_execution_tape_invalid".into());
         }
@@ -453,6 +482,7 @@ impl ExecutionTapeBuilder {
         session: NaiveDate,
         previous_session: Option<NaiveDate>,
         instruments: Vec<Instrument>,
+        avg_daily_volumes: BTreeMap<String, AverageDailyVolume>,
         mut provenance: Value,
         require_protection: bool,
     ) -> std::result::Result<ExecutionTape, String> {
@@ -485,6 +515,7 @@ impl ExecutionTapeBuilder {
             "previous_session":previous_session,
             "capital":self.capital,
             "universe":instruments,
+            "avg_daily_volumes":avg_daily_volumes,
             "events_sha256":events_sha256,
             "synthetic":false,
             "max_observation_gap_ms":self.max_gap_ms.max(1),
@@ -544,10 +575,17 @@ pub(crate) fn session_feature_snapshots(
     let previous_session_verified = previous_session.is_some();
     let previous_session =
         previous_session.unwrap_or(session.pred_opt().ok_or("scorer_snapshots_unavailable")?);
+    let keys = evidence
+        .instruments
+        .iter()
+        .map(|instrument| instrument.key.as_str())
+        .collect::<Vec<_>>();
+    let avg_daily_volumes = source.average_daily_volumes(&keys, session)?;
     let manifest = json!({
         "schema":1,"session":session,
         "previous_session":previous_session,
         "capital":"5000","universe":evidence.instruments,
+        "avg_daily_volumes":avg_daily_volumes,
         "events_sha256":nivra_core::replay::digest(events.as_bytes()),
         "synthetic":false,"max_observation_gap_ms":max_gap_ms.max(1),
         "provenance":{

@@ -5,8 +5,17 @@
 ### Upgrade an installed paper host
 
 1. Install the updated binary. The book creates its bounded strategy timing
-   table on the first completed call.
-2. Re-backtest and register action strategies against the new strategy
+   table on the first completed call. Back up the active planner file with a
+   `.pre-full-depth` suffix.
+2. Set `discovery.market_feed.mode` to `"ltpc"` and
+   `discovery.market_feed.depth_mode` to `"full"` in a new planner file.
+   Keep `max_connections` at 1. `shortlist_size` defaults to 40.
+3. Run `nivra planner config-check --planner NEW_PLANNER --session SESSION`.
+   Point `planner_config` in the paper config at the new file and use the
+   reviewed `config-apply` procedure. During the next open session, check
+   `market_feed.full_fresh_keys` in `/api/v1/summary`.
+   [Planner policy changes](docs/OPERATIONS.md#change-the-planner-policy)
+4. Re-backtest and register action strategies against the new strategy
    adapter digest. Existing entries keep their history and need new reports
    before they can run on this build.
 
@@ -16,6 +25,12 @@
   Held-quote reads use a separate worker. Rank, scan, and depth reads keep
   their configured cadences.
 - The summary API reports strategy latency percentiles from quote to gate.
+- Upstox full-mode subscriptions supply paper strategies with displayed depth,
+  session VWAP, book imbalance, and relative volume. The original source and
+  receipt clocks still have to pass the two-second gate.
+- Quote tapes preserve the archived VWAP, book totals, and touch. Archive-backed
+  tapes include pre-session average daily volumes. Rebuild tapes to pick up
+  these fields. The execution tape ceiling is now 32 MiB.
 
 ## 0.16.0 — 2026-11-27
 

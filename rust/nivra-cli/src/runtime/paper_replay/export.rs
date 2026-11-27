@@ -136,12 +136,18 @@ fn write_tape(
         .iter()
         .filter(|instrument| seen.contains(&instrument.key))
         .collect::<Vec<_>>();
+    let keys = universe
+        .iter()
+        .map(|instrument| instrument.key.as_str())
+        .collect::<Vec<_>>();
+    let avg_daily_volumes = c.quote_source().average_daily_volumes(&keys, c.session)?;
     let manifest = serde_json::to_vec(&json!({
         "schema":1,
         "session":c.session,
         "previous_session":c.previous_session,
         "capital":c.allocation().map_err(|_| "positive_paper_capital_required".to_string())?,
         "universe":universe,
+        "avg_daily_volumes":avg_daily_volumes,
         "events_sha256":events_sha256,
         "synthetic":false,
         "max_observation_gap_ms":max_gap_ms.max(1),

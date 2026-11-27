@@ -7,10 +7,25 @@ use nivra_core::{
 use rusqlite::{Connection, OpenFlags, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
+
+pub const MAX_EXECUTION_TAPE_BYTES: usize = 32 * 1024 * 1024;
 
 fn rejected() -> String {
     "strategy_source_rejected".into()
+}
+
+/// One `avg_daily_volumes` entry of a tape manifest: the mean daily volume of
+/// prepared sessions, mirroring the live history preparation that feeds
+/// `rel_volume_tod`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AverageDailyVolume {
+    pub average: f64,
+    pub sessions: u32,
 }
 
 #[derive(Deserialize)]
@@ -18,6 +33,8 @@ fn rejected() -> String {
 struct PaperManifest {
     #[serde(default)]
     paper_costs: Option<nivra_core::finance::FeeArithmetic>,
+    #[serde(default)]
+    avg_daily_volumes: Option<BTreeMap<String, AverageDailyVolume>>,
     schema: u32,
     session: chrono::NaiveDate,
     previous_session: chrono::NaiveDate,
@@ -78,6 +95,13 @@ pub fn archive_identity(manifest: &[u8], events: &[u8]) -> Result<ArchiveIdentit
                 return Err(rejected());
             }
         }
+        if paper.avg_daily_volumes.as_ref().is_some_and(|volumes| {
+            volumes.iter().any(|(key, v)| {
+                !keys.contains(key) || !v.average.is_finite() || v.average <= 0.0 || v.sessions == 0
+            })
+        }) {
+            return Err(rejected());
+        }
         Ok((paper.previous_session, paper.session, paper.universe))
     } else {
         let historical: Manifest = serde_json::from_value(value).map_err(|_| rejected())?;
@@ -93,6 +117,21 @@ pub fn archive_identity(manifest: &[u8], events: &[u8]) -> Result<ArchiveIdentit
             historical.universe,
         ))
     }
+}
+
+pub fn load_daily_volume_baselines(scanner: &mut Scanner, manifest: &[u8]) -> Result<(), String> {
+    #[derive(Deserialize)]
+    struct Baselines {
+        #[serde(default)]
+        avg_daily_volumes: BTreeMap<String, AverageDailyVolume>,
+    }
+    let baselines: Baselines = serde_json::from_slice(manifest).map_err(|_| rejected())?;
+    for (key, volume) in baselines.avg_daily_volumes {
+        let sample = scanner.samples.entry(key).or_default();
+        sample.avg_daily_volume = Some(volume.average);
+        sample.avg_daily_volume_sessions = Some(volume.sessions);
+    }
+    Ok(())
 }
 
 /// Validate the exact manifest/events binding without exporting features.
@@ -179,6 +218,7 @@ pub fn export_features_configured(
         .map(|instrument| (instrument.key.as_str(), instrument))
         .collect();
     let mut scanner = Scanner::default();
+    load_daily_volume_baselines(&mut scanner, manifest)?;
     let mut last = None;
     let mut snapshots = Vec::new();
     let mut count = 0usize;
