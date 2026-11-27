@@ -378,7 +378,7 @@ test("skills load from default repo skills and the book workspace, and read reso
   assert.equal(r1.status, "ok", r1.error);
   assert.deepEqual(agent.skillDiagnostics("research"), []);
   const names = agent.loadedSkills("research").map((s) => s.name).sort();
-  assert.deepEqual(names, ["backtest-methodology", "custom-gap-fade", "regime-check", "strategy-abi", "strategy-review"]);
+  assert.deepEqual(names, ["backtest-methodology", "custom-gap-fade", "regime-check", "strategy-abi", "strategy-library", "strategy-review"]);
 
   const sysPrompt = agent.systemPrompt("research") ?? "";
   assert.ok(sysPrompt.includes("<available_skills>"));
@@ -433,6 +433,6 @@ test("malformed and colliding skills produce diagnostics without failing the tur
   const emitted = sent.filter((m): m is Extract<Outbound, { type: "event" }> => m.type === "event" && m.event.kind === "skill_diagnostic");
   assert.equal(emitted.length, diagnostics.length);
   // Default skills still loaded cleanly.
-  assert.equal(agent.loadedSkills("review").length, 4);
+  assert.equal(agent.loadedSkills("review").length, 5);
   agent.dispose();
 });
