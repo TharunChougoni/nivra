@@ -1,5 +1,51 @@
 # Source snapshot
 
+## 0.15.0 — 2026-11-27
+
+A strategy runs from the open, and the gate screens F&O.
+
+### Upgrade an installed paper host
+
+1. Install the release (stop, `update --operator-stopped`, or the updater
+   after the close). No book or data migration.
+2. In the planner, set `strategy_execution.fallback` to the shipped action
+   strategies you want as fallbacks, best first (for example
+   `["bollinger_reversion"]`), run `nivra planner config-check`, then apply it
+   with `config-apply` and keep a `*.pre-fallback` backup.
+3. Keep `nifty_options.enabled: true` with the `NSE_FO` fee schedule in the
+   paper config; without it the gate lane never runs.
+4. Refresh the pi agent runtime on the run host so the new prompts and the
+   `strategy-library` skill load.
+
+### Added
+
+- **09:00 strategy choice.** At `agent.triggers.decision.pre_open_minute`
+  (default 540, 09:00 IST) the decision lane picks today's strategy: an
+  accepted library version, a configured fallback, or none. When nothing
+  accepted can run, research gets a `strategy_search` task that replays the
+  shipped strategies over the last `recent_archive_sessions` (default 3)
+  closed sessions and registers what passes acceptance.
+- **Fallback strategies.** `strategy_execution.fallback` lists shipped action
+  strategies to run while no accepted version can. A fallback is labelled
+  `fallback:<name>` on actions, fills, refusals, briefs and the dashboard and
+  goes through the same execution gate. An accepted version, an owner pin or a
+  lane stand-down stops it.
+- **F&O gate.** The gate lane wakes on `fo_signal` triggers (Nifty spot,
+  near-money premium or open-interest moves on tradable contracts) and hands
+  the decision lane up to five ranked option prospects, checked against the
+  option universe, as `gate_prospects`. Thresholds are under
+  `agent.triggers.fo`. Cash entry candidates go straight to the decision lane.
+- Every build ships `strategies/`; lane workspaces get it read-only under
+  `reference/strategies/`. `action-bench` replays action strategies over
+  archived quote tapes (`strategies/BENCHMARK.md`).
+- `AGENTS.md` rules: configuration follows the owner's intent; codebase
+  structure and change rules.
+
+### Changed
+
+- `regime_changed` supervision turns fire whenever strategy execution is on.
+- A replay on the current build replaces an acceptance made by an older build.
+
 ## 0.14.1 — 2026-11-27
 
 **Paper fills must carry their fee policy and benchmark price.** Every fill
