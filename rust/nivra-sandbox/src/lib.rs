@@ -1,5 +1,6 @@
 //! Offline Python scoring only. Never starts sessions or selects a runtime strategy.
 pub mod env;
+pub mod hardening;
 pub mod library;
 pub mod selector;
 pub mod stream;
@@ -543,6 +544,7 @@ fn cleanup(child: &mut std::process::Child, pid: i32, normal_exit: bool) -> Bwra
         unsafe {
             libc::kill(-pid, libc::SIGKILL);
         }
+        let _ = child.kill();
         true
     };
     let waited = child.wait().is_ok();
@@ -603,21 +605,6 @@ fn spawn(
     let (result, normal_exit) = run_child(c, &mut child);
     let receipt = cleanup(&mut child, pid, normal_exit);
     (result, receipt)
-}
-
-/// Run a program on one JSON document under the same containment and limits
-/// as a ranker, returning its bounded stdout. The caller parses the output
-/// for its own ABI. A config that shares the network is refused here.
-pub fn run_document(
-    c: &SandboxConfig,
-    source: &[u8],
-    input: &serde_json::Value,
-) -> Result<Vec<u8>, Failure> {
-    if c.network {
-        return Err(Failure::Config);
-    }
-    let input = serde_json::to_vec(input).map_err(|_| Failure::Input)?;
-    spawn(c, prepare_input(c, source, &input)).0
 }
 
 /// Score already-loaded source bytes (for example an exact library version).
@@ -1113,17 +1100,6 @@ print(json.dumps({k: numpy.score_val(v["x"]) for k, v in data.items()}))
                 &features,
             ),
             Err(Failure::Exit)
-        );
-        assert_eq!(
-            run_document(
-                &SandboxConfig {
-                    network: true,
-                    ..configured.clone()
-                },
-                b"print('{}')",
-                &serde_json::json!({}),
-            ),
-            Err(Failure::Config)
         );
 
         // Tampering with an environment file invalidates the pinned hash.

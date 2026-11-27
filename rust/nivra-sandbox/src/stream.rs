@@ -1,4 +1,4 @@
-//! A sandboxed Python process with bounded, lockstep JSON-lines input/output.
+//! A bounded, lockstep JSON-lines process transport, with a bubblewrap launcher.
 use super::{Failure, SandboxConfig, cleanup, prepare_program};
 use std::{
     io::{BufRead, BufReader, Read, Write},
@@ -46,19 +46,12 @@ fn ready(fd: &impl AsFd, events: i16, until: Instant) -> Result<(), Failure> {
 }
 
 impl Stream {
-    pub fn start(
-        config: &SandboxConfig,
-        program: &[u8],
-        initialization: &[u8],
-        cpu_seconds: u64,
+    /// Wrap an already-spawned child whose stdin and stdout are piped.
+    pub fn from_pipes(
+        mut child: Child,
+        wall: Duration,
+        max_output: usize,
     ) -> Result<Self, Failure> {
-        if config.network || !(1..=600).contains(&cpu_seconds) {
-            return Err(Failure::Config);
-        }
-        let mut prepared = prepare_program(config, program, initialization, cpu_seconds)?;
-        // Keep the mounted files until bwrap has consumed them.
-        prepared.cmd.stdin(Stdio::piped());
-        let mut child = prepared.cmd.spawn().map_err(|_| Failure::Setup)?;
         let pipes = (|| {
             let input = child.stdin.take().ok_or(Failure::Setup)?;
             let output = child.stdout.take().ok_or(Failure::Setup)?;
@@ -74,19 +67,48 @@ impl Stream {
                 return Err(error);
             }
         };
-        let mut stream = Self {
+        Ok(Self {
             child,
             input: Some(input),
             output: BufReader::new(output),
-            wall: Duration::from_millis(config.wall_ms),
-            max_output: config.max_output_bytes,
-        };
+            wall,
+            max_output,
+        })
+    }
+
+    pub fn start(
+        config: &SandboxConfig,
+        program: &[u8],
+        initialization: &[u8],
+        cpu_seconds: u64,
+    ) -> Result<Self, Failure> {
+        if config.network || !(1..=600).contains(&cpu_seconds) {
+            return Err(Failure::Config);
+        }
+        let mut prepared = prepare_program(config, program, initialization, cpu_seconds)?;
+        // Keep the mounted files until bwrap has consumed them.
+        prepared.cmd.stdin(Stdio::piped());
+        let child = prepared.cmd.spawn().map_err(|_| Failure::Setup)?;
+        let mut stream = Self::from_pipes(
+            child,
+            Duration::from_millis(config.wall_ms),
+            config.max_output_bytes,
+        )?;
         let mut line = Vec::new();
-        stream.read_line(&mut line, Instant::now() + stream.wall)?;
+        stream.read_line_within(&mut line, stream.wall)?;
         if line != b"ready\n" {
             return Err(Failure::OutputInvalid);
         }
         Ok(stream)
+    }
+
+    /// Read one newline-delimited frame before `timeout` elapses.
+    pub fn read_line_within(
+        &mut self,
+        response: &mut Vec<u8>,
+        timeout: Duration,
+    ) -> Result<(), Failure> {
+        self.read_line(response, Instant::now() + timeout)
     }
 
     fn read_line(&mut self, response: &mut Vec<u8>, until: Instant) -> Result<(), Failure> {
@@ -109,8 +131,18 @@ impl Stream {
     }
 
     /// Send one complete timestamp batch and wait for its actions.
-    pub fn exchange(&mut self, mut line: &[u8], response: &mut Vec<u8>) -> Result<(), Failure> {
-        let until = Instant::now() + self.wall;
+    pub fn exchange(&mut self, line: &[u8], response: &mut Vec<u8>) -> Result<(), Failure> {
+        self.exchange_within(line, response, self.wall)
+    }
+
+    /// Send one request line and read one response line before `timeout` elapses.
+    pub fn exchange_within(
+        &mut self,
+        mut line: &[u8],
+        response: &mut Vec<u8>,
+        timeout: Duration,
+    ) -> Result<(), Failure> {
+        let until = Instant::now() + timeout;
         let input = self.input.as_mut().ok_or(Failure::Setup)?;
         while !line.is_empty() {
             ready(input, libc::POLLOUT, until)?;
