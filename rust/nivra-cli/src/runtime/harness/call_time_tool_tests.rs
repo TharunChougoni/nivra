@@ -183,7 +183,7 @@ fn data_and_granted_tool_schemas_use_configured_limits() {
     })).unwrap());
     assert_eq!(
         backtest[0]["parameters"]["properties"]["dataset_id"]["enum"],
-        json!(["recent", "archive_bars"])
+        json!(["recent", "archive_bars", "recent_archive"])
     );
     for tool in digest.iter().chain(owner.iter()).chain(backtest.iter()) {
         strict_schema(&tool["parameters"]);

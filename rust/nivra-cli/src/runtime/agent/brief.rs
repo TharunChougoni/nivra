@@ -52,9 +52,17 @@ pub(crate) struct EligibleStrategyFacts {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub(crate) struct StrategyLibraryFacts {
     pub execution_enabled: bool,
+    /// What the executor runs: an accepted strategy id or `fallback:<name>`.
     pub active_strategy_id: Option<String>,
+    /// `accepted` or `fallback` when something runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_basis: Option<&'static str>,
+    /// Why no accepted version runs, beside a fallback or nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_blocked_reason: Option<&'static str>,
+    /// Configured fallback references, best first. Their sources are in the
+    /// workspace under `reference/strategies/`.
+    pub fallback: Vec<String>,
     pub owner_pinned: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lane_selection: Option<crate::runtime::strategy_library::LaneSelection>,
@@ -336,13 +344,16 @@ pub(crate) fn strategy_facts(
     }
     let root = crate::runtime::strategy_library::root(c).ok()?;
     let library = crate::runtime::strategy_library::Library::at(root);
-    let resolved = match library.resolve() {
-        Ok(resolved) => resolved,
+    let fallback = cfg.strategy_fallback().to_vec();
+    let choice = match crate::runtime::strategy_library::choice::choose(&library, &fallback) {
+        Ok(choice) => choice,
         Err(_) => {
             return Some(StrategyLibraryFacts {
                 execution_enabled: true,
                 active_strategy_id: None,
+                active_basis: None,
                 active_blocked_reason: Some("strategy_library_unavailable"),
+                fallback,
                 owner_pinned: None,
                 lane_selection: None,
                 active_live_outcomes: BTreeMap::new(),
@@ -350,47 +361,44 @@ pub(crate) fn strategy_facts(
             });
         }
     };
-    let mut active_blocked_reason = None;
+    let resolved = &choice.resolved;
     let eligible: Vec<EligibleStrategyFacts> = resolved
-        .entries
-        .iter()
+        .eligible()
         .rev()
-        .filter(|e| !resolved.disabled.contains(&e.strategy_id))
         .take(MAX_STRATEGIES)
-        .map(|entry| {
-            let active = resolved.active.as_deref() == Some(entry.strategy_id.as_str());
-            let blocked_reason = match library.report(entry) {
+        .map(|entry| EligibleStrategyFacts {
+            strategy_id: entry.strategy_id.clone(),
+            active: resolved.active.as_deref() == Some(entry.strategy_id.as_str()),
+            pinned: resolved.pinned.as_deref() == Some(entry.strategy_id.as_str()),
+            registered_at_ms: entry.registered_at_ms,
+            author: entry.author.clone(),
+            trades: entry.summary["trades"].clone(),
+            net_pnl: entry.summary["net_pnl"].clone(),
+            worst_drawdown: entry.summary["worst_drawdown"].clone(),
+            tape_dates: entry.tape_dates.clone(),
+            blocked_reason: match library.report(entry) {
                 Ok(report) => crate::runtime::strategy_library::build_mismatch(&report),
                 Err(_) => Some("strategy_library_report_unreadable"),
-            };
-            if active {
-                active_blocked_reason = blocked_reason;
-            }
-            EligibleStrategyFacts {
-                strategy_id: entry.strategy_id.clone(),
-                active,
-                pinned: resolved.pinned.as_deref() == Some(entry.strategy_id.as_str()),
-                registered_at_ms: entry.registered_at_ms,
-                author: entry.author.clone(),
-                trades: entry.summary["trades"].clone(),
-                net_pnl: entry.summary["net_pnl"].clone(),
-                worst_drawdown: entry.summary["worst_drawdown"].clone(),
-                tape_dates: entry.tape_dates.clone(),
-                blocked_reason,
-            }
+            },
         })
         .collect();
-    let active_live_outcomes = resolved
-        .active
+    let running = choice.running.as_ref();
+    let active_strategy_id = running.map(|r| r.run_id());
+    let active_live_outcomes = active_strategy_id
         .as_deref()
         .map(|id| crate::runtime::wide::strategy_run::outcome_counts(db, id))
         .unwrap_or_default();
     Some(StrategyLibraryFacts {
         execution_enabled: true,
-        active_strategy_id: resolved.active,
-        active_blocked_reason,
-        owner_pinned: resolved.pinned,
-        lane_selection: resolved.lane_selection,
+        active_basis: running.map(|r| match r {
+            crate::runtime::strategy_library::choice::Running::Accepted { .. } => "accepted",
+            crate::runtime::strategy_library::choice::Running::Fallback(_) => "fallback",
+        }),
+        active_strategy_id,
+        active_blocked_reason: choice.reason,
+        fallback,
+        owner_pinned: resolved.pinned.clone(),
+        lane_selection: resolved.lane_selection.clone(),
         active_live_outcomes,
         eligible,
     })

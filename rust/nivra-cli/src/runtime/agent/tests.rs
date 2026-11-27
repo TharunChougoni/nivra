@@ -210,7 +210,10 @@ fn all_tools(dir: &std::path::Path) -> (Config, planner::PlannerConfig) {
         }),
         registrations: Vec::new(),
     });
-    cfg.strategy_execution = Some(planner::StrategyExecution { enabled: true });
+    cfg.strategy_execution = Some(planner::StrategyExecution {
+        enabled: true,
+        ..Default::default()
+    });
     // The turn guard refuses a policy that differs from the reviewed file.
     std::fs::write(
         c.planner_config.as_ref().unwrap(),
@@ -1192,7 +1195,10 @@ fn decision_lane_supervises_strategies_and_refuses_cash_buys_while_active() {
 
     let dir = tempfile::tempdir().unwrap();
     let (c, mut cfg) = all_tools(dir.path());
-    cfg.strategy_execution = Some(planner::StrategyExecution { enabled: true });
+    cfg.strategy_execution = Some(planner::StrategyExecution {
+        enabled: true,
+        ..Default::default()
+    });
     std::fs::write(
         c.planner_config.as_ref().unwrap(),
         serde_json::to_vec(&cfg).unwrap(),

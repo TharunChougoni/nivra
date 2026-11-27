@@ -7,7 +7,10 @@
 //! Paper only.
 use super::*;
 use crate::runtime::strategy::{self, ActionResult, Observation, Prospect};
-use crate::runtime::strategy_library::{Entry, Library, build_mismatch};
+use crate::runtime::strategy_library::{
+    Library,
+    choice::{self, Running},
+};
 use nivra_core::market::MAX_FINANCIAL_AGE_MS;
 use nivra_sandbox::SandboxConfig;
 use serde_json::{Value, json};
@@ -23,8 +26,12 @@ const ACTION_TABLE: &str = "CREATE TABLE IF NOT EXISTS strategy_action(id INTEGE
 /// Active strategy supervision state for the agent lanes and execution gate.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SupervisionState {
+    /// The run id of what the executor runs: an accepted strategy id or a
+    /// `fallback:<name>` reference.
     pub active_id: Option<String>,
-    pub any_eligible: bool,
+    /// Strategy execution is on: the decision lane supervises the choice at
+    /// the open, before it and on regime changes, even with nothing running.
+    pub supervised: bool,
 }
 
 impl SupervisionState {
@@ -33,33 +40,18 @@ impl SupervisionState {
     }
 }
 
-/// Inspect the library when `strategy_execution` is enabled: returns the
-/// runnable active strategy id (matching this build's engine and adapter) and
-/// whether any eligible strategies exist for supervision.
+/// What the executor would run now when `strategy_execution` is enabled.
 pub(crate) fn supervision_state(c: &Config, cfg: &planner::PlannerConfig) -> SupervisionState {
     if !cfg.runs_strategies() {
         return SupervisionState::default();
     }
-    let Ok(root) = crate::runtime::strategy_library::root(c) else {
-        return SupervisionState::default();
-    };
-    let library = Library::at(root);
-    let Ok(resolved) = library.resolve() else {
-        return SupervisionState::default();
-    };
-    let any_eligible = resolved.eligible().any(|entry| {
-        library
-            .entry_build_mismatch(entry)
-            .is_ok_and(|reason| reason.is_none())
-    });
-    let active_id = resolved.active.as_deref().and_then(|id| {
-        let entry = resolved.entries.iter().find(|e| e.strategy_id == id)?;
-        let report = library.report(entry).ok()?;
-        build_mismatch(&report).is_none().then(|| id.to_owned())
-    });
+    let active_id = crate::runtime::strategy_library::root(c)
+        .ok()
+        .and_then(|root| choice::choose(&Library::at(root), cfg.strategy_fallback()).ok())
+        .and_then(|choice| choice.running.map(|running| running.run_id()));
     SupervisionState {
         active_id,
-        any_eligible,
+        supervised: true,
     }
 }
 
@@ -88,7 +80,8 @@ pub(crate) fn outcome_counts(db: &Connection, strategy_id: &str) -> BTreeMap<Str
 }
 
 struct Active {
-    entry: Entry,
+    running: Running,
+    run_id: String,
     source: Vec<u8>,
     top_n: usize,
 }
@@ -149,10 +142,12 @@ struct InFlight {
 pub(super) struct StrategyRun {
     library: Library,
     sandbox: SandboxConfig,
+    /// Reference strategies to run, best first, while no accepted one can.
+    fallback: Vec<String>,
     active: Option<Active>,
     resolved_at: Option<i64>,
-    /// Why no call starts: no active entry, a build mismatch or a library
-    /// read failure.
+    /// Why no accepted version runs: no active entry, a build mismatch, a
+    /// stand-down or a library read failure. Set beside a fallback too.
     blocked: Option<&'static str>,
     in_flight: Option<InFlight>,
     /// The failure last journaled, so a repeating one is written once.
@@ -164,10 +159,11 @@ pub(super) struct StrategyRun {
 }
 
 impl StrategyRun {
-    pub(super) fn new(library: Library, sandbox: SandboxConfig) -> Self {
+    pub(super) fn new(library: Library, sandbox: SandboxConfig, fallback: Vec<String>) -> Self {
         Self {
             library,
             sandbox,
+            fallback,
             active: None,
             resolved_at: None,
             blocked: None,
@@ -180,29 +176,21 @@ impl StrategyRun {
         }
     }
 
-    fn resolve(&self) -> Result<std::result::Result<Active, &'static str>> {
-        let resolved = self.library.resolve()?;
-        let Some(id) = resolved.active.as_deref() else {
-            return Ok(Err("no_active_strategy"));
+    fn resolve(&self) -> Result<(Option<Active>, Option<&'static str>)> {
+        let choice = choice::choose(&self.library, &self.fallback)?;
+        let active = match choice.running {
+            Some(running) => Some(Active {
+                top_n: running.top_n()?,
+                run_id: running.run_id(),
+                source: match &running {
+                    Running::Accepted { entry, .. } => self.library.source(entry)?,
+                    Running::Fallback(reference) => reference.source.to_vec(),
+                },
+                running,
+            }),
+            None => None,
         };
-        let entry = resolved
-            .entries
-            .iter()
-            .find(|e| e.strategy_id == id)
-            .ok_or("strategy_not_found")?
-            .clone();
-        let report = self.library.report(&entry)?;
-        if let Some(reason) = build_mismatch(&report) {
-            return Ok(Err(reason));
-        }
-        let top_n = report["parameters"]["top_n"]
-            .as_u64()
-            .map_or(Ok(20), usize::try_from)?;
-        Ok(Ok(Active {
-            source: self.library.source(&entry)?,
-            entry,
-            top_n,
-        }))
+        Ok((active, choice.reason))
     }
 
     /// The prospect count for a call to start now, or `None` when none may:
@@ -214,11 +202,16 @@ impl StrategyRun {
             self.active = None;
             self.blocked = None;
             match self.resolve() {
-                Ok(Ok(active)) => self.active = Some(active),
-                Ok(Err("no_active_strategy")) => self.blocked = Some("no_active_strategy"),
-                Ok(Err(reason)) => {
-                    self.blocked = Some(reason);
-                    self.fail(db, c, now, None, reason)?;
+                Ok((active, reason)) => {
+                    let quiet = matches!(
+                        reason,
+                        None | Some("no_active_strategy" | "strategy_lane_stood_down")
+                    );
+                    self.blocked = reason;
+                    if let (Some(reason), false) = (reason, quiet || active.is_some()) {
+                        self.fail(db, c, now, None, reason)?;
+                    }
+                    self.active = active;
                 }
                 Err(error) => {
                     self.blocked = Some("strategy_library_unavailable");
@@ -245,7 +238,7 @@ impl StrategyRun {
         }
         let sandbox = self.sandbox.clone();
         let source = active.source.clone();
-        let params = active.entry.params.clone();
+        let params = active.running.params().clone();
         let quotes = frozen.quotes.clone();
         let handle = std::thread::spawn(move || {
             let costs = frozen.portfolio.costs.clone();
@@ -268,7 +261,7 @@ impl StrategyRun {
         self.calls += 1;
         self.last_call_at_ms = Some(frozen.at_ms);
         self.in_flight = Some(InFlight {
-            strategy_id: active.entry.strategy_id.clone(),
+            strategy_id: active.run_id.clone(),
             observed_at: frozen.at_ms,
             quotes,
             handle,
@@ -367,32 +360,42 @@ impl StrategyRun {
     /// The dashboard's view: the active entry, the counters, and the latest
     /// actions, gate refusals and fills.
     pub(super) fn status(&self, db: &Connection, p: &Portfolio) -> Value {
-        let active = self.active.as_ref().map(|a| &a.entry);
         let state = if self.in_flight.is_some() {
             "calling"
-        } else if active.is_some() {
+        } else if self.active.is_some() {
             "ready"
         } else {
             "blocked"
         };
-        let fills: Vec<_> = active
-            .map(|e| {
+        let fills: Vec<_> = self
+            .active
+            .as_ref()
+            .map(|a| {
                 p.fills
                     .iter()
                     .rev()
-                    .filter(|f| f.decision_id.as_deref() == Some(e.strategy_id.as_str()))
+                    .filter(|f| f.decision_id.as_deref() == Some(a.run_id.as_str()))
                     .take(RECENT)
                     .collect()
             })
             .unwrap_or_default();
+        let strategy = self.active.as_ref().map(|a| match &a.running {
+            Running::Accepted { entry: e, .. } => json!({
+                "strategy_id": e.strategy_id, "basis": "accepted", "author": e.author,
+                "summary": e.summary, "tape_dates": e.tape_dates,
+                "registered_at_ms": e.registered_at_ms,
+            }),
+            Running::Fallback(reference) => json!({
+                "strategy_id": a.run_id, "basis": "fallback", "name": reference.name,
+                "source_sha256": digest(reference.source),
+            }),
+        });
         json!({
             "enabled": true,
             "state": state,
             "reason": self.blocked,
-            "strategy": active.map(|e| json!({
-                "strategy_id": e.strategy_id, "author": e.author, "summary": e.summary,
-                "tape_dates": e.tape_dates, "registered_at_ms": e.registered_at_ms,
-            })),
+            "strategy": strategy,
+            "fallback": self.fallback,
             "calls": self.calls, "failures": self.failures, "skipped": self.skipped,
             "last_call_at_ms": self.last_call_at_ms, "last_failure": self.last_failure,
             "actions": recent_actions(db).unwrap_or_default(),
@@ -471,6 +474,7 @@ fn apply_cycle(
         rusqlite::params![
             now,
             json!({"strategy_id":strategy_id,"observed_at_ms":observed_at,
+                "basis":if choice::is_fallback(strategy_id) { "fallback" } else { "accepted" },
                 "outcomes":results.iter().map(|r| r.outcome.as_str()).collect::<Vec<_>>()})
             .to_string()
         ],

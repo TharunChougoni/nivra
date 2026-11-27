@@ -301,7 +301,13 @@ fn registration_is_immutable_and_controls_change_the_active_strategy() {
     );
     // While owner pin `a` holds, lane selection records its reason without overriding `a`.
     let resolved = library
-        .select_by_lane(Some(&b[..12]), "regime favors b", Some("decision-1"), 6_000)
+        .select_by_lane(
+            Some(&b[..12]),
+            &[],
+            "regime favors b",
+            Some("decision-1"),
+            6_000,
+        )
         .unwrap();
     assert_eq!(resolved.active, Some(a.clone()));
     assert_eq!(
@@ -322,7 +328,7 @@ fn registration_is_immutable_and_controls_change_the_active_strategy() {
     );
     assert!(
         library
-            .select_by_lane(Some(&b), "try disabled", None, 6_500)
+            .select_by_lane(Some(&b), &[], "try disabled", None, 6_500)
             .is_err()
     );
     // Lane can stand down (`None`) when unpinned, and owner pin still overrides `None`.
@@ -333,7 +339,7 @@ fn registration_is_immutable_and_controls_change_the_active_strategy() {
         Some(b.clone())
     );
     let stood_down = library
-        .select_by_lane(None, "unknown regime", Some("decision-2"), 7_000)
+        .select_by_lane(None, &[], "unknown regime", Some("decision-2"), 7_000)
         .unwrap();
     assert_eq!(stood_down.active, None);
     assert_eq!(
@@ -354,4 +360,133 @@ fn registration_is_immutable_and_controls_change_the_active_strategy() {
     )
     .unwrap();
     assert!(library.resolve().is_err());
+}
+
+#[test]
+fn a_configured_fallback_runs_only_until_an_accepted_version_can() {
+    use super::choice::{Running, choose};
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::at(dir.path().join("strategy-library"));
+    let fallback = vec!["vwap_trend".to_owned(), "vwap_reversion".to_owned()];
+    let running = |library: &Library, fallback: &[String]| {
+        let choice = choose(library, fallback).unwrap();
+        (choice.running.map(|r| r.run_id()), choice.reason)
+    };
+    // Nothing accepted and nothing configured: nothing runs, and says why.
+    assert_eq!(running(&library, &[]), (None, Some("no_active_strategy")));
+    // The first configured fallback runs, labelled, with its shipped params.
+    let choice = choose(&library, &fallback).unwrap();
+    let Some(Running::Fallback(reference)) = &choice.running else {
+        panic!("fallback expected");
+    };
+    assert_eq!(reference.run_id(), "fallback:vwap_trend");
+    assert_eq!(
+        reference.source,
+        &include_bytes!("../../../../../strategies/vwap_trend.py")[..]
+    );
+    assert_eq!(reference.params["max_positions"], 2);
+    assert_eq!(choice.reason, Some("no_active_strategy"));
+    // The lane may pick another configured fallback, never an unlisted one.
+    let lane = |id: Option<&str>, at| library.select_by_lane(id, &fallback, "regime", None, at);
+    lane(Some("fallback:vwap_reversion"), 1).unwrap();
+    assert_eq!(
+        running(&library, &fallback).0.as_deref(),
+        Some("fallback:vwap_reversion")
+    );
+    assert!(lane(Some("fallback:circuit_magnet"), 2).is_err());
+    // A version accepted on another build leaves the fallback running.
+    let author = Author {
+        lane: "research".into(),
+        model: None,
+        model_revision: None,
+        turn_id: None,
+        session: None,
+    };
+    let register = |n: u64, engine: String, at| {
+        let (bytes, sha) = report(|r| {
+            r["parameters"]["params"] = json!({"n": n});
+            r["engine_sha256"] = json!(engine);
+            r["adapter_sha256"] = json!(super::super::strategy::replay::adapter_sha256());
+        });
+        let accepted = accept(&bytes, &sha, SOURCE, &Thresholds::default()).unwrap();
+        library
+            .register(&accepted, author.clone(), at)
+            .unwrap()
+            .entry
+            .strategy_id
+    };
+    let stale = register(1, "0".repeat(64), 3);
+    assert_eq!(
+        running(&library, &fallback),
+        (
+            Some("fallback:vwap_reversion".into()),
+            Some("strategy_engine_changed")
+        )
+    );
+    // An owner pin on a version that cannot run here runs nothing.
+    library
+        .append(ControlRecord {
+            at_ms: 4,
+            control: Control::Pin {
+                strategy_id: stale.clone(),
+            },
+        })
+        .unwrap();
+    assert_eq!(
+        running(&library, &fallback),
+        (None, Some("strategy_engine_changed"))
+    );
+    library
+        .append(ControlRecord {
+            at_ms: 5,
+            control: Control::Unpin,
+        })
+        .unwrap();
+    // A runnable accepted version wins over the lane's fallback choice.
+    let current = register(2, nivra_core::replay::engine_fingerprint(), 6);
+    assert_eq!(running(&library, &fallback), (Some(current.clone()), None));
+    // A lane stand-down runs nothing, fallback included.
+    lane(None, 7).unwrap();
+    assert_eq!(
+        running(&library, &fallback),
+        (None, Some("strategy_lane_stood_down"))
+    );
+    // An owner pin still wins.
+    library
+        .append(ControlRecord {
+            at_ms: 8,
+            control: Control::Pin {
+                strategy_id: current.clone(),
+            },
+        })
+        .unwrap();
+    assert_eq!(running(&library, &fallback), (Some(current), None));
+}
+
+#[test]
+fn fallback_config_names_only_shipped_action_references() {
+    let parse = |json: &str| super::super::planner::PlannerConfig::parse(json.as_bytes());
+    let ok = parse(r#"{"enabled":false,"strategy_execution":{"enabled":true,"fallback":["vwap_trend","opening_range_breakout"]}}"#).unwrap();
+    assert_eq!(
+        ok.strategy_fallback(),
+        ["vwap_trend", "opening_range_breakout"]
+    );
+    for bad in [
+        "rsi2_reversion",
+        "check_actions",
+        "missing",
+        "costs/nse-intraday",
+    ] {
+        let json = format!(
+            r#"{{"enabled":false,"strategy_execution":{{"enabled":true,"fallback":["{bad}"]}}}}"#
+        );
+        assert!(parse(&json).is_err(), "{bad}");
+    }
+    assert!(parse(r#"{"enabled":false,"strategy_execution":{"enabled":true,"fallback":["vwap_trend","vwap_trend"]}}"#).is_err());
+    // Disabled execution runs no fallback.
+    let off = parse(
+        r#"{"enabled":false,"strategy_execution":{"enabled":false,"fallback":["vwap_trend"]}}"#,
+    )
+    .unwrap();
+    assert!(off.strategy_fallback().is_empty());
 }

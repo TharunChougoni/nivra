@@ -149,6 +149,11 @@ pub(crate) struct PlannerConfig {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct StrategyExecution {
     pub enabled: bool,
+    /// Reference action strategies (`strategies/<name>.py`), best first, that
+    /// run labelled as fallback while no accepted library version can run on
+    /// this build. Empty runs nothing until a version is accepted.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fallback: Vec<String>,
 }
 /// Operational allowances do not change the frozen trading policy. Shadow-only
 /// selector diagnostics remain excluded; live ranking participates in the policy.
@@ -199,6 +204,13 @@ impl PlannerConfig {
     }
     pub(crate) fn runs_strategies(&self) -> bool {
         self.strategy_execution.as_ref().is_some_and(|s| s.enabled)
+    }
+    /// The configured fallback names, best first; empty when execution is off.
+    pub(crate) fn strategy_fallback(&self) -> &[String] {
+        match &self.strategy_execution {
+            Some(s) if s.enabled => &s.fallback,
+            _ => &[],
+        }
     }
     pub(crate) fn uses_pi_paper(&self) -> bool {
         self.agent
@@ -311,6 +323,9 @@ impl PlannerConfig {
         }
         if let Some(thresholds) = &c.strategy_acceptance {
             thresholds.validate()?;
+        }
+        if let Some(execution) = &c.strategy_execution {
+            super::strategy_library::reference::validate_fallback(&execution.fallback)?;
         }
         if let Some(env) = &c.research_env {
             env.validate()?;

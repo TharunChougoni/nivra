@@ -15,8 +15,6 @@ use std::{
 };
 
 const MAX_RANKER_INPUT_BYTES: usize = 65_536;
-const REFERENCE_STRATEGIES: &[(&str, &[u8])] =
-    include!(concat!(env!("OUT_DIR"), "/reference_strategies.rs"));
 
 const README: &str = r#"# Orchestrator workspace
 
@@ -408,7 +406,7 @@ pub(crate) fn ensure(book: &Path, settings: &WorkspaceSettings) -> Result<PathBu
 fn seed_references(root: &Path) -> Result<()> {
     let directory = root.join("reference/strategies");
     ensure_private_dir(root, &directory.join("costs"))?;
-    for &(name, bytes) in REFERENCE_STRATEGIES {
+    for &(name, bytes) in crate::runtime::strategy_library::reference::FILES {
         let path = directory.join(name);
         match fs::symlink_metadata(&path) {
             Ok(meta) if !meta.is_file() || meta.uid() != current_uid() => {

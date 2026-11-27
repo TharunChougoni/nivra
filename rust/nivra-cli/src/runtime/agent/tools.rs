@@ -83,14 +83,14 @@ pub(crate) const TOOLS: &[BridgeTool] = &[
 fn strategy_select_definition() -> Value {
     json!({
         "name":"strategy_select",
-        "description":"Select the active action strategy from the library, or pass strategy_id: null to run no strategy. Appends a lane selection with your reason to the library control log; an owner pin or disable always overrides it. Choosing a strategy never places an order.",
+        "description":"Select the action strategy the executor runs: an accepted id from strategies.eligible, a configured fallback as fallback:<name> from strategies.fallback, or strategy_id: null to run no strategy. Appends a lane selection with your reason to the library control log. An owner pin or disable always overrides it, and a runnable accepted version always wins over a fallback. Choosing a strategy never places an order.",
         "parameters":{
             "type":"object",
             "properties":{
                 "strategy_id":{
                     "type":["string","null"],
                     "maxLength":64,
-                    "description":"Strategy ID (or unique 8+ char prefix) from strategies.eligible, or null to stand down."
+                    "description":"Strategy ID (or unique 8+ char prefix) from strategies.eligible, fallback:<name> from strategies.fallback, or null to stand down."
                 },
                 "reason":{
                     "type":"string",
@@ -282,7 +282,13 @@ impl LaneHost<'_> {
         let root = crate::runtime::strategy_library::root(self.bridge.c)
             .map_err(|_| "strategy_library_unavailable".to_owned())?;
         let resolved = crate::runtime::strategy_library::Library::at(root)
-            .select_by_lane(target, reason, Some(self.bridge.run_id), (self.clock)())
+            .select_by_lane(
+                target,
+                self.bridge.cfg.strategy_fallback(),
+                reason,
+                Some(self.bridge.run_id),
+                (self.clock)(),
+            )
             .map_err(|e| failure_reason(e.as_ref()))?;
         let selected_id = resolved
             .lane_selection

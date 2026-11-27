@@ -396,7 +396,7 @@ impl LaneService {
             .filter(|f| {
                 f.decision_id
                     .as_deref()
-                    .is_some_and(|id| id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+                    .is_some_and(crate::runtime::strategy_library::choice::is_strategy_run)
             })
             .count();
         let rankers = ranker_registry();
@@ -418,7 +418,7 @@ impl LaneService {
                 && !lanes::root(c).join(lanes::AFTER_CLOSE_MARKER).exists(),
             review_running: self.busy == Some(Lane::Review),
             strategy_active: supervision.strategy_active(),
-            strategy_supervision: supervision.any_eligible,
+            strategy_supervision: supervision.supervised,
             strategy_fills,
             regime: cycle.regime.as_ref().map(|r| r.label.as_str()),
         });
@@ -438,7 +438,7 @@ impl LaneService {
             && (!cycle.ranking.is_empty()
                 || !held.is_empty()
                 || fired.iter().any(|t| t.kind == TriggerKind::Fill)
-                || supervision.any_eligible)
+                || supervision.supervised)
         {
             self.preempt.store(true, Ordering::Release);
         }
@@ -504,7 +504,7 @@ impl LaneService {
                 && !triggers
                     .iter()
                     .any(|trigger| trigger.kind == TriggerKind::Fill)
-                && !(supervision.any_eligible
+                && !(supervision.supervised
                     && triggers
                         .iter()
                         .any(|trigger| trigger.kind == TriggerKind::Schedule))

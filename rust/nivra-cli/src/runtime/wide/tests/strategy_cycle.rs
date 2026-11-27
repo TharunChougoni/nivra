@@ -162,7 +162,7 @@ fn active_strategy_fills_refuses_and_exits_through_the_gate() {
     let mut tape = Tape::new();
     let params: Value = serde_json::from_str::<Value>(PARAMETERS).unwrap()["params"].clone();
     let id = register(&tape.library(), SOURCE, params, |_| {});
-    let mut run = StrategyRun::new(tape.library(), sandbox);
+    let mut run = StrategyRun::new(tape.library(), sandbox, Vec::new());
     for step in 0..tape.events.len() {
         let at = tape.protect(step);
         tape.scan(&mut run, at);
@@ -254,7 +254,7 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
         .unwrap()
         .unwrap();
     register(&tape.library(), b"raise SystemExit(3)\n", json!({}), |_| {});
-    let mut crash = StrategyRun::new(tape.library(), sandbox.clone());
+    let mut crash = StrategyRun::new(tape.library(), sandbox.clone(), Vec::new());
     tape.scan(&mut crash, at);
     for step in 1..3 {
         let at = tape.protect(step);
@@ -273,7 +273,7 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
     };
     let library = Library::at(tape.c.directory.join("slow-library"));
     register(&library, b"while True:\n    pass\n", json!({}), |_| {});
-    let mut timeout = StrategyRun::new(library, slow);
+    let mut timeout = StrategyRun::new(library, slow, Vec::new());
     let at = tape.protect(3);
     assert!(timeout.ready(&tape.db, &tape.c, at).unwrap().is_some());
     timeout.start(tape.frozen(at));
@@ -294,7 +294,7 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
     register(&library, SOURCE, json!({}), |r| {
         r["engine_sha256"] = json!("0".repeat(64))
     });
-    let mut old = StrategyRun::new(library, nivra_sandbox::SandboxConfig::default());
+    let mut old = StrategyRun::new(library, nivra_sandbox::SandboxConfig::default(), Vec::new());
     assert_eq!(old.ready(&tape.db, &tape.c, at).unwrap(), None);
     assert_eq!(
         old.status(&tape.db, &tape.p)["reason"],
@@ -308,4 +308,31 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
     assert_eq!(tape.p.fills.len(), 2);
     assert!(!tape.p.fills[1].buy && !tape.p.halted && !tape.p.stopped);
     assert!(recent_actions(&tape.db).unwrap().is_empty());
+}
+
+#[test]
+fn a_fallback_runs_labelled_until_a_strategy_is_accepted() {
+    let Some(sandbox) = sandbox() else { return };
+    let mut tape = Tape::new();
+    let mut run = StrategyRun::new(tape.library(), sandbox, vec!["vwap_trend".into()]);
+    let first = tape.protect(0);
+    tape.scan(&mut run, first);
+    let status = run.status(&tape.db, &tape.p);
+    assert_eq!(status["state"], "ready", "{status}");
+    assert_eq!(status["reason"], "no_active_strategy");
+    assert_eq!(status["strategy"]["basis"], "fallback");
+    assert_eq!(status["strategy"]["strategy_id"], "fallback:vwap_trend");
+    assert_eq!(status["calls"], 1);
+    assert!(tape.failures().is_empty(), "{:?}", tape.failures());
+    // An accepted version takes over at the next library read.
+    let params: Value = serde_json::from_str::<Value>(PARAMETERS).unwrap()["params"].clone();
+    let id = register(&tape.library(), SOURCE, params, |_| {});
+    for step in 1..tape.events.len() {
+        let at = tape.protect(step) + 30_000;
+        tape.scan(&mut run, at.max(first + 30_000));
+    }
+    let status = run.status(&tape.db, &tape.p);
+    assert_eq!(status["strategy"]["basis"], "accepted", "{status}");
+    assert_eq!(status["strategy"]["strategy_id"], id.as_str());
+    assert_eq!(status["reason"], Value::Null);
 }

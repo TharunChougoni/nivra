@@ -32,6 +32,8 @@ use std::{
 };
 
 pub(crate) mod acceptance;
+pub(crate) mod choice;
+pub(crate) mod reference;
 
 const ENTRY_VERSION: u32 = 1;
 const MAX_ENTRY_BYTES: u64 = 65_536;
@@ -152,7 +154,7 @@ pub(crate) struct Resolved {
     pub active: Option<String>,
 }
 impl Resolved {
-    pub(crate) fn eligible(&self) -> impl Iterator<Item = &Entry> {
+    pub(crate) fn eligible(&self) -> impl DoubleEndedIterator<Item = &Entry> {
         self.entries
             .iter()
             .filter(|e| !self.disabled.contains(&e.strategy_id))
@@ -471,16 +473,26 @@ impl Library {
     }
 
     /// Record the decision lane's strategy choice (`None` to run no strategy).
-    /// Disabled or unknown ids are refused; owner pins and disables still win.
+    /// An accepted id, or `fallback:<name>` for a configured fallback.
+    /// Disabled or unknown ids are refused; owner pins and disables still win,
+    /// and any runnable accepted version wins over a fallback.
     pub(crate) fn select_by_lane(
         &self,
         strategy_id: Option<&str>,
+        fallback: &[String],
         reason: &str,
         turn_id: Option<&str>,
         now: i64,
     ) -> Result<Resolved> {
         let resolved = self.resolve()?;
         let strategy_id = match strategy_id {
+            Some(id) if choice::is_fallback(id) => {
+                let name = &id[reference::FALLBACK_PREFIX.len()..];
+                if !fallback.iter().any(|f| f == name) {
+                    return Err("strategy_fallback_not_configured".into());
+                }
+                Some(id.to_owned())
+            }
             Some(id) => {
                 let full = find(&resolved, id)?;
                 if resolved.disabled.contains(&full) {
