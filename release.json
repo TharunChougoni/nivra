@@ -1,0 +1,6 @@
+{
+  "sha256": "2e2f2817e346d6a4b799bd61055fae4f2697e701f28f3e891f1bb814c21108b6",
+  "source_commit": "b6e46bd39619205ee994c27187254a7530550f8c",
+  "tag": "v0.17.0",
+  "target": "x86_64-unknown-linux-musl"
+}
