@@ -37,6 +37,32 @@ it, and update the guide that describes them.
   original receipt time.
 - Never invent instrument identifiers, lots, holidays or prices.
 
+## Configuration follows the owner's intent
+
+Most behaviour is switched on in config, not in code. A feature that ships
+off in config has not shipped. When the owner asks for a behaviour:
+
+1. Find every switch that gates it: the paper config, the planner, the agent
+   settings, systemd units and environment. Search the code for the setting
+   that guards the path (for example `strategy_execution.enabled`,
+   `history_preparation_enabled`, `candidate_compute.strategy`, `research_env`,
+   `market_archive`). A default of off in code is not the owner's choice.
+2. Change the live config on the paper host to match, using the documented
+   procedure: write a new file, run `nivra planner config-check`, apply with
+   `config-apply`, keep a backup named `*.pre-<reason>`, and record the change
+   in `.vm/`.
+3. Verify the behaviour on the host, not in the file: read the dashboard or
+   `/api/v1/summary` and confirm the feature reports itself active. Say which
+   keys you changed.
+4. When you add a setting, add it to `packaging/rust/CONFIGURATION.md`, the
+   example configs and the changelog upgrade steps in the same change. If the
+   owner wants the feature now, turn it on in the host config in the same
+   deploy.
+
+If a request conflicts with a guard such as the acceptance thresholds, do what
+the owner asked, keep the guard visible (label fallbacks, log the override),
+and say so.
+
 ## Code and verification
 
 The application is a Cargo workspace. The pi agent is a separate TypeScript
@@ -64,6 +90,52 @@ Build speed:
 - Skip `cargo run -p nivra-tools`, which recompiles with different features.
   Run the binary that is already built.
 - Build musl only for a release.
+
+### Codebase structure
+
+The workspace is layered. A crate may depend only on crates below it:
+
+| Crate | Owns | Depends on |
+| --- | --- | --- |
+| `nivra-core` | Domain types and pure rules: money, instruments, execution, fees, strategy contracts | nothing in the workspace |
+| `nivra-store` | Persistence: SQLite paper books, the TimescaleDB market archive, research job queues | core |
+| `nivra-sandbox` | Bounded Python execution and the pinned research environment | core |
+| `nivra-research` | The research worker: archive bar jobs and sandboxed runs | core, store, sandbox |
+| `nivra-cli` | The `nivra` binary: controller, lanes, dashboard, updater, commands | all of the above |
+| `nivra-tools` | Developer tools: release checks, test budget, benches | all of the above |
+
+- Put a rule in the lowest crate that can own it. Domain logic goes in
+  `nivra-core` as pure functions. I/O stays in `nivra-store` or at the edge in
+  `nivra-cli`.
+- In `nivra-cli/src/runtime/`, one directory per area (`wide/`, `agent/`,
+  `market_archive/`, `harness/`, `web/`). `area.rs` holds the public surface,
+  `area/*.rs` the parts. Split by responsibility so a typical change touches
+  one file. Treat about 800 lines as the point to split.
+- Tests sit next to the code: `area/tests.rs`, or `area/tests/*.rs` named for
+  what they test. Integration tests that need a service are `#[ignore]`d.
+- Market data lives only in the TimescaleDB archive. Paper books hold ledger
+  events and archive references, not bulk quote bodies.
+- The dashboard source is `rust/nivra-cli/src/runtime/web/v2/src/`. Text for
+  the owner lives in `labels.ts` in plain language.
+
+### Making changes
+
+- Name the data shape first, then write the logic. Parse external data at the
+  boundary and pass typed values inside.
+- Make the smallest change that solves the problem. Delete instead of
+  deprecating: migrate every caller and remove the old path in the same
+  change. No compatibility shims in dev mode.
+- For a bug, write the failing test first, then the fix. Test behaviour a user
+  or the book can observe, not internals. Wall-clock assertions are only
+  regression bounds with generous limits.
+- No `cfg!(test)` branches or test-only bypasses in production code. No
+  swallowed errors: return a snake_case failure code.
+- Do not grow a function's argument list past about seven; group the values
+  into a struct. Collapse one-caller pass-through wrappers.
+- Update the guide that describes the behaviour, the changelog with upgrade
+  steps, and `rust/nivra-tools/retired-names.txt` when a retired name goes.
+- Commit in small units that each pass the gate. Merge parallel work one
+  branch at a time and run the gate after each.
 
 ### Dashboard frontend
 
