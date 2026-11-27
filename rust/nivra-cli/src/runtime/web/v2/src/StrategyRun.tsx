@@ -1,7 +1,10 @@
-// The paper controller's strategy executor: which accepted strategy runs on
-// each scan, what it asked for, what filled and what the gate refused.
+// The paper controller's strategy executor: which strategy runs on each scan,
+// whether research accepted it or it is a shipped fallback, what it asked
+// for, what filled and what the gate refused.
+import type React from "react";
 import { amount, count, datetime } from "./data";
 import {
+  REFERENCE_STRATEGY_LABELS,
   STRATEGY_LABELS,
   instrumentName,
   plain,
@@ -10,6 +13,8 @@ import {
 } from "./labels";
 import type { StrategyExecution } from "./types";
 import { Empty, Facts, Panel, ShortId, Status, Table } from "./ui";
+
+type Fact = [string, React.ReactNode];
 
 export function StrategyRun({ run }: { run?: StrategyExecution | null }) {
   if (!run?.enabled)
@@ -26,6 +31,9 @@ export function StrategyRun({ run }: { run?: StrategyExecution | null }) {
         .filter(Boolean)
         .join(" · ")
     : null;
+  const fallback = s?.basis === "fallback";
+  const reference = (name?: string) =>
+    name ? plain(name, REFERENCE_STRATEGY_LABELS) : null;
   const accepted = s?.summary
     ? `${count(s.summary.trades)} trades · ${amount(s.summary.net_pnl)} after costs`
     : null;
@@ -38,13 +46,39 @@ export function StrategyRun({ run }: { run?: StrategyExecution | null }) {
     >
       <Facts
         items={[
-          ["Strategy", s ? <ShortId key="id" value={s.strategy_id} /> : null],
-          ["Written by", author],
-          ["Accepted result", accepted],
-          ["Tested on", s?.tape_dates?.join(", ") || null],
           [
-            "Why not running",
-            run.reason ? plain(run.reason, STRATEGY_LABELS) : "—",
+            "Strategy",
+            fallback ? (
+              reference(s?.name)
+            ) : s ? (
+              <ShortId key="id" value={s.strategy_id} />
+            ) : (
+              "None"
+            ),
+          ],
+          ...(s?.basis
+            ? ([["Kind", plain(s.basis, STRATEGY_LABELS)]] as Fact[])
+            : []),
+          ...(s && !fallback
+            ? ([
+                ["Written by", author],
+                ["Accepted result", accepted],
+                ["Tested on", s.tape_dates?.join(", ") || null],
+              ] as Fact[])
+            : []),
+          ...(run.reason
+            ? ([
+                [
+                  fallback ? "Why a fallback runs" : "Why none is running",
+                  plain(run.reason, STRATEGY_LABELS),
+                ],
+              ] as Fact[])
+            : []),
+          [
+            "Fallbacks",
+            run.fallback?.length
+              ? run.fallback.map((name) => reference(name)).join(", ")
+              : "None configured",
           ],
           [
             "Calls",

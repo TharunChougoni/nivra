@@ -106,3 +106,46 @@ test("the strategy panel names the active strategy, its actions, refusals and fi
     ).includes("Accepted on a different engine build"),
   );
 });
+
+test("a fallback reads as a shipped strategy that has not passed acceptance, and says why it runs", () => {
+  const fallback = text(
+    <StrategyRun
+      run={{
+        enabled: true,
+        state: "ready",
+        reason: "no_active_strategy",
+        fallback: ["vwap_trend", "opening_range_breakout"],
+        strategy: {
+          strategy_id: "fallback:vwap_trend",
+          basis: "fallback",
+          name: "vwap_trend",
+        },
+      }}
+    />,
+  );
+  for (const phrase of [
+    "VWAP trend",
+    "Fallback: a shipped strategy that has not passed acceptance",
+    "Why a fallback runs",
+    "No accepted strategy yet",
+    "VWAP trend, Opening range breakout",
+  ])
+    assert.ok(fallback.includes(phrase), phrase);
+  for (const raw of ["fallback:", "vwap_trend", "no_active_strategy"])
+    assert.ok(!fallback.includes(raw), raw);
+  const none = text(
+    <StrategyRun
+      run={{
+        enabled: true,
+        state: "blocked",
+        reason: "strategy_lane_stood_down",
+      }}
+    />,
+  );
+  for (const phrase of [
+    "Why none is running",
+    "The decision lane chose to run no strategy",
+    "None configured",
+  ])
+    assert.ok(none.includes(phrase), phrase);
+});

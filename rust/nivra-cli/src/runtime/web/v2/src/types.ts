@@ -233,8 +233,12 @@ export interface StrategyExecution {
   enabled?: boolean;
   state?: string;
   reason?: string | null;
+  /** Shipped strategies configured to run while none is accepted, best first. */
+  fallback?: string[];
   strategy?: {
     strategy_id?: string;
+    basis?: "accepted" | "fallback";
+    name?: string;
     author?: { lane?: string; model?: string | null } | null;
     summary?: {
       trades?: number;

@@ -79,6 +79,10 @@ export const TRIGGER_LABELS: Record<string, string> = {
   post_close: "after close",
   hourly_top_k_changed: "top picks changed",
   regime_changed: "regime changed",
+  pre_open: "Before open",
+  choose_strategy: "choosing today's strategy",
+  strategy_search: "Strategy search",
+  no_accepted_strategy: "no accepted strategy",
   fill: "Fill",
   fill_batch: "fills arrived",
   position_risk: "Position risk",
@@ -104,12 +108,27 @@ export const TURN_ERROR_LABELS: Record<string, string> = {
   turn_timeout: "Timed out",
 };
 
+/** The shipped strategies the executor can run as a fallback. */
+export const REFERENCE_STRATEGY_LABELS: Record<string, string> = {
+  opening_range_breakout: "Opening range breakout",
+  vwap_reversion: "VWAP reversion",
+  relative_strength: "Relative strength",
+  bollinger_reversion: "Bollinger reversion",
+  order_book_imbalance: "Order book imbalance",
+  circuit_magnet: "Circuit magnet",
+  volume_climax_reversal: "Volume climax reversal",
+  vwap_trend: "VWAP trend",
+};
+
 /** The strategy executor's states, reasons and action outcomes. */
 export const STRATEGY_LABELS: Record<string, string> = {
   ready: "Running on each scan",
   calling: "Running a call",
   blocked: "Not running",
-  no_active_strategy: "No accepted strategy is active",
+  no_active_strategy: "No accepted strategy yet",
+  strategy_lane_stood_down: "The decision lane chose to run no strategy",
+  accepted: "Accepted by research",
+  fallback: "Fallback: a shipped strategy that has not passed acceptance",
   strategy_engine_changed: "Accepted on a different engine build",
   strategy_adapter_changed: "Accepted with different execution code",
   strategy_library_unavailable: "The strategy library could not be read",
