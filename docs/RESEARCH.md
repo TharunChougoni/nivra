@@ -463,8 +463,10 @@ Entries are never rewritten: registering the same source and `params` again
 returns the first entry unchanged. Each read verifies every hash. The active
 version is the pinned one when it is eligible, else the decision lane's last
 `lane_select` choice (which may be `null` to stand down), else the newest
-eligible one. Owner pins, rollbacks and disables always override lane
-selections. To pin, disable or roll back a version, see
+eligible one. Each `lane_select` records the planner policy digest it was
+made under and counts only under that policy, so applying a new planner policy
+clears an earlier lane choice or stand-down. Owner pins, rollbacks and
+disables always override lane selections. To pin, disable or roll back a version, see
 [operations](OPERATIONS.md#manage-action-strategies).
 
 This library is separate from the ranker library below. The ranker selector

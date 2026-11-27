@@ -263,7 +263,8 @@ fn strategy_runner(
     Ok(Some(super::strategy_run::StrategyRun::new(
         super::super::strategy_library::Library::at(super::super::strategy_library::root(c)?),
         sandbox,
-        cfg.map(|policy| policy.strategy_fallback().to_vec())
+        cfg.map(planner::PlannerConfig::strategy_policy)
+            .transpose()?
             .unwrap_or_default(),
     )))
 }

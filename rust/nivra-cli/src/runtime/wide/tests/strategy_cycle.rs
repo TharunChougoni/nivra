@@ -162,7 +162,7 @@ fn active_strategy_fills_refuses_and_exits_through_the_gate() {
     let mut tape = Tape::new();
     let params: Value = serde_json::from_str::<Value>(PARAMETERS).unwrap()["params"].clone();
     let id = register(&tape.library(), SOURCE, params, |_| {});
-    let mut run = StrategyRun::new(tape.library(), sandbox, Vec::new());
+    let mut run = StrategyRun::new(tape.library(), sandbox, Default::default());
     for step in 0..tape.events.len() {
         let at = tape.protect(step);
         tape.scan(&mut run, at);
@@ -254,7 +254,7 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
         .unwrap()
         .unwrap();
     register(&tape.library(), b"raise SystemExit(3)\n", json!({}), |_| {});
-    let mut crash = StrategyRun::new(tape.library(), sandbox.clone(), Vec::new());
+    let mut crash = StrategyRun::new(tape.library(), sandbox.clone(), Default::default());
     tape.scan(&mut crash, at);
     for step in 1..3 {
         let at = tape.protect(step);
@@ -273,7 +273,7 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
     };
     let library = Library::at(tape.c.directory.join("slow-library"));
     register(&library, b"while True:\n    pass\n", json!({}), |_| {});
-    let mut timeout = StrategyRun::new(library, slow, Vec::new());
+    let mut timeout = StrategyRun::new(library, slow, Default::default());
     let at = tape.protect(3);
     assert!(timeout.ready(&tape.db, &tape.c, at).unwrap().is_some());
     timeout.start(tape.frozen(at));
@@ -294,7 +294,11 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
     register(&library, SOURCE, json!({}), |r| {
         r["engine_sha256"] = json!("0".repeat(64))
     });
-    let mut old = StrategyRun::new(library, nivra_sandbox::SandboxConfig::default(), Vec::new());
+    let mut old = StrategyRun::new(
+        library,
+        nivra_sandbox::SandboxConfig::default(),
+        Default::default(),
+    );
     assert_eq!(old.ready(&tape.db, &tape.c, at).unwrap(), None);
     assert_eq!(
         old.status(&tape.db, &tape.p)["reason"],
@@ -314,7 +318,14 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
 fn a_fallback_runs_labelled_until_a_strategy_is_accepted() {
     let Some(sandbox) = sandbox() else { return };
     let mut tape = Tape::new();
-    let mut run = StrategyRun::new(tape.library(), sandbox, vec!["vwap_trend".into()]);
+    let mut run = StrategyRun::new(
+        tape.library(),
+        sandbox,
+        crate::runtime::strategy_library::choice::ChoicePolicy {
+            fallback: vec!["vwap_trend".into()],
+            policy_sha256: String::new(),
+        },
+    );
     let first = tape.protect(0);
     tape.scan(&mut run, first);
     let status = run.status(&tape.db, &tape.p);

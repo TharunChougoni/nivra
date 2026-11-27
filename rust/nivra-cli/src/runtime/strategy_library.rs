@@ -118,6 +118,10 @@ pub(crate) enum Control {
         reason: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<String>,
+        /// The planner policy digest the choice was made under. A choice
+        /// counts only under the same policy.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        policy_sha256: Option<String>,
     },
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -133,6 +137,8 @@ pub(crate) struct LaneSelection {
     pub at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_sha256: Option<String>,
 }
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -177,8 +183,13 @@ impl Resolved {
     }
 }
 
-/// Pure fold of the entries and the control log.
-pub(crate) fn resolve(mut entries: Vec<Entry>, controls: &[ControlRecord]) -> Resolved {
+/// Pure fold of the entries and the control log. With `policy`, a lane
+/// choice made under another planner policy (or none recorded) is ignored.
+pub(crate) fn resolve(
+    mut entries: Vec<Entry>,
+    controls: &[ControlRecord],
+    policy: Option<&str>,
+) -> Resolved {
     entries.sort_by(|a, b| {
         (a.registered_at_ms, &a.strategy_id).cmp(&(b.registered_at_ms, &b.strategy_id))
     });
@@ -198,15 +209,21 @@ pub(crate) fn resolve(mut entries: Vec<Entry>, controls: &[ControlRecord]) -> Re
                 pinned = Some(to.clone());
             }
             Control::LaneSelect {
+                policy_sha256: chosen_under,
+                ..
+            } if policy.is_some_and(|p| chosen_under.as_deref() != Some(p)) => {}
+            Control::LaneSelect {
                 strategy_id,
                 reason,
                 turn_id,
+                policy_sha256,
             } => {
                 lane_selection = Some(LaneSelection {
                     strategy_id: strategy_id.clone(),
                     reason: reason.clone(),
                     at_ms: record.at_ms,
                     turn_id: turn_id.clone(),
+                    policy_sha256: policy_sha256.clone(),
                 });
             }
         }
@@ -441,8 +458,18 @@ impl Library {
         Ok(log.controls)
     }
 
+    /// The library as the owner sees it, every lane choice included.
     pub(crate) fn resolve(&self) -> Result<Resolved> {
-        Ok(resolve(self.entries()?, &self.controls()?))
+        Ok(resolve(self.entries()?, &self.controls()?, None))
+    }
+
+    /// The library as the executor sees it under one planner policy.
+    pub(crate) fn resolve_for(&self, policy_sha256: &str) -> Result<Resolved> {
+        Ok(resolve(
+            self.entries()?,
+            &self.controls()?,
+            Some(policy_sha256),
+        ))
     }
 
     /// Append one control under the library lock. Earlier records are kept
@@ -479,11 +506,12 @@ impl Library {
     pub(crate) fn select_by_lane(
         &self,
         strategy_id: Option<&str>,
-        fallback: &[String],
+        policy: &choice::ChoicePolicy,
         reason: &str,
         turn_id: Option<&str>,
         now: i64,
     ) -> Result<Resolved> {
+        let fallback = &policy.fallback;
         let resolved = self.resolve()?;
         let strategy_id = match strategy_id {
             Some(id) if choice::is_fallback(id) => {
@@ -516,8 +544,10 @@ impl Library {
                 strategy_id,
                 reason: reason.to_owned(),
                 turn_id: turn_id.map(str::to_owned),
+                policy_sha256: Some(policy.policy_sha256.clone()),
             },
-        })
+        })?;
+        self.resolve_for(&policy.policy_sha256)
     }
 
     fn dir(&self, name: &str) -> Result<PathBuf> {

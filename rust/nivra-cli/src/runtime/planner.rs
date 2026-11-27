@@ -206,6 +206,13 @@ impl PlannerConfig {
         self.strategy_execution.as_ref().is_some_and(|s| s.enabled)
     }
     /// The configured fallback names, best first; empty when execution is off.
+    /// The fallbacks and the policy digest that strategy choices are bound to.
+    pub(crate) fn strategy_policy(&self) -> Result<super::strategy_library::choice::ChoicePolicy> {
+        Ok(super::strategy_library::choice::ChoicePolicy {
+            fallback: self.strategy_fallback().to_vec(),
+            policy_sha256: digest(&policy_bytes(self)?),
+        })
+    }
     pub(crate) fn strategy_fallback(&self) -> &[String] {
         match &self.strategy_execution {
             Some(s) if s.enabled => &s.fallback,

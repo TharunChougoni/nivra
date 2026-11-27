@@ -360,7 +360,10 @@ pub(crate) fn strategy_facts(
     let root = crate::runtime::strategy_library::root(c).ok()?;
     let library = crate::runtime::strategy_library::Library::at(root);
     let fallback = cfg.strategy_fallback().to_vec();
-    let choice = match crate::runtime::strategy_library::choice::choose(&library, &fallback) {
+    let choice = match cfg
+        .strategy_policy()
+        .and_then(|policy| crate::runtime::strategy_library::choice::choose(&library, &policy))
+    {
         Ok(choice) => choice,
         Err(_) => {
             return Some(StrategyLibraryFacts {

@@ -53,7 +53,7 @@ pub(crate) fn supervision_state(c: &Config, cfg: &planner::PlannerConfig) -> Sup
     }
     let active_id = crate::runtime::strategy_library::root(c)
         .ok()
-        .and_then(|root| choice::choose(&Library::at(root), cfg.strategy_fallback()).ok())
+        .and_then(|root| choice::choose(&Library::at(root), &cfg.strategy_policy().ok()?).ok())
         .and_then(|choice| choice.running.map(|running| running.run_id()));
     SupervisionState {
         active_id,
@@ -149,7 +149,7 @@ pub(super) struct StrategyRun {
     library: Library,
     sandbox: SandboxConfig,
     /// Reference strategies to run, best first, while no accepted one can.
-    fallback: Vec<String>,
+    policy: choice::ChoicePolicy,
     active: Option<Active>,
     resolved_at: Option<i64>,
     /// Why no accepted version runs: no active entry, a build mismatch, a
@@ -165,11 +165,15 @@ pub(super) struct StrategyRun {
 }
 
 impl StrategyRun {
-    pub(super) fn new(library: Library, sandbox: SandboxConfig, fallback: Vec<String>) -> Self {
+    pub(super) fn new(
+        library: Library,
+        sandbox: SandboxConfig,
+        policy: choice::ChoicePolicy,
+    ) -> Self {
         Self {
             library,
             sandbox,
-            fallback,
+            policy,
             active: None,
             resolved_at: None,
             blocked: None,
@@ -183,7 +187,7 @@ impl StrategyRun {
     }
 
     fn resolve(&self) -> Result<(Option<Active>, Option<&'static str>)> {
-        let choice = choice::choose(&self.library, &self.fallback)?;
+        let choice = choice::choose(&self.library, &self.policy)?;
         let active = match choice.running {
             Some(running) => Some(Active {
                 top_n: running.top_n()?,
@@ -401,7 +405,7 @@ impl StrategyRun {
             "state": state,
             "reason": self.blocked,
             "strategy": strategy,
-            "fallback": self.fallback,
+            "fallback": self.policy.fallback,
             "calls": self.calls, "failures": self.failures, "skipped": self.skipped,
             "last_call_at_ms": self.last_call_at_ms, "last_failure": self.last_failure,
             "actions": recent_actions(db).unwrap_or_default(),

@@ -417,7 +417,11 @@ impl LaneHost<'_> {
         let resolved = crate::runtime::strategy_library::Library::at(root)
             .select_by_lane(
                 target,
-                self.bridge.cfg.strategy_fallback(),
+                &self
+                    .bridge
+                    .cfg
+                    .strategy_policy()
+                    .map_err(|e| failure_reason(e.as_ref()))?,
                 reason,
                 Some(self.bridge.run_id),
                 (self.clock)(),

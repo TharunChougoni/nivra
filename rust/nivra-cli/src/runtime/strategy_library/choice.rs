@@ -44,6 +44,14 @@ impl Running {
     }
 }
 
+/// What the planner policy says about strategy choice: the configured
+/// fallbacks, and the planner policy hash that each lane choice is bound to.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ChoicePolicy {
+    pub fallback: Vec<String>,
+    pub policy_sha256: String,
+}
+
 pub(crate) struct Choice {
     pub resolved: Resolved,
     pub running: Option<Running>,
@@ -63,8 +71,9 @@ pub(crate) fn is_strategy_run(decision_id: &str) -> bool {
         || (decision_id.len() == 64 && decision_id.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
-pub(crate) fn choose(library: &Library, fallback: &[String]) -> Result<Choice> {
-    let resolved = library.resolve()?;
+pub(crate) fn choose(library: &Library, policy: &ChoicePolicy) -> Result<Choice> {
+    let fallback = &policy.fallback;
+    let resolved = library.resolve_for(&policy.policy_sha256)?;
     let lane_choice = resolved
         .lane_selection
         .as_ref()

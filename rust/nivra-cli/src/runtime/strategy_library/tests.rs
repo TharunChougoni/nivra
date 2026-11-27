@@ -3,6 +3,14 @@ use super::*;
 
 const SOURCE: &[u8] = b"print('{\"actions\":[]}')\n";
 
+/// A planner policy with these fallbacks; `tag` stands in for its digest.
+fn policy(fallback: &[&str], tag: char) -> choice::ChoicePolicy {
+    choice::ChoicePolicy {
+        fallback: fallback.iter().map(|f| (*f).to_owned()).collect(),
+        policy_sha256: tag.to_string().repeat(64),
+    }
+}
+
 /// A report exactly at every default bound: 10 trades, net P&L just above
 /// zero, a 300 bps drawdown on 5,000 capital, three tape dates and 1 failure in
 /// 100 calls.
@@ -303,7 +311,7 @@ fn registration_is_immutable_and_controls_change_the_active_strategy() {
     let resolved = library
         .select_by_lane(
             Some(&b[..12]),
-            &[],
+            &policy(&[], 'a'),
             "regime favors b",
             Some("decision-1"),
             6_000,
@@ -328,7 +336,7 @@ fn registration_is_immutable_and_controls_change_the_active_strategy() {
     );
     assert!(
         library
-            .select_by_lane(Some(&b), &[], "try disabled", None, 6_500)
+            .select_by_lane(Some(&b), &policy(&[], 'a'), "try disabled", None, 6_500)
             .is_err()
     );
     // Lane can stand down (`None`) when unpinned, and owner pin still overrides `None`.
@@ -339,7 +347,13 @@ fn registration_is_immutable_and_controls_change_the_active_strategy() {
         Some(b.clone())
     );
     let stood_down = library
-        .select_by_lane(None, &[], "unknown regime", Some("decision-2"), 7_000)
+        .select_by_lane(
+            None,
+            &policy(&[], 'a'),
+            "unknown regime",
+            Some("decision-2"),
+            7_000,
+        )
         .unwrap();
     assert_eq!(stood_down.active, None);
     assert_eq!(
@@ -367,13 +381,16 @@ fn a_configured_fallback_runs_only_until_an_accepted_version_can() {
     use super::choice::{Running, choose};
     let dir = tempfile::tempdir().unwrap();
     let library = Library::at(dir.path().join("strategy-library"));
-    let fallback = vec!["vwap_trend".to_owned(), "vwap_reversion".to_owned()];
-    let running = |library: &Library, fallback: &[String]| {
+    let fallback = policy(&["vwap_trend", "vwap_reversion"], 'a');
+    let running = |library: &Library, fallback: &choice::ChoicePolicy| {
         let choice = choose(library, fallback).unwrap();
         (choice.running.map(|r| r.run_id()), choice.reason)
     };
     // Nothing accepted and nothing configured: nothing runs, and says why.
-    assert_eq!(running(&library, &[]), (None, Some("no_active_strategy")));
+    assert_eq!(
+        running(&library, &policy(&[], 'a')),
+        (None, Some("no_active_strategy"))
+    );
     // The first configured fallback runs, labelled, with its shipped params.
     let choice = choose(&library, &fallback).unwrap();
     let Some(Running::Fallback(reference)) = &choice.running else {
@@ -489,4 +506,56 @@ fn fallback_config_names_only_shipped_action_references() {
     )
     .unwrap();
     assert!(off.strategy_fallback().is_empty());
+}
+
+#[test]
+fn a_lane_choice_counts_only_under_the_policy_it_was_made_under() {
+    use super::choice::choose;
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::at(dir.path().join("strategy-library"));
+    let run = |policy: &choice::ChoicePolicy| {
+        let choice = choose(&library, policy).unwrap();
+        (choice.running.map(|r| r.run_id()), choice.reason)
+    };
+    // Under policy A, with nothing configured, the lane stands down.
+    let a = policy(&[], 'a');
+    library
+        .select_by_lane(None, &a, "nothing eligible", None, 1)
+        .unwrap();
+    assert_eq!(run(&a), (None, Some("strategy_lane_stood_down")));
+    // The owner applies policy B with a fallback: the old stand-down no
+    // longer counts and the fallback runs.
+    let b = policy(&["vwap_trend", "vwap_reversion"], 'b');
+    assert_eq!(
+        run(&b),
+        (
+            Some("fallback:vwap_trend".to_owned()),
+            Some("no_active_strategy")
+        )
+    );
+    // A fallback chosen under a policy that lists it is ignored under another.
+    let a2 = policy(&["vwap_trend", "vwap_reversion"], 'c');
+    library
+        .select_by_lane(Some("fallback:vwap_reversion"), &a2, "regime", None, 2)
+        .unwrap();
+    assert_eq!(run(&a2).0.as_deref(), Some("fallback:vwap_reversion"));
+    assert_eq!(run(&b).0.as_deref(), Some("fallback:vwap_trend"));
+    // A record from before digests were kept counts under no policy.
+    let legacy = Library::at(dir.path().join("legacy"));
+    legacy
+        .append(ControlRecord {
+            at_ms: 3,
+            control: Control::LaneSelect {
+                strategy_id: None,
+                reason: "stand down".into(),
+                turn_id: None,
+                policy_sha256: None,
+            },
+        })
+        .unwrap();
+    let choice = choose(&legacy, &b).unwrap();
+    assert_eq!(
+        choice.running.map(|r| r.run_id()).as_deref(),
+        Some("fallback:vwap_trend")
+    );
 }
