@@ -41,9 +41,6 @@ impl Controller {
                 self.prepare_universe(t)?;
                 self.prepare_options(t)?;
             }
-            if self.active {
-                self.observe_strategy()?;
-            }
             return Ok(Flow::Continue);
         }
 
@@ -119,9 +116,6 @@ impl Controller {
         .filter(|deadline| *deadline > now)
         .min()
         .expect("maintenance interval positive");
-        if active && millis() < session_end_ms.unwrap_or(0) {
-            self.observe_strategy()?;
-        }
         Ok(Flow::Continue)
     }
 }

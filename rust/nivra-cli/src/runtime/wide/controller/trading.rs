@@ -131,6 +131,13 @@ impl Controller {
         let Now { now, m, .. } = t;
         self.service_strategy_reply(now, events.contains(ControllerEvent::Choice))?;
         self.commit_market_reads()?;
+        // Dispatch established selections before broad ranking and maintenance.
+        if !events.contains(ControllerEvent::FeedState)
+            && let Some(run) = self.strategy.as_ref()
+            && self.strategy_inputs.selected_for(run.desired_id())
+        {
+            self.observe_strategy()?;
+        }
         if self.p.halted {
             return Ok(());
         }
@@ -195,6 +202,7 @@ impl Controller {
             self.last_rank = now;
         }
         self.reconcile_strategy_inputs(now, rank_due)?;
+        self.observe_strategy()?;
         if let Some(settings) = feed_settings.as_ref()
             && now - self.last_depth >= settings.depth_poll_ms
             && !self.quote_reads.pending(ReadKind::Depth)
@@ -564,6 +572,12 @@ impl Controller {
             });
             self.depth_candidates = super::super::super::discovery::candidates(&projection);
             checkpoint_scanner(&self.db, &self.scan)?;
+        }
+        if discovery.is_none() && self.strategy.is_some() {
+            self.depth_candidates = crate::runtime::strategy::prospects(&self.scan, now, 20)?
+                .into_iter()
+                .map(|prospect| (prospect.key, Some(prospect.score)))
+                .collect();
         }
         Ok(())
     }

@@ -118,7 +118,9 @@ impl Frozen {
         instrument: impl Fn(&str) -> Option<&'a Instrument>,
         covered: impl Fn(&str) -> bool,
     ) -> Self {
-        let prospects = selection.prospects(scan, now, top_n, &covered);
+        let prospects = selection.prospects(scan, now, top_n, |key| {
+            !p.positions.contains_key(key) && covered(key)
+        });
         let universe = prospects
             .iter()
             .filter_map(|prospect| instrument(&prospect.key).map(|i| (i.key.clone(), i.clone())))

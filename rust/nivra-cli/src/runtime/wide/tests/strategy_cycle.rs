@@ -279,13 +279,12 @@ fn active_strategy_fills_refuses_and_exits_through_the_gate() {
 fn worker_reply_applies_fixture_on_one_notification() {
     let worker = worker_config().expect("fixture requires python3");
     let mut tape = Tape::new();
-    let start_ms = millis() + 200;
-    let mut params = serde_json::from_str::<Value>(PARAMETERS).unwrap()["params"].clone();
-    params["start_ms"] = json!(start_ms);
-    let library = tape.library();
-    register(&library, SOURCE, params, |_| {});
     let inbox = Inbox::new();
-    let mut run = StrategyRun::new(library, worker, Default::default(), Some(inbox.notify()));
+    let policy = crate::runtime::strategy_library::choice::ChoicePolicy {
+        fallback: vec!["vwap_trend".into()],
+        ..Default::default()
+    };
+    let mut run = StrategyRun::new(tape.library(), worker, policy, Some(inbox.notify()));
     run.ready(&tape.db, &tape.c, millis()).unwrap();
     assert!(
         inbox
@@ -294,9 +293,19 @@ fn worker_reply_applies_fixture_on_one_notification() {
     );
     assert!(run.ready(&tape.db, &tape.c, millis()).unwrap().is_some());
 
-    thread::sleep(Duration::from_millis(
-        start_ms.saturating_sub(millis()).max(0) as u64,
-    ));
+    let start_ms = millis();
+    let mut params = serde_json::from_str::<Value>(PARAMETERS).unwrap()["params"].clone();
+    params["start_ms"] = json!(start_ms);
+    register(&tape.library(), SOURCE, params, |_| {});
+    let switch_at = millis();
+    run.refresh_choice(&tape.db, &tape.c, switch_at, true)
+        .unwrap();
+    assert!(
+        inbox
+            .wait(Duration::from_secs(3))
+            .contains(ControllerEvent::Strategy)
+    );
+
     let at = millis();
     tape.c.session = local(at).date_naive();
     tape.p.settings.session_start_minute = 0;
@@ -326,6 +335,7 @@ fn worker_reply_applies_fixture_on_one_notification() {
     let latency = &status["latency"];
     assert_eq!(latency["submit_to_reply"]["samples"], 1);
     assert_eq!(latency["reply_to_gate"]["samples"], 2);
+    assert_eq!(latency["switch_to_first_call"]["samples"], 1);
     assert!(latency["reply_to_gate"]["p99_ms"].as_i64().unwrap() < 1000);
     eprintln!("fixture_strategy_latency {latency}");
 }

@@ -300,10 +300,11 @@ fn candidate_strategy_contract(
     assert!(!c.directory.join("model/strategy-replays").exists());
     let done = submit(&cfg);
     assert_eq!(done["status"], "completed", "{done}");
-    // The three archived reads in the window each supply executable depth.
-    // AAA's final time exit still runs on the following read outside the window.
+    // Three reads update a prospect or a holding. A timed exit removes
+    // the held quote from the next call until the ranker selects it again.
     assert_eq!(done["tape"]["strategy_calls"], 3, "{done}");
-    assert_eq!(done["summary"]["trades"], 3, "{done}");
+    assert_eq!(done["action_outcomes"]["filled"], 1, "{done}");
+    assert_eq!(done["summary"]["trades"], 1, "{done}");
     assert_eq!(done["trades"][0]["exit_reason"], "time");
     let sha = done["report_sha256"].as_str().unwrap();
     let kept = fs::read(

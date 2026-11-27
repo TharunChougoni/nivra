@@ -374,13 +374,7 @@ struct Cache {
 impl Cache {
     fn queue_depth(&mut self, key: &str, point: &Point) -> bool {
         if self.held.contains(key) {
-            if self.depth_updates.held.len() == HELD_QUEUE_LIMIT {
-                self.depth_updates.held.pop_back();
-                self.depth_updates.held_gap = true;
-            }
-            self.depth_updates
-                .held
-                .push_back((key.to_owned(), point.clone()));
+            self.queue_held(key.to_owned(), point.clone());
         } else if self.strategy_keys.contains(key) {
             self.depth_updates
                 .prospects
@@ -389,6 +383,14 @@ impl Cache {
             return false;
         }
         true
+    }
+
+    fn queue_held(&mut self, key: String, point: Point) {
+        if self.depth_updates.held.len() == HELD_QUEUE_LIMIT {
+            self.depth_updates.held.pop_back();
+            self.depth_updates.held_gap = true;
+        }
+        self.depth_updates.held.push_back((key, point));
     }
 
     fn record_ticks(&mut self, receipt: i64, count: u64, window: i64) {
@@ -817,6 +819,12 @@ impl Worker {
                     .iter()
                     .map(|instrument| instrument.key.clone())
                     .collect();
+                for instrument in held {
+                    // A receipt can arrive between the entry fill and pinning.
+                    if let Some(point) = cache.depth_updates.prospects.remove(&instrument.key) {
+                        cache.queue_held(instrument.key.clone(), point);
+                    }
+                }
                 cache.strategy_keys = if notify_strategy {
                     full.difference(&cache.held).cloned().collect()
                 } else {
@@ -859,7 +867,10 @@ impl Worker {
                     .iter()
                     .map(|(key, point)| {
                         let mut price = point.clone();
-                        price.depth = None;
+                        // Notifications apply these receipts in order, ahead of strategy replies.
+                        if cache.held.contains(key) || cache.strategy_keys.contains(key) {
+                            price.depth = None;
+                        }
                         (key.clone(), price)
                     })
                     .collect()

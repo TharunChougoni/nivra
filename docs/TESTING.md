@@ -80,3 +80,19 @@ Set `NIVRA_ARCHIVE_WINDOW_PERF=1` and pass `--nocapture` to seed 22,000
 synthetic quote batches and time a one-hour tape slice across five sessions.
 The strategy replay integration test requires the same bubblewrap support
 as the research lane.
+
+### Synthetic feed load
+
+Run the feed probe in a release build on Linux.
+
+```sh
+NIVRA_FEED_LOAD=1 cargo test --release -p nivra-cli --bin nivra --locked \
+  synthetic_feed_load -- --ignored --nocapture
+```
+
+The probe alternates six-second idle and 540-message-per-second samples.
+It measures CPU time on the feed reader and observation preparation threads,
+and counts each time either thread returns from its wait. It runs the
+protobuf decoder, screening snapshot, selection, and observation encoder
+with 2,000 keys, 20 in full mode. The Python worker, book transaction, and
+network are outside this probe.

@@ -59,6 +59,16 @@ fn frame(source: i64, price: f64) -> Vec<u8> {
     }
     .encode_to_vec()
 }
+mod load;
+
+fn full_fixture() -> Vec<u8> {
+    let hex = "080112610a084e53455f45517c41125512530a510a1709000000000000594010e307180521000000000080584012180a16080b11cdccccccccfc58401807213333333333035940290000000000e05840309875490000000000c0724051000000000000594018e807";
+    (0..hex.len())
+        .step_by(2)
+        .map(|n| u8::from_str_radix(&hex[n..n + 2], 16).unwrap())
+        .collect()
+}
+
 #[test]
 fn provider_depth_frame_decodes_touch_and_features() {
     let allowed = BTreeSet::from(["NSE_EQ|A".into()]);
@@ -854,7 +864,7 @@ fn ticks_newer_than_a_stale_loop_clock_are_not_reported_as_fallback() {
 fn broad_prices_stay_in_the_cache_and_full_receipts_notify_the_book() {
     let inbox = super::super::controller_events::Inbox::new();
     let key = "NSE_EQ|A".to_string();
-    let mut cache = Cache {
+    let cache = Cache {
         controller_notify: Some(inbox.notify()),
         last_tick: Some(999),
         strategy_keys: BTreeSet::from([key.clone()]),
@@ -872,7 +882,7 @@ fn broad_prices_stay_in_the_cache_and_full_receipts_notify_the_book() {
         token_checked: 0,
         retry_ms: 1000,
         settings: Settings::default(),
-        cache: Arc::new(Mutex::new(std::mem::take(&mut cache))),
+        cache: Arc::new(Mutex::new(cache)),
     };
     let mut mock = Mock {
         revision: "fixture".into(),
@@ -887,15 +897,26 @@ fn broad_prices_stay_in_the_cache_and_full_receipts_notify_the_book() {
             .wait(Duration::ZERO)
             .contains(super::super::controller_events::Event::Feed)
     );
-    let hex = "080112610a084e53455f45517c41125512530a510a1709000000000000594010e307180521000000000080584012180a16080b11cdccccccccfc58401807213333333333035940290000000000e05840309875490000000000c0724051000000000000594018e807";
-    let full: Vec<_> = (0..hex.len())
-        .step_by(2)
-        .map(|n| u8::from_str_radix(&hex[n..n + 2], 16).unwrap())
-        .collect();
-    controller.ingest(&mut mock, &full, 1_002);
+    controller.ingest(&mut mock, &full_fixture(), 1_002);
+    controller.ingest(&mut mock, &full_fixture(), 1_003);
+    assert_eq!(
+        controller.cache.lock().unwrap().depth_updates.prospects[&key].receipt,
+        1_003
+    );
     assert!(
         inbox
             .wait(Duration::ZERO)
             .contains(super::super::controller_events::Event::Feed)
     );
+    controller.cache.lock().unwrap().held.insert(key);
+    controller.ingest(&mut mock, &full_fixture(), 1_004);
+    controller.ingest(&mut mock, &full_fixture(), 1_005);
+    let cache = controller.cache.lock().unwrap();
+    let held: Vec<_> = cache
+        .depth_updates
+        .held
+        .iter()
+        .map(|(_, point)| point.receipt)
+        .collect();
+    assert_eq!(held, [1_004, 1_005]);
 }

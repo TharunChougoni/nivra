@@ -33,6 +33,10 @@ impl Inputs {
             .map_or(now, |at| at.saturating_add(REFRESH_MS))
     }
 
+    pub(super) fn selected_for(&self, strategy: Option<&str>) -> bool {
+        self.selected_for.as_deref() == strategy
+    }
+
     pub(super) fn selection(&self) -> &[String] {
         self.selection.keys()
     }

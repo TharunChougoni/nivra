@@ -413,6 +413,7 @@ pub(crate) fn run(
                 .iter()
                 .any(|prospect| changed.contains(prospect.key.as_str()));
         if in_session && in_window && relevant {
+            fresh.retain(|key, _| portfolio.positions.contains_key(key));
             fresh.extend(
                 prospects
                     .iter()
