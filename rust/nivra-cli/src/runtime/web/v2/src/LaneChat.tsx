@@ -13,6 +13,7 @@ import {
   TURN_ERROR_LABELS,
   instrumentName,
   plain,
+  prospectTitle,
   sentenceCase,
   spoken,
   tradesProposed,
@@ -280,6 +281,23 @@ function Outcome({
   return chips.length ? <div className="chat-chips">{chips}</div> : null;
 }
 
+/** The gate's ranked F&O prospects, as the decision lane receives them. */
+function Prospects({ ex, index }: { ex: TranscriptExchange; index?: Index }) {
+  const prospects = ex.turn?.verdict?.prospects ?? [];
+  if (!prospects.length) return null;
+  return (
+    <ol className="chat-prospects" aria-label="Prospects for the decision lane">
+      {prospects.map((p) => (
+        <li key={p.instrument_key}>
+          <strong>{prospectTitle(p, index)}</strong>
+          <span>{spoken(p.why)}</span>
+          <span className="chat-note">{spoken(p.evidence)}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function Footer({ ex }: { ex: TranscriptExchange }) {
   const turn = ex.turn,
     elapsed =
@@ -408,6 +426,7 @@ function Exchange({
           index={index}
         />
         <Outcome ex={ex} hasLater={hasLater} />
+        <Prospects ex={ex} index={index} />
         <Footer ex={ex} />
       </div>
     </article>

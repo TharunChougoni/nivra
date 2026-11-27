@@ -863,7 +863,22 @@ export interface AgentTurn {
     actions?: number;
     error?: string | null;
   } | null;
-  verdict?: { escalate: boolean; reason: string } | null;
+  verdict?: {
+    escalate: boolean;
+    reason: string;
+    prospects?: GateProspect[];
+  } | null;
+}
+/** One F&O contract the gate ranked for the decision lane; terms come from the option universe. */
+export interface GateProspect {
+  rank: number;
+  instrument_key: string;
+  idea: "buy_call" | "buy_put" | string;
+  strike: string;
+  expiry: string;
+  lot_size: number;
+  evidence: string;
+  why: string;
 }
 export interface AgentResponse extends Availability {
   v?: number;

@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   TOOL_LABELS,
+  TRIGGER_LABELS,
   TURN_ERROR_LABELS,
   instrumentName,
   plain,
+  prospectTitle,
   shortId,
   spoken,
   turnOutcome,
@@ -28,6 +30,33 @@ test("labels humanize codes, shorten ids and drop instrument segment prefixes", 
     }),
     "No trade",
   );
+
+  const prospect = {
+    rank: 1,
+    instrument_key: "NSE_FO|58743",
+    idea: "buy_call",
+    strike: "26000",
+    expiry: "2026-10-20",
+    lot_size: 65,
+    evidence: "premium +20%",
+    why: "momentum",
+  };
+  assert.equal(
+    turnOutcome({
+      turn_id: "g",
+      lane: "gate",
+      verdict: { escalate: true, reason: "ATM call jumped", prospects: [prospect] },
+    }),
+    "Escalated · 1 prospect · ATM call jumped",
+  );
+  assert.equal(
+    prospectTitle(
+      prospect,
+      new Map([["NSE_FO|58743", { key: "NSE_FO|58743", symbol: "NIFTY 26000 CE" }]]),
+    ),
+    "NIFTY 26000 CE · Buy call · strike 26000 · expiry 2026-10-20 · lot 65",
+  );
+  assert.equal(plain("premium_move", TRIGGER_LABELS), "option premium moved");
 
   const hash = "a".repeat(64);
   assert.deepEqual(shortId(hash), { text: "aaaaaaaa", title: hash });

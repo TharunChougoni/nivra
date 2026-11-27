@@ -4,7 +4,7 @@
 import { datetime, instrumentClassLabels, refusalLabels } from "./data";
 import { instrumentLabel } from "./model";
 import type { InstrumentRecord } from "./model";
-import type { AgentTurn } from "./types";
+import type { AgentTurn, GateProspect } from "./types";
 
 /** Known codes → plain labels. Anything missing falls back to `plain`'s sentence case. */
 export const LABELS: Record<string, string> = {
@@ -70,6 +70,10 @@ export const TOOL_LABELS: Record<string, string> = {
 /** Why a lane turn started: kinds read as titles, reasons as phrases. */
 export const TRIGGER_LABELS: Record<string, string> = {
   entry_candidate: "New pick",
+  fo_signal: "Option move",
+  spot_move: "Nifty moved",
+  premium_move: "option premium moved",
+  oi_shift: "open interest shifted",
   entered_top_k: "entered the top picks",
   schedule: "Scheduled",
   scheduled: "Scheduled",
@@ -100,6 +104,26 @@ export const TRIGGER_LABELS: Record<string, string> = {
   decision_request: "decision request",
   agenda: "Agenda",
 };
+
+/** What the gate suggests the decision lane consider. */
+export const IDEA_LABELS: Record<string, string> = {
+  buy_call: "Buy call",
+  buy_put: "Buy put",
+};
+
+/** A gate prospect's heading: "NIFTY 26000 CE · Buy call · strike 26000 · expiry 2026-10-20 · lot 65". */
+export function prospectTitle(
+  p: GateProspect,
+  index?: Map<string, InstrumentRecord>,
+): string {
+  return [
+    instrumentName(p.instrument_key, index),
+    plain(p.idea, IDEA_LABELS),
+    `strike ${p.strike}`,
+    `expiry ${p.expiry}`,
+    `lot ${p.lot_size}`,
+  ].join(" · ");
+}
 
 /** Why a lane turn failed. */
 export const TURN_ERROR_LABELS: Record<string, string> = {
@@ -236,10 +260,16 @@ export function tradesProposed(actions?: number | null): string | null {
 
 /** One line for a lane turn: gate verdict, plan outcome or error. */
 export function turnOutcome(t: AgentTurn): string {
-  if (t.verdict)
-    return (
-      (t.verdict.escalate ? "Escalated" : "Declined") + " · " + t.verdict.reason
-    );
+  if (t.verdict) {
+    const count = t.verdict.prospects?.length ?? 0;
+    return [
+      t.verdict.escalate ? "Escalated" : "Declined",
+      count && `${count} ${count === 1 ? "prospect" : "prospects"}`,
+      t.verdict.reason,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
   if (t.plan) {
     const { status, stance, actions } = t.plan;
     return [
