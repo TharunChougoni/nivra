@@ -330,7 +330,13 @@ pub(super) fn attach_depth(
                 levels: Default::default(),
             }));
         }
-        if sample.executable.as_ref() == Some(quote) {
+        // Open interest follows the depth read the sample now carries, matched by
+        // receipt and source time so a later edit to that depth still counts.
+        if sample
+            .executable
+            .as_ref()
+            .is_some_and(|q| (q.receipt, q.source) == (quote.receipt, quote.source))
+        {
             sample.open_interest = row["oi"]
                 .as_f64()
                 .filter(|oi| oi.is_finite() && *oi >= 0.0)
