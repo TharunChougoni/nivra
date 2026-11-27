@@ -141,3 +141,161 @@ Re-run this page with the same split after you change a strategy. If you
 tune on the test split, choose a later untouched window to assess it again,
 as [research](../docs/RESEARCH.md#backtest-years-of-archived-bars)
 describes.
+
+## Action strategies on real quote tapes
+
+Every `strategy_actions_v1` script in this directory, replayed over
+archived NSE quote receipts through the production research-lane path:
+`archive_window_tape`, then `strategy::replay::run` in the bubblewrap
+sandbox (each depth receipt is one strategy call; held exits run first), then
+`strategy_library::acceptance::accept` with the default thresholds. The
+bench is the ignored test `action_bench` in
+`rust/nivra-cli/src/runtime/harness/research/backtest/action_bench.rs`. It
+shares the `backtest` tool's replay and acceptance code and skips only the
+model call, library registration and the tool's admission caps.
+
+**Result: nothing is profitable after costs, and the data cannot show
+otherwise.** Seven of the eight strategies, and all six variants of them,
+placed no order in two full sessions and part of a third (no filled and no refused action). Only
+`bollinger_reversion` traded: two round trips, both winners, +₹10.18 net on
+₹1,000 clips. Two trades are noise. Every replay is rejected by the default
+acceptance rules, with `too_few_trades` and `too_few_tape_dates` on all of
+them, because one session holds one tape date and the bar is 10 trades over
+3 dates.
+
+### Data, costs and command
+
+- Archive: the local copy of production (`nivra_archive`), quote receipts for
+  2026-11-25 and 2026-11-26 (full sessions, 09:15 to 15:30) and 2026-11-27
+  (partial: receipts from 09:15 to 09:43). Daily bars from 2025-10-17 rank the
+  universe.
+- Universe: the 250 most liquid names, by mean traded value over the 35 days
+  before 2026-11-25 (daily bars strictly before the first session, so no
+  lookahead). The archive has no instrument master, so each name's symbol is
+  the one in its quote receipts and its tick is the greatest common divisor of
+  every price it displayed. Nothing is invented; a name with no priced level is
+  dropped.
+- Why 250: the tape builder allows at most 100,000 observations and 16 MiB.
+  A session over the whole 2,760-name scan is about 500,000 observations, so the
+  research lane's `backtest` cannot replay one full unfiltered session. At 250
+  names a session fits: 13.5 and 15.1 MiB.
+- Costs: the paper schedule in
+  [`packaging/rust/paper-costs.fragment.json`](../packaging/rust/paper-costs.fragment.json)
+  (₹0.01 per order, 5 bps buy, 7 bps sell, 5 bps slippage). Capital ₹5,000
+  (the repo fixture's), `order_rupees` 1000, the strategies' own exit
+  intents, 2 s executable-quote freshness. The ₹24-per-order intraday broker
+  schedule was not run; on a ₹1,000 clip it costs about 4.8% a round trip.
+- Each tape starts flat with its own book. Aggregate rows sum trades, P&L and
+  failures across sessions and take the worst per-session drawdown, in bps of
+  capital.
+
+```sh
+printf '%s' research > /tmp/archive-password && chmod 600 /tmp/archive-password
+cargo test -p nivra-cli --locked action_bench -- --ignored --nocapture --exact \
+  runtime::harness::research::backtest::action_bench::action_bench
+```
+
+with these set (the plan lists the sessions, the universe size and the
+variants; `strategies/action-bench.results.json` holds every run, with report
+hashes):
+
+```sh
+export NIVRA_ACTION_BENCH_PLAN=strategies/action-bench.plan.json \
+  NIVRA_ACTION_BENCH_URL=postgresql://postgres@127.0.0.1:55440/nivra_archive \
+  NIVRA_ACTION_BENCH_PASSWORD_FILE=/tmp/archive-password \
+  NIVRA_ACTION_BENCH_OUT=/tmp/action-bench
+```
+
+It writes `leaderboard.md` and `results.json` to the output directory. The
+run took 19 minutes for 54 replays on 20 cores. The behavioural test is
+`action_bench_runs_a_strategy_over_a_fixture_archive`; it needs
+`NIVRA_ARCHIVE_TEST_URL` (see [TESTING](../docs/TESTING.md)) and bubblewrap.
+
+### Leaderboard
+
+Sorted by net P&L after costs. Variants are named `strategy@change`; each
+changes at most three parameters of one baseline toward more trades, using no
+data from the replay window. Rows with no trades keep their name order.
+
+#### Sessions 2026-11-25 and 2026-11-26 combined
+
+| # | Variant | Trades | Net P&L ₹ | Net bps/trade | Win % | Max DD bps | Fees ₹ | Failed calls | Filled/refused actions | Open at end | Acceptance per tape |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 1 | `bollinger_reversion` | 2 | 10.18 | 61.4 | 100 | 11 | 2.37 | 0/4069 | 3/0 | 1 | 2026-11-25: rejected (too_few_trades, too_few_tape_dates); 2026-11-26: rejected (too_few_trades, too_few_tape_dates, open_positions_at_end) |
+| 2 | `bollinger_reversion@target1.5-hold30m` | 2 | 10.18 | 61.4 | 100 | 11 | 2.37 | 0/4069 | 3/0 | 1 | 2026-11-25: rejected (too_few_trades, too_few_tape_dates); 2026-11-26: rejected (too_few_trades, too_few_tape_dates, open_positions_at_end) |
+| 3 | `bollinger_reversion@band1.0-range0.3-hold30m` | 3 | 2.77 | 11.4 | 67 | 18 | 4.01 | 0/4069 | 5/30 | 2 | 2026-11-25: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates, open_positions_at_end); 2026-11-26: rejected (too_few_trades, too_few_tape_dates, open_positions_at_end) |
+| 4 | `circuit_magnet` | 0 | 0.00 | – | – | 0 | 0.00 | 0/4069 | 0/0 | 0 | 2026-11-25: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates); 2026-11-26: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 5 | `opening_range_breakout` | 0 | 0.00 | – | – | 0 | 0.00 | 0/4069 | 0/0 | 0 | 2026-11-25: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates); 2026-11-26: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 6 | `order_book_imbalance` | 0 | 0.00 | – | – | 0 | 0.00 | 0/4069 | 0/0 | 0 | 2026-11-25: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates); 2026-11-26: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 7 | `order_book_imbalance@imb0.55` | 0 | 0.00 | – | – | 0 | 0.00 | 0/4069 | 0/0 | 0 | 2026-11-25: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates); 2026-11-26: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 8 | `relative_strength` | 0 | 0.00 | – | – | 0 | 0.00 | 0/4069 | 0/0 | 0 | 2026-11-25: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates); 2026-11-26: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 9 | `relative_strength@rel30-vol1.0` | 0 | 0.00 | – | – | 0 | 0.00 | 0/4069 | 0/0 | 0 | 2026-11-25: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates); 2026-11-26: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 10 | `volume_climax_reversal` | 0 | 0.00 | – | – | 0 | 0.00 | 0/4069 | 0/0 | 0 | 2026-11-25: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates); 2026-11-26: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 11 | `volume_climax_reversal@drop100` | 0 | 0.00 | – | – | 0 | 0.00 | 0/4069 | 0/0 | 0 | 2026-11-25: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates); 2026-11-26: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 12 | `volume_climax_reversal@drop60-vol1.0` | 0 | 0.00 | – | – | 0 | 0.00 | 0/4069 | 0/0 | 0 | 2026-11-25: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates); 2026-11-26: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 13 | `vwap_reversion` | 0 | 0.00 | – | – | 0 | 0.00 | 0/4069 | 0/0 | 0 | 2026-11-25: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates); 2026-11-26: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 14 | `vwap_reversion@z1.0-drop300` | 0 | 0.00 | – | – | 0 | 0.00 | 0/4069 | 0/0 | 0 | 2026-11-25: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates); 2026-11-26: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 15 | `vwap_reversion@z1.5` | 0 | 0.00 | – | – | 0 | 0.00 | 0/4069 | 0/0 | 0 | 2026-11-25: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates); 2026-11-26: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 16 | `vwap_trend` | 0 | 0.00 | – | – | 0 | 0.00 | 0/4069 | 0/0 | 0 | 2026-11-25: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates); 2026-11-26: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 17 | `bollinger_reversion@band1.5` | 2 | -3.91 | -26.8 | 50 | 27 | 2.41 | 0/4069 | 4/14 | 2 | 2026-11-25: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates, open_positions_at_end); 2026-11-26: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates, open_positions_at_end) |
+| 18 | `bollinger_reversion@band1.5-range0.25` | 2 | -3.91 | -26.8 | 50 | 27 | 2.41 | 0/4069 | 4/14 | 2 | 2026-11-25: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates, open_positions_at_end); 2026-11-26: rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates, open_positions_at_end) |
+
+#### 2026-11-27, partial session (09:15 to 09:43)
+
+| # | Variant | Trades | Net P&L ₹ | Net bps/trade | Win % | Max DD bps | Fees ₹ | Failed calls | Filled/refused actions | Open at end | Acceptance per tape |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 1 | `bollinger_reversion` | 0 | 0.00 | – | – | 0 | 0.00 | 0/180 | 0/0 | 0 | 2026-11-27 (partial): rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 2 | `bollinger_reversion@band1.0-range0.3-hold30m` | 0 | 0.00 | – | – | 0 | 0.00 | 0/180 | 0/0 | 0 | 2026-11-27 (partial): rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 3 | `bollinger_reversion@band1.5` | 0 | 0.00 | – | – | 0 | 0.00 | 0/180 | 0/0 | 0 | 2026-11-27 (partial): rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 4 | `bollinger_reversion@band1.5-range0.25` | 0 | 0.00 | – | – | 0 | 0.00 | 0/180 | 0/0 | 0 | 2026-11-27 (partial): rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 5 | `bollinger_reversion@target1.5-hold30m` | 0 | 0.00 | – | – | 0 | 0.00 | 0/180 | 0/0 | 0 | 2026-11-27 (partial): rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 6 | `circuit_magnet` | 0 | 0.00 | – | – | 0 | 0.00 | 0/180 | 0/0 | 0 | 2026-11-27 (partial): rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 7 | `opening_range_breakout` | 0 | 0.00 | – | – | 0 | 0.00 | 0/180 | 0/0 | 0 | 2026-11-27 (partial): rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 8 | `order_book_imbalance` | 0 | 0.00 | – | – | 0 | 0.00 | 0/180 | 0/0 | 0 | 2026-11-27 (partial): rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 9 | `order_book_imbalance@imb0.55` | 0 | 0.00 | – | – | 0 | 0.00 | 0/180 | 0/0 | 0 | 2026-11-27 (partial): rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 10 | `relative_strength` | 0 | 0.00 | – | – | 0 | 0.00 | 0/180 | 0/0 | 0 | 2026-11-27 (partial): rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 11 | `relative_strength@rel30-vol1.0` | 0 | 0.00 | – | – | 0 | 0.00 | 0/180 | 0/0 | 0 | 2026-11-27 (partial): rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 12 | `volume_climax_reversal` | 0 | 0.00 | – | – | 0 | 0.00 | 0/180 | 0/0 | 0 | 2026-11-27 (partial): rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 13 | `volume_climax_reversal@drop100` | 0 | 0.00 | – | – | 0 | 0.00 | 0/180 | 0/0 | 0 | 2026-11-27 (partial): rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 14 | `volume_climax_reversal@drop60-vol1.0` | 0 | 0.00 | – | – | 0 | 0.00 | 0/180 | 0/0 | 0 | 2026-11-27 (partial): rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 15 | `vwap_reversion` | 0 | 0.00 | – | – | 0 | 0.00 | 0/180 | 0/0 | 0 | 2026-11-27 (partial): rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 16 | `vwap_reversion@z1.0-drop300` | 0 | 0.00 | – | – | 0 | 0.00 | 0/180 | 0/0 | 0 | 2026-11-27 (partial): rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 17 | `vwap_reversion@z1.5` | 0 | 0.00 | – | – | 0 | 0.00 | 0/180 | 0/0 | 0 | 2026-11-27 (partial): rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+| 18 | `vwap_trend` | 0 | 0.00 | – | – | 0 | 0.00 | 0/180 | 0/0 | 0 | 2026-11-27 (partial): rejected (too_few_trades, net_pnl_too_low, too_few_tape_dates) |
+
+Universe: 250 instruments.
+
+| Tape | Sessions | Missing | Events | Observations | Bytes | `events_sha256` |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| 2026-11-25 | 2026-11-25 |  | 3954 | 39761 | 13490111 | `06d49adf4fcc933b` |
+| 2026-11-26 | 2026-11-26 |  | 4369 | 44461 | 15099033 | `8521f550e797d382` |
+| 2026-11-27 (partial) | 2026-11-27 |  | 360 | 4347 | 1473995 | `fca3d378d8af65ec` |
+
+### What the tape does and does not show
+
+- **Silence is not proof of a weak strategy.** The scanner features the
+  strategies read (`session_vwap`, `market_relative_bps`, volatility, range
+  position) come from scanner samples no older than 2 s. The archive's scan
+  receipts rotate over 2,760 names, so few names have fresh features at any
+  strategy call. This is the likely reason most scripts never fire. This run
+  did not measure it; count the prospects per call before relying on it.
+- **A held name needs a fresh depth quote to exit.** `bollinger_reversion`
+  left a position open at the end of 2026-11-26, probably because the 15:15
+  time exit needs a fresh executable quote for that name and none arrived. Acceptance flags it as
+  `open_positions_at_end`.
+- Three sessions, one of them partial, is not a sample. No row here is
+  statistically meaningful, and a variant that wins on two days is not evidence
+  of an edge.
+
+### Recommended fallbacks
+
+1. `bollinger_reversion` with its shipped params
+   (`strategies/bollinger_reversion.params.json`). It is the only script with
+   any trade evidence: 2 trades, 2 wins, +61 bps per trade, 11 bps worst
+   drawdown. Treat that as "does not lose money in this window", not as an
+   edge.
+2. None. No other strategy or variant made a trade or beat `bollinger_reversion`
+   (the looser Bollinger variants earned less or lost). Use the other seven only after
+   a tape where they act.
+
+Do not read the list as "profitable after costs". Nothing is.

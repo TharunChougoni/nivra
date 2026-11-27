@@ -1,0 +1,165 @@
+{
+ "strategies_dir": "strategies",
+ "costs": "packaging/rust/paper-costs.fragment.json",
+ "capital": "5000",
+ "universe_size": 250,
+ "universe_before": "2026-11-25",
+ "tapes": [
+  {
+   "name": "2026-11-25",
+   "from_session": "2026-11-25",
+   "to_session": "2026-11-25"
+  },
+  {
+   "name": "2026-11-26",
+   "from_session": "2026-11-26",
+   "to_session": "2026-11-26"
+  },
+  {
+   "name": "2026-11-27 (partial)",
+   "from_session": "2026-11-27",
+   "to_session": "2026-11-27"
+  }
+ ],
+ "variants": [
+  {
+   "name": "opening_range_breakout",
+   "strategy": "opening_range_breakout"
+  },
+  {
+   "name": "vwap_reversion",
+   "strategy": "vwap_reversion"
+  },
+  {
+   "name": "relative_strength",
+   "strategy": "relative_strength"
+  },
+  {
+   "name": "bollinger_reversion",
+   "strategy": "bollinger_reversion"
+  },
+  {
+   "name": "order_book_imbalance",
+   "strategy": "order_book_imbalance"
+  },
+  {
+   "name": "circuit_magnet",
+   "strategy": "circuit_magnet"
+  },
+  {
+   "name": "volume_climax_reversal",
+   "strategy": "volume_climax_reversal"
+  },
+  {
+   "name": "vwap_trend",
+   "strategy": "vwap_trend"
+  },
+  {
+   "name": "bollinger_reversion@band1.5",
+   "strategy": "bollinger_reversion",
+   "params": {
+    "band_z": "1.5"
+   }
+  },
+  {
+   "name": "bollinger_reversion@band1.5-range0.25",
+   "strategy": "bollinger_reversion",
+   "params": {
+    "band_z": "1.5",
+    "max_range_position": "0.25"
+   }
+  },
+  {
+   "name": "bollinger_reversion@band1.0-range0.3-hold30m",
+   "strategy": "bollinger_reversion",
+   "params": {
+    "band_z": "1.0",
+    "max_range_position": "0.3",
+    "hold_ms": 1800000
+   }
+  },
+  {
+   "name": "bollinger_reversion@target1.5-hold30m",
+   "strategy": "bollinger_reversion",
+   "params": {
+    "target_band_z": "1.5",
+    "hold_ms": 1800000
+   }
+  },
+  {
+   "name": "vwap_reversion@z1.5",
+   "strategy": "vwap_reversion",
+   "params": {
+    "entry_z": "1.5"
+   }
+  },
+  {
+   "name": "vwap_reversion@z1.0-drop300",
+   "strategy": "vwap_reversion",
+   "params": {
+    "entry_z": "1.0",
+    "max_relative_drop_bps": 300
+   }
+  },
+  {
+   "name": "volume_climax_reversal@drop100",
+   "strategy": "volume_climax_reversal",
+   "params": {
+    "min_drop_bps": 100,
+    "min_relative_drop_bps": 75,
+    "min_rel_volume": "1.5"
+   }
+  },
+  {
+   "name": "volume_climax_reversal@drop60-vol1.0",
+   "strategy": "volume_climax_reversal",
+   "params": {
+    "min_drop_bps": 60,
+    "min_relative_drop_bps": 40,
+    "min_rel_volume": "1.0"
+   }
+  },
+  {
+   "name": "relative_strength@rel30-vol1.0",
+   "strategy": "relative_strength",
+   "params": {
+    "min_relative_bps": 30,
+    "min_rel_volume": "1.0"
+   }
+  },
+  {
+   "name": "order_book_imbalance@imb0.55",
+   "strategy": "order_book_imbalance",
+   "params": {
+    "min_imbalance": "0.55"
+   }
+  }
+ ],
+ "leaderboards": [
+  {
+   "title": "Sessions 2026-11-25 and 2026-11-26 combined",
+   "tapes": [
+    "2026-11-25",
+    "2026-11-26"
+   ]
+  },
+  {
+   "title": "2026-11-27, partial session (09:15 to 09:43)",
+   "tapes": [
+    "2026-11-27 (partial)"
+   ]
+  },
+  {
+   "title": "2026-11-25 alone",
+   "tapes": [
+    "2026-11-25"
+   ]
+  },
+  {
+   "title": "2026-11-26 alone",
+   "tapes": [
+    "2026-11-26"
+   ]
+  }
+ ]
+}

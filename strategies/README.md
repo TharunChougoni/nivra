@@ -42,6 +42,10 @@ strategies, "range" and "band" mean the scanner's lookback window
 | `volume_climax_reversal` | Campbell, Grossman and Wang: buy a sharp, stock-specific drop on heavy volume; target half the drop, capped at VWAP | `min_drop_bps`, `min_relative_drop_bps`, `min_rel_volume`, `target_retrace` | Forced or liquidity selling in otherwise sound names | Drops on real news, and market-wide selloffs |
 | `vwap_trend` | Zarattini and Aziz VWAP trend: buy names holding a little above VWAP with positive momentum; stop just under VWAP | `min_above_bps`, `max_above_bps`, `stop_below_vwap_bps` | Steady trend days | Chop around VWAP, which stops out repeatedly |
 
+[BENCHMARK.md](BENCHMARK.md#action-strategies-on-real-quote-tapes) replays them
+over archived quote tapes with `action-bench`
+(`strategies/action-bench.plan.json`).
+
 Check every action strategy against empty, malformed, untradable and
 trigger observations:
 
