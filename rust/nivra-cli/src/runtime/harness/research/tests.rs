@@ -275,6 +275,7 @@ print(json.dumps({"actions":a}))"#;
     assert_eq!(submit(&cfg)["reason"], "candidate_strategy_disabled");
     settings.candidate_compute.as_mut().unwrap().strategy = Some(CandidateStrategySettings {
         max_archive_window_days: default_archive_window_days(),
+        recent_archive_sessions: 3,
         enabled: true,
         abi: "strategy_actions_v1".into(),
         max_quote_events: 100,
@@ -419,6 +420,7 @@ fn archive_strategy_replay_pins_quotes_across_sessions() -> Result<()> {
     let max_wall_ms = 20_000;
     candidate.strategy = Some(CandidateStrategySettings {
         max_archive_window_days: default_archive_window_days(),
+        recent_archive_sessions: 3,
         enabled: true,
         abi: "strategy_actions_v1".into(),
         max_wall_ms,
@@ -509,6 +511,36 @@ fn archive_strategy_replay_pins_quotes_across_sessions() -> Result<()> {
             &|| false,
         )
     };
+    let mut rolling = candidate_submit_args("rolling-strategy", SOURCE);
+    rolling.params = serde_json::from_str::<Value>(PARAMETERS)?["params"].clone();
+    rolling.params["start_ms"] = json!(start);
+    rolling.dataset_id = "recent_archive".into();
+    rolling.training_from_ms = start - 1;
+    rolling.training_to_ms = start - 1;
+    rolling.selection_from_ms = start;
+    rolling.selection_to_ms = candidate_at_on(days[2], 15, 30) - 1;
+    let run_rolling = || {
+        backtest_submit(
+            &c,
+            &cfg,
+            "fixture-model",
+            "turn-archive",
+            rolling.clone(),
+            end,
+            &|| false,
+        )
+    };
+    let recent = run_rolling()?;
+    assert_eq!(recent["status"], "completed", "{recent}");
+    assert_eq!(
+        recent["tape"]["archive_window"]["sessions"],
+        json!(&days[..3])
+    );
+    assert_eq!(
+        recent["tape"]["archive_window"]["missing_sessions"],
+        json!([])
+    );
+    assert_eq!(recent["acceptance"]["verdict"], "rejected");
     let first = submit(None)?;
     assert_eq!(first["status"], "completed", "{first}");
     assert_eq!(first["tape"]["dates"], json!(&days[..3]), "{first}");
@@ -689,6 +721,7 @@ fn archive_bar_job_replays_closed_splits() -> Result<()> {
         max_tape_bytes: 16 * 1024 * 1024,
         max_wall_ms: 20_000,
         max_archive_window_days: default_archive_window_days(),
+        recent_archive_sessions: 3,
     });
     candidate.wall_millis = 360_000;
     if perf.is_none() {

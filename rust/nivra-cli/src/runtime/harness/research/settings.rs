@@ -92,12 +92,23 @@ pub(crate) struct CandidateStrategySettings {
         skip_serializing_if = "is_default_archive_window_days"
     )]
     pub max_archive_window_days: i64,
+    #[serde(
+        default = "default_recent_archive_sessions",
+        skip_serializing_if = "is_default_recent_archive_sessions"
+    )]
+    pub recent_archive_sessions: usize,
 }
 pub(crate) const fn default_archive_window_days() -> i64 {
     14
 }
 fn is_default_archive_window_days(days: &i64) -> bool {
     *days == default_archive_window_days()
+}
+pub(crate) const fn default_recent_archive_sessions() -> usize {
+    3
+}
+fn is_default_recent_archive_sessions(sessions: &usize) -> bool {
+    *sessions == default_recent_archive_sessions()
 }
 fn default_strategy_wall_ms() -> u64 {
     20_000
@@ -107,6 +118,7 @@ impl CandidateStrategySettings {
         if self.abi != crate::runtime::strategy::ABI
             || !(1..=120_000).contains(&self.max_wall_ms)
             || !(1..=60).contains(&self.max_archive_window_days)
+            || !(3..=20).contains(&self.recent_archive_sessions)
             || !(1..=10_000).contains(&self.max_quote_events)
             || !(1..=100_000).contains(&self.max_observations)
             || !(1..=16 * 1024 * 1024).contains(&self.max_tape_bytes)
@@ -193,6 +205,7 @@ impl CandidateComputeSettings {
                     .dataset_id
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+                || dataset.dataset_id == super::RECENT_ARCHIVE_DATASET_ID
                 || !aliases.insert(&dataset.dataset_id)
             {
                 return Err("candidate_dataset_invalid");

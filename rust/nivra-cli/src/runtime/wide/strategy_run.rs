@@ -7,7 +7,7 @@
 //! Paper only.
 use super::*;
 use crate::runtime::strategy::{self, ActionResult, Observation, Prospect};
-use crate::runtime::strategy_library::{Entry, Library};
+use crate::runtime::strategy_library::{Entry, Library, build_mismatch};
 use nivra_core::market::MAX_FINANCIAL_AGE_MS;
 use nivra_sandbox::SandboxConfig;
 use serde_json::{Value, json};
@@ -19,18 +19,6 @@ const RESOLVE_MS: i64 = 30_000;
 /// Actions, refusals and fills the dashboard lists.
 const RECENT: usize = 20;
 const ACTION_TABLE: &str = "CREATE TABLE IF NOT EXISTS strategy_action(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,observed_at INTEGER NOT NULL,strategy_id TEXT NOT NULL,idx INTEGER NOT NULL,instrument_key TEXT,side TEXT,units INTEGER NOT NULL,outcome TEXT NOT NULL);";
-
-/// The build-specific reason an accepted entry cannot run here: its report
-/// was produced by a different engine or a different action adapter.
-pub(crate) fn build_mismatch(report: &Value) -> Option<&'static str> {
-    if report["engine_sha256"].as_str() != Some(&nivra_core::replay::engine_fingerprint()) {
-        Some("strategy_engine_changed")
-    } else if report["adapter_sha256"].as_str() != Some(&strategy::replay::adapter_sha256()) {
-        Some("strategy_adapter_changed")
-    } else {
-        None
-    }
-}
 
 /// Active strategy supervision state for the agent lanes and execution gate.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -59,7 +47,11 @@ pub(crate) fn supervision_state(c: &Config, cfg: &planner::PlannerConfig) -> Sup
     let Ok(resolved) = library.resolve() else {
         return SupervisionState::default();
     };
-    let any_eligible = resolved.eligible().next().is_some();
+    let any_eligible = resolved.eligible().any(|entry| {
+        library
+            .entry_build_mismatch(entry)
+            .is_ok_and(|reason| reason.is_none())
+    });
     let active_id = resolved.active.as_deref().and_then(|id| {
         let entry = resolved.entries.iter().find(|e| e.strategy_id == id)?;
         let report = library.report(entry).ok()?;

@@ -360,7 +360,7 @@ pub(crate) fn strategy_facts(
         .map(|entry| {
             let active = resolved.active.as_deref() == Some(entry.strategy_id.as_str());
             let blocked_reason = match library.report(entry) {
-                Ok(report) => crate::runtime::wide::strategy_run::build_mismatch(&report),
+                Ok(report) => crate::runtime::strategy_library::build_mismatch(&report),
                 Err(_) => Some("strategy_library_report_unreadable"),
             };
             if active {

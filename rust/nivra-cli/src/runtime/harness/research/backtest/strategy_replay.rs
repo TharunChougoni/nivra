@@ -31,24 +31,32 @@ pub(super) fn strategy_backtest(
         .datasets
         .iter()
         .find(|d| d.dataset_id == args.dataset_id);
-    let window = match dataset.map(|d| &d.kind) {
-        Some(CandidateDatasetKind::ArchiveWindow {
-            from_session,
-            to_session,
-        }) => {
+    let bounds = match dataset.map(|d| &d.kind) {
+        None if args.dataset_id == RECENT_ARCHIVE_DATASET_ID => {
             if args.selection_to_ms > now {
                 return Ok(not_dispatched("candidate_archive_window_in_future"));
             }
-            Some(ArchiveWindow {
-                max_days: settings.max_archive_window_days,
-                from_session: *from_session,
-                to_session: *to_session,
-                from_ms: args.selection_from_ms,
-                to_ms: args.selection_to_ms,
-                daily: args.archive_daily_window,
-                receipt_id: args.as_of_receipt_id,
-            })
+            let recent = match RecentArchiveWindow::resolve(
+                c,
+                settings,
+                args.selection_to_ms.saturating_add(1).min(now),
+            ) {
+                Ok(recent) => recent,
+                Err(reason) => return Ok(not_dispatched(reason)),
+            };
+            if args.selection_from_ms < recent.selection_from_ms
+                || args.selection_to_ms > recent.selection_to_ms
+            {
+                return Ok(not_dispatched(
+                    "candidate_recent_archive_selection_outside_window",
+                ));
+            }
+            Some(recent.session_bounds())
         }
+        Some(CandidateDatasetKind::ArchiveWindow {
+            from_session,
+            to_session,
+        }) => Some((*from_session, *to_session)),
         Some(CandidateDatasetKind::CurrentSessionFeatures)
             if args.archive_daily_window.is_none() && args.as_of_receipt_id.is_none() =>
         {
@@ -56,6 +64,18 @@ pub(super) fn strategy_backtest(
         }
         _ => return Ok(not_dispatched("candidate_strategy_dataset_unsupported")),
     };
+    if bounds.is_some() && args.selection_to_ms > now {
+        return Ok(not_dispatched("candidate_archive_window_in_future"));
+    }
+    let window = bounds.map(|(from_session, to_session)| ArchiveWindow {
+        max_days: settings.max_archive_window_days,
+        from_session,
+        to_session,
+        from_ms: args.selection_from_ms,
+        to_ms: args.selection_to_ms,
+        daily: args.archive_daily_window,
+        receipt_id: args.as_of_receipt_id,
+    });
     let Some(costs) = c.paper_costs.clone() else {
         return Ok(not_dispatched("paper_costs_required"));
     };
@@ -267,7 +287,7 @@ fn accept_and_register(
         Ok(registration) => json!({
             "verdict":"accepted",
             "strategy_id":registration.entry.strategy_id,
-            "registration":if registration.created { "registered" } else { "already_registered" },
+            "registration":registration.status,
             "thresholds":thresholds
         }),
         Err(error) => json!({

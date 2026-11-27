@@ -7,8 +7,10 @@ use nivra_core::finance::Amount;
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 mod archive_bars;
+mod recent_archive;
 mod strategy_replay;
 pub(crate) use archive_bars::{ARCHIVE_BARS_DATASET_ID, bar_worker_run};
+pub(crate) use recent_archive::{RECENT_ARCHIVE_DATASET_ID, RecentArchiveWindow};
 
 fn deserialize_params<'de, D>(deserializer: D) -> std::result::Result<Value, D::Error>
 where

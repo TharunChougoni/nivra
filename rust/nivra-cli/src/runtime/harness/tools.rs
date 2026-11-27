@@ -74,7 +74,8 @@ pub(super) fn backtest_tool_definitions(
     if !dataset_ids.contains(&research::ARCHIVE_BARS_DATASET_ID) {
         dataset_ids.push(research::ARCHIVE_BARS_DATASET_ID);
     }
-    let windows: Vec<_> = backtest
+    dataset_ids.push(research::RECENT_ARCHIVE_DATASET_ID);
+    let mut windows: Vec<_> = backtest
         .datasets
         .iter()
         .filter_map(|dataset| match dataset.kind {
@@ -88,6 +89,10 @@ pub(super) fn backtest_tool_definitions(
             _ => None,
         })
         .collect();
+    windows.push(format!(
+        "{} (recent closed trading sessions; use the selection timestamps in the brief)",
+        research::RECENT_ARCHIVE_DATASET_ID
+    ));
     let mut properties = json!({
         "task_key":{"type":"string","minLength":1,"maxLength":48,"pattern":"^[a-zA-Z0-9_-]+$"},
         "hypothesis":{"type":"string","minLength":1,"maxLength":1024},
@@ -110,7 +115,7 @@ pub(super) fn backtest_tool_definitions(
             "required":["unit","from","to","instruments"]
         }
     });
-    if !windows.is_empty() {
+    {
         properties["dataset_id"]["description"] = json!(format!(
             "Archive windows for strategy replay: {}",
             windows.join(", ")

@@ -162,6 +162,56 @@ fn acceptance_names_each_threshold_and_integrity_failure() {
 }
 
 #[test]
+fn a_current_build_replay_refreshes_a_stale_acceptance_under_the_same_strategy_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::at(dir.path().join("strategy-library"));
+    let register = |engine: &str, adapter: &str, now| {
+        let (bytes, sha) = report(|r| {
+            r["engine_sha256"] = json!(engine);
+            r["adapter_sha256"] = json!(adapter);
+        });
+        let accepted = accept(&bytes, &sha, SOURCE, &Thresholds::default()).unwrap();
+        library
+            .register(
+                &accepted,
+                Author {
+                    lane: "research".into(),
+                    model: None,
+                    model_revision: None,
+                    turn_id: None,
+                    session: None,
+                },
+                now,
+            )
+            .unwrap()
+    };
+    let old = register("old-engine", "old-adapter", 1);
+    let id = &old.entry.strategy_id;
+    library
+        .append(ControlRecord {
+            at_ms: 2,
+            control: Control::Disable {
+                strategy_id: id.clone(),
+            },
+        })
+        .unwrap();
+    let refreshed = register(
+        &nivra_core::replay::engine_fingerprint(),
+        &super::super::strategy::replay::adapter_sha256(),
+        3,
+    );
+    assert_eq!(&refreshed.entry.strategy_id, id);
+    assert_ne!(refreshed.entry.report_sha256, old.entry.report_sha256);
+    assert!(library.resolve().unwrap().disabled.contains(id));
+    assert!(library.report(&old.entry).is_ok());
+    assert_eq!(library.get(id).unwrap().unwrap(), refreshed.entry);
+    assert_eq!(
+        register("old-engine", "old-adapter", 4).entry,
+        refreshed.entry
+    );
+}
+
+#[test]
 fn registration_is_immutable_and_controls_change_the_active_strategy() {
     let dir = tempfile::tempdir().unwrap();
     let library = Library::at(dir.path().join("strategy-library"));
@@ -173,12 +223,16 @@ fn registration_is_immutable_and_controls_change_the_active_strategy() {
         session: NaiveDate::from_ymd_opt(2026, 11, 25),
     };
     let register = |n: u64, at: i64| {
-        let (bytes, sha) = report(|r| r["parameters"]["params"] = json!({"n": n}));
+        let (bytes, sha) = report(|r| {
+            r["parameters"]["params"] = json!({"n": n});
+            r["engine_sha256"] = json!(nivra_core::replay::engine_fingerprint());
+            r["adapter_sha256"] = json!(super::super::strategy::replay::adapter_sha256());
+        });
         let accepted = accept(&bytes, &sha, SOURCE, &Thresholds::default()).unwrap();
         library.register(&accepted, author.clone(), at).unwrap()
     };
     let first = register(1, 1_000);
-    assert!(first.created);
+    assert_eq!(first.status, RegistrationStatus::Registered);
     let path = dir
         .path()
         .join("strategy-library/entries")
@@ -186,11 +240,11 @@ fn registration_is_immutable_and_controls_change_the_active_strategy() {
     let written = fs::read(&path).unwrap();
     // Re-registering the same (source, params) changes nothing, even later.
     let again = register(1, 9_000);
-    assert!(!again.created);
+    assert_eq!(again.status, RegistrationStatus::AlreadyRegistered);
     assert_eq!(again.entry, first.entry);
     assert_eq!(fs::read(&path).unwrap(), written);
     let second = register(2, 2_000);
-    assert!(second.created);
+    assert_eq!(second.status, RegistrationStatus::Registered);
     assert_eq!(second.entry.source_sha256, first.entry.source_sha256);
     let (a, b) = (
         first.entry.strategy_id.clone(),

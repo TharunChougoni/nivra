@@ -204,6 +204,7 @@ fn all_tools(dir: &std::path::Path) -> (Config, planner::PlannerConfig) {
                     max_wall_ms: 20_000,
                     max_archive_window_days:
                         crate::runtime::harness::research::default_archive_window_days(),
+                    recent_archive_sessions: 3,
                 },
             ),
         }),

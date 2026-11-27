@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! <sessions_root>/strategy-library/
-//!   entries/<strategy_id>.json   one immutable entry per (source, params)
+//!   entries/<strategy_id>.json   accepted replay for each (source, params)
 //!   sources/<source_sha256>.py   content-addressed strategy source
 //!   reports/<report_sha256>.json content-addressed acceptance replay
 //!   controls.json                owner pin/disable/rollback log, append-only
@@ -11,8 +11,8 @@
 //!
 //! Every file is written to a temporary name, synced and then linked or
 //! renamed into place, so a crash leaves either the old state or the new one.
-//! Entries are never rewritten. Owner controls never edit an entry; the
-//! resolved state is the entries folded with the control log. Paper only.
+//! Reacceptance on a new engine or adapter replaces the entry atomically. The
+//! old report remains content-addressed, and owner controls keep the same id.
 use super::{Config, Result, rollover};
 use acceptance::Accepted;
 use chrono::NaiveDate;
@@ -49,7 +49,7 @@ pub(crate) struct Author {
     pub session: Option<NaiveDate>,
 }
 
-/// One accepted strategy version. Immutable once written.
+/// One accepted strategy version and its latest build-compatible replay.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Entry {
@@ -77,6 +77,18 @@ pub(crate) fn strategy_id(source_sha256: &str, params: &Value) -> Result<String>
     Ok(artifact_sha256(
         &json!({"abi":super::strategy::ABI,"source_sha256":source_sha256,"params":params}),
     )?)
+}
+
+/// The build-specific reason an accepted entry cannot run here.
+pub(crate) fn build_mismatch(report: &Value) -> Option<&'static str> {
+    if report["engine_sha256"].as_str() != Some(&nivra_core::replay::engine_fingerprint()) {
+        Some("strategy_engine_changed")
+    } else if report["adapter_sha256"].as_str() != Some(&super::strategy::replay::adapter_sha256())
+    {
+        Some("strategy_adapter_changed")
+    } else {
+        None
+    }
 }
 
 /// A control record. `rollback` disables `from` and pins `to`; `lane_select`
@@ -228,8 +240,15 @@ pub(crate) fn resolve(mut entries: Vec<Entry>, controls: &[ControlRecord]) -> Re
 
 pub(crate) struct Registration {
     pub entry: Entry,
-    /// False when the same strategy id was already registered.
-    pub created: bool,
+    pub status: RegistrationStatus,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RegistrationStatus {
+    Registered,
+    AlreadyRegistered,
+    Reaccepted,
 }
 
 pub(crate) struct Library {
@@ -246,8 +265,8 @@ impl Library {
         Self { root }
     }
 
-    /// Register an accepted strategy. The same `(source, params)` returns the
-    /// existing entry unchanged.
+    /// A replay for this build may replace an older build's acceptance under
+    /// the same strategy id. A repeat on the current build keeps the first report.
     pub(crate) fn register(
         &self,
         accepted: &Accepted<'_>,
@@ -255,13 +274,25 @@ impl Library {
         now: i64,
     ) -> Result<Registration> {
         let id = strategy_id(&accepted.source_sha256, &accepted.params)?;
-        if let Some(entry) = self.get(&id)? {
+        let entries = self.dir("entries")?;
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .mode(0o600)
+            .open(self.root.join("registration.lock"))?;
+        lock.lock_exclusive()?;
+        let _lock = nivra_cli::lock::AdvisoryLock::new(lock);
+        let previous = self.get(&id)?;
+        if let Some(entry) = &previous
+            && (self.entry_build_mismatch(entry)?.is_none()
+                || build_mismatch(&serde_json::from_slice(accepted.report)?).is_some())
+        {
             return Ok(Registration {
-                entry,
-                created: false,
+                entry: entry.clone(),
+                status: RegistrationStatus::AlreadyRegistered,
             });
         }
-        let entries = self.dir("entries")?;
         let sources = self.dir("sources")?;
         let reports = self.dir("reports")?;
         write_new(
@@ -291,11 +322,25 @@ impl Library {
             registered_at_ms: now,
         };
         // The entry is the commit point: its sources and report exist first.
-        let created = write_new(&entries, &format!("{id}.json"), &artifact_bytes(&entry)?)?;
+        let name = format!("{id}.json");
+        let bytes = artifact_bytes(&entry)?;
+        let status = if previous.is_some() {
+            let temporary = write_temp(&entries, &name, &bytes)?;
+            fs::rename(temporary, entries.join(&name))?;
+            fs::File::open(&entries)?.sync_all()?;
+            RegistrationStatus::Reaccepted
+        } else {
+            write_new(&entries, &name, &bytes)?;
+            RegistrationStatus::Registered
+        };
         Ok(Registration {
             entry: self.get(&id)?.ok_or("strategy_library_entry_invalid")?,
-            created,
+            status,
         })
+    }
+
+    pub(crate) fn entry_build_mismatch(&self, entry: &Entry) -> Result<Option<&'static str>> {
+        self.report(entry).map(|report| build_mismatch(&report))
     }
 
     /// Read and verify one entry, its source and its report.
@@ -440,6 +485,14 @@ impl Library {
                 let full = find(&resolved, id)?;
                 if resolved.disabled.contains(&full) {
                     return Err("strategy_disabled".into());
+                }
+                let entry = resolved
+                    .entries
+                    .iter()
+                    .find(|e| e.strategy_id == full)
+                    .ok_or("strategy_not_found")?;
+                if let Some(reason) = self.entry_build_mismatch(entry)? {
+                    return Err(reason.into());
                 }
                 Some(full)
             }
