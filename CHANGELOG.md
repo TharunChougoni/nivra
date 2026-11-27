@@ -1,6 +1,9 @@
 # Source snapshot
 
-## Unreleased
+## 0.17.0 — 2026-11-27
+
+Strategy actions reach the execution gate in about 130 ms instead of 2 to 3 s,
+and strategies get fresh quotes and complete features for their candidates.
 
 ### Upgrade an installed paper host
 
