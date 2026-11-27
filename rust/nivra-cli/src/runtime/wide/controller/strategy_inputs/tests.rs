@@ -69,3 +69,16 @@ fn a_nominee_is_covered_only_by_a_fresh_valid_full_touch() {
     assert!(!inputs.covered(&scan, key, at + 2, false));
     assert!(!inputs.covered(&scan, key, at + MAX_FINANCIAL_AGE_MS + 1, true));
 }
+
+#[test]
+fn faster_ranking_does_not_accelerate_nominations() {
+    let inputs = Inputs {
+        refreshed_at: Some(10_000),
+        ..Inputs::default()
+    };
+    assert!(!inputs.refresh_due(10_250, true, true));
+    assert!(inputs.refresh_due(11_000, true, false));
+    // With no active strategy, rank-only promotion keeps its own cadence.
+    assert!(inputs.refresh_due(10_250, false, true));
+    assert!(!inputs.refresh_due(11_000, false, false));
+}

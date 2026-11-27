@@ -33,6 +33,15 @@ impl Inputs {
             .map_or(now, |at| at.saturating_add(REFRESH_MS))
     }
 
+    fn refresh_due(&self, now: i64, active: bool, rank_due: bool) -> bool {
+        self.refreshed_at.is_none()
+            || if active {
+                now >= self.next_refresh(now)
+            } else {
+                rank_due
+            }
+    }
+
     pub(super) fn selected_for(&self, strategy: Option<&str>) -> bool {
         self.selected_for.as_deref() == strategy
     }
@@ -106,6 +115,11 @@ impl Inputs {
 }
 
 impl Controller {
+    pub(super) fn strategy_promotion_at(&self, now: i64) -> Option<i64> {
+        self.strategy.as_ref()?.desired_id()?;
+        Some(self.strategy_inputs.next_refresh(now))
+    }
+
     pub(super) fn full_strategy_depth(&self) -> bool {
         self.feed_settings()
             .is_some_and(market_feed::Settings::full_depth)
@@ -123,12 +137,7 @@ impl Controller {
                 .positions
                 .keys()
                 .any(|key| !inputs.pinned.contains(key));
-        if !switched
-            && !held_changed
-            && !rank_due
-            && (run.is_none() || now < inputs.next_refresh(now))
-            && inputs.refreshed_at.is_some()
-        {
+        if !switched && !held_changed && !inputs.refresh_due(now, id.is_some(), rank_due) {
             return Ok(());
         }
         if switched {

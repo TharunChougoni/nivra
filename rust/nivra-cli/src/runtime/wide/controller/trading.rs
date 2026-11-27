@@ -79,11 +79,9 @@ impl Controller {
                 QUOTE_POLL_MS,
             );
             include(true, self.last_rank, self.rank_interval());
-            include(
-                self.strategy.is_some(),
-                self.strategy_inputs.next_refresh(now),
-                0,
-            );
+            if let Some(promotion_at) = self.strategy_promotion_at(now) {
+                include(true, promotion_at, 0);
+            }
             if let Some(settings) = self.feed_settings() {
                 if let Some(at) = self.feed_retry_deadline() {
                     include(true, at, 0);
@@ -131,19 +129,21 @@ impl Controller {
         let Now { now, m, .. } = t;
         self.service_strategy_reply(now, events.contains(ControllerEvent::Choice))?;
         self.commit_market_reads()?;
-        // Dispatch established selections before broad ranking and maintenance.
-        if !events.contains(ControllerEvent::FeedState)
-            && let Some(run) = self.strategy.as_ref()
-            && self.strategy_inputs.selected_for(run.desired_id())
-        {
-            self.observe_strategy()?;
-        }
         if self.p.halted {
             return Ok(());
         }
         let Some(u) = self.universe.clone() else {
             return Ok(());
         };
+        // Handle a changed choice and dispatch before scheduled ranking.
+        if !events.contains(ControllerEvent::FeedState)
+            && let Some(run) = self.strategy.as_ref()
+        {
+            if !self.strategy_inputs.selected_for(run.desired_id()) {
+                self.reconcile_strategy_inputs(now, false)?;
+            }
+            self.observe_strategy()?;
+        }
         let feed_settings = self.feed_settings().cloned();
         let discovery = self
             .event_config
@@ -164,8 +164,7 @@ impl Controller {
             .and_then(|d| d.quote_freshness_ms)
             .unwrap_or(super::super::super::discovery::MAX_QUOTE_FRESHNESS_MS);
         let rank_due = now - self.last_rank >= self.rank_interval();
-        let promotion_due =
-            self.strategy.is_some() && now >= self.strategy_inputs.next_refresh(now);
+        let promotion_due = self.strategy_promotion_at(now).is_some_and(|at| now >= at);
         let mut feed_fallback = self.feed_health["fallback"] != false;
         let due_retry = self.feed_retry_deadline().filter(|&at| at <= now);
         if maintenance
@@ -261,7 +260,7 @@ impl Controller {
                 self.feed_health = health;
                 feed_fallback = fallback;
                 if now - self.last_rank >= settings.tick_ms
-                    || (self.strategy.is_some() && now >= self.strategy_inputs.next_refresh(now))
+                    || self.strategy_promotion_at(now).is_some_and(|at| now >= at)
                 {
                     let mut store = self
                         .feature_store
