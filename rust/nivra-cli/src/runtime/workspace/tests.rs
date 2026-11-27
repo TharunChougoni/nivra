@@ -88,6 +88,51 @@ fn workspace_seeds_layout_without_touching_the_book() {
 }
 
 #[test]
+fn workspace_installs_and_refreshes_read_only_strategy_references() {
+    let (dir, root, settings) = enabled_book();
+    let reference = root.join("reference/strategies");
+    for name in [
+        "README.md",
+        "BENCHMARK.md",
+        "vwap_trend.py",
+        "vwap_trend.params.json",
+        "minute_gap_fade.py",
+        "minute_gap_fade.params.json",
+        "costs/nse-intraday.json",
+    ] {
+        let metadata = fs::metadata(reference.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(metadata.mode() & 0o777, 0o400, "{name}");
+    }
+    let path = "reference/strategies/vwap_trend.py";
+    let script = root.join(path);
+    let shipped = fs::read(&script).unwrap();
+    assert!(
+        execute_scoped(
+            dir.path(),
+            &settings,
+            WorkspaceScope::ResearchSandbox,
+            WorkspaceOp::Write {
+                path: path.into(),
+                text: "lane edit".into()
+            }
+        )
+        .is_err()
+    );
+
+    fs::remove_file(&script).unwrap();
+    fs::write(&script, b"outdated reference").unwrap();
+    let result = execute_scoped(
+        dir.path(),
+        &settings,
+        WorkspaceScope::ResearchSandbox,
+        WorkspaceOp::Read(path.into()),
+    )
+    .unwrap();
+    assert_eq!(result["text"].as_str().unwrap().as_bytes(), shipped);
+    assert_eq!(fs::metadata(&script).unwrap().mode() & 0o777, 0o400);
+}
+
+#[test]
 fn workspace_run_allowlist_and_install_gate() {
     let (dir, _root, mut settings) = enabled_book();
     let book = dir.path();

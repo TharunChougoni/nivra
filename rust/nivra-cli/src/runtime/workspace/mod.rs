@@ -15,6 +15,9 @@ use std::{
 };
 
 const MAX_RANKER_INPUT_BYTES: usize = 65_536;
+const REFERENCE_STRATEGIES: &[(&str, &[u8])] =
+    include!(concat!(env!("OUT_DIR"), "/reference_strategies.rs"));
+
 const README: &str = r#"# Orchestrator workspace
 
 This directory belongs to the persistent paper decision owner. Files here are
@@ -26,6 +29,7 @@ Layout:
 - `notes/` persistent notes across turns
 - `skills/` standing procedures the owner writes for itself
 - `tools/` files installed only when name and sha256 match the reviewed allowlist
+- `reference/strategies/` shipped strategy sources, parameters and benchmark notes
 - `scripts/` Python rankers written and run by the pi research lane
 - `data/` bounded input JSON the owner prepares for a script
 - `reports/` advisory output the owner chooses to keep
@@ -397,7 +401,31 @@ pub(crate) fn ensure(book: &Path, settings: &WorkspaceSettings) -> Result<PathBu
         ensure_private_dir(&root, &root.join(name))?;
     }
     write_if_missing(&root, &root.join("README.md"), README.as_bytes())?;
+    seed_references(&root)?;
     Ok(root)
+}
+
+fn seed_references(root: &Path) -> Result<()> {
+    let directory = root.join("reference/strategies");
+    ensure_private_dir(root, &directory.join("costs"))?;
+    for &(name, bytes) in REFERENCE_STRATEGIES {
+        let path = directory.join(name);
+        match fs::symlink_metadata(&path) {
+            Ok(meta) if !meta.is_file() || meta.uid() != current_uid() => {
+                return Err("workspace_seed_failed".into());
+            }
+            Ok(meta)
+                if meta.mode() & 0o777 == 0o400
+                    && meta.len() == bytes.len() as u64
+                    && fs::read(&path).is_ok_and(|existing| existing == bytes) => {}
+            Ok(_) => atomic_write_private(root, &path, bytes, 0o400)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                atomic_write_private(root, &path, bytes, 0o400)?;
+            }
+            Err(_) => return Err("workspace_seed_failed".into()),
+        }
+    }
+    Ok(())
 }
 
 fn root_dir(book: &Path, settings: &WorkspaceSettings) -> Result<PathBuf> {
@@ -514,7 +542,7 @@ fn put_file(
     if let Some(parent) = dest.parent() {
         ensure_private_dir(root, parent)?;
     }
-    atomic_write_private(root, &dest, text.as_bytes())?;
+    atomic_write_private(root, &dest, text.as_bytes(), 0o600)?;
     Ok(json!({
         "path": rel_display(&rel),
         "bytes": text.len(),
@@ -996,7 +1024,7 @@ fn cleanup_temp(root: &Path, temp: &Path) {
 /// bytes and a hardlink target outside the workspace is untouched. The temp
 /// file is created 0600 in the already-validated private parent, synced, and
 /// renamed only after the destination is rechecked for symlinks.
-fn atomic_write_private(root: &Path, dest: &Path, bytes: &[u8]) -> Result<()> {
+fn atomic_write_private(root: &Path, dest: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     let parent = dest.parent().ok_or("workspace_write_failed")?;
     if !dest.starts_with(root) {
         return Err("workspace_path_escape".into());
@@ -1018,9 +1046,9 @@ fn atomic_write_private(root: &Path, dest: &Path, bytes: &[u8]) -> Result<()> {
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(&temp)
             .map_err(|_| "workspace_write_failed")?;
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .map_err(|_| "workspace_write_failed")?;
         file.write_all(bytes)
+            .map_err(|_| "workspace_write_failed")?;
+        file.set_permissions(fs::Permissions::from_mode(mode))
             .map_err(|_| "workspace_write_failed")?;
         file.sync_all().map_err(|_| "workspace_write_failed")?;
         drop(file);
