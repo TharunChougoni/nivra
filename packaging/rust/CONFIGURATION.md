@@ -14,6 +14,30 @@ never in a template.
 See [agent](../../docs/AGENT.md) for the lane keys and
 [operations](../../docs/OPERATIONS.md) for how to apply a config change.
 
+## F&O gate triggers
+
+The gate lane screens Nifty options. Its thresholds live in the pi `agent`
+block under `triggers.fo`. Every key is optional, and a block left at its
+defaults is not serialized, so the policy hash does not change. The
+[F&O triggers](../../docs/AGENT.md#fo-triggers) section describes how they
+fire.
+
+| Key | Default | Range | Meaning |
+| --- | --- | --- | --- |
+| `spot_move_bps` | 30 | > 0 | Nifty spot move since the reference |
+| `premium_move_bps` | 1500 | > 0 | Mid-premium move of a near-money contract |
+| `oi_shift_pct` | 10 | > 0 | Open-interest change of a near-money contract, in % |
+| `strikes_near` | 2 | 1 to 10 | Strikes either side of the at-the-money strike in the chain |
+| `max_spread_ticks` | 4 | 1 to 1000 | Widest spread a tradable contract may show |
+| `min_depth_lots` | 2 | 1 to 1000 | Lots the thinner side of the best level must hold |
+| `max_cost_bps` | 300 | > 0 | Highest round-trip fees, slippage and spread, in bps of the premium |
+| `cooldown_ms` | 600000 | 0 to 86400000 | Quiet time per contract and reason after a trigger |
+| `expiry_day_last_minute` | 810 | 0 to 1439 | Exchange-local minute (13:30) after which expiry day raises no trigger |
+| `threshold_rise` | 1 | > 0 | Thresholds scale by `1 + threshold_rise × spent` of the decision budget |
+
+F&O triggers need `nifty_options.enabled` in the paper config and a `gate`
+lane; without a gate lane they go to the decision lane directly.
+
 ## Install a fresh paper account
 
 A fresh account needs an explicit decision by the repository owner and a

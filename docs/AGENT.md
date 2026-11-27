@@ -9,12 +9,13 @@ order or read a broker credential.
 With `strategy_execution` enabled and an active strategy, code executes cash
 entries while the decision lane supervises strategy selection, exceptions and
 options. Without an active strategy, the decision lane chooses each paper trade
-([DIRECTION](DIRECTION.md)).
+([DIRECTION](DIRECTION.md)). The gate lane screens Nifty options only and
+hands the decision lane ranked F&O prospects.
 
 | Lane | Runs when | Output |
 | --- | --- | --- |
 | Decision | A decision trigger fires during the session | A `plan` of paper actions |
-| Gate | Optional. A decision batch holds only entry candidates | A `verdict`: escalate or drop |
+| Gate | Optional. A decision batch holds only F&O signals | A `verdict`: escalate with ranked F&O prospects, or drop |
 | Research | Once after the close, and when the decision lane asks, the session is quiet or the review leaves an agenda | A text answer and workspace files |
 | Review | Once, after the session seal | A review carried into the next session |
 
@@ -65,6 +66,7 @@ trigger aborts a running research or review turn with `agent_preempted`.
 | `fill` | Decision | New fills appear |
 | `entry_candidate` | Decision | An unheld instrument stays in the top `top_k` (5) with score at least `entry_score` (10) for `persist_cycles` (2) scans; then `cooldown_ms` (15 min) per instrument (suppressed while an active strategy owns cash entries) |
 | `pre_open` | Decision | Once per session at `pre_open_minute` (09:00 IST) before the open, with `strategy_execution` enabled, once history, universe and book are ready. The turn chooses today's strategy (`strategy_select`) or asks research for one; it holds no paper claim and cannot trade |
+| `fo_signal` | Decision, screened by the gate | The Nifty option chain moves: `spot_move`, `premium_move` or `oi_shift` past its threshold while a near-money contract is tradable. See [F&O triggers](#fo-triggers) |
 | `schedule` | Decision | Within 30 minutes of the open, at `pre_close_minute` (15:00), on `regime_changed` when `strategy_execution` is enabled (`regime_cooldown_ms`, 5 min), and on the hour when `material_change` (2) new names entered the top K (skipped while a strategy is active) |
 | `request` | Research | The decision lane queued a research request |
 | `after_close` | Research | Once per session, after the seal, when the review turn has finished, failed or been skipped |
@@ -76,6 +78,35 @@ trigger aborts a running research or review turn with `agent_preempted`.
 As the decision lane spends its budget, the entry bar rises by
 `entry_score_rise` (40) times the spent share, and the top K shrinks in
 proportion.
+
+### F&O triggers
+
+With `nifty_options.enabled` and the option universe ready, each scan builds
+the near-the-money chain: the contracts within `strikes_near` strikes of the
+strike closest to the fresh Nifty spot, with a depth read no older than 5 s.
+Each row carries the spread in ticks, the depth in lots on the thinner side,
+the open interest from the same REST read, the cash one lot needs at the ask
+with the buy fee, the lots the book's cash affords and the round-trip cost
+(fees and slippage on both legs plus the spread, in bps of the mid premium).
+
+A contract is tradable when its spread is at most `max_spread_ticks`, its
+depth at least `min_depth_lots`, one lot is affordable and the round-trip
+cost is at most `max_cost_bps`. Each move is measured from a reference: the
+first value seen, the value the last trigger fired on, or the value at the
+last decision turn.
+
+| Reason | Fires when |
+| --- | --- |
+| `spot_move` | Spot moved `spot_move_bps` (30) and some near-money contract is tradable |
+| `premium_move` | A tradable contract's mid premium moved `premium_move_bps` (1,500) |
+| `oi_shift` | A tradable contract's open interest changed `oi_shift_pct` (10 %) |
+
+Each instrument and reason then waits `cooldown_ms` (10 min). F&O triggers
+fire only in the open phase, and on expiry day not from
+`expiry_day_last_minute` (13:30). The thresholds scale by
+`1 + threshold_rise × spent` (`threshold_rise` 1), so they double once the
+decision lane's budget is spent. Index futures are not in the runtime
+universe, so the gate screens options only.
 
 The `after_close` turn (reason `post_close`) does not depend on review text.
 When the review leaves an agenda, both triggers run as one turn, and the task
@@ -93,20 +124,38 @@ outcome goes to `triggers.ndjson` as `fired`, `dispatched`, `skipped`,
 
 ### Gate routing
 
-With a gate lane, a decision batch made only of entry candidates runs on the
-gate first. The gate calls `verdict` with `escalate` and a reason. On `true`,
-the same batch runs next on the decision lane. On `false`, the batch ends. A
-gate turn that fails or gives no verdict escalates. A batch with a fill,
-position risk or schedule trigger goes straight to the decision lane. When the
-gate budget is spent, batches bypass the gate. When the decision budget is
-spent, the gate does not run.
+With a gate lane, a decision batch made only of `fo_signal` triggers runs on
+the gate first. The gate brief carries the chain as `fo` and the thresholds in
+force as `budget.fo_bar`. The gate calls `verdict` with `escalate`, a reason
+and up to five `prospects`, best first. Each prospect names an `NSE_FO` key,
+an idea (`buy_call` or `buy_put`), the evidence and why it qualifies.
+
+The host keeps a prospect only when its key is in the current option universe
+and its idea matches the contract, drops duplicates and anything past five,
+and takes the strike, expiry and lot size from the universe. The tool result
+lists each dropped key with its reason (`prospect_not_in_option_universe`,
+`prospect_idea_mismatch`, `prospect_duplicate`, `prospect_limit` or
+`prospect_invalid`).
+
+On `true`, the same batch runs next on the decision lane, and its brief lists
+the kept prospects as `gate_prospects` next to the same `fo` chain. The
+decision lane alone decides whether to buy, how many lots and with which
+exits, through the normal `plan` and execution gate. On `false`, the batch
+ends. A gate turn that fails or gives no verdict escalates without prospects.
+The `gated` line in `triggers.ndjson` records the verdict and its prospects.
+
+Cash `entry_candidate` triggers, and any batch with a fill, position risk or
+schedule trigger, go straight to the decision lane. When the gate budget is
+spent, F&O batches bypass the gate. When the decision budget is spent, the
+gate does not run.
 
 While `strategy_execution` is enabled and a strategy runs, an accepted library
-version or a configured fallback, the strategy owns cash entries: cash `entry_candidate` and
-`hourly_top_k_changed` triggers do not fire, the gate never runs on cash entries,
-and strategy fills do not trigger `fill` decision turns. The decision lane keeps
-`open`, `regime_changed`, `position_risk`, Nifty options, non-strategy fills and
-`pre_close`. Without an active strategy, the trigger and gate flow is unchanged.
+version or a configured fallback, the strategy owns cash entries: cash
+`entry_candidate` and `hourly_top_k_changed` triggers do not fire, and strategy
+fills do not trigger `fill` decision turns. The decision lane keeps `open`,
+`regime_changed`, `position_risk`, gated `fo_signal` batches, non-strategy
+fills and `pre_close`. Without an active strategy, cash entry candidates go to
+the decision lane directly.
 
 ## Tools
 
@@ -124,7 +173,7 @@ config enables. A call to a tool outside the lane fails with
 | `plan` | Decision | Submit the paper plan (cash buys refused with `agent_paper_strategy_owns_cash_entries` while an active strategy runs) |
 | `strategy_select` | Decision | Pick an eligible action strategy from the library, a configured fallback as `fallback:<name>`, or `null` to stand down, with a reason; only with `strategy_execution.enabled`. Owner pins and disables always win, and a runnable accepted version wins over a fallback |
 | `research` | Decision | Queue a research request with up to eight `refs` |
-| `verdict` | Gate | Escalate the batch or drop it |
+| `verdict` | Gate | Escalate the F&O batch with up to five ranked prospects, or drop it |
 | `write`, `install`, `run` | Research | Write workspace files, install an allowlisted, hash-matched file into `tools/`, run a `scripts/<name>.py` ranker in the no-network sandbox |
 | `backtest`, `backtest_status`, `backtest_result`, `backtest_cancel` | Research | Ranker backtests on configured datasets |
 | `quotes`, `research_cancel` | Research | Archived quote receipts, cancel a request |
