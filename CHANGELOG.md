@@ -1,5 +1,12 @@
 # Source snapshot
 
+## 0.15.1 — 2026-11-27
+
+**Fixed:** a decision-lane strategy choice now counts only under the planner
+policy it was made under. A stand-down recorded before fallbacks were
+configured kept blocking them after `config-apply`. Each `lane_select` records
+the policy digest; older records count under no policy. No upgrade step.
+
 ## 0.15.0 — 2026-11-27
 
 A strategy runs from the open, and the gate screens F&O.
