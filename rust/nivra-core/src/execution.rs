@@ -433,6 +433,24 @@ impl Portfolio {
             .filter(|key| Sleeve::of_key(key) == sleeve)
             .count()
     }
+    /// Every sleeve's capital, cash, marked equity and P&L, for reports.
+    pub fn sleeve_views(&self) -> Result<Vec<crate::sleeve::SleeveView>> {
+        Sleeve::ALL
+            .into_iter()
+            .map(|sleeve| {
+                let capital = self.sleeve_allocation(sleeve)?;
+                let equity = self.sleeve_equity(sleeve)?;
+                Ok(crate::sleeve::SleeveView {
+                    sleeve,
+                    capital,
+                    cash: self.sleeve_cash(sleeve)?,
+                    equity,
+                    pnl: equity.checked_sub(capital)?,
+                    open_positions: self.sleeve_positions(sleeve),
+                })
+            })
+            .collect()
+    }
     /// Exact fee policy for one instrument key. A runtime per-segment schedule
     /// selects `paper_costs` for `NSE_EQ` and the configured `NSE_FO` entry for
     /// options; absent a schedule the legacy single cash policy is used.

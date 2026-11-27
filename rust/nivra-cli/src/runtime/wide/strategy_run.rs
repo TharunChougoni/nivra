@@ -498,7 +498,7 @@ impl StrategyRun {
                     p,
                     &frozen.universe,
                     costs,
-                );
+                )?;
                 flight.instruments = observation.instruments().cloned().collect();
                 let bytes = serde_json::to_vec(&observation).map_err(|_| "strategy_input_limit")?;
                 let now = clock();

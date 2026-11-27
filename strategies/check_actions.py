@@ -6,7 +6,8 @@ Each strategy runs as the sandbox runs it (`python3 -I -S -B`). Empty,
 malformed and untradable observations must print `{"actions": []}` and exit
 0. A trigger observation, built to meet the strategy's own rule, must yield
 exactly one well-formed buy whose target is above `max_price`, whose stop
-is below the bid and whose time exit is in the future.
+is below the bid and whose time exit is in the future. A buy never names
+units: the runtime sizes it from `obs.book` and `obs.sizing`.
 """
 import json
 import pathlib
@@ -49,6 +50,16 @@ TRIGGERS = {
 }
 
 
+SIZING = {'risk_per_trade_bps': 50, 'max_position_bps': 4000, 'max_positions': 3,
+          'min_order_rupees': '200'}
+
+
+def book(open_positions=0):
+    return {'sleeve': 'cash', 'equity': '5000', 'cash': '5000',
+            'open_positions': open_positions, 'max_positions': SIZING['max_positions'],
+            'realised_today': '0', 'drawdown_bps': 0}
+
+
 def observation(params, features, bid='499.95', ask='500.00', bid_units=900):
     return {
         'abi': 'strategy_actions_v1', 'at_ms': AT_MS, 'params': params,
@@ -56,7 +67,7 @@ def observation(params, features, bid='499.95', ask='500.00', bid_units=900):
         'quotes': {KEY: {'bid': bid, 'ask': ask, 'bid_units': bid_units, 'ask_units': 600,
                          'source': 'fixture', 'receipt': AT_MS - 500}},
         'positions': {}, 'instruments': {KEY: {'symbol': 'FIXTURE', 'tick': '0.05'}},
-        'cash': '100000', 'costs': COSTS,
+        'book': book(), 'sizing': SIZING, 'costs': COSTS,
     }
 
 
@@ -98,7 +109,10 @@ def check(name):
                                      bid='501.00', ask='500.00'),
         'after last entry': observation(params, BASE | TRIGGERS.get(name, {})) | {
             'at_ms': AT_MS + (int(params['last_entry_minute']) - 660) * 60000 + 60000},
-        'no cash': observation(params, BASE | TRIGGERS.get(name, {})) | {'cash': '0'},
+        'slots full': observation(params, BASE | TRIGGERS.get(name, {})) | {
+            'book': book(open_positions=SIZING['max_positions'])},
+        'no book': {k: v for k, v in observation(params, BASE | TRIGGERS.get(name, {})).items()
+                    if k != 'book'},
     }
     for label, payload in quiet.items():
         actions = run(script, payload)
@@ -109,14 +123,14 @@ def check(name):
     assert len(actions) == 1, f'trigger: expected one buy, got {actions}'
     buy = actions[0]
     intent = buy['exit_intent']
-    assert buy['side'] == 'buy' and buy['instrument_key'] == KEY and buy['rupees'] is None
-    assert type(buy['units']) is int and buy['units'] >= 1
+    assert buy['side'] == 'buy' and buy['instrument_key'] == KEY
+    assert 'units' not in buy and 'rupees' not in buy, 'the runtime sizes every buy'
+    assert 0 < Decimal(buy.get('conviction', '1')) <= 1
     max_price, target, stop = (Decimal(buy['max_price']), Decimal(intent['target']),
                                Decimal(intent['stop']))
     assert target > max_price >= Decimal('500.00') and Decimal(0) < stop < Decimal('499.95')
-    assert buy['units'] * max_price <= Decimal(params['order_rupees'])
     assert AT_MS < intent['time'], 'time exit must be in the future'
-    return f"buy {buy['units']} @ <= {max_price}, target {target}, stop {stop}"
+    return f"buy @ <= {max_price}, target {target}, stop {stop}"
 
 
 def main():

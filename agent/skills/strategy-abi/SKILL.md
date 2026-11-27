@@ -16,7 +16,8 @@ Write self-contained Python 3 scripts (no network, no OS/file access; run in a p
 - `quotes`: depth quotes <= 2 s old (`bid`, `ask`, `bid_units`, `ask_units`, `source`, `receipt`)
 - `positions`: held positions keyed by instrument key (`units`, `entry`, `mark`, `marked_at_ms`, `exit_intent`)
 - `instruments`: allowlisted instruments present above (`symbol`, `tick`). Only trade keys in `instruments`
-- `cash`: decimal string of cash available after fees
+- `book`: the cash sleeve the strategy trades from: `sleeve` (`"cash"`), `equity` and `cash` (decimal strings), `open_positions`, `max_positions`, `realised_today` (net realised P&L on this IST date) and `drawdown_bps` (how far equity is below the sleeve's allocated capital)
+- `sizing`: the cash sleeve's policy (`risk_per_trade_bps`, `max_position_bps`, `max_positions`, `min_order_rupees`). The runtime sizes every buy with it
 - `costs`: `paper_costs` schedule (`per_order`, `buy_bps`, `sell_bps`, `slippage_bps`, `rounding_increment`)
 
 ## Action Shape (at most 32 actions per call)
@@ -25,17 +26,16 @@ Write self-contained Python 3 scripts (no network, no OS/file access; run in a p
 {
   "instrument_key": "NSE_EQ|INE000000001",
   "side": "buy",
-  "units": 10,
-  "rupees": null,
   "max_price": "100.50",
+  "conviction": "0.8",
   "rationale": "short reason",
   "exit_intent": {"target": "102.00", "stop": "99.50", "time": 1795579200000}
 }
 ```
 
-- `buy`: set **exactly one** of `units` (int > 0) or `rupees` (decimal string), a `max_price` decimal string, and `exit_intent`. Add slippage headroom above `ask` and align prices to `instruments[key]["tick"]` (e.g., `(p // tick) * tick`). `exit_intent.time` must be > `at_ms` (or `null`); if both `target` and `stop` are set, `target > stop`. Ensure target distance clears round-trip `costs`.
-- `sell`: set `units` (<= held `units`), `rupees: null`, `max_price` (at or below `bid` with slippage headroom), and `exit_intent: {"target": null, "stop": null, "time": null}`.
-- `revise_exit`: on a held key only; set `units: null`, `rupees: null`, `max_price: null`, and a non-empty `exit_intent`.
+- `buy`: never set `units` (a buy with units is refused with `action_strategy_buy_units`). Set a `max_price` decimal string and an `exit_intent` with a `stop` below `max_price` (`action_stop_required`, `size_stop_not_below_price`). The runtime sizes the buy: the most shares whose loss to the stop, with fees, fits `sizing.risk_per_trade_bps` of sleeve equity, within `sizing.max_position_bps`, the sleeve's cash and the displayed ask depth. A wider stop buys fewer shares. Optional `conviction` (decimal string in (0, 1]) scales the risk budget down for a marginal signal. Refusals: `sleeve_positions_full`, `size_below_lot`, `sleeve_cash_insufficient`, `size_below_min_order`. Add slippage headroom above `ask` and align prices to `instruments[key]["tick"]` (e.g., `(p // tick) * tick`). `exit_intent.time` must be > `at_ms` (or `null`); if both `target` and `stop` are set, `target > stop`. Ensure target distance clears round-trip `costs`. Read `book` to adapt: open no more than `book.max_positions - book.open_positions` names, and enter less often in drawdown.
+- `sell`: set `units` (<= held `units`), `max_price` (at or below `bid` with slippage headroom), and `exit_intent: {"target": null, "stop": null, "time": null}`.
+- `revise_exit`: on a held key only; set `units: null`, `max_price: null`, and a non-empty `exit_intent`.
 
 ## Acceptance thresholds for quote-tape backtests
 

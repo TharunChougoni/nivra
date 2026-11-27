@@ -79,7 +79,12 @@ pub(super) fn strategy_backtest(
     let Some(costs) = c.paper_costs.clone() else {
         return Ok(not_dispatched("paper_costs_required"));
     };
-    let capital = c.allocation()?;
+    // A strategy trades the cash sleeve, so it replays with that sleeve's
+    // capital and policy.
+    let capital = c.sleeves.cash.capital;
+    if capital <= nivra_core::finance::Amount::ZERO {
+        return Ok(not_dispatched("cash_sleeve_capital_required"));
+    }
     let budget = Duration::from_millis(settings.max_wall_ms);
     let stop = || {
         if preempted() {
@@ -118,6 +123,7 @@ pub(super) fn strategy_backtest(
         version: 1,
         capital: Some(capital),
         costs: Some(costs),
+        sizing: Some(c.sleeves.cash.policy()),
         exit_policy: cfg.exit_policy.clone(),
         params: args.params.clone(),
         top_n: 20,

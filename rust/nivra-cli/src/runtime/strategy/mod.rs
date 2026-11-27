@@ -13,6 +13,7 @@ use nivra_core::{
     execution::{ExitIntent, Instrument, Portfolio, Quote, Refused, Scanner},
     finance::{Amount, FeeArithmetic, Price},
     market::MAX_FINANCIAL_AGE_MS,
+    sleeve::{SizingPolicy, Sleeve},
     strategy::{Feature, StrategySpec, evaluate, extract_features_with_lookback},
 };
 use serde::{Deserialize, Serialize};
@@ -77,7 +78,59 @@ struct Held<'a> {
     exit_intent: &'a ExitIntent,
 }
 
-/// The frozen input of one call. Prices and rupees are exact decimal strings,
+/// The cash sleeve a strategy trades from, as one call sees it.
+#[derive(Debug, Serialize)]
+pub(crate) struct Book {
+    sleeve: Sleeve,
+    equity: Amount,
+    cash: Amount,
+    open_positions: usize,
+    max_positions: u32,
+    /// Net realised P&L of the sleeve's sells on the call's IST date.
+    realised_today: Amount,
+    /// How far sleeve equity is below the sleeve's allocated capital.
+    drawdown_bps: u64,
+}
+
+const IST_MS: i64 = 19_800_000;
+const DAY_MS: i64 = 86_400_000;
+
+impl Book {
+    fn new(portfolio: &Portfolio, policy: &SizingPolicy, at_ms: i64) -> Result<Self> {
+        let sleeve = Sleeve::Cash;
+        let equity = portfolio.sleeve_equity(sleeve)?;
+        let allocated = portfolio.sleeve_allocation(sleeve)?;
+        let day = |ms: i64| (ms + IST_MS).div_euclid(DAY_MS);
+        let realised_today = portfolio
+            .fills
+            .iter()
+            .zip(portfolio.realised_net_pnl())
+            .filter(|(f, _)| Sleeve::of_key(&f.instrument.key) == sleeve && day(f.at) == day(at_ms))
+            .filter_map(|(_, pnl)| pnl)
+            .try_fold(Amount::ZERO, |sum, pnl| sum.checked_add(pnl))?;
+        let drawdown_bps = if allocated > Amount::ZERO && equity < allocated {
+            u64::try_from(
+                allocated
+                    .checked_sub(equity)?
+                    .checked_mul(Amount::from_integer(10_000))?
+                    .checked_floor_ratio(allocated)?,
+            )?
+        } else {
+            0
+        };
+        Ok(Self {
+            sleeve,
+            equity,
+            cash: portfolio.sleeve_cash(sleeve)?,
+            open_positions: portfolio.sleeve_positions(sleeve),
+            max_positions: policy.max_positions,
+            realised_today,
+            drawdown_bps,
+        })
+    }
+}
+
+/// The frozen input of one call. Prices and rupee amounts are exact decimal strings,
 /// times are epoch milliseconds, and only the keys in `instruments` may appear
 /// in the output.
 #[derive(Debug, Serialize)]
@@ -90,7 +143,9 @@ pub(crate) struct Observation<'a> {
     quotes: &'a BTreeMap<String, Quote>,
     positions: BTreeMap<&'a str, Held<'a>>,
     instruments: BTreeMap<&'a str, &'a Instrument>,
-    cash: Amount,
+    book: Book,
+    /// The cash sleeve's policy. Rust sizes every buy with it.
+    sizing: &'a SizingPolicy,
     costs: &'a FeeArithmetic,
 }
 
@@ -109,7 +164,13 @@ impl<'a> Observation<'a> {
         portfolio: &'a Portfolio,
         universe: &'a BTreeMap<String, Instrument>,
         costs: &'a FeeArithmetic,
-    ) -> Self {
+    ) -> std::result::Result<Self, &'static str> {
+        let sizing = portfolio
+            .sizing
+            .as_ref()
+            .ok_or("strategy_sizing_policy_missing")?
+            .get(Sleeve::Cash);
+        let book = Book::new(portfolio, sizing, at_ms).map_err(|_| "strategy_book_invalid")?;
         let mut instruments = BTreeMap::new();
         for key in prospects
             .iter()
@@ -136,7 +197,7 @@ impl<'a> Observation<'a> {
                 )
             })
             .collect();
-        Self {
+        Ok(Self {
             abi: ABI,
             at_ms,
             params,
@@ -144,9 +205,10 @@ impl<'a> Observation<'a> {
             quotes,
             positions,
             instruments,
-            cash: portfolio.cash,
+            book,
+            sizing,
             costs,
-        }
+        })
     }
 
     /// The only instruments the call's actions may name.
@@ -275,7 +337,7 @@ pub(crate) fn apply(
         .iter()
         .map(|a| a["instrument_key"].as_str().map(str::to_owned))
         .collect();
-    let verdicts = planner::validate_actions(actions, portfolio, instruments, clock())?;
+    let verdicts = planner::validate_actions(actions, portfolio, instruments, clock(), quotes)?;
     let mut results = Vec::with_capacity(verdicts.len());
     for verdict in verdicts {
         let key = keys[verdict.index].clone();

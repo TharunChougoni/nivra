@@ -19,8 +19,13 @@ only, because the paper book holds cash equity.
 
 ## Action strategies
 
-These strategies size each entry at `order_rupees`, capped by cash and the
-displayed ask depth. Each one holds at most `max_positions`, opens nothing
+These strategies never size an entry. Each buy carries its stop, and the
+runtime sizes it from the cash sleeve's policy (`obs.sizing`) and the live
+book (`obs.book`): the most shares whose loss to the stop fits the risk
+budget, within the position cap, the sleeve's cash and the displayed ask
+depth. A volatile name has a wider stop, so it gets fewer shares. Each
+strategy fills only the sleeve's open slots
+(`book.max_positions - book.open_positions`), opens nothing
 after `last_entry_minute` IST, and sets the time exit to `hold_ms` or
 `flat_minute` (15:15 IST), whichever comes first. Every target must clear
 `edge_margin` times the round-trip cost from `obs.costs`, plus the spread.

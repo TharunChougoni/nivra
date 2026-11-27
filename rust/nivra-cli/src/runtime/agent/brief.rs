@@ -133,6 +133,12 @@ pub(crate) struct BookFacts {
     /// Non-cash segments whose costs differ, keyed by segment.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub paper_costs_by_segment: BTreeMap<&'static str, FeeArithmetic>,
+    /// Each sleeve's capital, cash, equity and P&L. A cash buy spends the
+    /// cash sleeve; a Nifty option buy spends the options sleeve.
+    pub sleeves: Vec<nivra_core::sleeve::SleeveView>,
+    /// The policy the host sizes each sleeve's buys with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sizing: Option<nivra_core::sleeve::SleevePolicies>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -322,6 +328,9 @@ impl Brief {
                     .flat_map(|schedule| schedule.segments())
                     .map(|(segment, fees)| (segment.as_str(), fees.clone()))
                     .collect(),
+                // Reconcile already ran the same checked sums on this book.
+                sleeves: p.sleeve_views().unwrap_or_default(),
+                sizing: p.sizing.clone(),
             },
             budget,
             positions,

@@ -194,7 +194,8 @@ fn sample(loaded: bool) {
     let params = json!({});
     let costs =
         serde_json::from_str(include_str!("../../../../../../fixtures/paper-costs.json")).unwrap();
-    let p = Portfolio::new();
+    let mut p = Portfolio::new();
+    p.sizing = Some(crate::runtime::tests::test_sleeves("5000", "0").policies());
     let mut refresh_at = start;
     let mut notifications = 0;
     let mut refreshes = 0;
@@ -258,7 +259,8 @@ fn sample(loaded: bool) {
             .filter_map(|p| executable(&scan, &p.key, now).map(|q| (p.key.clone(), q)))
             .collect::<BTreeMap<_, _>>();
         if !quotes.is_empty() {
-            let obs = Observation::new(now, &params, &prospects, &quotes, &p, &index, &costs);
+            let obs =
+                Observation::new(now, &params, &prospects, &quotes, &p, &index, &costs).unwrap();
             std::hint::black_box(serde_json::to_vec(&obs).unwrap());
             observations += 1;
         }

@@ -254,8 +254,8 @@ fn candidate_strategy_contract(
     let (c, cfg) = candidate_config(&dir, base_policy, settings.clone());
     candidate_execution_book(&c);
     let source = r#"def on_observation(o):
-    a=[{"instrument_key":k,"side":"buy","units":1,"rupees":None,"max_price":"120","rationale":"",
-        "exit_intent":{"time":o["at_ms"]+500}} for k,q in o["quotes"].items()
+    a=[{"instrument_key":k,"side":"buy","max_price":"120","rationale":"","conviction":"0.02",
+        "exit_intent":{"stop":"90","time":o["at_ms"]+500}} for k,q in o["quotes"].items()
        if k.endswith("INE000000001") and k not in o["positions"]]
     return {"actions":a}"#;
     let submit = |cfg: &PlannerConfig| {

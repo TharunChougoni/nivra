@@ -34,6 +34,9 @@ pub(super) struct Plan {
     /// A `paper_costs` schedule, bare or wrapped as `{"paper_costs":{..}}`.
     pub costs: PathBuf,
     pub capital: Amount,
+    /// The cash sleeve's sizing policy; absent uses the shipped cash policy.
+    #[serde(default)]
+    pub sizing: Option<nivra_core::sleeve::SizingPolicy>,
     /// Keep the N most liquid names by 20-session traded value before
     /// `universe_before`, or every name seen when 0. The tape builder caps a
     /// replay at 100,000 observations and 32 MiB, so a full session needs this.
@@ -391,6 +394,7 @@ pub(super) fn run_plan(
                         version: 1,
                         capital: Some(plan.capital),
                         costs: Some(costs.clone()),
+                        sizing: plan.sizing.clone(),
                         exit_policy: None,
                         params: params.clone(),
                         top_n: 20,

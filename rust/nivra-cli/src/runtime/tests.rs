@@ -61,15 +61,16 @@ pub(super) fn config(dir: &Path) -> Config {
         sleeves: test_sleeves("5000", "0"),
     }
 }
-/// Sleeves whose capitals are `cash` and `options`, with the shipped policies.
+/// Sleeves whose capitals are `cash` and `options`. Their policies let cash
+/// and depth alone bound a buy, so tests that are not about sizing keep the
+/// units they name.
 pub(crate) fn test_sleeves(cash: &str, options: &str) -> nivra_core::sleeve::SleeveConfigs {
-    serde_json::from_value(serde_json::json!({
-        "cash": {"capital": cash, "risk_per_trade_bps": 50, "max_position_bps": 4000,
-                 "max_positions": 3, "min_order_rupees": "200"},
-        "options": {"capital": options, "risk_per_trade_bps": 3000, "max_position_bps": 10000,
-                    "max_positions": 1, "min_order_rupees": "200"}
-    }))
-    .unwrap()
+    let roomy = |capital: &str| {
+        serde_json::json!({"capital": capital, "risk_per_trade_bps": 10000,
+            "max_position_bps": 10000, "max_positions": 20, "min_order_rupees": "0"})
+    };
+    serde_json::from_value(serde_json::json!({"cash": roomy(cash), "options": roomy(options)}))
+        .unwrap()
 }
 #[test]
 fn execution_preparation_defaults_and_validation() {

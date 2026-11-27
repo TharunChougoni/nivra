@@ -617,8 +617,8 @@ fn request_research_reaches_a_research_turn_and_the_next_decision_brief() {
         assert_eq!(read_brief(&brief)["research_updates"], json!([]));
         let queued = peer.call(&decision, "research", args("research"));
         let refused = peer.call(&decision, "plan", json!({"actions":[],"stance":"x"}));
-        let unlisted = peer.call(&decision, "plan", json!({"actions":[{"instrument_key":"NSE_EQ|Z","side":"buy","rupees":"100","units":null,"max_price":"10","rationale":"x","exit_intent":{"target":null,"stop":null,"time":null}}],"stance":"x","notes":"y"}));
-        let plan = peer.call(&decision, "plan", json!({"actions":[{"instrument_key":"NSE_EQ|A","side":"buy","rupees":"1000","units":null,"max_price":"100.10","rationale":"momentum","exit_intent":{"target":null,"stop":null,"time":null}}],"stance":"selective","notes":"asked research"}));
+        let unlisted = peer.call(&decision, "plan", json!({"actions":[{"instrument_key":"NSE_EQ|Z","side":"buy","units":null,"max_price":"10","rationale":"x","exit_intent":{"target":null,"stop":null,"time":null}}],"stance":"x","notes":"y"}));
+        let plan = peer.call(&decision, "plan", json!({"actions":[{"instrument_key":"NSE_EQ|A","side":"buy","units":9,"max_price":"100.10","rationale":"momentum","exit_intent":{"target":null,"stop":"95","time":null}}],"stance":"selective","notes":"asked research"}));
         peer.finish(&decision, "ok", "asked research", 4, 0.03);
         let (research, brief) = peer.turn();
         assert_eq!(brief["lane"], "research");
@@ -1348,16 +1348,16 @@ fn decision_lane_supervises_strategies_and_refuses_cash_buys_while_active() {
         let cash_buy = peer.call(
             &id,
             "plan",
-            json!({"actions":[{"instrument_key":"NSE_EQ|B","side":"buy","rupees":"1000","units":null,"max_price":"100","rationale":"cash entry","exit_intent":{"target":"105","stop":"95","time":null}}],"stance":"active","notes":"cash buy"}),
+            json!({"actions":[{"instrument_key":"NSE_EQ|B","side":"buy","units":9,"max_price":"100","rationale":"cash entry","exit_intent":{"target":"105","stop":"95","time":null}}],"stance":"active","notes":"cash buy"}),
         );
         // Risk-reducing cash sell + exit revision + Nifty option buy are allowed.
         let allowed = peer.call(
             &id,
             "plan",
             json!({"actions":[
-                {"instrument_key":"NSE_EQ|A","side":"sell","rupees":null,"units":2,"max_price":"98","rationale":"trim risk","exit_intent":{"target":null,"stop":null,"time":null}},
-                {"instrument_key":"NSE_EQ|A","side":"revise_exit","rupees":null,"units":null,"max_price":null,"rationale":"tighten stop","exit_intent":{"target":"108","stop":"97","time":null}},
-                {"instrument_key":"NSE_FO|26000CE","side":"buy","rupees":null,"units":65,"max_price":"50","rationale":"hedge/option","exit_intent":{"target":"70","stop":"35","time":null}}
+                {"instrument_key":"NSE_EQ|A","side":"sell","units":2,"max_price":"98","rationale":"trim risk","exit_intent":{"target":null,"stop":null,"time":null}},
+                {"instrument_key":"NSE_EQ|A","side":"revise_exit","units":null,"max_price":null,"rationale":"tighten stop","exit_intent":{"target":"108","stop":"97","time":null}},
+                {"instrument_key":"NSE_FO|26000CE","side":"buy","units":65,"max_price":"50","rationale":"hedge/option","exit_intent":{"target":"70","stop":"35","time":null}}
             ],"stance":"supervise","notes":"risk and option"}),
         );
         peer.finish(&id, "ok", "supervised", 3, 0.01);
@@ -1372,7 +1372,7 @@ fn decision_lane_supervises_strategies_and_refuses_cash_buys_while_active() {
         let cash_after = peer.call(
             &id2,
             "plan",
-            json!({"actions":[{"instrument_key":"NSE_EQ|B","side":"buy","rupees":"1000","units":null,"max_price":"100","rationale":"manual entry","exit_intent":{"target":"105","stop":"95","time":null}}],"stance":"selective","notes":"no active strategy"}),
+            json!({"actions":[{"instrument_key":"NSE_EQ|B","side":"buy","units":9,"max_price":"100","rationale":"manual entry","exit_intent":{"target":"105","stop":"95","time":null}}],"stance":"selective","notes":"no active strategy"}),
         );
         peer.finish(&id2, "ok", "manual", 2, 0.01);
         (selected, cash_buy, allowed, stood_down, cash_after)

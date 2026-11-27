@@ -46,6 +46,18 @@ pub struct Allocation {
     pub reason: String,
 }
 
+/// One sleeve's state, derived from the book. `pnl` is marked equity minus
+/// allocated capital.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct SleeveView {
+    pub sleeve: Sleeve,
+    pub capital: Amount,
+    pub cash: Amount,
+    pub equity: Amount,
+    pub pnl: Amount,
+    pub open_positions: usize,
+}
+
 /// How one sleeve sizes a buy. Basis points are of the sleeve's equity.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -61,6 +73,15 @@ pub struct SizingPolicy {
 }
 
 impl SizingPolicy {
+    /// The shipped cash-sleeve policy, for offline replays that name none.
+    pub fn shipped_cash() -> Self {
+        Self {
+            risk_per_trade_bps: 50,
+            max_position_bps: 4000,
+            max_positions: 3,
+            min_order_rupees: Amount::from_integer(200),
+        }
+    }
     pub fn validate(&self) -> Result<()> {
         if !(1..=10_000).contains(&self.risk_per_trade_bps)
             || !(1..=10_000).contains(&self.max_position_bps)
@@ -174,6 +195,9 @@ pub struct SizingInput<'a> {
     pub open_positions: u32,
     /// False when the buy adds to a position the sleeve already holds.
     pub opens_position: bool,
+    /// Value of the units of this instrument already held, which count
+    /// against the position cap.
+    pub held_value: Amount,
     /// The worst fill price the order accepts.
     pub max_price: Price,
     pub stop: Price,
@@ -239,7 +263,7 @@ fn fits(input: &SizingInput, units: u64, risk_budget: Amount, cap: Amount) -> Re
         .checked_add(bps(exit, input.costs.slippage_bps.amount())?)?;
     Ok((
         notional.checked_add(buy_fee)? <= input.sleeve_cash,
-        notional <= cap && risk <= risk_budget,
+        notional.checked_add(input.held_value)? <= cap && risk <= risk_budget,
     ))
 }
 
@@ -266,32 +290,35 @@ pub fn size(
     let risk_budget =
         bps(equity, whole(policy.risk_per_trade_bps))?.checked_mul(input.conviction)?;
     let cap = bps(equity, whole(policy.max_position_bps))?;
-    let max_lots = input.ask_units / input.lot;
-    if max_lots == 0 {
-        return Ok(Err(SizeBelowLot));
-    }
-    let (cash, caps) = fits(input, input.lot, risk_budget, cap)?;
-    if !cash {
-        return Ok(Err(SleeveCashInsufficient));
-    }
-    if !caps {
-        return Ok(Err(SizeBelowLot));
-    }
-    let (mut low, mut high) = (1, max_lots);
-    while low < high {
-        let middle = low + (high - low).div_ceil(2);
-        let units = middle.checked_mul(input.lot).ok_or("sizing_units_range")?;
-        if fits(input, units, risk_budget, cap)? == (true, true) {
-            low = middle;
-        } else {
-            high = middle - 1;
+    let units = if let Some(units) = requested {
+        // Named units must fit the same limits; the execution gate checks
+        // the lot grid and the displayed depth.
+        match fits(input, units, risk_budget, cap)? {
+            (false, _) => return Ok(Err(SleeveCashInsufficient)),
+            (true, false) => return Ok(Err(PolicyExceeded)),
+            (true, true) => units,
         }
-    }
-    let most = low * input.lot;
-    let units = match requested {
-        None => most,
-        Some(units) if units > most => return Ok(Err(PolicyExceeded)),
-        Some(units) => units,
+    } else {
+        let max_lots = input.ask_units / input.lot;
+        if max_lots == 0 {
+            return Ok(Err(SizeBelowLot));
+        }
+        match fits(input, input.lot, risk_budget, cap)? {
+            (false, _) => return Ok(Err(SleeveCashInsufficient)),
+            (true, false) => return Ok(Err(SizeBelowLot)),
+            (true, true) => {}
+        }
+        let (mut low, mut high) = (1, max_lots);
+        while low < high {
+            let middle = low + (high - low).div_ceil(2);
+            let units = middle.checked_mul(input.lot).ok_or("sizing_units_range")?;
+            if fits(input, units, risk_budget, cap)? == (true, true) {
+                low = middle;
+            } else {
+                high = middle - 1;
+            }
+        }
+        low * input.lot
     };
     if input
         .max_price
@@ -333,6 +360,7 @@ mod tests {
             sleeve_cash: a("5000"),
             open_positions: 0,
             opens_position: true,
+            held_value: a("0"),
             max_price: p("100"),
             stop: p(stop),
             ask_units: 1000,
@@ -379,6 +407,18 @@ mod tests {
         );
         assert_eq!(
             size(&options, &lot("60", "40"), Some(150)).unwrap(),
+            Err(SizingRefusal::SleeveCashInsufficient)
+        );
+        let deep = SizingInput {
+            sleeve_equity: a("20000"),
+            sleeve_cash: a("20000"),
+            ..lot("60", "30")
+        };
+        // The budget is 30% of 20000, 6000. Two lots risk 4500; four lots
+        // fit the cash but risk 9000.
+        assert_eq!(size(&options, &deep, Some(150)).unwrap(), Ok(150));
+        assert_eq!(
+            size(&options, &deep, Some(300)).unwrap(),
             Err(SizingRefusal::PolicyExceeded)
         );
         assert_eq!(size(&options, &lot("60", "40"), Some(75)).unwrap(), Ok(75));

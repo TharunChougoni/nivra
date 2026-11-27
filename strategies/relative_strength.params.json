@@ -10,13 +10,11 @@
   "hold_samples": 20,
   "last_entry_minute": 885,
   "max_move_bps": 400,
-  "max_positions": 2,
   "max_spread_bps": 15,
   "min_rel_volume": "1.2",
   "min_relative_bps": 50,
   "min_stop_bps": "30",
   "min_target_bps": "50",
-  "order_rupees": "1000",
   "stop_vol_multiple": "1",
   "target_vol_multiple": "1.5"
  }

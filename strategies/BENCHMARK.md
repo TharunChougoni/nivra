@@ -181,7 +181,8 @@ them, because one session holds one tape date and the bar is 10 trades over
 - Costs: the paper schedule in
   [`packaging/rust/paper-costs.fragment.json`](../packaging/rust/paper-costs.fragment.json)
   (₹0.01 per order, 5 bps buy, 7 bps sell, 5 bps slippage). Capital ₹5,000
-  (the repo fixture's), `order_rupees` 1000, the strategies' own exit
+  (the repo fixture's), a fixed ₹1,000 entry (these runs predate sleeve
+  sizing; rerun them for current numbers), the strategies' own exit
   intents, 2 s executable-quote freshness. The ₹24-per-order intraday broker
   schedule was not run; on a ₹1,000 clip it costs about 4.8% a round trip.
 - Each tape starts flat with its own book. Aggregate rows sum trades, P&L and

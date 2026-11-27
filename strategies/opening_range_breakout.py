@@ -56,7 +56,11 @@ def round_trip_bps(costs, spread_bps):
 
 
 def entry(obs, p, key, rationale, target, stop):
-    """A sized buy at the ask with tick-rounded target, stop and time exit, or None."""
+    """A buy at the ask with tick-rounded target, stop and time exit, or None.
+
+    The runtime sizes it: the stop sets the risk per share, and the cash
+    sleeve's policy (`obs.sizing`) sets the risk budget and position cap.
+    """
     quote = obs.get('quotes', {}).get(key)
     inst = obs.get('instruments', {}).get(key)
     if not isinstance(quote, dict) or not isinstance(inst, dict):
@@ -71,18 +75,10 @@ def entry(obs, p, key, rationale, target, stop):
     stop = to_tick(stop, tick, ROUND_FLOOR)
     if not (stop < bid and target > max_price and stop > 0):
         return None
-    cash = dec(obs.get('cash')) or Decimal(0)
-    budget = min(dec(p['order_rupees']), cash)
-    units = int(budget // max_price)
-    ask_units = quote.get('ask_units')
-    if type(ask_units) is int:
-        units = min(units, ask_units)
-    if units < 1:
-        return None
     at = obs['at_ms']
     exit_ms = min(at + int(p['hold_ms']), ist_cutoff_ms(at, int(p['flat_minute'])))
     return {
-        'instrument_key': key, 'side': 'buy', 'units': units, 'rupees': None,
+        'instrument_key': key, 'side': 'buy',
         'max_price': str(max_price), 'rationale': rationale,
         'exit_intent': {'target': str(target), 'stop': str(stop), 'time': exit_ms},
     }
@@ -109,7 +105,8 @@ def run_select(obs, select):
         actions = []
         if type(at) is int and at < ist_cutoff_ms(at, int(p['last_entry_minute'])):
             held = obs.get('positions') or {}
-            slots = int(p['max_positions']) - len(held)
+            book = obs['book']
+            slots = int(book['max_positions']) - int(book['open_positions'])
             for key, action in select(obs, p):
                 if slots <= 0 or len(actions) >= 32:
                     break

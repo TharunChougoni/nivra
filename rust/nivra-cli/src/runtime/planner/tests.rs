@@ -101,14 +101,21 @@ fn plan_validation_reserves_cash_and_holdings() {
     let at = DateTime::parse_from_rfc3339("2026-10-16T09:15:00+05:30")
         .unwrap()
         .timestamp_millis();
-    let action = |key: &str, side: &str, units: u64| json!({"instrument_key":key,"side":side,"units":units,"max_price":"100","rationale":"fixture","exit_intent":{}});
+    let action = |key: &str, side: &str, units: u64| {
+        let exit = if side == "buy" {
+            json!({"stop":"90"})
+        } else {
+            json!({})
+        };
+        json!({"instrument_key":key,"side":side,"units":units,"max_price":"100","rationale":"fixture","exit_intent":exit})
+    };
     let plan = json!({"actions":[action("absent","buy",1),action(&i.key,"buy",50),action(&i.key,"sell",1),action(&i.key,"buy",2)],"stance":"test","notes":""});
     let v = validate(&plan.to_string(), &p, std::slice::from_ref(&i), at).unwrap();
     assert_eq!(
         v.iter().map(|v| v.reason.as_str()).collect::<Vec<_>>(),
         vec![
             "action_allowlist",
-            "action_cash",
+            "sleeve_cash_insufficient",
             "action_sell_unheld",
             "accepted"
         ]
@@ -178,5 +185,88 @@ fn plan_validation_reserves_cash_and_holdings() {
     assert_eq!(
         v.iter().map(|v| v.reason.as_str()).collect::<Vec<_>>(),
         vec!["action_sell_units", "accepted", "action_sell_units"]
+    );
+}
+
+#[test]
+fn buys_are_sized_from_the_sleeve_and_its_policy() {
+    let i = Instrument {
+        key: "NSE_EQ|SYNTHETIC".into(),
+        symbol: "SYNTHETIC".into(),
+        series: "EQ".into(),
+        tick: Price::parse("0.05").unwrap(),
+    };
+    let mut p = crate::runtime::tests::test_portfolio();
+    p.costs = Some(
+        serde_json::from_value(json!({"per_order":"0","buy_bps":"0","sell_bps":"0",
+            "slippage_bps":"0","rounding_increment":null}))
+        .unwrap(),
+    );
+    // Risk 50 bps of 5000 (25 rupees), at most 2000 in one name.
+    p.sizing = Some(
+        serde_json::from_value(json!({
+            "cash":{"risk_per_trade_bps":50,"max_position_bps":4000,"max_positions":3,"min_order_rupees":"200"},
+            "options":{"risk_per_trade_bps":3000,"max_position_bps":10000,"max_positions":1,"min_order_rupees":"200"}}))
+        .unwrap(),
+    );
+    let at = DateTime::parse_from_rfc3339("2026-10-16T10:15:00+05:30")
+        .unwrap()
+        .timestamp_millis();
+    let buy = |units: Value, stop: Value| {
+        json!({"instrument_key":i.key,"side":"buy","units":units,
+        "max_price":"100","rationale":"fixture","exit_intent":{"stop":stop}})
+    };
+    let verdicts = |actions: Vec<Value>| {
+        let plan = json!({"actions":actions,"stance":"test","notes":""});
+        validate(&plan.to_string(), &p, std::slice::from_ref(&i), at)
+            .unwrap()
+            .into_iter()
+            .map(|v| (v.reason, v.units))
+            .collect::<Vec<_>>()
+    };
+    let r = |reason: &str, units: u64| (reason.to_owned(), units);
+    // A 5-rupee stop risks 25 on 5 units. A 1-rupee stop would allow 25, but
+    // the 2000-rupee position cap already holds the first 500.
+    assert_eq!(
+        verdicts(vec![
+            buy(Value::Null, json!("95")),
+            buy(Value::Null, json!("99"))
+        ]),
+        vec![r("accepted", 5), r("accepted", 15)]
+    );
+    assert_eq!(
+        verdicts(vec![
+            buy(json!(6), json!("95")),
+            buy(json!(5), json!("95")),
+            buy(Value::Null, Value::Null),
+            buy(Value::Null, json!("100")),
+        ]),
+        vec![
+            r("sizing_policy_exceeded", 0),
+            r("accepted", 5),
+            r("action_stop_required", 0),
+            r("size_stop_not_below_price", 0),
+        ]
+    );
+    // A strategy never names units, and its buys size against displayed depth.
+    let quotes = BTreeMap::from([(
+        i.key.clone(),
+        serde_json::from_value::<Quote>(json!({"bid":"99.95","ask":"100","bid_units":3,
+            "ask_units":3,"source":at,"receipt":at}))
+        .unwrap(),
+    )]);
+    let strategy = validate_actions(
+        vec![buy(json!(1), json!("95")), buy(Value::Null, json!("99"))],
+        &p,
+        std::slice::from_ref(&i),
+        at,
+        &quotes,
+    )
+    .unwrap();
+    assert_eq!(strategy[0].reason, "action_strategy_buy_units");
+    // Three units at 100 is above the 200-rupee floor.
+    assert_eq!(
+        (strategy[1].reason.as_str(), strategy[1].units),
+        ("accepted", 3)
     );
 }

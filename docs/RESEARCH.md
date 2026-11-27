@@ -213,23 +213,31 @@ The observation holds:
 | `quotes` | Depth quotes no more than two seconds old: `bid`, `ask`, `bid_units`, `ask_units`, `source`, `receipt` |
 | `positions` | Held `units`, `entry`, `mark`, `marked_at_ms` and `exit_intent` |
 | `instruments` | Each key above with its `symbol` and `tick`. Only these keys may be traded |
-| `cash`, `costs` | Cash after fees, and the `paper_costs` fee schedule |
+| `book` | The cash sleeve: `sleeve`, `equity`, `cash`, `open_positions`, `max_positions`, `realised_today` (net realised P&L on this IST date) and `drawdown_bps` (equity below the sleeve's allocated capital) |
+| `sizing` | The cash sleeve's policy: `risk_per_trade_bps`, `max_position_bps`, `max_positions`, `min_order_rupees` |
+| `costs` | The `paper_costs` fee schedule |
 
 Each action is a planner action, the same object a decision-lane plan holds:
 
 ```json
-{"instrument_key":"NSE_EQ|INE000000001","side":"buy","units":10,"rupees":null,
- "max_price":"100.50","rationale":"breakout",
+{"instrument_key":"NSE_EQ|INE000000001","side":"buy","max_price":"100.50",
+ "conviction":"0.8","rationale":"breakout",
  "exit_intent":{"target":"102.00","stop":"99.50","time":1795579200000}}
 ```
 
-- `buy` needs exactly one of `units` or `rupees`, a `max_price`, and an exit
-  intent. A fill adds the cost policy's slippage, so leave headroom above
-  the ask.
+- `buy` needs a `max_price` and an exit intent with a `stop` below it. A
+  strategy never names units. The runtime sizes the buy from the sleeve
+  policy: the most shares whose loss to the stop, with both fees and exit
+  slippage, fits `risk_per_trade_bps` of sleeve equity, within
+  `max_position_bps`, the sleeve's cash and the displayed ask depth. A wider
+  stop buys fewer shares. The optional `conviction`, a decimal in (0, 1],
+  scales the risk budget. A fill adds the cost policy's slippage, so leave
+  headroom above the ask. See
+  [capital sleeves](../packaging/rust/CONFIGURATION.md#capital-sleeves-and-sizing).
 - `sell` needs `units` and `max_price`.
 - `revise_exit` needs only the new `exit_intent`.
 
-Prices and rupees are decimal strings. `time` is absolute epoch milliseconds.
+Prices and rupee amounts are decimal strings. `time` is absolute epoch milliseconds.
 At most 32 actions are allowed per call.
 
 Deterministic code runs each action through the planner checks and then the
@@ -290,6 +298,7 @@ The parameters are `{"version":1}` plus these optional fields:
 | --- | --- |
 | `params` | `{}` |
 | `capital`, `costs` | The manifest's `capital` and `paper_costs` |
+| `sizing` | The shipped cash-sleeve policy: 50 bps risk, 4000 bps position cap, 3 positions, ₹200 minimum |
 | `exit_policy` | None: every held stop, target and time exit executes |
 | `top_n` | 20 prospects by default. A call is capped at 20. |
 | `from_ms`, `to_ms` | The whole tape. The window limits strategy calls, not held exits |

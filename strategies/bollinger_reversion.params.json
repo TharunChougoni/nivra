@@ -11,12 +11,10 @@
   "last_entry_minute": 885,
   "lookback_samples": 20,
   "max_market_drop_bps": 100,
-  "max_positions": 2,
   "max_range_position": "0.1",
   "max_spread_bps": 15,
   "min_stop_bps": "25",
   "min_target_bps": "40",
-  "order_rupees": "1000",
   "stop_band_z": "0.75",
   "target_band_z": "1"
  }

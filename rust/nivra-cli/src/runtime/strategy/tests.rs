@@ -18,11 +18,14 @@ fn fixture_strategy_replays_with_hand_checked_fills_and_fees() {
     let report = replay::run(&c, SOURCE, &parameters, MANIFEST, EVENTS, &|| None)
         .unwrap()
         .unwrap();
-    // Costs: 10 bps each side, fees rounded up to 0.01, no slippage.
-    // T0 buy 10 A @ 100.00: fee 1.00. B at max 49.95 under a 50.00 ask is refused.
+    // Costs: 10 bps each side, fees rounded up to 0.01, no slippage. Sizing
+    // risks 15 bps of sleeve equity to a stop 0.50 under the ask.
+    // T0 budget 7.50: 10 A @ 100.00 risk 5.00 + fees 1.00 + 1.00 = 7.00, 11 would
+    //    risk 7.70. Fee 1.00. B at max 49.95 under a 50.00 ask is refused.
     // T1 revise A's target 100.50 -> 100.40. T2 bid 100.45 hits it: sell 10 @ 100.45,
     //    fee 1.0045 -> 1.01, net 1004.50 - 1.01 - 1001.00 = 2.49.
-    // T3 buy Rs 1000 of A at 100.50: 9 units (904.50 + fee 0.91 = 905.41).
+    // T3 conviction 0.9 of 15 bps of 5002.49 is 6.75: 9 A @ 100.50 risk
+    //    4.50 + 0.91 + 0.90 = 6.31, 10 would risk 7.01. Fee 0.91.
     // T4 bid 99.95 hits the 100.00 stop: sell 9 @ 99.95, fee 0.90, net -6.76.
     // T5 selling A again is refused by the planner check: nothing is held.
     let fills: Vec<_> = report["fills"]
@@ -102,12 +105,14 @@ fn invalid_strategy_output_fails_with_a_reason_and_no_actions() {
     let costs: FeeArithmetic = serde_json::from_value(json!({"per_order":"0","buy_bps":"10",
         "sell_bps":"10","slippage_bps":"0","rounding_increment":"0.01"}))
     .unwrap();
-    let portfolio = Portfolio::new();
+    let mut portfolio = Portfolio::new();
+    portfolio.sizing = Some(crate::runtime::tests::test_sleeves("5000", "0").policies());
     let params = json!({});
-    let observation = Observation::new(1_000, &params, &[], &quotes, &portfolio, &universe, &costs);
+    let observation =
+        Observation::new(1_000, &params, &[], &quotes, &portfolio, &universe, &costs).unwrap();
     let buy = |key: &str| {
         format!(
-            "def on_observation(obs):\n    return {{\"actions\":[{{\"instrument_key\":\"{key}\",\"side\":\"buy\",\"units\":1,\"rupees\":None,\"max_price\":\"100\",\"rationale\":\"\",\"exit_intent\":{{}}}}]}}\n"
+            "def on_observation(obs):\n    return {{\"actions\":[{{\"instrument_key\":\"{key}\",\"side\":\"buy\",\"max_price\":\"100\",\"rationale\":\"\",\"exit_intent\":{{\"stop\":\"99\"}}}}]}}\n"
         )
     };
     assert_eq!(

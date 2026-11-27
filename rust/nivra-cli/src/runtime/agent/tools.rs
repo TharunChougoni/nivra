@@ -137,7 +137,7 @@ fn plan_definition() -> Value {
     let decimal = json!({"type":["string","null"],"maxLength":32});
     json!({
         "name":"plan",
-        "description":"Submit this turn's paper TradePlan. The host validates identity, allowlist, cash, fees, sizes and exits and returns per-action verdicts; it never places an order. Use actions:[] to hold or abstain. If the plan is refused, fix the reported problem and submit again.",
+        "description":"Submit this turn's paper TradePlan. The host validates identity, allowlist, cash, fees and exits, sizes each buy from its sleeve, and returns per-action verdicts; it never places an order. A cash-equity buy spends the cash sleeve and a Nifty option buy the options sleeve. Every buy needs a stop below max_price. Leave units null on a buy and the host sizes it to whole lots from the sleeve's risk budget, position cap and cash; units you name must fit the same policy. Use actions:[] to hold or abstain. If the plan is refused, fix the reported problem and submit again.",
         "parameters":{
             "type":"object",
             "properties":{
@@ -146,8 +146,8 @@ fn plan_definition() -> Value {
                     "properties":{
                         "instrument_key":{"type":"string","maxLength":256},
                         "side":{"type":"string","enum":["buy","sell","revise_exit"]},
-                        "rupees":decimal,
-                        "units":{"type":["integer","null"],"minimum":0},
+                        "units":{"type":["integer","null"],"minimum":0,"description":"Required for a sell. For a buy, null lets the host size it; a number must fit the sleeve policy."},
+                        "conviction":{"type":["string","null"],"maxLength":32,"description":"Buy only: a decimal in (0, 1] that scales the risk budget. null means 1."},
                         "max_price":decimal,
                         "rationale":{"type":"string","maxLength":2048},
                         "exit_intent":{
@@ -157,7 +157,7 @@ fn plan_definition() -> Value {
                             "additionalProperties":false
                         }
                     },
-                    "required":["instrument_key","side","rupees","units","max_price","rationale","exit_intent"],
+                    "required":["instrument_key","side","units","conviction","max_price","rationale","exit_intent"],
                     "additionalProperties":false
                 }},
                 "stance":{"type":"string","maxLength":256},

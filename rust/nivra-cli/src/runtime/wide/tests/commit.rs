@@ -292,7 +292,7 @@ fn event_planning_suspends_old_actions_without_interrupting_protection() {
         let at = start();
         let i = instrument(1);
         let second = instrument(2);
-        let raw=serde_json::json!({"actions":[{"instrument_key":i.key,"side":"buy","units":1,"max_price":"101","rationale":"fixture","exit_intent":{"target":"110"}},{"instrument_key":second.key,"side":"buy","units":1,"max_price":"101","rationale":"fixture","exit_intent":{}}],"stance":"long","notes":""}).to_string();
+        let raw=serde_json::json!({"actions":[{"instrument_key":i.key,"side":"buy","units":1,"max_price":"101","rationale":"fixture","exit_intent":{"target":"110","stop":"90"}},{"instrument_key":second.key,"side":"buy","units":1,"max_price":"101","rationale":"fixture","exit_intent":{"stop":"90"}}],"stance":"long","notes":""}).to_string();
         let input = serde_json::json!({"allowlist":[i,second]});
         let plan = serde_json::json!({"decision_id":"fixture-predecessor","session_binding":book_binding(&c).unwrap(),"input_hash":digest(&serde_json::to_vec(&input).unwrap()),"input":input,"fake":false,"dry_run":false,"verdicts":planner::validate(&raw,&p,&[i.clone(),second.clone()],at).unwrap()});
         fs::create_dir_all(c.directory.join("model/fixture-predecessor")).unwrap();

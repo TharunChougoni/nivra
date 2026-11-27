@@ -36,7 +36,6 @@ Python stays for ideas the format cannot express.
     "hold_ms": 900000,
     "flat_minute": 915
   },
-  "size": {"order_rupees": 1000, "max_positions": 2},
   "edge": {"target_over_round_trip_cost": 2.0}
 }
 ```
@@ -48,6 +47,8 @@ Python stays for ideas the format cannot express.
   relative move, volatility band, range position, session VWAP distance, book
   imbalance, relative volume, spread, minutes since open, circuit distance.
 - Exits compile to the existing `exit_intent` (target, stop, time).
+- A rule names no size. The cash sleeve's policy sizes each buy from its stop,
+  as it does for Python strategies.
 
 ## Why
 

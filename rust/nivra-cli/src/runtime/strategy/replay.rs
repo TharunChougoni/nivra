@@ -16,6 +16,7 @@ use nivra_core::{
     historical::EventKind,
     market::MAX_FINANCIAL_AGE_MS,
     replay::digest,
+    sleeve::{SizingPolicy, SleevePolicies},
     strategy::Feature,
 };
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,9 @@ pub(crate) struct Parameters {
     pub capital: Option<Amount>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub costs: Option<FeeArithmetic>,
+    /// The cash sleeve's sizing policy; absent uses the shipped cash policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sizing: Option<SizingPolicy>,
     /// The planner config's `exit_policy`; absent executes every held stop,
     /// target and time exit, as a model-led paper book does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -59,6 +63,7 @@ impl Parameters {
             || !(1..=MAX_PROSPECTS).contains(&self.top_n)
             || self.capital.is_some_and(|c| c <= Amount::ZERO)
             || self.costs.as_ref().is_some_and(|c| c.validate().is_err())
+            || self.sizing.as_ref().is_some_and(|s| s.validate().is_err())
             || self
                 .exit_policy
                 .as_ref()
@@ -179,6 +184,8 @@ pub(crate) fn adapter_sha256() -> String {
             include_str!("replay.rs"),
             include_str!("selection.rs"),
             include_str!("../../../../nivra-core/src/strategy.rs"),
+            include_str!("../../../../nivra-core/src/sleeve.rs"),
+            include_str!("../planner/plan.rs"),
             include_str!("runner.py"),
         ]
         .concat()
@@ -267,6 +274,15 @@ pub(crate) fn run(
     )?;
     let mut portfolio = Portfolio::with_capital(capital);
     portfolio.costs = Some(costs.clone());
+    let sizing = parameters
+        .sizing
+        .clone()
+        .unwrap_or_else(SizingPolicy::shipped_cash);
+    // A cash replay has no options sleeve; its policy is never read.
+    portfolio.sizing = Some(SleevePolicies {
+        cash: sizing.clone(),
+        options: sizing.clone(),
+    });
     portfolio.model_led = true;
     portfolio.settings.exit_policy = parameters.exit_policy.clone();
     let mut scanner = Scanner::default();
@@ -437,7 +453,7 @@ pub(crate) fn run(
                 &portfolio,
                 &universe,
                 &costs,
-            );
+            )?;
             coverage.observe(&prospects, &fresh);
             let called = serde_json::to_vec(&observation)
                 .map_err(|_| "strategy_input_limit")
@@ -569,6 +585,7 @@ pub(crate) fn run(
             "runner_sha256": super::runner_sha256(),
         },
         "capital": capital,
+        "sizing": sizing,
         "costs": costs,
         "tape": {
             "dates": dates,

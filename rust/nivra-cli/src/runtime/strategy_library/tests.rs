@@ -421,7 +421,7 @@ fn a_configured_fallback_runs_only_until_an_accepted_version_can() {
         reference.source,
         &include_bytes!("../../../../../strategies/vwap_trend.py")[..]
     );
-    assert_eq!(reference.params["max_positions"], 2);
+    assert_eq!(reference.params["hold_ms"], 3_600_000);
     assert_eq!(choice.reason, Some("no_active_strategy"));
     // The lane may pick another configured fallback, never an unlisted one.
     let lane = |id: Option<&str>, at| library.select_by_lane(id, &fallback, "regime", None, at);
