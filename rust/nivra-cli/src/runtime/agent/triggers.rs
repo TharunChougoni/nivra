@@ -42,6 +42,13 @@ pub(crate) struct DecisionTriggers {
     pub material_change: usize,
     /// Exchange-local minute of the pre-close turn.
     pub pre_close_minute: u32,
+    /// Exchange-local minute of the pre-open strategy choice, once history
+    /// is prepared. Fires only with strategy execution on.
+    #[serde(
+        default = "default_pre_open_minute",
+        skip_serializing_if = "is_default_pre_open_minute"
+    )]
+    pub pre_open_minute: u32,
     /// Minimum time between `regime_changed` supervision triggers, in ms.
     #[serde(
         default = "default_regime_cooldown_ms",
@@ -50,6 +57,12 @@ pub(crate) struct DecisionTriggers {
     pub regime_cooldown_ms: i64,
 }
 
+fn default_pre_open_minute() -> u32 {
+    9 * 60
+}
+fn is_default_pre_open_minute(v: &u32) -> bool {
+    *v == default_pre_open_minute()
+}
 fn default_regime_cooldown_ms() -> i64 {
     5 * 60_000
 }
@@ -70,6 +83,7 @@ impl Default for DecisionTriggers {
             exit_score: None,
             material_change: 2,
             pre_close_minute: 15 * 60,
+            pre_open_minute: default_pre_open_minute(),
             regime_cooldown_ms: default_regime_cooldown_ms(),
         }
     }
@@ -132,6 +146,7 @@ impl TriggerSettings {
             && d.adverse_move_bps > 0.0
             && (1..=20).contains(&d.material_change)
             && d.pre_close_minute < 24 * 60
+            && d.pre_open_minute < 24 * 60
             && (0..=86_400_000).contains(&d.regime_cooldown_ms)
             && (60_000..=86_400_000).contains(&r.quiet_ms)
             && (60_000..=86_400_000).contains(&r.request_ttl_ms)
@@ -151,24 +166,34 @@ pub(crate) enum TriggerKind {
     Fill,
     EntryCandidate,
     Schedule,
+    /// The pre-open turn that chooses today's strategy.
+    PreOpen,
     Request,
     /// The once-a-session research turn after the seal and the review.
     AfterClose,
     Quiet,
     Agenda,
     Drift,
+    /// No accepted strategy can run today: replay references over recent
+    /// sessions and register what passes.
+    StrategySearch,
     Seal,
 }
 
 impl TriggerKind {
     pub(crate) const fn lane(self) -> Lane {
         match self {
-            Self::PositionRisk | Self::Fill | Self::EntryCandidate | Self::Schedule => {
-                Lane::Decision
-            }
-            Self::Request | Self::AfterClose | Self::Quiet | Self::Agenda | Self::Drift => {
-                Lane::Research
-            }
+            Self::PositionRisk
+            | Self::Fill
+            | Self::EntryCandidate
+            | Self::Schedule
+            | Self::PreOpen => Lane::Decision,
+            Self::Request
+            | Self::AfterClose
+            | Self::Quiet
+            | Self::Agenda
+            | Self::Drift
+            | Self::StrategySearch => Lane::Research,
             Self::Seal => Lane::Review,
         }
     }
@@ -295,9 +320,11 @@ pub(crate) struct Observation<'a> {
     /// An active runnable strategy owns cash entries: suppress cash
     /// `entry_candidate`, `hourly_top_k_changed` and strategy-fill triggers.
     pub strategy_active: bool,
-    /// Strategy execution is enabled with eligible strategies: enable
-    /// deterministic `regime_changed` triggers for supervision.
+    /// Strategy execution is enabled: the decision lane chooses the strategy
+    /// before the open and re-evaluates it on `regime_changed`.
     pub strategy_supervision: bool,
+    /// An accepted library version, not a fallback, is what runs.
+    pub strategy_accepted: bool,
     /// Fills belonging to an active strategy (excluded from `Fill` triggers
     /// while `strategy_active` is true).
     pub strategy_fills: usize,
@@ -334,6 +361,8 @@ pub(crate) struct TriggerEngine {
     regime_seen: Option<String>,
     regime_cooldown_until: Option<i64>,
     drifted: BTreeSet<String>,
+    pre_open: bool,
+    strategy_search: bool,
     sealed: bool,
     after_close: bool,
     pending: BTreeMap<Lane, Vec<Trigger>>,
@@ -384,7 +413,9 @@ impl TriggerEngine {
         } else {
             self.fills_seen = Some(o.fills);
             self.non_strategy_fills_seen = Some(o.fills.saturating_sub(o.strategy_fills));
+            self.pre_open(o, &mut fired);
         }
+        self.strategy_search(o, &mut fired);
         if o.requests_queued > 0 && !self.queued(TriggerKind::Request) {
             fired.push(Trigger::new(
                 TriggerKind::Request,
@@ -644,6 +675,41 @@ impl TriggerEngine {
             fired.push(Trigger::new(TriggerKind::Schedule, "regime_changed", o.now));
             self.regime_seen = Some(label.to_owned());
             self.regime_cooldown_until = Some(o.now + self.settings.decision.regime_cooldown_ms);
+        }
+    }
+
+    /// Once a session, at `pre_open_minute` before the open: choose today's
+    /// strategy while there is time to ask research for one.
+    fn pre_open(&mut self, o: &Observation<'_>, fired: &mut Vec<Trigger>) {
+        if o.phase == Phase::PreOpen
+            && o.strategy_supervision
+            && o.minute >= self.settings.decision.pre_open_minute
+            && !self.pre_open
+        {
+            self.pre_open = true;
+            fired.push(Trigger::new(TriggerKind::PreOpen, "choose_strategy", o.now));
+        }
+    }
+
+    /// Once a session, from the pre-open turn or the open, when no accepted
+    /// version runs: research replays references over recent sessions.
+    fn strategy_search(&mut self, o: &Observation<'_>, fired: &mut Vec<Trigger>) {
+        let due = fired.iter().any(|t| {
+            t.kind == TriggerKind::PreOpen
+                || (t.kind == TriggerKind::Schedule && t.reason == "open")
+        });
+        if due
+            && o.strategy_supervision
+            && !o.strategy_accepted
+            && o.research_budget_left
+            && !self.strategy_search
+        {
+            self.strategy_search = true;
+            fired.push(Trigger::new(
+                TriggerKind::StrategySearch,
+                "no_accepted_strategy",
+                o.now,
+            ));
         }
     }
 

@@ -587,6 +587,7 @@ impl<'a> Controller<'a> {
                 m: minute(agent_now),
             },
             active && history_admitted && self.universe.is_some() && self.read_failure.is_none(),
+            history_admitted && self.universe.is_some() && self.read_failure.is_none(),
         );
         if t.day > self.config.session {
             match self.rollover(t)? {
@@ -612,7 +613,7 @@ impl<'a> Controller<'a> {
 
     /// Feed this pass to the pi lanes. A lane failure is reported and never
     /// stops the controller: protection and fills stay deterministic.
-    fn agent_tick(&mut self, t: Now, decision_ready: bool) {
+    fn agent_tick(&mut self, t: Now, decision_ready: bool, prepared: bool) {
         let (Some(agent), Some(cfg)) = (self.agent.as_mut(), self.event_config.as_ref()) else {
             return;
         };
@@ -675,6 +676,7 @@ impl<'a> Controller<'a> {
             ranking,
             ranked_at: self.last_rank,
             decision_ready,
+            prepared,
             scanner: &self.scan,
             store: &store,
             index: self

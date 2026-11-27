@@ -32,6 +32,29 @@ const CONTEXT_RETRY_MS: i64 = 5_000;
 /// rides along in the same task.
 const AFTER_CLOSE_TASK: &str = "The session is closed and speed does not matter. Read today's review when present. Use archive_window over at least three recent NSE sessions to check intraday fills and strategy acceptance. Use archive_bars over a longer training and test period to study performance across regimes. Queue bar jobs with backtest and read the verified reports when they finish. Keep a short note per strategy under notes/ with its source hash, costs, and net result.";
 
+/// What the pre-open decision turn is for.
+const PRE_OPEN_TASK: &str = "The market opens soon. Choose today's action strategy before the first scan. Read strategies in the brief: select an eligible accepted version that suits the regime and the last sessions, else the best configured fallback (fallback:<name>), with strategy_select. If nothing eligible or configured suits the expected session, post a research request asking for a strategy suited to it, naming the regime you expect. Submit no plan: no quote is executable before the open.";
+
+/// What research does when no accepted strategy can run today.
+const STRATEGY_SEARCH_TASK: &str = "No accepted action strategy can run on this build today. Follow the strategy-library skill: replay the reference action strategies under reference/strategies/ with backtest on the recent_archive dataset, with each one's shipped params and the selection window below, then your own variants of the best. Every replay that passes acceptance registers itself in the library. Keep a note per strategy under notes/ with its source hash, params and net result, and say which passed and which you would run today.";
+
+fn strategy_search_task(c: &Config, cfg: &PlannerConfig, now: i64) -> Value {
+    let window = cfg
+        .research_tools
+        .as_ref()
+        .and_then(|r| r.candidate_compute.as_ref())
+        .and_then(|candidate| candidate.strategy.as_ref())
+        .map(|settings| {
+            crate::runtime::harness::research::RecentArchiveWindow::resolve(c, settings, now)
+                .map_or_else(
+                    |reason| json!({"unavailable":reason}),
+                    |window| json!(window),
+                )
+        });
+    json!({"kind":"strategy_search","session":c.session.to_string(),
+        "instructions":STRATEGY_SEARCH_TASK,"recent_archive":window})
+}
+
 /// Serves intraday context from the controller's frozen evidence snapshot.
 /// It never calls a model: pi owns every model call.
 pub(crate) struct LaneBackend(pub Option<decision_evidence::Snapshot>);
@@ -73,6 +96,9 @@ pub(crate) struct Cycle<'a> {
     pub ranking: &'a [Ranked],
     pub ranked_at: i64,
     pub decision_ready: bool,
+    /// History, universe and book are ready for today's session, before or
+    /// during it: the pre-open strategy choice may run.
+    pub prepared: bool,
     pub scanner: &'a Scanner,
     pub store: &'a FeatureStore,
     pub index: Option<Value>,
@@ -377,6 +403,12 @@ impl LaneService {
                 c.execution.session_end_minute,
                 cycle.sealed,
             )
+        } else if in_session
+            && cycle.prepared
+            && cycle.minute < c.execution.session_start_minute
+            && !(cycle.portfolio.closed || cycle.portfolio.stopped)
+        {
+            Phase::PreOpen
         } else {
             Phase::Closed
         };
@@ -419,6 +451,7 @@ impl LaneService {
             review_running: self.busy == Some(Lane::Review),
             strategy_active: supervision.strategy_active(),
             strategy_supervision: supervision.supervised,
+            strategy_accepted: supervision.accepted(),
             strategy_fills,
             regime: cycle.regime.as_ref().map(|r| r.label.as_str()),
         });
@@ -432,7 +465,7 @@ impl LaneService {
         if self
             .busy
             .is_some_and(|lane| !matches!(lane, Lane::Decision | Lane::Gate))
-            && phase.trading()
+            && (phase.trading() || phase == Phase::PreOpen)
             && self.fraction(Lane::Decision, &spent) < 1.0
             && self.engine.decision_waiting()
             && (!cycle.ranking.is_empty()
@@ -495,8 +528,11 @@ impl LaneService {
             return self.skip(c, lane, &triggers, "agent_lane_not_configured");
         };
         let p = cycle.portfolio;
+        let pre_open = lane == Lane::Decision
+            && phase == Phase::PreOpen
+            && triggers.iter().all(|t| t.kind == TriggerKind::PreOpen);
         if matches!(lane, Lane::Decision | Lane::Gate) {
-            if !phase.trading() || p.halted || p.stopped || p.closed {
+            if !(phase.trading() || pre_open) || p.halted || p.stopped || p.closed {
                 return self.skip(c, lane, &triggers, "agent_book_not_trading");
             }
             if cycle.ranking.is_empty()
@@ -505,9 +541,9 @@ impl LaneService {
                     .iter()
                     .any(|trigger| trigger.kind == TriggerKind::Fill)
                 && !(supervision.supervised
-                    && triggers
-                        .iter()
-                        .any(|trigger| trigger.kind == TriggerKind::Schedule))
+                    && triggers.iter().any(|trigger| {
+                        matches!(trigger.kind, TriggerKind::Schedule | TriggerKind::PreOpen)
+                    }))
             {
                 return self.skip(c, lane, &triggers, "agent_no_eligible_evidence");
             }
@@ -586,9 +622,19 @@ impl LaneService {
             Lane::Research if consumes_agenda => {
                 json!({"kind":"agenda","review":self.agenda})
             }
+            Lane::Research
+                if triggers
+                    .iter()
+                    .any(|t| t.kind == TriggerKind::StrategySearch) =>
+            {
+                strategy_search_task(c, cycle.cfg, cycle.now)
+            }
             Lane::Research => json!({"kind":triggers[0].kind}),
             Lane::Review => json!({"kind":"review","session":c.session.to_string()}),
             Lane::Gate => json!({"kind":"gate"}),
+            Lane::Decision if pre_open => {
+                json!({"kind":"pre_open","session":c.session.to_string(),"instructions":PRE_OPEN_TASK})
+            }
             Lane::Decision => Value::Null,
         };
         let mut brief = Brief::build(&facts, budget, task, &triggers);
@@ -597,7 +643,8 @@ impl LaneService {
             brief.execution_refusals =
                 crate::runtime::wide::recent_refusals(db, brief::MAX_REFUSALS)?;
         }
-        let claim = if lane == Lane::Decision && self.mode == AgentMode::Paper {
+        // The pre-open turn chooses a strategy; it never holds a paper plan.
+        let claim = if lane == Lane::Decision && self.mode == AgentMode::Paper && !pre_open {
             let claim = paper::reserve(
                 db,
                 c,
@@ -769,7 +816,8 @@ impl LaneService {
             self.pending_claim = None;
             Some(status)
         } else {
-            paper_decision.then(|| "agent_paper_claim_unavailable".to_owned())
+            let pre_open = done.triggers.iter().all(|t| t.kind == TriggerKind::PreOpen);
+            (paper_decision && !pre_open).then(|| "agent_paper_claim_unavailable".to_owned())
         };
         if let Some(text) = &done.review {
             self.agenda = Some(text.chars().take(4_000).collect());
@@ -872,6 +920,7 @@ mod tests {
             ranking: &[],
             ranked_at: 0,
             decision_ready: false,
+            prepared: false,
             scanner: &scanner,
             store: &store,
             index: None,
@@ -888,6 +937,79 @@ mod tests {
         let deferred: Value = serde_json::from_str(journal.lines().last().unwrap()).unwrap();
         assert_eq!(deferred["event"], "deferred");
         assert_eq!(deferred["retry_at_ms"], cycle.now + CONTEXT_RETRY_MS);
+        service.stop();
+    }
+
+    #[test]
+    fn a_prepared_book_chooses_its_strategy_at_nine_without_a_paper_claim() {
+        let dir = tempfile::tempdir().unwrap();
+        let (c, mut cfg) = crate::runtime::decision::decision_fixture_config(dir.path());
+        cfg.strategy_execution = Some(planner::StrategyExecution {
+            enabled: true,
+            fallback: vec!["vwap_trend".into()],
+        });
+        let mut service = LaneService::start(&cfg).unwrap();
+        let portfolio = crate::runtime::tests::test_portfolio();
+        let scanner = Scanner::default();
+        let store = FeatureStore::new(Default::default()).unwrap();
+        let nine = chrono::DateTime::parse_from_rfc3339(&format!("{}T09:00:00+05:30", c.session))
+            .unwrap()
+            .timestamp_millis();
+        let cycle = |now: i64, minute, prepared| Cycle {
+            c: &c,
+            cfg: &cfg,
+            now,
+            minute,
+            sealed: false,
+            portfolio: &portfolio,
+            instruments: &[],
+            ranking: &[],
+            ranked_at: 0,
+            decision_ready: false,
+            prepared,
+            scanner: &scanner,
+            store: &store,
+            index: None,
+            regime: None,
+        };
+        let mut db = crate::runtime::open_book(&c).unwrap();
+        // History not yet prepared: nothing fires, even at nine.
+        service.tick(&cycle(nine, 540, false), &mut db).unwrap();
+        assert!(service.busy.is_none());
+        service
+            .tick(&cycle(nine - 60_000, 539, true), &mut db)
+            .unwrap();
+        assert!(service.busy.is_none());
+        service.tick(&cycle(nine, 540, true), &mut db).unwrap();
+        assert_eq!(service.busy, Some(Lane::Decision));
+        assert!(service.pending_claim.is_none());
+        let journal = std::fs::read_to_string(lanes::root(&c).join("triggers.ndjson")).unwrap();
+        let events: Vec<Value> = journal
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let seen: Vec<(&str, &str)> = events
+            .iter()
+            .map(|e| {
+                (
+                    e["event"].as_str().unwrap(),
+                    e["trigger"]["kind"]
+                        .as_str()
+                        .or(e["lane"].as_str())
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("fired", "pre_open"),
+                ("fired", "strategy_search"),
+                ("dispatched", "decision"),
+            ]
+        );
+        // The research search waits its turn behind the decision.
+        assert_eq!(service.engine.next().unwrap().0, Lane::Research);
         service.stop();
     }
 
@@ -957,6 +1079,7 @@ mod tests {
             ranking: &[],
             ranked_at: 0,
             decision_ready: true,
+            prepared: true,
             scanner: &scanner,
             store: &store,
             index: None,

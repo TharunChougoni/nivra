@@ -35,6 +35,7 @@ fn triggers_count_distinct_scans_and_prioritize_decision_over_research() {
         review_running: false,
         strategy_active: false,
         strategy_supervision: false,
+        strategy_accepted: false,
         strategy_fills: 0,
         regime: None,
     };
@@ -109,6 +110,7 @@ fn returning_candidate_waits_out_cooldown_without_repeating() {
         review_running: false,
         strategy_active: false,
         strategy_supervision: false,
+        strategy_accepted: false,
         strategy_fills: 0,
         regime: None,
     };
@@ -159,6 +161,7 @@ fn drift_seal_and_after_close_research_fire_once_after_the_review() {
         review_running: false,
         strategy_active: false,
         strategy_supervision: false,
+        strategy_accepted: false,
         strategy_fills: 0,
         regime: None,
     };
@@ -241,6 +244,7 @@ fn active_strategy_suppresses_cash_entries_and_triggers_only_for_supervision() {
         review_running: false,
         strategy_active: true,
         strategy_supervision: true,
+        strategy_accepted: true,
         strategy_fills: 0,
         regime: Some("unknown"),
     };
@@ -353,4 +357,82 @@ fn active_strategy_suppresses_cash_entries_and_triggers_only_for_supervision() {
     o.ranked_at = 3_000;
     o.ranking = &ranking;
     assert_eq!(kinds(&baseline.observe(&o)), [TriggerKind::Schedule]);
+}
+
+#[test]
+fn the_strategy_is_chosen_before_the_open_and_research_searches_when_none_is_accepted() {
+    let observe = |engine: &mut TriggerEngine, phase, minute, accepted, now| {
+        engine
+            .observe(&Observation {
+                now,
+                minute,
+                open_minute: 555,
+                phase,
+                held: &[],
+                fills: 0,
+                ranking: &[],
+                ranked_at: 0,
+                decision_spent: 0.0,
+                research_budget_left: true,
+                requests_queued: 0,
+                rankers: &[],
+                after_close_due: false,
+                review_running: false,
+                strategy_active: accepted,
+                strategy_supervision: true,
+                strategy_accepted: accepted,
+                strategy_fills: 0,
+                regime: None,
+            })
+            .iter()
+            .map(|t| (t.kind, t.reason.clone()))
+            .collect::<Vec<_>>()
+    };
+    let mut engine = TriggerEngine::new(TriggerSettings::default());
+    // Before 09:00 nothing fires; at 09:00 the choice and the search fire once.
+    assert!(observe(&mut engine, Phase::PreOpen, 539, false, 1).is_empty());
+    assert_eq!(
+        observe(&mut engine, Phase::PreOpen, 540, false, 2),
+        [
+            (TriggerKind::PreOpen, "choose_strategy".to_owned()),
+            (
+                TriggerKind::StrategySearch,
+                "no_accepted_strategy".to_owned()
+            ),
+        ]
+    );
+    assert!(observe(&mut engine, Phase::PreOpen, 541, false, 3).is_empty());
+    let (lane, batch) = engine.next().unwrap();
+    assert_eq!((lane, batch.len()), (Lane::Decision, 1));
+    assert_eq!(engine.next().unwrap().0, Lane::Research);
+    // The open still re-evaluates; the search does not repeat.
+    assert_eq!(
+        observe(&mut engine, Phase::Open, 555, false, 4),
+        [(TriggerKind::Schedule, "open".to_owned())]
+    );
+    // An accepted strategy needs no search; a closed or unprepared book
+    // gets no pre-open turn; a late configured minute waits for it.
+    let mut accepted = TriggerEngine::new(TriggerSettings::default());
+    assert_eq!(
+        observe(&mut accepted, Phase::PreOpen, 545, true, 1),
+        [(TriggerKind::PreOpen, "choose_strategy".to_owned())]
+    );
+    let mut closed = TriggerEngine::new(TriggerSettings::default());
+    assert!(observe(&mut closed, Phase::Closed, 545, false, 1).is_empty());
+    let mut late = TriggerSettings::default();
+    late.decision.pre_open_minute = 550;
+    let mut late = TriggerEngine::new(late);
+    assert!(observe(&mut late, Phase::PreOpen, 545, false, 1).is_empty());
+    // A controller that starts after the open searches from the open turn.
+    let mut restarted = TriggerEngine::new(TriggerSettings::default());
+    assert_eq!(
+        observe(&mut restarted, Phase::Open, 560, false, 1),
+        [
+            (TriggerKind::Schedule, "open".to_owned()),
+            (
+                TriggerKind::StrategySearch,
+                "no_accepted_strategy".to_owned()
+            ),
+        ]
+    );
 }

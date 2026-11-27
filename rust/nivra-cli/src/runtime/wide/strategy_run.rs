@@ -38,6 +38,12 @@ impl SupervisionState {
     pub(crate) fn strategy_active(&self) -> bool {
         self.active_id.is_some()
     }
+    /// An accepted library version runs, not a fallback.
+    pub(crate) fn accepted(&self) -> bool {
+        self.active_id
+            .as_deref()
+            .is_some_and(|id| !choice::is_fallback(id))
+    }
 }
 
 /// What the executor would run now when `strategy_execution` is enabled.
