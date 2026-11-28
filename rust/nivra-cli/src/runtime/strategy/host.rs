@@ -1,11 +1,11 @@
 //! `StrategyHost`: manages a small pool of persistent strategy workers
 //! (`WorkerKey = (source_sha256, params_sha256)`), running one live worker with
-//! non-blocking hot swap and activation generation tracking, and reserving
-//! shadow slots for follow-up shadow-testing tools.
+//! non-blocking hot swap and activation generation tracking, plus one
+//! independent shadow slot.
 #[cfg(test)]
 use super::worker::WorkerState;
 use super::worker::{Worker, WorkerConfig, WorkerKey};
-use crate::runtime::controller_events::Notify;
+use crate::runtime::{controller_events::Notify, wide::strategy_run::shadow::ShadowSlot};
 use nivra_core::replay::digest;
 use serde_json::Value;
 use std::{
@@ -17,15 +17,6 @@ use std::{
 const MAX_POOL_WORKERS: usize = 2;
 const RETIRE_GRACE_MS: i64 = 60_000;
 
-/// Reserved shadow slot shape for follow-up research shadow tools.
-#[allow(dead_code)] // Reserved for follow-up shadow research tools.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ShadowSlot {
-    pub label: String,
-    pub key: WorkerKey,
-    pub until_ms: i64,
-}
-
 pub(crate) struct StrategyHost {
     config: WorkerConfig,
     notify: Option<Notify>,
@@ -35,7 +26,8 @@ pub(crate) struct StrategyHost {
     desired_live: Option<WorkerKey>,
     activation_generation: u64,
     retiring: BTreeMap<WorkerKey, i64>,
-    shadows: Vec<ShadowSlot>,
+    pub(crate) shadow: Option<ShadowSlot>,
+    pending_live: Option<(Vec<u8>, Value)>,
 }
 
 impl StrategyHost {
@@ -49,7 +41,8 @@ impl StrategyHost {
             desired_live: None,
             activation_generation: 0,
             retiring: BTreeMap::new(),
-            shadows: Vec::new(),
+            shadow: None,
+            pending_live: None,
         }
     }
 
@@ -84,6 +77,11 @@ impl StrategyHost {
 
     pub(crate) fn pool_len(&self) -> usize {
         self.workers.len()
+            + usize::from(
+                self.shadow
+                    .as_ref()
+                    .is_some_and(ShadowSlot::worker_reserved),
+            )
     }
 
     fn evict_unused(&mut self, now_ms: i64) {
@@ -97,7 +95,6 @@ impl StrategyHost {
             self.retiring.remove(&key);
             if self.live.as_ref() != Some(&key)
                 && self.desired_live.as_ref() != Some(&key)
-                && !self.shadows.iter().any(|s| s.key == key)
                 && let Some(mut worker) = self.workers.remove(&key)
             {
                 worker.stop();
@@ -106,16 +103,14 @@ impl StrategyHost {
     }
 
     fn reserve_slot(&mut self) -> Result<(), &'static str> {
-        if self.workers.len() < MAX_POOL_WORKERS {
+        if self.pool_len() < MAX_POOL_WORKERS {
             return Ok(());
         }
         let key = self
             .workers
             .keys()
             .find(|key| {
-                self.live.as_ref() != Some(*key)
-                    && self.desired_live.as_ref() != Some(*key)
-                    && !self.shadows.iter().any(|s| &s.key == *key)
+                self.live.as_ref() != Some(*key) && self.desired_live.as_ref() != Some(*key)
             })
             .cloned()
             .ok_or("strategy_worker_pool_full")?;
@@ -142,23 +137,21 @@ impl StrategyHost {
             if self.live.is_some() || self.desired_live.is_some() {
                 self.activation_generation = self.activation_generation.wrapping_add(1);
             }
+            self.pending_live = None;
             if let Some(old) = self.live.take() {
                 self.retiring.remove(&old);
-                if !self.shadows.iter().any(|s| s.key == old)
-                    && let Some(mut worker) = self.workers.remove(&old)
-                {
+                if let Some(mut worker) = self.workers.remove(&old) {
                     worker.stop();
                 }
             }
             if let Some(old_desired) = self.desired_live.take() {
                 self.retiring.remove(&old_desired);
-                if !self.shadows.iter().any(|s| s.key == old_desired)
-                    && let Some(mut worker) = self.workers.remove(&old_desired)
-                {
+                if let Some(mut worker) = self.workers.remove(&old_desired) {
                     worker.stop();
                 }
             }
             self.evict_unused(now_ms);
+            self.allow_shadow();
             return Ok(());
         };
 
@@ -171,34 +164,77 @@ impl StrategyHost {
         if self.desired_live.as_ref() != Some(&key) {
             self.desired_live = Some(key.clone());
             self.retiring.remove(&key);
-            if !self.workers.contains_key(&key) {
-                self.evict_unused(now_ms);
-                self.reserve_slot()?;
-                let worker = Worker::start_background(
-                    source.to_vec(),
-                    params.clone(),
-                    self.config.clone(),
-                    now_ms,
-                    self.notify.clone(),
-                    self.startup_gate.clone(),
-                );
-                self.workers.insert(key.clone(), worker);
-            }
+            self.pending_live =
+                (!self.workers.contains_key(&key)).then(|| (source.to_vec(), params.clone()));
+            self.launch_desired(now_ms)?;
         }
 
         Ok(())
     }
 
+    fn launch_desired(&mut self, now_ms: i64) -> Result<(), &'static str> {
+        if self.pending_live.is_none() {
+            return Ok(());
+        }
+        if let Some(shadow) = &self.shadow
+            && self.workers.len() >= MAX_POOL_WORKERS - 1
+            && shadow.permit_worker(false)
+        {
+            return Ok(());
+        }
+        self.evict_unused(now_ms);
+        self.reserve_slot()?;
+        let key = self
+            .desired_live
+            .clone()
+            .ok_or("strategy_worker_unavailable")?;
+        let (source, params) = self
+            .pending_live
+            .take()
+            .ok_or("strategy_worker_unavailable")?;
+        let worker = Worker::start_background(
+            source,
+            params,
+            self.config.clone(),
+            now_ms,
+            self.notify.clone(),
+            self.startup_gate.clone(),
+        );
+        self.workers.insert(key, worker);
+        Ok(())
+    }
+
+    fn allow_shadow(&mut self) {
+        let Some(shadow) = self.shadow.as_ref().filter(|s| s.top_n().is_some()) else {
+            return;
+        };
+        if (self.live.is_none() || self.live == self.desired_live) && self.pending_live.is_none() {
+            for (key, _) in std::mem::take(&mut self.retiring) {
+                if let Some(mut worker) = self.workers.remove(&key) {
+                    worker.stop();
+                }
+            }
+            shadow.permit_worker(self.workers.len() < MAX_POOL_WORKERS);
+        }
+    }
+
     pub(crate) fn advance_activation(&mut self, now_ms: i64) -> Result<bool, &'static str> {
         self.evict_unused(now_ms);
+        self.launch_desired(now_ms)?;
         let Some(desired) = self.desired_live.clone() else {
+            self.allow_shadow();
             return Ok(false);
         };
+        if self.pending_live.is_some() {
+            return Ok(false);
+        }
         let worker = self
             .workers
             .get_mut(&desired)
             .ok_or("strategy_worker_unavailable")?;
-        if !worker.ensure_ready(now_ms)? {
+        let ready = worker.ensure_ready(now_ms);
+        self.allow_shadow();
+        if !ready? {
             return Ok(false);
         }
         if self.live.as_ref() != Some(&desired) {
@@ -208,10 +244,14 @@ impl StrategyHost {
             }
             self.activation_generation = self.activation_generation.wrapping_add(1);
         }
+        self.allow_shadow();
         Ok(true)
     }
 
     pub(crate) fn time_until_due(&self, now_ms: i64) -> Option<Duration> {
+        if self.pending_live.is_some() {
+            return Some(Duration::from_millis(50));
+        }
         self.desired_live
             .iter()
             .filter_map(|key| self.workers.get(key)?.time_until_due(now_ms))

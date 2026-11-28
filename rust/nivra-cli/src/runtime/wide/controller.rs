@@ -97,6 +97,7 @@ struct Controller {
     retention_status: serde_json::Value,
     last_plan_read: i64,
     last_protection_read: i64,
+    last_shadow_read: i64,
     last_depth: i64,
     last_rank: i64,
     prefilter_status: Option<serde_json::Value>,
@@ -275,20 +276,66 @@ fn strategy_runner(
     cfg: Option<&planner::PlannerConfig>,
     notify: Notify,
 ) -> Result<Option<super::strategy_run::StrategyRun>> {
-    if !cfg.is_some_and(planner::PlannerConfig::runs_strategies) {
+    let Some(cfg) = cfg.filter(|cfg| cfg.runs_strategies()) else {
+        stop_disabled_shadow(c);
         return Ok(None);
-    }
-    let worker = cfg
-        .map(planner::PlannerConfig::effective_strategy_worker)
-        .unwrap_or_default();
-    Ok(Some(super::strategy_run::StrategyRun::new(
+    };
+    let worker = cfg.effective_strategy_worker();
+    let policy = cfg.strategy_policy()?;
+    let mut run = super::strategy_run::StrategyRun::new(
         super::super::strategy_library::Library::at(super::super::strategy_library::root(c)?),
-        worker,
-        cfg.map(planner::PlannerConfig::strategy_policy)
-            .transpose()?
-            .unwrap_or_default(),
-        Some(notify),
-    )))
+        worker.clone(),
+        policy.clone(),
+        Some(notify.clone()),
+    );
+    if let Some(settings) = super::super::autoresearch::enabled(cfg) {
+        let settings = settings.forward_sessions_paper;
+        let open_ms = session_minute_ms(c, c.execution.session_start_minute);
+        if let (Some(open_ms), Some(end_ms)) = (open_ms, session_end_ms(c)) {
+            let mut execution = c.execution.clone();
+            execution.exit_policy = cfg.exit_policy.clone();
+            if let Err(error) = run.start_shadow(super::strategy_run::shadow::Setup {
+                config: c.clone(),
+                choice: policy,
+                worker,
+                settings: execution,
+                sessions: settings,
+                open_ms,
+                end_ms,
+                notify: Some(notify),
+            }) {
+                eprintln!(
+                    "strategy_shadow_start_failed {}",
+                    failure_code(error.as_ref())
+                );
+            }
+        }
+    } else {
+        stop_disabled_shadow(c);
+    }
+    Ok(Some(run))
+}
+
+fn stop_disabled_shadow(c: &Config) {
+    let Ok(root) = super::super::autoresearch::research_root(c) else {
+        return;
+    };
+    if !root.join("research.sqlite").is_file() {
+        return;
+    }
+    let task = std::thread::Builder::new()
+        .name("strategy-shadow-stop".into())
+        .spawn(move || {
+            if let Err(error) = super::strategy_run::shadow::disable(&root) {
+                eprintln!(
+                    "strategy_shadow_stop_failed {}",
+                    failure_code(error.as_ref())
+                );
+            }
+        });
+    if task.is_err() {
+        eprintln!("strategy_shadow_stop_failed");
+    }
 }
 
 fn watch_strategy_choices(
@@ -537,6 +584,7 @@ impl Controller {
             retention_status: serde_json::json!({"status":"not_run"}),
             last_plan_read: 0,
             last_protection_read: 0,
+            last_shadow_read: 0,
             last_depth: 0,
             last_rank: 0,
             prefilter_status: None,

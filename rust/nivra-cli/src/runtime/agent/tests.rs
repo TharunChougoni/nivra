@@ -333,6 +333,7 @@ fn args(name: &str) -> Value {
         "research_history" => {
             json!({"family":null,"mechanism":null,"parent_experiment_id":null,"before_id":null,"limit":null})
         }
+        "shadow_status" => json!({"candidate":null}),
         "idea_record" => json!({"family":"breakout","regime":"trend","mechanism":"volume breakout",
             "hypothesis":"Breakouts on volume continue","falsifier":"No gain over cash","comparator":"cash",
             "parent_experiment_id":null}),

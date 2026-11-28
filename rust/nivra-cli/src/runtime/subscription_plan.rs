@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 
 pub(super) const SINGLE_LTPC: usize = 5_000;
 pub(super) const MIXED_LTPC: usize = 2_000;
-const MIXED_FULL: usize = 1_500;
+pub(super) const MIXED_FULL: usize = 1_500;
 const BATCH_SIZE: usize = 100;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

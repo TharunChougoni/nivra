@@ -689,3 +689,484 @@ fn a_published_stand_down_fences_a_reply_before_notification_dispatch() {
     assert!(recent_actions(&tape.db).unwrap().is_empty());
     assert_eq!(tape.failures(), ["\"strategy_activation_stale\""]);
 }
+
+#[test]
+fn switched_strategy_cannot_change_inherited_holdings_until_protection_flattens_them() {
+    use crate::runtime::strategy;
+    let mut tape = Tape::new();
+    let at = tape.protect(0);
+    let key = "NSE_EQ|TESTA";
+    let mut quotes = tape.fresh(at);
+    let origin = "fallback:old";
+    let buy = json!({"instrument_key":key,"side":"buy","max_price":"100",
+        "rationale":"fixture","exit_intent":{"target":"100.50","stop":"99.50"}});
+    let results = strategy::apply(
+        &mut tape.p,
+        &|| at,
+        &mut quotes,
+        &tape.universe,
+        vec![buy.clone()],
+        origin,
+    )
+    .unwrap();
+    assert_eq!(results[0].outcome, "filled");
+    let mut restarted: Portfolio =
+        serde_json::from_value(serde_json::to_value(&tape.p).unwrap()).unwrap();
+    restarted.sizing = tape.p.sizing.clone();
+    let before = restarted.clone();
+    let actions = vec![
+        buy,
+        json!({"instrument_key":key,"side":"sell","units":1,"max_price":"99.95","rationale":"fixture"}),
+        json!({"instrument_key":key,"side":"revise_exit","exit_intent":{"target":"110"},"rationale":"fixture"}),
+    ];
+    for action in actions {
+        let results = strategy::apply(
+            &mut restarted,
+            &|| at,
+            &mut quotes,
+            &tape.universe,
+            vec![action],
+            "fallback:new",
+        )
+        .unwrap();
+        assert_eq!(results[0].outcome, "strategy_position_inherited");
+    }
+    assert_eq!(restarted, before);
+    let quote = quotes.get_mut(key).unwrap();
+    quote.bid = Price::parse("100.50").unwrap();
+    quote.ask = quote.bid;
+    restarted.protect(at, &quotes).unwrap();
+    assert!(restarted.positions.is_empty());
+    assert_eq!(
+        restarted.fills.last().unwrap().decision_id.as_deref(),
+        Some(origin)
+    );
+}
+
+struct ShadowFixture {
+    tape: Tape,
+    run: StrategyRun,
+    candidate: String,
+    library: Library,
+    clock: std::sync::Arc<std::sync::atomic::AtomicI64>,
+    setup: super::super::strategy_run::shadow::Setup,
+}
+
+impl ShadowFixture {
+    fn new(worker: WorkerConfig, source: &[u8]) -> Self {
+        use crate::runtime::strategy_library::{Control, ControlRecord};
+        let tape = Tape::new();
+        let root = crate::runtime::strategy_library::root(&tape.c).unwrap();
+        let library = Library::at(root.clone());
+        let params = serde_json::from_str::<Value>(PARAMETERS).unwrap()["params"].clone();
+        let live = register(&library, SOURCE, params.clone(), |_| {});
+        let candidate = register(&library, source, params, |_| {});
+        library
+            .append(ControlRecord {
+                at_ms: 1,
+                control: Control::Pin { strategy_id: live },
+            })
+            .unwrap();
+        let first = tape.events[0]["at"].as_i64().unwrap();
+        let setup = super::super::strategy_run::shadow::Setup {
+            config: tape.c.clone(),
+            choice: Default::default(),
+            worker: worker.clone(),
+            settings: tape.p.settings.clone(),
+            sessions: 1,
+            open_ms: first - 5 * 60_000,
+            end_ms: first + 300_000,
+            notify: None,
+        };
+        let mut run = StrategyRun::new(Library::at(root), worker, Default::default(), None);
+        let clock = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(setup.open_ms - 1));
+        let time = clock.clone();
+        run.host_shadow_fixture(
+            super::super::strategy_run::shadow::ShadowSlot::start_with_clock(
+                setup.clone(),
+                move || time.load(std::sync::atomic::Ordering::Relaxed),
+            )
+            .unwrap(),
+        );
+        wait_for(|| run.shadow_slot().is_some());
+        run.settle_startup(&tape.db, &tape.c, setup.open_ms - 1)
+            .unwrap();
+        wait_for(|| run.shadow_slot().is_some_and(|slot| slot.ready()));
+        assert_eq!(run.host().pool_len(), 2);
+        Self {
+            tape,
+            run,
+            candidate,
+            library,
+            clock,
+            setup,
+        }
+    }
+
+    fn set_clock(&self, at: i64) {
+        self.clock.store(at, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn input(&mut self, step: usize) -> i64 {
+        let at = self.tape.events[step]["at"].as_i64().unwrap();
+        self.input_at(step, at);
+        at
+    }
+
+    /// Replay fixture event `step` as if its receipts arrived at `at`.
+    fn input_at(&mut self, step: usize, at: i64) {
+        use super::super::strategy_run::Capture;
+        self.set_clock(at);
+        self.tape.protect_at(step, at);
+        self.run
+            .shadow_slot()
+            .unwrap()
+            .receipts(self.tape.fresh(at));
+        self.run.start_shared(
+            self.tape.frozen(at),
+            &self.tape.p,
+            Capture {
+                top_n: 20,
+                live: true,
+                shadow: true,
+            },
+            &|| at,
+        );
+    }
+
+    fn settle(&mut self, at: i64) {
+        self.run.wait();
+        self.run
+            .poll(
+                &mut self.tape.db,
+                &self.tape.c,
+                &mut self.tape.p,
+                &mut self.tape.scan,
+                &|| at,
+            )
+            .unwrap();
+    }
+
+    fn wait_shadow(&self) {
+        wait_for(|| self.run.shadow_slot().is_some_and(|slot| !slot.busy()));
+    }
+
+    fn status(&self) -> Value {
+        super::super::strategy_run::shadow::status(&self.tape.c, Some(&self.candidate)).unwrap()
+    }
+}
+
+fn wait_for(mut done: impl FnMut() -> bool) {
+    let until = Instant::now() + Duration::from_secs(5);
+    while !done() {
+        assert!(Instant::now() < until, "strategy fixture timed out");
+        std::thread::sleep(Duration::from_millis(3));
+    }
+}
+
+#[test]
+fn shadow_and_live_reconcile_identical_stream_and_seal_one_session() {
+    let Some(worker) = worker_config() else {
+        return;
+    };
+    let mut source = SOURCE.to_vec();
+    source.extend_from_slice(b"\n# Independent version of the fixture.\n");
+    let mut f = ShadowFixture::new(worker, &source);
+    for step in 0..f.tape.events.len() {
+        let at = f.input(step);
+        f.settle(at);
+        f.wait_shadow();
+    }
+    assert!(f.status()["summary"]["shadow"].is_null());
+    f.set_clock(f.setup.end_ms);
+    f.run.finish_shadow(&f.tape.db, &f.tape.p);
+    wait_for(|| f.status()["state"] == "completed");
+    let report = f.status();
+    let evidence = &report["summary"];
+    assert_eq!(evidence["coverage_bps"], 10_000);
+    assert_eq!(evidence["paired_scans"], f.tape.events.len());
+    assert_eq!(evidence["comparable"], true);
+    assert_eq!(
+        evidence["shadow"],
+        evidence["live"]
+            .as_object()
+            .map(|live| {
+                let mut live = live.clone();
+                live.remove("strategy_id");
+                live.remove("stable");
+                live.remove("scans");
+                Value::Object(live)
+            })
+            .unwrap()
+    );
+    let store = crate::runtime::autoresearch::open(&f.tape.c).unwrap();
+    let window = store.shadow_window(Some(&f.candidate)).unwrap().unwrap();
+    let ledger: Value = serde_json::from_slice(
+        &store
+            .shadow_ledger(window.id, f.tape.c.session)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    let mut shadow: Portfolio = serde_json::from_value(ledger["book"].clone()).unwrap();
+    shadow.reconcile().unwrap();
+    assert_eq!(shadow.fills.len(), 4);
+    for fill in &mut shadow.fills {
+        // The books attribute fills to their own source version.
+        fill.decision_id.clone_from(&f.tape.p.fills[0].decision_id);
+    }
+    assert_eq!(shadow.fills, f.tape.p.fills);
+    assert_eq!(shadow.cash, f.tape.p.cash);
+    assert_eq!(f.library.entries().unwrap().len(), 2);
+    assert_eq!(window.plan.sessions, vec![f.tape.c.session]);
+    use crate::runtime::strategy_library::{Control, ControlRecord};
+    f.library
+        .append(ControlRecord {
+            at_ms: f.setup.end_ms,
+            control: Control::Unpin,
+        })
+        .unwrap();
+    let chosen = f
+        .library
+        .select_by_lane(
+            Some(&f.candidate),
+            &f.setup.choice,
+            "Matched forward fixture",
+            None,
+            f.setup.end_ms,
+        )
+        .unwrap();
+    assert_eq!(chosen.active.as_deref(), Some(f.candidate.as_str()));
+}
+
+#[test]
+fn slow_shadow_skips_a_scan_and_disable_leaves_live_protection_running() {
+    use crate::runtime::strategy_library::{Control, ControlRecord};
+    let Some(worker) = worker_config() else {
+        return;
+    };
+    let slow = b"def on_observation(obs):\n    for i in range(100000000):\n        pass\n    return {'actions': []}\n";
+    let mut f = ShadowFixture::new(worker, slow);
+    let first = f.input(0);
+    f.settle(first);
+    assert!(f.run.shadow_slot().unwrap().busy());
+    let second = f.input(1);
+    f.settle(second);
+    f.library
+        .append(ControlRecord {
+            at_ms: second,
+            control: Control::Disable {
+                strategy_id: f.candidate.clone(),
+            },
+        })
+        .unwrap();
+    wait_for(|| f.status()["state"] == "inconclusive");
+    assert_eq!(f.status()["reason"], "strategy_shadow_disabled");
+    assert_eq!(f.status()["summary"]["skipped_scans"], 1);
+    let third = f.tape.events[2]["at"].as_i64().unwrap();
+    f.tape.protect_at(2, third);
+    assert_eq!(f.tape.p.fills.len(), 2);
+    assert!(f.tape.p.positions.is_empty());
+}
+
+#[test]
+fn abandoned_shadow_is_inconclusive_on_restart() {
+    let Some(worker) = worker_config() else {
+        return;
+    };
+    let mut source = SOURCE.to_vec();
+    source.extend_from_slice(b"\n# Restart fixture.\n");
+    let f = ShadowFixture::new(worker, &source);
+    let clock = f.clock.clone();
+    // A running row is the durable state after an unclean controller exit.
+    // Recover it without allowing the second slot to start another worker.
+    let recovered = super::super::strategy_run::shadow::ShadowSlot::start_with_clock(
+        f.setup.clone(),
+        move || clock.load(std::sync::atomic::Ordering::Relaxed),
+    )
+    .unwrap();
+    wait_for(|| f.status()["reason"] == "strategy_shadow_restarted");
+    assert!(!recovered.worker_reserved());
+    assert!(f.tape.p.fills.is_empty());
+}
+
+#[test]
+fn shadow_rechecks_original_receipt_age_after_worker_reply() {
+    let Some(worker) = worker_config() else {
+        return;
+    };
+    let worker = WorkerConfig {
+        call_deadline_ms: 2_000,
+        ..worker
+    };
+    let source = b"def on_observation(obs):\n    for i in range(8000000):\n        pass\n    return {'actions': [{'instrument_key':'NSE_EQ|TESTA','side':'buy','max_price':'100','rationale':'fixture','exit_intent':{'stop':'99.50'}}]}\n";
+    let mut f = ShadowFixture::new(worker, source);
+    let first = f.input(0);
+    wait_for(|| {
+        f.run
+            .shadow_slot()
+            .is_some_and(|slot| slot.busy() && !slot.ready())
+    });
+    f.set_clock(first + nivra_core::market::MAX_FINANCIAL_AGE_MS + 1);
+    f.wait_shadow();
+    f.settle(first);
+    f.set_clock(f.setup.end_ms);
+    f.run.finish_shadow(&f.tape.db, &f.tape.p);
+    wait_for(|| f.status()["state"] == "completed");
+    let report = f.status();
+    assert_eq!(report["summary"]["evaluated_scans"], 1);
+    assert_eq!(report["summary"]["shadow"]["fills"], 0);
+    assert_eq!(
+        report["summary"]["shadow"]["outcomes"],
+        json!({"stale_quote":1})
+    );
+    assert_eq!(f.tape.p.fills.len(), 1);
+}
+
+/// Peak summed RSS and CPU of the process tree, sampled from `/proc`. The
+/// Python workers are grandchildren of the test binary.
+struct TreeSampler {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    peak_rss_kib: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    peak_worker_kib: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    cpu_ms: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl TreeSampler {
+    fn start() -> Self {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicU64, Ordering::Relaxed},
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let peak_rss_kib = Arc::new(AtomicU64::new(0));
+        let peak_worker_kib = Arc::new(AtomicU64::new(0));
+        let cpu_ms = Arc::new(AtomicU64::new(0));
+        let (flag, rss, workers, cpu) = (
+            stop.clone(),
+            peak_rss_kib.clone(),
+            peak_worker_kib.clone(),
+            cpu_ms.clone(),
+        );
+        let handle = std::thread::spawn(move || {
+            let own = std::process::id();
+            let mut last: BTreeMap<u32, u64> = BTreeMap::new();
+            let mut ticks = 0u64;
+            while !flag.load(Relaxed) {
+                let pids = proc_tree(own);
+                let (mut total, mut children) = (0u64, 0u64);
+                for pid in &pids {
+                    let kib = proc_rss_kib(*pid).unwrap_or(0);
+                    total += kib;
+                    if *pid != own {
+                        children += kib;
+                    }
+                    if let Some(now) = proc_cpu_ticks(*pid) {
+                        ticks += now.saturating_sub(*last.get(pid).unwrap_or(&now));
+                        last.insert(*pid, now);
+                    }
+                }
+                rss.fetch_max(total, Relaxed);
+                workers.fetch_max(children, Relaxed);
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            cpu.store(ticks * 10, Relaxed);
+        });
+        Self {
+            stop,
+            peak_rss_kib,
+            peak_worker_kib,
+            cpu_ms,
+            handle: Some(handle),
+        }
+    }
+
+    fn stop(mut self) -> (u64, u64, u64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.stop.store(true, Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+        (
+            self.peak_rss_kib.load(Relaxed),
+            self.peak_worker_kib.load(Relaxed),
+            self.cpu_ms.load(Relaxed),
+        )
+    }
+}
+
+fn proc_tree(root: u32) -> Vec<u32> {
+    let mut pids = vec![root];
+    let mut index = 0;
+    while index < pids.len() {
+        let pid = pids[index];
+        if let Ok(text) = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")) {
+            pids.extend(
+                text.split_whitespace()
+                    .filter_map(|c| c.parse::<u32>().ok()),
+            );
+        }
+        index += 1;
+    }
+    pids
+}
+
+fn proc_rss_kib(pid: u32) -> Option<u64> {
+    std::fs::read_to_string(format!("/proc/{pid}/status"))
+        .ok()?
+        .lines()
+        .find(|line| line.starts_with("VmRSS:"))?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
+}
+
+fn proc_cpu_ticks(pid: u32) -> Option<u64> {
+    let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let fields: Vec<&str> = text.rsplit_once(") ")?.1.split_whitespace().collect();
+    let user: u64 = fields.get(11)?.parse().ok()?;
+    let system: u64 = fields.get(12)?.parse().ok()?;
+    Some(user + system)
+}
+
+/// Reports peak memory and CPU for one live and one shadow worker replaying the
+/// fixture tape. Ignored: it measures rather than gates, and the numbers only
+/// compare on the same host.
+#[test]
+#[ignore = "measurement: reports peak memory and CPU of the live and shadow workers"]
+fn shadow_fixture_resource_use() {
+    let Some(worker) = worker_config() else {
+        return;
+    };
+    let mut source = SOURCE.to_vec();
+    source.extend_from_slice(b"\n# Resource fixture.\n");
+    let mut f = ShadowFixture::new(worker, &source);
+    let sampler = TreeSampler::start();
+    let mut scans = 0u64;
+    for round in 0..24usize {
+        let step = round % f.tape.events.len();
+        let at = f.tape.events[step]["at"].as_i64().unwrap() + round as i64 * 1_000;
+        f.input_at(step, at);
+        f.settle(at);
+        f.wait_shadow();
+        scans += 1;
+    }
+    let (peak_rss_kib, peak_worker_kib, cpu_ms) = sampler.stop();
+    f.set_clock(f.setup.end_ms);
+    f.run.finish_shadow(&f.tape.db, &f.tape.p);
+    wait_for(|| f.status()["state"] == "completed");
+    eprintln!(
+        "forward_shadow_fixture scans={scans} peak_tree_rss_kib={peak_rss_kib} \
+         peak_worker_rss_kib={peak_worker_kib} cpu_ms={cpu_ms}"
+    );
+    assert_eq!(f.status()["summary"]["evaluated_scans"], json!(scans));
+    // Regression bounds only: a debug test binary dominates the tree, so this
+    // catches a worker that materialises the tape, not a small regression.
+    assert!(peak_rss_kib < 1_024 * 1_024, "tree peak {peak_rss_kib} KiB");
+    assert!(
+        peak_worker_kib < 120 * 1_024,
+        "two workers peaked at {peak_worker_kib} KiB"
+    );
+}

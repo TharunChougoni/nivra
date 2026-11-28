@@ -66,6 +66,7 @@ impl TurnKind {
         match self {
             Self::Proposal => &[
                 ("research_history", Some("research_history")),
+                ("shadow_status", Some("shadow_status")),
                 ("idea_record", Some("idea_record")),
                 ("list", Some("workspace_list")),
                 ("read", Some("workspace_read")),
@@ -76,6 +77,7 @@ impl TurnKind {
             Self::OptionProposal => &[("option_compare", Some("option_compare"))],
             Self::Interpretation => &[
                 ("research_history", Some("research_history")),
+                ("shadow_status", Some("shadow_status")),
                 ("finding_record", Some("finding_record")),
                 ("list", Some("workspace_list")),
                 ("read", Some("workspace_read")),
@@ -119,6 +121,12 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                 "before_id",
                 "limit"
             ]),
+        ),
+        function(
+            "shadow_status",
+            "Read a forward paper shadow's coverage, failures, scheduled end and completed outcomes. Pass null for the current or latest candidate.",
+            json!({"candidate":{"type":["string","null"],"minLength":64,"maxLength":64}}),
+            json!(["candidate"]),
         ),
         function(
             "idea_record",
@@ -191,6 +199,7 @@ pub(crate) fn skill_verdict_definition() -> Value {
 #[derive(Clone, Debug)]
 pub(crate) enum MemoryOp {
     History(HistoryArgs),
+    ShadowStatus(ShadowStatusArgs),
     Idea(IdeaArgs),
     Finding(FindingArgs),
     Submit(SubmitArgs),
@@ -205,6 +214,12 @@ pub(crate) struct HistoryArgs {
     parent_experiment_id: Option<i64>,
     before_id: Option<i64>,
     limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ShadowStatusArgs {
+    candidate: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -258,6 +273,16 @@ pub(crate) fn parse_tool(name: &str, args: Value) -> Result<MemoryOp> {
                 return Err(invalid());
             }
             MemoryOp::History(a)
+        }
+        "shadow_status" => {
+            let a: ShadowStatusArgs = serde_json::from_value(args).map_err(|_| invalid())?;
+            if a.candidate
+                .as_deref()
+                .is_some_and(|id| !nivra_core::autoresearch::sha256_ok(id))
+            {
+                return Err(invalid());
+            }
+            MemoryOp::ShadowStatus(a)
         }
         "idea_record" => {
             let a: IdeaArgs = serde_json::from_value(args).map_err(|_| invalid())?;
@@ -339,9 +364,13 @@ pub(crate) fn execute(
     preempted: &dyn Fn() -> bool,
 ) -> Result<Value> {
     let settings = enabled(cfg).ok_or("autoresearch_disabled")?;
+    if let MemoryOp::ShadowStatus(a) = op {
+        return super::wide::strategy_run::shadow::status(c, a.candidate.as_deref());
+    }
     let mut store = open(c)?;
     let campaign = store.campaign(&settings.campaign.name)?;
     match op {
+        MemoryOp::ShadowStatus(_) => unreachable!("handled before opening the campaign"),
         MemoryOp::History(a) => {
             let history = store.history(&HistoryQuery {
                 campaign_id: campaign.as_ref().map(|c| c.id),

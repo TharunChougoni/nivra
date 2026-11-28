@@ -69,6 +69,8 @@ pub(crate) struct StrategyLibraryFacts {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lane_selection: Option<crate::runtime::strategy_library::LaneSelection>,
     pub active_live_outcomes: BTreeMap<String, u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forward_shadow: Option<Value>,
     pub eligible: Vec<EligibleStrategyFacts>,
 }
 
@@ -169,6 +171,8 @@ pub(crate) struct PositionFacts {
     pub target: Option<String>,
     pub target_distance_bps: Option<f64>,
     pub exit_time_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strategy_origin: Option<String>,
     pub rank: Option<usize>,
     pub score: Option<f64>,
 }
@@ -276,6 +280,8 @@ impl Brief {
                     target: target.map(text),
                     target_distance_bps: distance(mark, target.and_then(number)),
                     exit_time_ms: intent.and_then(|i| i.time),
+                    strategy_origin: super::super::strategy::position_origin(p, position)
+                        .map(str::to_owned),
                     rank: ranked.map(|(rank, _)| rank),
                     score: ranked.map(|(_, score)| score),
                 }
@@ -387,6 +393,7 @@ pub(crate) fn strategy_facts(
                 owner_pinned: None,
                 lane_selection: None,
                 active_live_outcomes: BTreeMap::new(),
+                forward_shadow: None,
                 eligible: Vec::new(),
             });
         }
@@ -430,6 +437,10 @@ pub(crate) fn strategy_facts(
         owner_pinned: resolved.pinned.clone(),
         lane_selection: resolved.lane_selection.clone(),
         active_live_outcomes,
+        forward_shadow: crate::runtime::autoresearch::enabled(cfg).map(|_| {
+            crate::runtime::wide::strategy_run::shadow::status(c, None)
+                .unwrap_or_else(|_| serde_json::json!({"state":"unavailable","reason":"strategy_shadow_status_unavailable"}))
+        }),
         eligible,
     })
 }

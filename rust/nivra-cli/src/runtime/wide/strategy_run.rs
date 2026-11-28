@@ -23,6 +23,7 @@ mod health;
 mod latency;
 use health::{CallOutcome, HealthRun, Tracker};
 pub(crate) use health::{HealthBasis, StrategyHealth};
+pub(crate) mod shadow;
 use std::collections::BTreeMap;
 
 /// How often the library is read again, so a pin, disable or new entry takes
@@ -112,8 +113,10 @@ struct Active {
 /// One scan's state, frozen for a call: the ranked prospects, the depth
 /// quotes still within two seconds of their original receipt, the book and
 /// the tradable instruments.
+#[derive(Clone)]
 pub(super) struct Frozen {
     pub at_ms: i64,
+    pub cutoff: usize,
     pub prospects: Vec<Prospect>,
     pub quotes: BTreeMap<String, Quote>,
     pub universe: BTreeMap<String, Instrument>,
@@ -148,6 +151,7 @@ impl Frozen {
             .collect();
         Self {
             at_ms: now,
+            cutoff: top_n,
             prospects,
             quotes,
             universe,
@@ -182,6 +186,12 @@ struct StrategyBook<'a> {
     scan: &'a mut Scanner,
 }
 
+pub(super) struct Capture {
+    pub top_n: usize,
+    pub live: bool,
+    pub shadow: bool,
+}
+
 pub(super) struct StrategyRun {
     library: Library,
     host: StrategyHost,
@@ -205,7 +215,9 @@ pub(super) struct StrategyRun {
     failures: u64,
     skipped: u64,
     dirty: bool,
+    shadow_dirty: bool,
     last_call_at_ms: Option<i64>,
+    shadow_baseline: Option<shadow::LiveBaseline>,
 }
 
 impl StrategyRun {
@@ -234,7 +246,9 @@ impl StrategyRun {
             failures: 0,
             skipped: 0,
             dirty: false,
+            shadow_dirty: false,
             last_call_at_ms: None,
+            shadow_baseline: None,
         }
     }
 
@@ -327,6 +341,7 @@ impl StrategyRun {
             self.skipped += 1;
         }
         self.dirty = true;
+        self.shadow_dirty = true;
     }
 
     pub(super) fn take_observation(
@@ -776,6 +791,7 @@ impl StrategyRun {
                     .collect::<Vec<_>>())
                 .unwrap_or_default(),
             "fills": fills,
+            "forward_shadow": self.host.shadow.as_ref().map(shadow::ShadowSlot::status),
         })
     }
 

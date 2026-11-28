@@ -115,6 +115,7 @@ pub(super) enum QuoteReadTarget<'a> {
         scan: &'a mut Scanner,
         spot: Option<super::super::options::SpotQuote>,
     },
+    Shadow,
     Depth {
         scan: &'a mut Scanner,
     },
@@ -364,6 +365,7 @@ pub(super) fn apply_executable_quotes(
     event_config: Option<&planner::PlannerConfig>,
     feature_store: &Arc<Mutex<FeatureStore>>,
     mut target: QuoteReadTarget<'_>,
+    shadow: Option<&strategy_run::shadow::ShadowSlot>,
     writer: Option<&super::super::market_archive::capture::Writer>,
 ) -> Result<Option<String>> {
     let FetchedQuoteRows {
@@ -382,6 +384,9 @@ pub(super) fn apply_executable_quotes(
             continue;
         };
         if !duplicate.insert(i.key.clone()) {
+            if matches!(target, QuoteReadTarget::Shadow) {
+                return Ok(Some("duplicate_quote".into()));
+            }
             if matches!(target, QuoteReadTarget::Options { .. })
                 && let Some(writer) = writer
             {
@@ -437,6 +442,30 @@ pub(super) fn apply_executable_quotes(
             writer.options.offer(c.session, receipt, event);
         }
     }
+    if matches!(target, QuoteReadTarget::Shadow) {
+        let purpose = "execution_or_protection";
+        let archive = serde_json::json!({"source":"upstox-readonly-v1","purpose":purpose,
+            "requested_ms":requested,"received_ms":receipt,"body":raw});
+        stage_quote(writer, purpose, &archive.to_string())?;
+        if let Some(slot) = shadow {
+            if quotes.len() != instruments.len() {
+                slot.receipt_gap();
+            }
+            slot.receipts(quotes);
+        }
+        return Ok(None);
+    }
+    if let Some(slot) = shadow {
+        slot.receipts(
+            quotes
+                .iter()
+                .filter(|(key, _)| {
+                    nivra_core::sleeve::Sleeve::of_key(key) == nivra_core::sleeve::Sleeve::Cash
+                })
+                .map(|(key, quote)| (key.clone(), quote.clone()))
+                .collect(),
+        );
+    }
     // A depth read attaches the executable quote to the sample it read (#38).
     match &mut target {
         QuoteReadTarget::Held {
@@ -463,7 +492,9 @@ pub(super) fn apply_executable_quotes(
             )?;
             update_regime_references(scan, &rows, receipt, event_config);
         }
-        QuoteReadTarget::Held { depth_sink: None } | QuoteReadTarget::Plan => {}
+        QuoteReadTarget::Held { depth_sink: None }
+        | QuoteReadTarget::Plan
+        | QuoteReadTarget::Shadow => {}
     }
     let purpose = if matches!(target, QuoteReadTarget::Scan(_)) {
         "scanner"

@@ -536,8 +536,10 @@ pub(super) fn checked_call_with(
         "web_search" | "web_fetch" | "news_lookup" => {
             Tool::Web(super::super::web_tools::parse_tool(name, args)?)
         }
-        "research_history" | "idea_record" | "finding_record" | "experiment_submit"
-        | "option_compare" => Tool::Memory(super::super::autoresearch::parse_tool(name, args)?),
+        "research_history" | "shadow_status" | "idea_record" | "finding_record"
+        | "experiment_submit" | "option_compare" => {
+            Tool::Memory(super::super::autoresearch::parse_tool(name, args)?)
+        }
         _ => return Err("harness_tool_not_allowed".into()),
     };
     Ok((id, tool))

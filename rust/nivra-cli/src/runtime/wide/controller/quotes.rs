@@ -9,6 +9,7 @@ use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
 #[derive(Clone, Copy)]
 pub(super) enum ReadKind {
     Held,
+    ShadowHeld,
     Plan,
     Scanner { metadata_only: bool, end: usize },
     Options,
@@ -23,6 +24,7 @@ impl ReadKind {
             Self::Scanner { .. } => 2,
             Self::Options => 3,
             Self::Depth => 4,
+            Self::ShadowHeld => 5,
         }
     }
 }
@@ -75,15 +77,15 @@ impl Reader {
 pub(super) struct QuoteReads {
     protection: Reader,
     market: Reader,
-    pending: [bool; 5],
+    pending: [bool; 6],
 }
 
 impl QuoteReads {
     pub(super) fn start(c: &Config, notify: Notify) -> Result<Self> {
         Ok(Self {
             protection: Reader::start(c, notify.clone(), "held-quotes", 1)?,
-            market: Reader::start(c, notify, "market-quotes", 4)?,
-            pending: [false; 5],
+            market: Reader::start(c, notify, "market-quotes", 5)?,
+            pending: [false; 6],
         })
     }
 
@@ -129,6 +131,32 @@ impl Controller {
         let Request { kind, instruments } = completed.request;
         self.quote_reads.pending[kind.slot()] = false;
         let cfg = self.event_config.as_ref();
+        if matches!(kind, ReadKind::ShadowHeld) {
+            let Some(slot) = self.strategy.as_ref().and_then(|run| run.shadow_slot()) else {
+                return Ok(());
+            };
+            let result = match completed.rows {
+                Ok(rows) => apply_executable_quotes(
+                    rows,
+                    &self.config,
+                    &mut self.db,
+                    &mut self.p,
+                    &instruments,
+                    &mut self.last_fresh_receipt,
+                    cfg,
+                    &self.feature_store,
+                    QuoteReadTarget::Shadow,
+                    Some(slot),
+                    self.archive.as_ref(),
+                )
+                .is_ok_and(|failure| failure.is_none()),
+                Err(_) => false,
+            };
+            if !result {
+                slot.receipt_gap();
+            }
+            return Ok(());
+        }
         self.read_failure = match completed.rows {
             Err(error) => {
                 if matches!(kind, ReadKind::Options)
@@ -139,6 +167,12 @@ impl Controller {
                         millis(),
                         crate::runtime::market_archive::options::gap("option_read_unavailable"),
                     );
+                }
+                if matches!(kind, ReadKind::Held)
+                    && let Some(slot) = self.strategy.as_ref().and_then(|run| run.shadow_slot())
+                    && slot.holds_any(&instruments)
+                {
+                    slot.receipt_gap();
                 }
                 Some(record_read_failure(
                     error,
@@ -168,6 +202,7 @@ impl Controller {
                             depth_sink: self.strategy.is_some().then_some(&mut self.scan),
                         },
                         ReadKind::Plan => QuoteReadTarget::Plan,
+                        ReadKind::ShadowHeld => unreachable!("shadow-only read handled separately"),
                         ReadKind::Options => QuoteReadTarget::Options {
                             scan: &mut self.scan,
                             spot: crate::runtime::options::spot_quote(
@@ -192,6 +227,7 @@ impl Controller {
                         cfg,
                         &self.feature_store,
                         target,
+                        self.strategy.as_ref().and_then(|run| run.shadow_slot()),
                         self.archive.as_ref(),
                     )?;
                     let full = self.full_strategy_depth();

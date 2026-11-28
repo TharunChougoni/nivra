@@ -11,6 +11,7 @@ impl Controller {
             return Ok(None);
         }
         if let Some(run) = &mut self.strategy {
+            run.finish_shadow(&self.db, &self.p);
             run.retire_call(&self.db, now)?;
         }
         if let Some(agent) = &mut self.agent
@@ -197,6 +198,7 @@ impl Controller {
         self.strategy_inputs = strategy_inputs::Inputs::default();
         self.depth_candidates.clear();
         self.last_protection_read = 0;
+        self.last_shadow_read = 0;
         self.last_plan_read = 0;
         self.last_rank = 0;
         self.last_depth = 0;

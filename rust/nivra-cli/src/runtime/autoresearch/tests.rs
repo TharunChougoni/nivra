@@ -611,6 +611,7 @@ fn after_the_seal_one_idea_runs_one_job_to_a_verdict_under_budget_and_restart() 
             names(&turn),
             [
                 "research_history",
+                "shadow_status",
                 "idea_record",
                 "list",
                 "read",

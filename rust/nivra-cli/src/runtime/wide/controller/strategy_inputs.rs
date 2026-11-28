@@ -11,6 +11,7 @@ pub(super) struct Inputs {
     selected_for: Option<String>,
     refreshed_at: Option<i64>,
     pinned: BTreeSet<String>,
+    shadow_held: BTreeMap<String, Instrument>,
     pushed: BTreeMap<String, (i64, i64)>,
     rest: BTreeMap<String, (i64, i64)>,
 }
@@ -107,7 +108,9 @@ impl Inputs {
                 && self.rest.get(key) != Some(&clock(&quote))
             {
                 self.rest.insert(key.clone(), clock(&quote));
-                relevant |= self.pinned.contains(key) || self.selection.keys().contains(key);
+                relevant |= self.pinned.contains(key)
+                    || self.shadow_held.contains_key(key)
+                    || self.selection.keys().contains(key);
             }
         }
         relevant
@@ -130,6 +133,14 @@ impl Controller {
         let inputs = &mut self.strategy_inputs;
         let run = self.strategy.as_mut();
         let id = run.as_ref().and_then(|run| run.desired_id());
+        let shadow_held: BTreeMap<_, _> = run
+            .as_ref()
+            .map(|run| run.shadow_held())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|instrument| (instrument.key.clone(), instrument))
+            .collect();
+        let shadow_changed = inputs.shadow_held != shadow_held;
         let switched = inputs.selected_for.as_deref() != id;
         let held_changed = inputs.pinned.len() != self.p.positions.len()
             || self
@@ -137,7 +148,11 @@ impl Controller {
                 .positions
                 .keys()
                 .any(|key| !inputs.pinned.contains(key));
-        if !switched && !held_changed && !inputs.refresh_due(now, id.is_some(), rank_due) {
+        if !switched
+            && !held_changed
+            && !shadow_changed
+            && !inputs.refresh_due(now, id.is_some(), rank_due)
+        {
             return Ok(());
         }
         if switched {
@@ -147,6 +162,7 @@ impl Controller {
         if held_changed {
             inputs.pinned = self.p.positions.keys().cloned().collect();
         }
+        inputs.shadow_held = shadow_held;
         let slots = self
             .feed_worker
             .as_ref()
@@ -163,9 +179,11 @@ impl Controller {
         inputs.refreshed_at = Some(now);
 
         let selected = inputs.selection.keys();
-        inputs
-            .pushed
-            .retain(|key, _| inputs.pinned.contains(key) || selected.contains(key));
+        inputs.pushed.retain(|key, _| {
+            inputs.pinned.contains(key)
+                || inputs.shadow_held.contains_key(key)
+                || selected.contains(key)
+        });
         let streaming = self
             .feed_worker
             .as_ref()
@@ -177,8 +195,24 @@ impl Controller {
                 .positions
                 .values()
                 .map(|p| p.instrument.clone())
+                .chain(
+                    inputs
+                        .shadow_held
+                        .values()
+                        .filter(|i| !inputs.pinned.contains(&i.key))
+                        .take(
+                            crate::runtime::subscription_plan::MIXED_FULL
+                                .saturating_sub(inputs.pinned.len()),
+                        )
+                        .cloned(),
+                )
                 .collect();
-            worker.set_promoted_keys(&held, selected.iter().cloned(), id.is_some())?;
+            worker.set_promoted_keys(
+                &held,
+                held.len().saturating_sub(inputs.pinned.len()),
+                selected.iter().cloned(),
+                id.is_some() || run.as_ref().is_some_and(|run| run.shadow_slot().is_some()),
+            )?;
         }
         if let Some(run) = run
             && (switched
@@ -201,14 +235,24 @@ impl Controller {
             self.strategy_inputs.pushed.clear();
         }
         if updates.held_gap {
+            if let Some(slot) = self.strategy.as_ref().and_then(|run| run.shadow_slot()) {
+                slot.receipt_gap();
+            }
             self.last_protection_read = 0;
             self.tape_gap(millis(), "held_depth_queue_full", 0)?;
         }
         let mut changed = false;
         if !updates.held.is_empty() {
-            let tx = self
-                .db
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let protects_live = updates
+                .held
+                .iter()
+                .any(|(key, _)| self.p.positions.contains_key(key));
+            let tx = protects_live
+                .then(|| {
+                    self.db
+                        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                })
+                .transpose()?;
             let mut next = self.p.clone();
             let mut newest_held = None;
             for (key, point) in updates.held {
@@ -216,6 +260,7 @@ impl Controller {
                     .positions
                     .get(&key)
                     .map(|position| &position.instrument)
+                    .or_else(|| self.strategy_inputs.shadow_held.get(&key))
                 else {
                     continue;
                 };
@@ -225,7 +270,13 @@ impl Controller {
                     continue;
                 }
                 changed |= executable(&self.scan, &key, now).is_some();
-                if self.scan.samples[&key].executable.is_none() {
+                if let Some(slot) = self.strategy.as_ref().and_then(|run| run.shadow_slot())
+                    && let Some(quote) = self.scan.samples[&key].executable.as_ref()
+                    && quote.fresh(now, MAX_FINANCIAL_AGE_MS)
+                {
+                    slot.receipts(BTreeMap::from([(key.clone(), quote.clone())]));
+                }
+                if !next.positions.contains_key(&key) {
                     continue;
                 }
                 let quotes: BTreeMap<_, _> = next
@@ -255,7 +306,7 @@ impl Controller {
                 }
                 newest_held = Some(point.receipt);
             }
-            if let Some(receipt) = newest_held {
+            if let (Some(receipt), Some(tx)) = (newest_held, tx) {
                 persist_state(
                     &tx,
                     &self.config,
@@ -285,6 +336,12 @@ impl Controller {
                 &settings,
                 now,
             )?;
+            if let Some(slot) = self.strategy.as_ref().and_then(|run| run.shadow_slot())
+                && let Some(quote) = executable(&self.scan, &key, now)
+                && quote.receipt == point.receipt
+            {
+                slot.receipts(BTreeMap::from([(key, quote)]));
+            }
         }
         if changed && let Some(run) = &mut self.strategy {
             run.request_observation();
@@ -301,18 +358,18 @@ impl Controller {
             return Ok(());
         }
         let now = millis();
-        if let Some(top_n) = run.take_observation(&self.db, &self.config, now)? {
+        if let Some(capture) = run.capture_top_n(&self.db, &self.config, now)? {
             let frozen = Frozen::capture(
                 &self.scan,
                 now,
-                top_n,
+                capture.top_n,
                 &self.p,
                 &self.strategy_inputs.selection,
                 |key| self.tradable_by_key.get(key).map(|&i| &self.tradable[i]),
                 |key| self.strategy_inputs.covered(&self.scan, key, now, full),
             );
             if !frozen.quotes.is_empty() {
-                run.start(frozen, &self.p, &millis);
+                run.start_shared(frozen, &self.p, capture, &millis);
             }
         }
         Ok(())

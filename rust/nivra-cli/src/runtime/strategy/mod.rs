@@ -321,6 +321,17 @@ fn side_name(side: &PlanSide) -> &'static str {
     }
 }
 
+pub(crate) fn position_origin<'a>(
+    portfolio: &'a Portfolio,
+    position: &'a nivra_core::execution::Position,
+) -> Option<&'a str> {
+    position.strategy_origin.as_deref().or_else(|| {
+        portfolio
+            .opening_decision(&position.instrument.key)
+            .filter(|id| super::strategy_library::choice::is_strategy_run(id))
+    })
+}
+
 /// Validate the actions with the planner's checks, then execute each accepted
 /// one through the shared execution gate, as the paper controller executes a
 /// saved plan. A fill consumes depth from `quotes`, so a later action on the
@@ -341,6 +352,24 @@ pub(crate) fn apply(
     let mut results = Vec::with_capacity(verdicts.len());
     for verdict in verdicts {
         let key = keys[verdict.index].clone();
+        if let Some(position) = key.as_ref().and_then(|key| portfolio.positions.get(key))
+            && position_origin(portfolio, position).is_some_and(|origin| origin != decision)
+        {
+            results.push(ActionResult {
+                index: verdict.index,
+                key,
+                side: verdict
+                    .action
+                    .as_ref()
+                    .map(|action| side_name(&action.side)),
+                units: 0,
+                outcome: "strategy_position_inherited".into(),
+                max_price: None,
+                refused: None,
+                gate_at_ms: None,
+            });
+            continue;
+        }
         let Some(action) = verdict.action else {
             results.push(ActionResult {
                 index: verdict.index,
@@ -369,6 +398,7 @@ pub(crate) fn apply(
             }
         } else if let Some(quote) = quotes.get_mut(&action.instrument_key) {
             let buy = matches!(action.side, PlanSide::Buy);
+            let opens = buy && !portfolio.positions.contains_key(&instrument.key);
             let max_price = action
                 .max_price
                 .ok_or("strategy_action_max_price_missing")?;
@@ -385,6 +415,13 @@ pub(crate) fn apply(
                 decision,
             )? {
                 Ok(()) => {
+                    if opens {
+                        portfolio
+                            .positions
+                            .get_mut(&instrument.key)
+                            .ok_or("strategy_position_missing")?
+                            .strategy_origin = Some(decision.into());
+                    }
                     if buy {
                         quote.ask_units -= verdict.units;
                     } else {

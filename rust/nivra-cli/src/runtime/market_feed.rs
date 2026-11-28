@@ -804,6 +804,7 @@ impl Worker {
     pub fn set_promoted_keys(
         &self,
         held: &[Instrument],
+        extra_shadow_slots: usize,
         ranked: impl IntoIterator<Item = String>,
         notify_strategy: bool,
     ) -> Result<()> {
@@ -811,7 +812,9 @@ impl Worker {
             let full = subscription_plan::promoted(
                 held.iter().map(|instrument| instrument.key.clone()),
                 ranked.into_iter().filter(|key| self.universe.contains(key)),
-                self.settings.shortlist_size,
+                self.settings
+                    .shortlist_size
+                    .saturating_add(extra_shadow_slots),
             )?;
             {
                 let mut cache = self.cache.lock().map_err(|_| "feed_cache_unavailable")?;

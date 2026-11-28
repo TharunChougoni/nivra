@@ -245,7 +245,7 @@ impl Controller {
                             .values()
                             .map(|position| position.instrument.clone())
                             .collect();
-                        worker.set_promoted_keys(&held, [], false)?;
+                        worker.set_promoted_keys(&held, 0, [], false)?;
                         self.feed_worker = Some(worker);
                     }
                     Err(_) => {
@@ -358,8 +358,8 @@ impl Controller {
     }
 
     fn protection_read(&mut self, now: i64) -> Result<()> {
-        if !self.p.positions.is_empty()
-            && now - self.last_protection_read >= QUOTE_POLL_MS
+        if now - self.last_protection_read >= QUOTE_POLL_MS
+            && !self.p.positions.is_empty()
             && !self.quote_reads.pending(ReadKind::Held)
         {
             let held = self
@@ -370,6 +370,34 @@ impl Controller {
                 .collect();
             self.quote_reads.request(ReadKind::Held, held)?;
             self.last_protection_read = now;
+        }
+        if now - self.last_shadow_read >= QUOTE_POLL_MS
+            && let Some(run) = &self.strategy
+            && let Some(slot) = run.shadow_slot()
+            && !self.quote_reads.pending(ReadKind::ShadowHeld)
+        {
+            let held: Vec<_> = run
+                .shadow_held()
+                .into_iter()
+                .filter(|i| {
+                    !self.p.positions.contains_key(&i.key)
+                        && (!self.full_strategy_depth()
+                            || crate::runtime::strategy::selection::executable(
+                                &self.scan, &i.key, now,
+                            )
+                            .is_none())
+                })
+                .collect();
+            if !held.is_empty() {
+                if self
+                    .quote_reads
+                    .request(ReadKind::ShadowHeld, held)
+                    .is_err()
+                {
+                    slot.receipt_gap();
+                }
+                self.last_shadow_read = now;
+            }
         }
         Ok(())
     }
