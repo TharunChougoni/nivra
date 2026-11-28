@@ -211,6 +211,40 @@ export interface ResearchCandidate {
 export interface ResearchTasksStatus {
   status?: string | null;
 }
+/** The autonomous research loop as the controller last saw it. */
+export interface ResearchLoopStatus {
+  enabled?: boolean;
+  state?: string | null;
+  reason?: string | null;
+  next_wake_ms?: number | null;
+  last_step_ms?: number | null;
+  budget?: {
+    variants_left?: number;
+    turns_left?: number;
+    calls_left?: number;
+    usd_left?: number;
+    variants?: number;
+    turns?: number;
+    usd?: number;
+  } | null;
+  campaign?: {
+    name?: string;
+    trials_used?: number | null;
+    trial_cap?: number;
+    development_from?: string;
+    development_to?: string;
+  } | null;
+  latest?: {
+    experiment_id?: number;
+    ordinal?: number;
+    status?: string;
+    verdict?: string | null;
+    reason?: string | null;
+    net_pnl?: string | null;
+    idea?: { family?: string; hypothesis?: string } | null;
+  } | null;
+  incumbents?: number;
+}
 export type RevisionName =
   | "portfolio"
   | "fills"
@@ -286,6 +320,7 @@ export interface SummaryResponse extends Envelope {
 
   operational_health?: OperationalHealth | null;
   research_tasks?: ResearchTasksStatus | null;
+  research_loop?: ResearchLoopStatus | null;
   instrument_display?: {
     status?: string;
     source_sha256?: string | null;

@@ -18,7 +18,7 @@ import {
   signed,
   tone,
 } from "./data";
-import { plain, sleeveLabel } from "./labels";
+import { plain, RESEARCH_LOOP_LABELS, sleeveLabel } from "./labels";
 import { Empty, Facts, KpiStrip, Notice, Panel, Status, Table } from "./ui";
 import {
   ageLabel,
@@ -199,6 +199,71 @@ function ResearchPanel({ summary }: { summary?: SummaryResponse | null }) {
           ["Model", plain(summary?.model_status)],
           ["Entries", plain(summary?.entry_status)],
           ["Readiness", plain(summary?.readiness?.status)],
+        ]}
+      />
+    </Panel>
+  );
+}
+/** The overnight research loop: what it is doing, what is left today and its latest result. */
+export function ResearchLoopPanel({
+  summary,
+}: {
+  summary?: SummaryResponse | null;
+}) {
+  const loop = summary?.research_loop;
+  if (!loop) return null;
+  if (loop.enabled !== true)
+    return (
+      <Panel title="Research loop">
+        <Empty title="The research loop is off" />
+      </Panel>
+    );
+  const label = (code: unknown) => plain(code, RESEARCH_LOOP_LABELS);
+  const now =
+    loop.state === "waiting" && loop.reason
+      ? label(loop.reason)
+      : label(loop.state);
+  const budget = loop.budget;
+  const campaign = loop.campaign;
+  const latest = loop.latest;
+  const next =
+    typeof loop.next_wake_ms === "number" &&
+    loop.next_wake_ms > Date.now() &&
+    loop.next_wake_ms < Date.now() + 7 * 86_400_000
+      ? datetime(loop.next_wake_ms)
+      : "As soon as it can";
+  const result = latest
+    ? [
+        `Idea ${latest.ordinal ?? "?"}`,
+        latest.idea?.family ? plain(latest.idea.family) : null,
+        latest.verdict
+          ? label(latest.verdict)
+          : label(latest.status === "reserved" ? "queued" : latest.status),
+        latest.net_pnl == null ? null : `${amount(latest.net_pnl)} after costs`,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "No ideas tested yet";
+  return (
+    <Panel title="Research loop">
+      <Facts
+        items={[
+          ["Now", now],
+          ["Next step", next],
+          [
+            "Left today",
+            budget
+              ? `${count(budget.variants_left)} ideas · ${count(budget.turns_left)} turns · $${Number(budget.usd_left ?? 0).toFixed(2)}`
+              : "Not reported",
+          ],
+          [
+            "Trials used",
+            campaign
+              ? `${count(campaign.trials_used ?? 0)} of ${count(campaign.trial_cap)}`
+              : "Not started",
+          ],
+          ["Latest result", result],
+          ["Strategies kept", count(loop.incumbents ?? 0)],
         ]}
       />
     </Panel>
@@ -505,6 +570,7 @@ export function OperationalPanel({
         />
       </div>
       <ResearchPanel summary={summary} />
+      <ResearchLoopPanel summary={summary} />
       <CalendarPanel calendar={operational?.calendar} interpret={interpret} />
       <AlertPanel alert={operational?.alert_transport} interpret={interpret} />
     </Panel>

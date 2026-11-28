@@ -97,3 +97,40 @@ test("halted book stays explicit", () => {
   );
   assert.match(textValue, /Halted/);
 });
+
+test("the research loop says it waits for tape and shows today's allowance and its latest verdict", () => {
+  const loop = (extra: Record<string, unknown>) =>
+    text(
+      <OperationalPanel
+        summary={summary({
+          research_loop: {
+            enabled: true,
+            state: "waiting",
+            reason: "waiting_for_tape",
+            next_wake_ms: now + 300_000,
+            budget: { variants_left: 29, turns_left: 58, calls_left: 190, usd_left: 7.85 },
+            campaign: { name: "bars-v1", trials_used: 1, trial_cap: 60 },
+            latest: {
+              ordinal: 1,
+              status: "scored",
+              verdict: "keep",
+              net_pnl: "120",
+              idea: { family: "breakout" },
+            },
+            incumbents: 1,
+            ...extra,
+          },
+        })}
+        portfolio={portfolio()}
+      />,
+    );
+  const waiting = loop({});
+  assert.match(waiting, /Research loop/);
+  assert.match(waiting, /Waiting for tape/);
+  assert.match(waiting, /29 ideas · 58 turns · \$7\.85/);
+  assert.match(waiting, /1 of 60/);
+  assert.match(waiting, /Idea 1 · Breakout · Kept · ₹120\.00 after costs/);
+  assert.doesNotMatch(waiting, /waiting_for_tape|day_usd/);
+  assert.match(loop({ reason: "day_usd_exhausted" }), /Today's research spend is used up/);
+  assert.match(loop({ enabled: false }), /The research loop is off/);
+});

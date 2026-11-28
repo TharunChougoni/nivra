@@ -113,6 +113,38 @@ export const TRIGGER_LABELS: Record<string, string> = {
   agenda: "Agenda",
 };
 
+/** What the research loop is doing, and why it waits. */
+export const RESEARCH_LOOP_LABELS: Record<string, string> = {
+  disabled: "Off",
+  waiting: "Waiting",
+  proposed: "Proposed an idea",
+  queued: "Backtest queued",
+  scored: "Scored a backtest",
+  interpreted: "Recorded what it learned",
+  skills_reviewed: "Reviewed learned skills",
+  retrying: "Retrying a backtest",
+  preempted: "Paused for trading work",
+  failed: "Backtest failed",
+  invalid: "Strategy did not run",
+  abandoned: "Gave up on a backtest",
+  proposal_turn_failed: "Idea turn failed",
+  unavailable: "Status unavailable",
+  waiting_for_tape: "Waiting for tape",
+  waiting_for_seal: "Waiting for the session to close",
+  day_variants_exhausted: "Today's new ideas are used up",
+  day_turns_exhausted: "Today's research turns are used up",
+  day_calls_exhausted: "Today's model calls are used up",
+  day_usd_exhausted: "Today's research spend is used up",
+  trial_allowance_spent: "Campaign trials are used up",
+  infrastructure_failures: "Paused after repeated failures",
+  lease_held: "Another runner is working",
+  decision_preempted: "Paused for trading work",
+  no_eligible_work: "Nothing to do",
+  campaign_closed: "Campaign closed",
+  keep: "Kept",
+  reject: "Rejected",
+};
+
 /** What the gate suggests the decision lane consider. */
 export const IDEA_LABELS: Record<string, string> = {
   buy_call: "Buy call",
