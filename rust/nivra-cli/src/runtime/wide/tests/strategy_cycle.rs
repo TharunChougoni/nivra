@@ -411,9 +411,11 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
             .unwrap()
             .is_some()
     );
+    // The readiness event comes from the worker's I/O thread, so it may
+    // trail the readiness check slightly; the bound is generous.
     assert!(
         inbox
-            .wait(Duration::ZERO)
+            .wait(Duration::from_secs(5))
             .contains(ControllerEvent::Strategy)
     );
     timeout.start(tape.frozen(at), &tape.p, &|| at);

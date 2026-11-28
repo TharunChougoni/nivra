@@ -1,5 +1,20 @@
 # Source snapshot
 
+## 0.20.1 — 2026-11-28
+
+v0.20.0 was tagged but never published: a test failed on the CI runner. This
+release ships the same code.
+
+### Upgrade an installed paper host
+
+Follow the 0.20.0 steps below with `--tag v0.20.1`.
+
+### Fixed
+
+- A strategy-cycle test asserted the worker's readiness event with a zero
+  wait, which raced the worker's I/O thread on a loaded runner. It now waits
+  up to five seconds.
+
 ## 0.20.0 — 2026-11-28
 
 The research lane remembers across daily books and runs a bounded
