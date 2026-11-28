@@ -106,6 +106,7 @@ pub(crate) struct Cycle<'a> {
     pub store: &'a FeatureStore,
     pub index: Option<Value>,
     pub regime: Option<RegimeFacts>,
+    pub strategy_health: Option<&'a strategy_run::StrategyHealth>,
     /// Fresh Nifty spot when the option universe is enabled.
     pub spot: Option<SpotQuote>,
 }
@@ -530,6 +531,12 @@ impl LaneService {
             strategy_active: supervision.strategy_active(),
             strategy_supervision: supervision.supervised,
             strategy_accepted: supervision.accepted(),
+            strategy_health: cycle.strategy_health.filter(|_| {
+                supervision.supervised
+                    && !(cycle.portfolio.halted
+                        || cycle.portfolio.stopped
+                        || cycle.portfolio.closed)
+            }),
             strategy_fills,
             regime: cycle.regime.as_ref().map(|r| r.label.as_str()),
         });
@@ -797,7 +804,12 @@ impl LaneService {
                 })
                 && !(supervision.supervised
                     && triggers.iter().any(|trigger| {
-                        matches!(trigger.kind, TriggerKind::Schedule | TriggerKind::PreOpen)
+                        matches!(
+                            trigger.kind,
+                            TriggerKind::Schedule
+                                | TriggerKind::PreOpen
+                                | TriggerKind::StrategyHealth
+                        )
                     }))
             {
                 return self
@@ -911,6 +923,7 @@ impl LaneService {
         if lane == Lane::Decision {
             brief.gate_prospects = prospects;
             brief.strategies = brief::strategy_facts(db, c, cycle.cfg);
+            brief.strategy_health = cycle.strategy_health.cloned();
             brief.execution_refusals =
                 crate::runtime::wide::recent_refusals(db, brief::MAX_REFUSALS)?;
         }
@@ -1161,6 +1174,8 @@ fn commit_done(
 mod tests {
     use super::*;
 
+    mod strategy_health;
+
     #[test]
     fn a_review_waits_for_context_before_claiming_the_seal() {
         let dir = tempfile::tempdir().unwrap();
@@ -1189,6 +1204,7 @@ mod tests {
             store: &store,
             index: None,
             regime: None,
+            strategy_health: None,
             spot: None,
         };
 
@@ -1237,6 +1253,7 @@ mod tests {
             store: &store,
             index: None,
             regime: None,
+            strategy_health: None,
             spot: None,
         };
         let mut db = crate::runtime::open_book(&c).unwrap();
@@ -1348,6 +1365,7 @@ mod tests {
             store: &store,
             index: None,
             regime: None,
+            strategy_health: None,
             spot: Some(spot("26040", now - 50)),
         };
         let mut db = Connection::open_in_memory().unwrap();
@@ -1518,6 +1536,7 @@ mod tests {
                     store: &store,
                     index: None,
                     regime: None,
+                    strategy_health: None,
                     spot: Some(spot(index, now - 50)),
                 };
                 service.tick(&cycle, &mut db).unwrap();

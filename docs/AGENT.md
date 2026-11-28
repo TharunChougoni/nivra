@@ -67,6 +67,7 @@ trigger aborts a running research or review turn with `agent_preempted`.
 | `entry_candidate` | Decision | An unheld instrument stays in the top `top_k` (5) with score at least `entry_score` (10) for `persist_cycles` (2) scans; then `cooldown_ms` (15 min) per instrument (suppressed while an active strategy owns cash entries) |
 | `pre_open` | Decision | Once per session at `pre_open_minute` (09:00 IST) before the open, with `strategy_execution` enabled, once history, universe and book are ready. The turn chooses today's strategy (`strategy_select`) or asks research for one; it holds no paper claim and cannot trade |
 | `fo_signal` | Decision, screened by the gate | The Nifty option chain moves: `spot_move`, `premium_move` or `oi_shift` past its threshold while a near-money contract is tradable. See [F&O triggers](#fo-triggers) |
+| `strategy_health` | Decision | A running strategy is idle with fresh prospects, losing, behind replay, or often failing or refused. Also fires when the executor is blocked or on fallback with an eligible version available |
 | `schedule` | Decision | Within 30 minutes of the open, at `pre_close_minute` (15:00), on `regime_changed` when `strategy_execution` is enabled (`regime_cooldown_ms`, 5 min), and on the hour when `material_change` (2) new names entered the top K (skipped while a strategy is active) |
 | `request` | Research | The decision lane queued a research request |
 | `after_close` | Research | Once per session, after the seal, when the review turn has finished, failed or been skipped |
@@ -78,6 +79,38 @@ trigger aborts a running research or review turn with `agent_preempted`.
 As the decision lane spends its budget, the entry bar rises by
 `entry_score_rise` (40) times the spent share, and the top K shrinks in
 proportion.
+
+### Strategy health
+
+Health triggers run during the session when strategy execution is enabled and
+the decision lane has budget. Each reason has its own cooldown. Reasons in
+one scan share a decision turn.
+
+- `idle` means no fill or exit revision for 15 minutes of fresh prospects.
+  The clock starts with the first fresh prospect and resets after a fill, an
+  exit revision, or a gap of over a minute between prospect observations.
+  The latest prospect must still have executable depth within two seconds.
+- `losing` means the strategy lost at least 100 basis points of cash sleeve
+  capital, or the sleeve fell at least 150 basis points from its observed
+  session peak. The peak adjusts for cash allocations and starts when the
+  controller observes the sleeve during the session.
+- `below_expectation` means strategy P&L trails replay by 75 basis points.
+  Rust divides replay return by the number of tape dates and scales it by
+  the fraction of the session elapsed since the strategy was activated.
+- `failing` means at least half the last 20 completed calls failed, with at
+  least five completed calls. `refusals` means at least half the actions in
+  those calls were refused, with at least five actions evaluated.
+- `fallback_while_eligible` means a reviewed version meets current build
+  requirements while the executor is on fallback or blocked. A deliberate
+  lane stand-down does not trigger this reason.
+
+The decision brief's `strategy_health` block reports the active basis,
+applied actions since activation, refusal counts by code, idle minutes, and
+cash sleeve drawdown. It names one eligible strategy when available. Session P&L includes fees and marks for cash lots the
+strategy opened today. Sell proceeds follow the opening lot, including when
+protection sells the position. P&L and replay comparison are unavailable
+until the strategy opens a lot. The call and idle windows reset on switch or
+restart. Tune thresholds in the [planner configuration](../packaging/rust/CONFIGURATION.md#strategy-execution-settings).
 
 ### F&O triggers
 

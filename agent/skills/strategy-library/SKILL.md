@@ -25,7 +25,9 @@ accepted version in the library.
     work. `BENCHMARK.md` gives the bar results on real NSE data.
 - The brief's `strategies` block lists accepted versions (`eligible`), the
   configured `fallback` names and what runs now (`active_strategy_id`,
-  `active_basis`, `active_blocked_reason`).
+  `active_basis`, `active_blocked_reason`). On a `strategy_health` decision
+  turn, check the executor's `strategy_health` facts and the current regime
+  before keeping, switching, or standing down the active version.
 
 ## Procedure
 

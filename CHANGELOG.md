@@ -1,5 +1,26 @@
 # Source snapshot
 
+## Unreleased
+
+### Added
+
+- Strategy health triggers wake the decision lane when a running paper
+  strategy is idle despite fresh prospects, losing, lagging replay, failing,
+  or often refused. The lane can also recheck a blocked executor or fallback
+  when an eligible strategy exists.
+
+### Upgrade an installed paper host
+
+Install the matching binary and agent prompts. Health triggers use defaults
+when `strategy_execution.enabled` and the decision lane are configured. For
+custom thresholds, keep a `*.pre-strategy-health` copy of the planner, edit
+`agent.triggers.decision.strategy_health` in a new file, and run
+`nivra planner config-check --planner NEW_PLANNER --session SESSION`. Apply it
+using [the open-book procedure](docs/OPERATIONS.md#change-the-planner-policy)
+or let the next rollover bind it for a closed book. After a threshold is
+reached during the session, check for `strategy_health` in the dashboard's
+lane history or in `model/agent/triggers.ndjson`.
+
 ## 0.20.1 — 2026-11-28
 
 v0.20.0 was tagged but never published: a test failed on the CI runner. This

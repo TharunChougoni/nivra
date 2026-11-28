@@ -94,6 +94,8 @@ pub(crate) struct Brief {
     /// decision turns when `strategy_execution` is enabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub strategies: Option<StrategyLibraryFacts>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strategy_health: Option<crate::runtime::wide::strategy_run::StrategyHealth>,
     /// The latest actions the execution gate refused, newest first: who
     /// proposed each, the action, the reason in plain words and the numbers
     /// the check used. Decision turns only.
@@ -339,6 +341,7 @@ impl Brief {
             regime: facts.regime.cloned(),
             fo: None,
             strategies: None,
+            strategy_health: None,
             execution_refusals: Vec::new(),
             research_updates: Vec::new(),
             gate_prospects: Vec::new(),

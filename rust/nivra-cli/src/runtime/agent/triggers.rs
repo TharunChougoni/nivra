@@ -7,7 +7,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod fo;
+mod health;
+use crate::runtime::wide::strategy_run::StrategyHealth;
 pub(crate) use fo::{FoBar, FoObservation, FoTriggers};
+use health::HealthTriggers;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -62,6 +65,8 @@ pub(crate) struct DecisionTriggers {
         skip_serializing_if = "is_default_regime_cooldown_ms"
     )]
     pub regime_cooldown_ms: i64,
+    #[serde(default, skip_serializing_if = "HealthTriggers::is_default")]
+    pub strategy_health: HealthTriggers,
 }
 
 fn default_pre_open_minute() -> u32 {
@@ -92,6 +97,7 @@ impl Default for DecisionTriggers {
             pre_close_minute: 15 * 60,
             pre_open_minute: default_pre_open_minute(),
             regime_cooldown_ms: default_regime_cooldown_ms(),
+            strategy_health: HealthTriggers::default(),
         }
     }
 }
@@ -162,6 +168,7 @@ impl TriggerSettings {
             && (0.0..=1.0).contains(&r.drift_threshold)
             && r.drift_min_samples > 0
             && self.fo.validate()
+            && d.strategy_health.validate()
     }
 }
 
@@ -178,6 +185,7 @@ pub(crate) enum TriggerKind {
     Schedule,
     /// The pre-open turn that chooses today's strategy.
     PreOpen,
+    StrategyHealth,
     Request,
     /// The once-a-session research turn after the seal and the review.
     AfterClose,
@@ -198,7 +206,8 @@ impl TriggerKind {
             | Self::EntryCandidate
             | Self::FoSignal
             | Self::Schedule
-            | Self::PreOpen => Lane::Decision,
+            | Self::PreOpen
+            | Self::StrategyHealth => Lane::Decision,
             Self::Request
             | Self::AfterClose
             | Self::Quiet
@@ -336,6 +345,7 @@ pub(crate) struct Observation<'a> {
     pub strategy_supervision: bool,
     /// An accepted library version, not a fallback, is what runs.
     pub strategy_accepted: bool,
+    pub strategy_health: Option<&'a StrategyHealth>,
     /// Fills belonging to an active strategy (excluded from `Fill` triggers
     /// while `strategy_active` is true).
     pub strategy_fills: usize,
@@ -374,6 +384,7 @@ pub(crate) struct TriggerEngine {
     drifted: BTreeSet<String>,
     pre_open: bool,
     strategy_search: bool,
+    health_cooldown_until: BTreeMap<&'static str, i64>,
     sealed: bool,
     after_close: bool,
     fo: fo::FoState,
@@ -421,6 +432,7 @@ impl TriggerEngine {
             }
             self.schedule(o, &mut fired);
             self.regime_change(o, &mut fired);
+            self.strategy_health(o, &mut fired);
             self.quiet(o, &mut fired);
         } else {
             self.fills_seen = Some(o.fills);

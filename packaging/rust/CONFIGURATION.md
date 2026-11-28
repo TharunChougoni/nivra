@@ -163,6 +163,25 @@ the open.
 }
 ```
 
+The keys below go under `agent.triggers.decision.strategy_health`. Existing
+planner files use the defaults with their current policy hash.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `idle_minutes` | 15 | Minutes with fresh prospects and no applied action |
+| `loss_bps` | 100 | Strategy session net loss in basis points of cash sleeve capital |
+| `drawdown_bps` | 150 | Cash sleeve peak-to-current drawdown in basis points of its capital |
+| `replay_gap_bps` | 75 | Shortfall against the time-scaled replay return in basis points |
+| `min_calls` | 5 | Minimum completed calls for the failure check (1 to 20) |
+| `failure_rate_pct` | 50 | Percentage of completed calls that failed |
+| `min_actions` | 5 | Minimum evaluated actions for the refusal check |
+| `refusal_rate_pct` | 50 | Percentage of evaluated actions that were refused |
+| `cooldown_ms` | 900000 | Minimum time between triggers for the same reason |
+
+Use `strategy-health.fragment.json` as a reference. Merge custom values
+into the existing planner's `agent` block. See [strategy health](../../docs/AGENT.md#strategy-health)
+for the measurement windows.
+
 > **Owner override of sandbox guard:** `strategy_actions_v1` strategies no longer run under per-call bubblewrap (`bwrap`); they run inside a persistent hardened Python worker (`python3 -I -S -B`, rlimits, Landlock, seccomp) after passing a static Python AST check and `strategy_review` model review. See [research](../../docs/RESEARCH.md#sandbox-and-action-worker).
 
 `packaging/rust/strategy-execution.fragment.json` holds the block with an

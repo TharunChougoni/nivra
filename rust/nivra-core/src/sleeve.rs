@@ -9,6 +9,9 @@ use crate::finance::{Amount, FeeArithmetic, Money, Price, Side};
 use crate::market::Segment;
 use serde::{Deserialize, Serialize};
 
+mod pnl;
+pub use pnl::session_strategy_pnl;
+
 /// Where an instrument's capital comes from. `NSE_FO` keys trade from the
 /// options sleeve; every other tradeable key is cash equity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

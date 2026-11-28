@@ -45,7 +45,7 @@
     "src/events.test.ts": "3a327b543ae1a705d329e2d572f87aa83c403b70a275b20953e19c557ea78a27",
     "src/events.ts": "fe3286e008a6f6c91c613b7489b41885a29d952020aa8cabefb207e0ea4a8f49",
     "src/labels.test.ts": "dd86e9508a86ab6f7aa7b3287ca5d36006444f5a1c50f23a2fd434e2b2a4e2b0",
-    "src/labels.ts": "d05fa21b7ba8878a95410696268f95b53b9c6e95c448c4836a40011cac0b26b5",
+    "src/labels.ts": "849c73676bbee94d3f9671835aec0a3e441d0404e65cf907b0940f36aff8c07a",
     "src/lanes.css": "a6e45ae5577d621d33763df65812b7aee411d1762df7e85efabd59bcfbe0e7f4",
     "src/layout.css": "56a5a415afc5a6e5963fd77a63ab3062013c1b7358827cd56e5d810754bbb491",
     "src/main.tsx": "a16b68bc523e176685550d1c8c47ff67774e5ef0552492089a18a023c2dc4078",
@@ -73,7 +73,7 @@
   "assets": {
     "LICENSES.txt": "4d6b5933ec22b8f9b9243f369650ca858b121b7e168aefea9ea5879bd461542b",
     "app.css": "a3279574ad30e86c46892ff8a2be2d3e5e054b16f8f4e221dea42c38affedea9",
-    "app.js": "5912e7f5fe3be402ab65f106773911fe67b2f27974fbc00906eaed9e3440e3a5",
+    "app.js": "b4fcedf8454c9b35ecbd8698d2720b60f9fc37185149609d7e99942c05038c7b",
     "index.html": "fc95cc951d8466b66a6b4f0bcdcc11ffbfdad3b79e3fd8e3615633fedfb9670e",
     "uPlot.esm.js": "068506d72590b07d0e53e012ff1541813c52c09bded848b3f97fcd1d4b0fd3b2"
   }

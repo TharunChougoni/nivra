@@ -1,0 +1,19 @@
+{
+  "agent": {
+    "triggers": {
+      "decision": {
+        "strategy_health": {
+          "idle_minutes": 15,
+          "loss_bps": 100,
+          "drawdown_bps": 150,
+          "replay_gap_bps": 75,
+          "min_calls": 5,
+          "failure_rate_pct": 50,
+          "min_actions": 5,
+          "refusal_rate_pct": 50,
+          "cooldown_ms": 900000
+        }
+      }
+    }
+  }
+}

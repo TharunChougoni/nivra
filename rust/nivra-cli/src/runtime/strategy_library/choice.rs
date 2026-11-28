@@ -72,6 +72,31 @@ pub(crate) struct Choice {
     pub reason: Option<&'static str>,
 }
 
+impl Choice {
+    /// An entry the lane could select on this build with the current review policy.
+    pub(crate) fn eligible_id(&self, library: &Library, policy: &ChoicePolicy) -> Option<&str> {
+        if let Some(Running::Accepted { entry, .. }) = &self.running {
+            return Some(&entry.strategy_id);
+        }
+        self.resolved
+            .eligible()
+            .rev()
+            .find(|entry| {
+                library
+                    .entry_build_mismatch(entry)
+                    .is_ok_and(|reason| reason.is_none())
+                    && library
+                        .entry_review_mismatch(
+                            entry,
+                            &policy.python_path,
+                            policy.allow_research_env,
+                        )
+                        .is_ok_and(|reason| reason.is_none())
+            })
+            .map(|entry| entry.strategy_id.as_str())
+    }
+}
+
 /// A run id names a fallback reference.
 pub(crate) fn is_fallback(run_id: &str) -> bool {
     run_id.starts_with(FALLBACK_PREFIX)

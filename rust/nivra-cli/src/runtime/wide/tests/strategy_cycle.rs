@@ -1,7 +1,7 @@
-use super::super::strategy_run::{Frozen, StrategyRun, recent_actions};
+use super::super::strategy_run::{Frozen, HealthBasis, StrategyRun, recent_actions};
 use super::*;
 use crate::runtime::strategy_library::{
-    Author, Library, acceptance, build_mismatch,
+    Author, Control, ControlRecord, Library, acceptance, build_mismatch,
     review::{EntryReview, review_policy_sha256},
 };
 use crate::runtime::{
@@ -208,11 +208,16 @@ fn active_strategy_fills_refuses_and_exits_through_the_gate() {
     };
     let mut tape = Tape::new();
     let params: Value = serde_json::from_str::<Value>(PARAMETERS).unwrap()["params"].clone();
-    let id = register(&tape.library(), SOURCE, params, |_| {});
+    let id = register(&tape.library(), SOURCE, params, |report| {
+        report["capital"] = json!("5000");
+    });
     let mut run = StrategyRun::new(tape.library(), worker, Default::default(), None);
+    let start = tape.events[0]["at"].as_i64().unwrap();
+    let session = start..start + 375 * 60_000;
     for step in 0..tape.events.len() {
         let at = tape.protect(step);
         tape.scan(&mut run, at);
+        run.health(&tape.p, at, session.clone());
     }
     // The same fills as the after-cost replay: two strategy entries, the
     // revised target and the stop executed by protection.
@@ -262,7 +267,16 @@ fn active_strategy_fills_refuses_and_exits_through_the_gate() {
         ]
     );
     // The gate refusal reaches the decision brief with its numbers.
-    let start = tape.events[0]["at"].as_i64().unwrap();
+    let health = run.health(&tape.p, start + 187 * 60_000 + 30_000, session);
+    assert_eq!(health.session_net_pnl, Some(a("-4.27")));
+    assert_eq!(health.replay_expected_bps, Some(41.5));
+    assert!(health.cash_drawdown_bps.unwrap() > 0.0);
+    assert_eq!(health.applied_actions, 3);
+    assert_eq!(health.recent_actions, 5);
+    assert_eq!(health.completed_calls, 6);
+    assert_eq!(health.failed_calls, 0);
+    assert_eq!(health.refusals_by_code["action_sell_unheld"], 1);
+    assert_eq!(health.refusals_by_code["price_above_max"], 1);
     let refusals = recent_refusals(&tape.db, 5).unwrap();
     assert_eq!(refusals.len(), 1);
     assert_eq!(
@@ -444,6 +458,8 @@ fn failed_strategy_calls_trade_nothing_and_protection_continues() {
         .poll(&mut tape.db, &tape.c, &mut tape.p, &mut tape.scan, &|| at)
         .unwrap();
     assert_eq!(timeout.status(&tape.db, &tape.p)["skipped"], 1);
+    let health = timeout.health(&tape.p, at, at..at + 60_000);
+    assert_eq!((health.completed_calls, health.failed_calls), (1, 1));
     assert_eq!(
         tape.failures(),
         ["\"strategy_exit\"", "\"strategy_wall_timeout\""]
@@ -531,6 +547,60 @@ fn a_fallback_runs_labelled_until_a_strategy_is_accepted_and_honours_stand_down(
     );
     assert_eq!(status["reason"], "strategy_lane_stood_down");
     assert!(status["activation_generation"].as_u64().unwrap() > gen2);
+    let session = first..first + 60_000;
+    let health = run.health(&tape.p, revoked, session.clone());
+    assert_eq!(health.active_basis, HealthBasis::StoodDown);
+    assert_eq!(health.eligible_strategy_id.as_deref(), Some(id.as_str()));
+
+    let stale = register(&tape.library(), SOURCE, json!({"version": 2}), |report| {
+        report["engine_sha256"] = json!("0".repeat(64));
+    });
+    tape.library()
+        .append(ControlRecord {
+            at_ms: revoked + 1,
+            control: Control::Pin { strategy_id: stale },
+        })
+        .unwrap();
+    run.refresh_choice(&tape.db, &tape.c, revoked + 1, true)
+        .unwrap();
+    let health = run.health(&tape.p, revoked + 1, session);
+    assert_eq!(health.active_basis, HealthBasis::Blocked);
+    assert_eq!(health.blocked_reason, Some("strategy_engine_changed"));
+    assert_eq!(health.eligible_strategy_id.as_deref(), Some(id.as_str()));
+}
+
+#[test]
+fn idle_health_needs_fresh_executable_prospects_and_resets_after_a_gap() {
+    let Some(worker) = worker_config() else {
+        return;
+    };
+    let mut tape = Tape::new();
+    let source = b"def on_observation(obs):\n    return {'actions': []}\n";
+    register(&tape.library(), source, json!({}), |_| {});
+    let mut run = StrategyRun::new(tape.library(), worker, Default::default(), None);
+    let start = tape.protect(0);
+    let session = start..start + 375 * 60_000;
+    for minute in 0..=15 {
+        let at = start + minute * 60_000;
+        tape.protect_at(0, at);
+        tape.scan(&mut run, at);
+    }
+    let at = start + 15 * 60_000;
+    let health = run.health(&tape.p, at, session.clone());
+    assert!(health.fresh_prospects);
+    assert_eq!(health.idle_minutes, 15);
+    assert_eq!(health.applied_actions, 0);
+    assert!(
+        !run.health(&tape.p, at + 2_001, session.clone())
+            .fresh_prospects
+    );
+
+    let after_gap = at + 60_001;
+    tape.protect_at(0, after_gap);
+    tape.scan(&mut run, after_gap);
+    let health = run.health(&tape.p, after_gap, session);
+    assert!(health.fresh_prospects);
+    assert_eq!(health.idle_minutes, 0);
 }
 
 #[test]

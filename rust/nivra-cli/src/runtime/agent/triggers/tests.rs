@@ -36,6 +36,7 @@ fn triggers_count_distinct_scans_and_prioritize_decision_over_research() {
         strategy_active: false,
         strategy_supervision: false,
         strategy_accepted: false,
+        strategy_health: None,
         strategy_fills: 0,
         regime: None,
     };
@@ -111,6 +112,7 @@ fn returning_candidate_waits_out_cooldown_without_repeating() {
         strategy_active: false,
         strategy_supervision: false,
         strategy_accepted: false,
+        strategy_health: None,
         strategy_fills: 0,
         regime: None,
     };
@@ -162,6 +164,7 @@ fn drift_seal_and_after_close_research_fire_once_after_the_review() {
         strategy_active: false,
         strategy_supervision: false,
         strategy_accepted: false,
+        strategy_health: None,
         strategy_fills: 0,
         regime: None,
     };
@@ -245,6 +248,7 @@ fn active_strategy_suppresses_cash_entries_and_triggers_only_for_supervision() {
         strategy_active: true,
         strategy_supervision: true,
         strategy_accepted: true,
+        strategy_health: None,
         strategy_fills: 0,
         regime: Some("unknown"),
     };
@@ -381,6 +385,7 @@ fn the_strategy_is_chosen_before_the_open_and_research_searches_when_none_is_acc
                 strategy_active: accepted,
                 strategy_supervision: true,
                 strategy_accepted: accepted,
+                strategy_health: None,
                 strategy_fills: 0,
                 regime: None,
             })
@@ -620,4 +625,126 @@ fn option_trigger_settings_validate_and_stay_out_of_the_policy_at_their_defaults
         assert!(!settings.validate());
     }
     assert!(serde_json::from_value::<TriggerSettings>(serde_json::json!({"fo":{"oi":1}})).is_err());
+}
+
+#[test]
+fn strategy_health_has_a_decision_trigger_and_an_optional_policy_block() {
+    let kind: TriggerKind = serde_json::from_str(r#""strategy_health""#).unwrap();
+    assert_eq!(kind.lane(), Lane::Decision);
+    let example: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../../packaging/rust/strategy-health.fragment.json"
+    ))
+    .unwrap();
+    let example: TriggerSettings =
+        serde_json::from_value(example["agent"]["triggers"].clone()).unwrap();
+    assert_eq!(example, TriggerSettings::default());
+    let defaults = serde_json::to_value(example).unwrap();
+    assert!(defaults["decision"].get("strategy_health").is_none());
+    let settings: TriggerSettings = serde_json::from_value(serde_json::json!({
+        "decision": {"strategy_health": {"idle_minutes": 9}}
+    }))
+    .unwrap();
+    assert!(settings.validate());
+    assert_eq!(
+        serde_json::to_value(settings).unwrap()["decision"]["strategy_health"]["idle_minutes"],
+        9
+    );
+}
+
+#[test]
+fn strategy_health_reasons_have_independent_cooldowns_and_require_session_budget() {
+    use crate::runtime::wide::strategy_run::HealthBasis;
+
+    let defaults = TriggerSettings::default();
+    let cooldown = defaults.decision.strategy_health.cooldown_ms;
+    let mut engine = TriggerEngine::new(defaults);
+    let mut health = StrategyHealth {
+        active_strategy_id: Some("strategy".into()),
+        active_basis: HealthBasis::Accepted,
+        fresh_prospects: true,
+        idle_minutes: 15,
+        session_net_pnl_bps: Some(-100.0),
+        replay_expected_bps: Some(10.0),
+        completed_calls: 5,
+        failed_calls: 3,
+        recent_actions: 6,
+        refusals_by_code: BTreeMap::from([("price_above_max".into(), 3)]),
+        ..StrategyHealth::default()
+    };
+    let start = 1_000_000;
+    let mut observe = |health: &StrategyHealth, now, phase, decision_spent| {
+        let fired = engine.observe(&Observation {
+            now,
+            minute: 600,
+            open_minute: 555,
+            phase,
+            held: &[],
+            fills: 0,
+            ranking: &[],
+            ranked_at: 0,
+            decision_spent,
+            research_budget_left: false,
+            requests_queued: 0,
+            rankers: &[],
+            after_close_due: false,
+            review_running: false,
+            strategy_active: true,
+            strategy_supervision: true,
+            strategy_accepted: true,
+            strategy_health: Some(health),
+            strategy_fills: 0,
+            regime: None,
+        });
+        while engine.next().is_some() {}
+        fired
+            .into_iter()
+            .filter(|trigger| trigger.kind == TriggerKind::StrategyHealth)
+            .map(|trigger| trigger.reason)
+            .collect::<Vec<_>>()
+    };
+    const RUNNING_REASONS: [&str; 5] =
+        ["idle", "losing", "below_expectation", "failing", "refusals"];
+    for phase in [Phase::PreOpen, Phase::Closed, Phase::Sealed] {
+        assert!(observe(&health, start, phase, 0.0).is_empty());
+    }
+    assert!(observe(&health, start, Phase::Open, 1.0).is_empty());
+    assert_eq!(observe(&health, start, Phase::Open, 0.99), RUNNING_REASONS);
+
+    let mut fallback = StrategyHealth {
+        active_basis: HealthBasis::Fallback,
+        eligible_strategy_id: Some("eligible".into()),
+        ..StrategyHealth::default()
+    };
+    assert!(observe(&fallback, start + 1, Phase::Closed, 0.0).is_empty());
+    assert!(observe(&fallback, start + 1, Phase::Open, 1.0).is_empty());
+    assert_eq!(
+        observe(&fallback, start + 1, Phase::Open, 0.0),
+        ["fallback_while_eligible"]
+    );
+    assert!(observe(&health, start + cooldown - 1, Phase::Open, 0.0).is_empty());
+    assert!(observe(&fallback, start + cooldown, Phase::Open, 0.0).is_empty());
+    assert_eq!(
+        observe(&health, start + cooldown, Phase::Open, 0.0),
+        RUNNING_REASONS
+    );
+
+    fallback.active_basis = HealthBasis::Blocked;
+    assert_eq!(
+        observe(&fallback, start + cooldown + 1, Phase::Open, 0.0),
+        ["fallback_while_eligible"]
+    );
+    fallback.active_basis = HealthBasis::StoodDown;
+    assert!(observe(&fallback, start + 2 * cooldown + 1, Phase::Open, 0.0).is_empty());
+
+    health.session_net_pnl_bps = Some(0.0);
+    health.replay_expected_bps = None;
+    health.fresh_prospects = false;
+    health.completed_calls = 4;
+    health.failed_calls = 4;
+    health.recent_actions = 4;
+    health.cash_drawdown_bps = Some(150.0);
+    assert_eq!(
+        observe(&health, start + 2 * cooldown + 1, Phase::PreClose, 0.0),
+        ["losing"]
+    );
 }

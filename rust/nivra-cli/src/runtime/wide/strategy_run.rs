@@ -19,7 +19,10 @@ use crate::runtime::strategy_library::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+mod health;
 mod latency;
+use health::{CallOutcome, HealthRun, Tracker};
+pub(crate) use health::{HealthBasis, StrategyHealth};
 use std::collections::BTreeMap;
 
 /// How often the library is read again, so a pin, disable or new entry takes
@@ -91,12 +94,19 @@ pub(crate) fn outcome_counts(db: &Connection, strategy_id: &str) -> BTreeMap<Str
         .collect()
 }
 
+struct Resolution {
+    active: Option<Active>,
+    reason: Option<&'static str>,
+    eligible_strategy_id: Option<String>,
+}
+
 struct Active {
     running: Running,
     run_id: String,
     source: Vec<u8>,
     top_n: usize,
     screen: Option<Screen>,
+    replay_return_bps: Option<f64>,
 }
 
 /// One scan's state, frozen for a call: the ranked prospects, the depth
@@ -185,6 +195,9 @@ pub(super) struct StrategyRun {
     /// Why no accepted version runs: no active entry, a build mismatch, a
     /// stand-down or a library read failure. Set beside a fallback too.
     blocked: Option<&'static str>,
+    worker_blocked: Option<&'static str>,
+    eligible_strategy_id: Option<String>,
+    health: Tracker,
     in_flight: Option<InFlight>,
     /// The failure last journaled, so a repeating one is written once.
     last_failure: Option<String>,
@@ -212,6 +225,9 @@ impl StrategyRun {
             choice_revision: None,
             switch_requested_at: None,
             blocked: None,
+            worker_blocked: None,
+            eligible_strategy_id: None,
+            health: Tracker::default(),
             in_flight: None,
             last_failure: None,
             calls: 0,
@@ -244,11 +260,15 @@ impl StrategyRun {
         }
     }
 
-    fn resolve(&self) -> Result<(Option<Active>, Option<&'static str>)> {
+    fn resolve(&self) -> Result<Resolution> {
         let choice = choice::choose(&self.library, &self.policy)?;
+        let eligible_strategy_id = choice
+            .eligible_id(&self.library, &self.policy)
+            .map(str::to_owned);
         let active = match choice.running {
             Some(running) => Some(Active {
                 top_n: running.top_n()?,
+                replay_return_bps: health::replay_return_bps(&running),
                 screen: Screen::parse(running.params())?,
                 run_id: running.run_id(),
                 source: match &running {
@@ -259,7 +279,11 @@ impl StrategyRun {
             }),
             None => None,
         };
-        Ok((active, choice.reason))
+        Ok(Resolution {
+            active,
+            reason: choice.reason,
+            eligible_strategy_id,
+        })
     }
 
     fn prune_known(&mut self) {
@@ -335,13 +359,22 @@ impl StrategyRun {
             self.resolved_at = Some(now);
             let previous = self.active.take();
             self.blocked = None;
+            self.eligible_strategy_id = None;
             self.choice_revision = None;
             match self
                 .library
                 .choice_revision()
                 .and_then(|revision| self.resolve().map(|resolved| (revision, resolved)))
             {
-                Ok((revision, (active, reason))) => {
+                Ok((
+                    revision,
+                    Resolution {
+                        active,
+                        reason,
+                        eligible_strategy_id,
+                    },
+                )) => {
+                    self.eligible_strategy_id = eligible_strategy_id;
                     self.choice_revision = Some(revision);
                     let quiet = matches!(
                         reason,
@@ -360,6 +393,8 @@ impl StrategyRun {
                 }
             }
             if previous.as_ref().map(|active| active.run_id.as_str()) != self.desired_id() {
+                self.health.activate(now);
+                self.worker_blocked = None;
                 self.switch_requested_at = self.active.as_ref().map(|_| now);
                 if self.has_call() {
                     self.record_revoked(db, now)?;
@@ -393,7 +428,7 @@ impl StrategyRun {
             }
             self.prune_known();
         }
-        let _ = self.host.advance_activation(now);
+        self.worker_blocked = self.host.advance_activation(now).err();
         if self
             .in_flight
             .as_ref()
@@ -426,6 +461,7 @@ impl StrategyRun {
             }
             Ok(false) => Ok(None),
             Err(reason) => {
+                self.worker_blocked = Some(reason);
                 let run_id = self
                     .host
                     .live_key()
@@ -474,6 +510,16 @@ impl StrategyRun {
             return;
         };
         let strategy_id = meta.run_id.clone();
+        if self.desired_id() == Some(strategy_id.as_str())
+            && let Some(oldest_stamp) = frozen
+                .prospects
+                .iter()
+                .filter_map(|prospect| frozen.quotes.get(&prospect.key))
+                .map(|quote| quote.source.min(quote.receipt))
+                .max()
+        {
+            self.health.prospect(frozen.at_ms, oldest_stamp);
+        }
         let mut flight = InFlight {
             worker_key: live_key,
             activation_generation: self.host.activation_generation(),
@@ -565,11 +611,17 @@ impl StrategyRun {
                 flight.timing.outcome = "no_actions".into();
                 flight.timing.record(db)?;
                 self.last_failure = None;
+                if self.desired_id() == Some(flight.strategy_id.as_str()) {
+                    self.health.completed(CallOutcome::returned(Vec::new()));
+                }
             }
             Ok(actions) => {
                 match self.apply_cycle(StrategyBook { db, c, p, scan }, &mut flight, actions, clock)
                 {
-                    Ok(()) => self.last_failure = None,
+                    Ok(results) => {
+                        self.last_failure = None;
+                        self.health.completed(CallOutcome::returned(results));
+                    }
                     Err(error) => self.record_failed_call(
                         db,
                         c,
@@ -594,6 +646,11 @@ impl StrategyRun {
     ) -> Result<()> {
         flight.timing.outcome = reason.to_owned();
         flight.timing.record(db)?;
+        if reason != "strategy_activation_stale"
+            && self.desired_id() == Some(flight.strategy_id.as_str())
+        {
+            self.health.completed(CallOutcome::Failed);
+        }
         self.fail(db, c, now, Some(&flight.strategy_id), reason)
     }
 
@@ -650,6 +707,24 @@ impl StrategyRun {
             json!({"stage":"strategy","strategy_id":strategy_id,"reason":reason,"stderr_tail":stderr_tail}),
         );
         Ok(())
+    }
+
+    pub(super) fn health(
+        &mut self,
+        p: &Portfolio,
+        now: i64,
+        session: std::ops::Range<i64>,
+    ) -> StrategyHealth {
+        self.health.snapshot(
+            HealthRun {
+                active: self.active.as_ref(),
+                blocked_reason: self.worker_blocked.or(self.blocked),
+                eligible_strategy_id: self.eligible_strategy_id.as_deref(),
+                portfolio: p,
+                session,
+            },
+            now,
+        )
     }
 
     /// The dashboard's view: the active entry, the counters, and the latest
@@ -710,7 +785,7 @@ impl StrategyRun {
         flight: &mut InFlight,
         actions: Vec<Value>,
         clock: &dyn Fn() -> i64,
-    ) -> Result<()> {
+    ) -> Result<Vec<ActionResult>> {
         let StrategyBook { db, c, p, scan } = book;
         let strategy_id = &flight.strategy_id;
         let observed_at = flight.observed_at;
@@ -824,7 +899,7 @@ impl StrategyRun {
             }
         }
         *p = next;
-        Ok(())
+        Ok(results)
     }
 }
 

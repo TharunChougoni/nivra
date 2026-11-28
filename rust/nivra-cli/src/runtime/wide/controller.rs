@@ -652,6 +652,11 @@ impl Controller {
                 minute_count: inputs.minute_count,
             })
         });
+        let strategy_health = self.strategy.as_mut().and_then(|run| {
+            let open = session_minute_ms(&self.config, self.config.execution.session_start_minute)?;
+            let close = session_end_ms(&self.config)?;
+            Some(run.health(&self.p, t.now, open..close))
+        });
         let cycle = super::super::agent::service::Cycle {
             c: &self.config,
             cfg,
@@ -672,6 +677,7 @@ impl Controller {
                 .enabled
                 .then(|| self.index_context.json()),
             regime,
+            strategy_health: strategy_health.as_ref(),
             spot: super::super::options::spot_quote(&self.index_context, &self.config, t.now),
         };
         match agent.tick(&cycle, &mut self.db) {
