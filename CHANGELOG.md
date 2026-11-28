@@ -1,6 +1,6 @@
 # Source snapshot
 
-## Unreleased
+## 0.19.0 — 2026-11-28
 
 The book splits its capital into a cash sleeve for the stock strategies and
 an options sleeve for Nifty options, and the runtime sizes every buy from its
