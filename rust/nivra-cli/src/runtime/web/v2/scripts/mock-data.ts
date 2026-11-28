@@ -1371,7 +1371,14 @@ export function createMockData(
         stopped: false,
         halted: false,
         closed: true,
-        initial_allocation: d2(capital),
+        allocations: [
+          {
+            at_ms: 0,
+            sleeve: "cash",
+            amount: d2(capital),
+            reason: "config_sleeves",
+          },
+        ],
       },
     });
   }
@@ -2397,7 +2404,38 @@ function portfolioAt(data: MockData, now: number): PortfolioResponse {
     capital: d2(data.capital),
     cash: d2(b.cash),
     equity: d2(b.equity),
-    initial_allocation: d2(data.capital),
+    allocations: [
+      {
+        at_ms: 0,
+        sleeve: "cash",
+        amount: d2(data.capital / 2),
+        reason: "config_sleeves",
+      },
+      {
+        at_ms: 0,
+        sleeve: "options",
+        amount: d2(data.capital / 2),
+        reason: "config_sleeves",
+      },
+    ],
+    sleeves: [
+      {
+        sleeve: "cash",
+        capital: d2(data.capital / 2),
+        cash: d2(b.cash - data.capital / 2),
+        equity: d2(b.equity - data.capital / 2),
+        pnl: d2(b.equity - data.capital),
+        open_positions: positionsAt(data, now).length,
+      },
+      {
+        sleeve: "options",
+        capital: d2(data.capital / 2),
+        cash: d2(data.capital / 2),
+        equity: d2(data.capital / 2),
+        pnl: d2(0),
+        open_positions: 0,
+      },
+    ],
     high_water: d2(dd.high),
     stopped: false,
     halted: false,

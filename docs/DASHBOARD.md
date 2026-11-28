@@ -132,8 +132,8 @@ All routes live in `rust/nivra-cli/src/runtime/web/` and return JSON with
 | Route | Returns |
 |---|---|
 | `GET /api/v1/meta` | Version, paper or live mode, account alias, broker roles, dashboard limits and capability names. |
-| `GET /api/v1/summary` | Session phase, identities, readiness, equity, cash, counts, feed and alerts, plus `revisions`. Built once per trading loop. |
-| `GET /api/v1/portfolio` | Cash, capital, marks, positions, fees and book state. |
+| `GET /api/v1/summary` | Session phase, identities, readiness, equity, cash, `sleeves`, counts, feed and alerts, plus `revisions`. Built once per trading loop. |
+| `GET /api/v1/portfolio` | Cash, capital, the allocation ledger, `sleeves`, marks, positions, fees and book state. |
 | `GET /api/v1/fills` | Simulated fills, newest first. |
 | `GET /api/v1/plans?date=` | Recorded plan actions, execution verdicts and planner status for the loaded session. |
 | `GET /api/v1/scanner?segment=prospects\|missing\|screens` | Scanner rows, coverage and reasons for missing instruments. |
@@ -151,6 +151,11 @@ All routes live in `rust/nivra-cli/src/runtime/web/` and return JSON with
 | `GET /api/v1/events` | The event stream. `?poll=1&after=N` is the long-poll fallback. |
 | `GET /api/v1/backtest/example` | A labelled synthetic backtest input. |
 | `POST /api/v1/backtest` | Runs an offline replay. Returns `409 backtest_paused_for_trading` unless the research-only dashboard serves it. |
+
+`sleeves` lists each capital sleeve (`cash`, `options`) with its allocated
+`capital`, `cash`, marked `equity`, `pnl` and `open_positions`. The Paper
+account panel on the overview shows them as "Stock strategies" and "Nifty
+options".
 
 `meta`, `health` and the lane routes support ETag revalidation. Financial
 projections are `no-store` or `private, no-cache`.

@@ -10,6 +10,7 @@ pub(crate) fn portfolio(head: &str, view: &Arc<Mutex<serde_json::Value>>) -> Res
     }
     let mut body = envelope(&view);
     body["capital"] = view["capital"].clone();
+    body["sleeves"] = view["sleeves"].clone();
     body["policy"] = p["policy"].clone();
     body["costs"] = p["costs"].clone();
     body["model_led"] = p["model_led"].clone();

@@ -242,6 +242,14 @@ export function plansFor(
   if (record?.current !== true || state?.plansState === "error") return null;
   return state?.plans || null;
 }
+/** Total capital in an allocation ledger, or null when none is recorded. */
+export function allocated(entries?: { amount?: unknown }[] | null) {
+  if (!Array.isArray(entries) || !entries.length) return null;
+  const amounts = entries.map((e) => numeric(e?.amount));
+  return amounts.every((a) => a !== null)
+    ? amounts.reduce((sum: number, a) => sum + (a as number), 0)
+    : null;
+}
 export function finance(r?: SessionRecord | null) {
   const p = r?.portfolio;
   const positionsKnown =
@@ -254,7 +262,7 @@ export function finance(r?: SessionRecord | null) {
       : [];
   const fills = Array.isArray(p?.fills) ? p.fills : null;
   const cash = numeric(p?.cash) ?? numeric(r?.cash);
-  const capital = numeric(r?.capital) ?? numeric(p?.initial_allocation);
+  const capital = numeric(r?.capital) ?? allocated(p?.allocations);
   const declaredEquity = numeric(p?.equity);
   const marked =
     positionsKnown &&

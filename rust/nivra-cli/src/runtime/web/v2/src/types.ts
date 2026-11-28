@@ -88,11 +88,27 @@ export interface Position {
   decision_id?: string | null;
   exit_intent?: { target?: Decimal; stop?: Decimal };
 }
+/** One capital sleeve's derived state: what it was given and what it holds. */
+export interface SleeveView {
+  sleeve: "cash" | "options" | string;
+  capital: Decimal;
+  cash: Decimal;
+  equity: Decimal;
+  pnl: Decimal;
+  open_positions: number;
+}
+export interface Allocation {
+  at_ms: number;
+  sleeve: string;
+  amount: Decimal;
+  reason: string;
+}
 export interface PortfolioResponse extends Envelope {
   capital?: Decimal | null;
+  sleeves?: SleeveView[] | null;
   cash?: Decimal | null;
   equity?: Decimal | null;
-  initial_allocation?: Decimal;
+  allocations?: Allocation[];
   high_water?: Decimal;
   stopped?: boolean | null;
   halted?: boolean | null;
@@ -280,6 +296,7 @@ export interface SummaryResponse extends Envelope {
   entry_status?: string | null;
   model_led?: boolean | null;
   capital?: Decimal | null;
+  sleeves?: SleeveView[] | null;
   cash?: Decimal | null;
   equity?: Decimal | null;
   counts?: {

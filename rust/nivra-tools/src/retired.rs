@@ -23,7 +23,7 @@ struct Rule {
     bounded: bool,
 }
 
-const RULES: [Rule; 9] = [
+const RULES: [Rule; 11] = [
     Rule {
         name: "luna",
         needles: &["luna"],
@@ -91,6 +91,18 @@ const RULES: [Rule; 9] = [
     Rule {
         name: "harness_run",
         needles: &["harness run", "harness_run", "harness-run"],
+        bounded: false,
+    },
+    // Book capital is the allocation ledger's sum (capital sleeves).
+    Rule {
+        name: "initial_allocation",
+        needles: &["initial_allocation"],
+        bounded: false,
+    },
+    // The sleeve policy sizes strategy buys; `min_order_rupees` is unrelated.
+    Rule {
+        name: "order_rupees",
+        needles: &["`order_rupees`", "\"order_rupees\"", "'order_rupees'"],
         bounded: false,
     },
 ];

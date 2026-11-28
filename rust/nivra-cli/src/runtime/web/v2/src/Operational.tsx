@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type {
+  SleeveView,
   AlertTransportStatus,
   CalendarCoverage,
   ControllerLiveness,
@@ -8,8 +9,16 @@ import type {
   PortfolioResponse,
   SummaryResponse,
 } from "./types";
-import { amount, count, datetime, projectedStatus } from "./data";
-import { plain } from "./labels";
+import {
+  amount,
+  count,
+  datetime,
+  numeric,
+  projectedStatus,
+  signed,
+  tone,
+} from "./data";
+import { plain, sleeveLabel } from "./labels";
 import { Empty, Facts, KpiStrip, Notice, Panel, Status, Table } from "./ui";
 import {
   ageLabel,
@@ -361,6 +370,57 @@ function AlertPanel({
     </Panel>
   );
 }
+/** Each sleeve's money: what it was given, its cash, its marked value and its gain. */
+export function SleeveTable({ sleeves }: { sleeves: SleeveView[] }) {
+  return (
+    <Table<SleeveView>
+      compact
+      getKey={(row) => row.sleeve}
+      rows={sleeves}
+      columns={[
+        {
+          key: "sleeve",
+          label: "Money for",
+          render: (r) => sleeveLabel(r.sleeve),
+        },
+        {
+          key: "capital",
+          label: "Given",
+          num: true,
+          render: (r) => amount(r.capital),
+        },
+        {
+          key: "cash",
+          label: "Cash",
+          num: true,
+          render: (r) => amount(r.cash),
+        },
+        {
+          key: "equity",
+          label: "Value now",
+          num: true,
+          render: (r) => amount(r.equity),
+        },
+        {
+          key: "pnl",
+          label: "Gain or loss",
+          num: true,
+          render: (r) => (
+            <span className={tone(numeric(r.pnl)) ?? undefined}>
+              {signed(numeric(r.pnl))}
+            </span>
+          ),
+        },
+        {
+          key: "open_positions",
+          label: "Open",
+          num: true,
+          render: (r) => count(r.open_positions),
+        },
+      ]}
+    />
+  );
+}
 export function BookContinuity({
   summary,
   portfolio,
@@ -370,6 +430,7 @@ export function BookContinuity({
 }) {
   const state = bookState(summary, portfolio);
   const stopped = state === "Stopped" || state === "Halted";
+  const sleeves = summary?.sleeves ?? portfolio?.sleeves ?? [];
   return (
     <Panel title="Paper account">
       <Facts
@@ -379,6 +440,7 @@ export function BookContinuity({
           ["Capital", amount(summary?.capital ?? portfolio?.capital)],
         ]}
       />
+      {sleeves.length > 0 && <SleeveTable sleeves={sleeves} />}
       {stopped && (
         <Notice error>The paper book is {state.toLowerCase()}.</Notice>
       )}

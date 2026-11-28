@@ -29,6 +29,14 @@ export const LABELS: Record<string, string> = {
   gate_declined: "Declined",
 };
 
+/** Capital sleeves, in the owner's words. */
+export const SLEEVE_LABELS: Record<string, string> = {
+  cash: "Stock strategies",
+  options: "Nifty options",
+};
+export const sleeveLabel = (sleeve: unknown) =>
+  typeof sleeve === "string" ? (SLEEVE_LABELS[sleeve] ?? plain(sleeve)) : "—";
+
 /** Lane tool names. */
 export const TOOL_LABELS: Record<string, string> = {
   session: "Session",

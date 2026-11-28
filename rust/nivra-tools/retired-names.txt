@@ -20,6 +20,7 @@
 9	fact_digest	rust/nivra-tools/src/retired.rs
 1	harness_run	rust/nivra-cli/src/runtime/web_tools/mod.rs
 4	harness_run	rust/nivra-tools/src/retired.rs
+2	initial_allocation	rust/nivra-tools/src/retired.rs
 1	luna	rust/nivra-cli/src/runtime/agent/tests.rs
 1	luna	rust/nivra-cli/src/runtime/discovery.rs
 1	luna	rust/nivra-cli/src/runtime/discovery/projection.rs
@@ -44,6 +45,7 @@
 1	orchestrator	rust/nivra-sandbox/src/lib.rs
 11	orchestrator	rust/nivra-store/src/strategy_results.rs
 2	orchestrator	rust/nivra-tools/src/retired.rs
+3	order_rupees	rust/nivra-tools/src/retired.rs
 1	owner_lane	rust/nivra-cli/src/runtime/agent/paper.rs
 1	owner_lane	rust/nivra-cli/src/runtime/experiment_ledger/research.rs
 1	owner_lane	rust/nivra-cli/src/runtime/harness.rs

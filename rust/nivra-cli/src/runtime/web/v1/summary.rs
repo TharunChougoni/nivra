@@ -272,6 +272,7 @@ pub(crate) fn build_summary_envelope(view: &serde_json::Value) -> serde_json::Va
     body["entry_status"] = view["entry_status"].clone();
     body["model_led"] = view["model_led"].clone();
     body["capital"] = view["capital"].clone();
+    body["sleeves"] = view["sleeves"].clone();
     body["cash"] = portfolio["cash"].clone();
     body["equity"] = portfolio_equity(portfolio)
         .map(serde_json::Value::String)
