@@ -222,8 +222,13 @@ review. The block is operational: it never enters the planner policy hash.
 | `family_stall` | 3 | 1 to 20 | Scored non-improvements that close a family |
 | `idle_poll_ms` | 300000 | 10000 to 3600000 | How long the controller waits before asking a waiting loop again |
 | `skill_review` | `true` | | Review learned skill drafts with a review-lane turn |
-| `forward_sessions_paper` | 1 | 1 to 60 | Forward shadow sessions a paper candidate will need (forward stage) |
-| `forward_sessions_live` | 10 | 1 to 60 | Forward shadow sessions a live candidate would need; live needs a separate owner mandate |
+| `forward_sessions_paper` | 1 | 1 to 60 | Exchange sessions in a paper forward test. The result is advisory. |
+| `forward_sessions_live` | 10 | 1 to 60 | Documented live forward window. The paper controller uses `forward_sessions_paper`. |
+
+A forward test runs when `autoresearch.enabled` and
+`strategy_execution.enabled` are both true. The paper cash sleeve provides
+its funding and sizing policy. Start the controller before the session opens
+to admit that day's candidate.
 
 The research lane's own `daily_calls` and `daily_cost_usd` also cap each
 autonomous turn on the book's day. Install `nivra-research-loop.service` and

@@ -16,6 +16,11 @@
   folds and one sealed confirmation of a frozen finalist. The research and
   ordinary compute lanes share a slot. Paper registration still follows
   accepted, reviewed quote replay.
+- Run one reviewed strategy in a separate forward-test book, using the same
+  market receipts as the active paper strategy. The decision brief,
+  `shadow_status`, and the Strategies dashboard show the evidence.
+- Protect inherited positions across strategy switches. The opening strategy
+  stays with the position until it is flat.
 
 ### Fixed
 
@@ -39,6 +44,9 @@
 ### Upgrade an installed paper host
 
 1. Install a build that includes these changes and refresh the agent prompts.
+   The research database adds the forward-test tables when the controller opens
+   it; open paper positions recover their opening strategy from the fill
+   ledger, and old `bars-v1` campaign records remain in `research.sqlite`.
    During an off-hours window, run `nivra archive init --config PAPER_CONFIG`
    to upgrade TimescaleDB to schema 2, then run
    `nivra archive check --config PAPER_CONFIG`.
@@ -49,23 +57,26 @@
    `autoresearch.campaign.name` to a fresh name such as `bars-v2`, remove the
    two day-count settings from the old campaign block, set
    `autoresearch.campaign.embargo_sessions` to 1 or to the declared label
-   horizon, and confirm the gate and research lanes are configured. Health
-   triggers use defaults when `strategy_execution.enabled` and the decision
-   lane are configured (`agent.triggers.decision.strategy_health` overrides).
-   Run `nivra planner config-check --planner NEW_PLANNER --session SESSION` and
+   horizon, confirm `strategy_execution.enabled`, `autoresearch.enabled`,
+   `autoresearch.forward_sessions_paper` (1), and the gate and research lanes
+   are configured. Health triggers use defaults when
+   `strategy_execution.enabled` and the decision lane are configured
+   (`agent.triggers.decision.strategy_health` overrides). Run
+   `nivra planner config-check --planner NEW_PLANNER --session SESSION` and
    apply it using
    [the open-book procedure](docs/OPERATIONS.md#change-the-planner-policy) or
    `config-apply` for a closed book.
-4. Restart `nivra-research-loop.timer` and the paper service with the
-   fresh-book config. During the session, check for `strategy_health` in the
-   dashboard's lane history or in `model/agent/triggers.ndjson`. After the
-   session, run
+4. Replay any strategy version you want to use on the updated engine, then
+   restart `nivra-research-loop.timer` and the paper service before the next
+   exchange session with the fresh-book config. During the session, check for
+   `strategy_health` in the dashboard's lane history or in
+   `model/agent/triggers.ndjson`, and `strategy_execution.forward_shadow` in
+   `/api/v1/summary`. After the session, run
    `nivra archive option-coverage --config PAPER_CONFIG --session YYYY-MM-DD`,
    and check `research_loop.campaign`, `research_loop.holdout`, and
    `research_loop.options` in `/api/v1/summary` or
-   `nivra research-loop --config PAPER_CONFIG status`. Old `bars-v1` campaign
-   records remain in the research store, and the options stage reports
-   `option_tape_unavailable` until the captured evidence supports replay.
+   `nivra research-loop --config PAPER_CONFIG status`. The options stage
+   reports `option_tape_unavailable` until the captured evidence supports replay.
 
 ## 0.20.1 — 2026-11-28
 

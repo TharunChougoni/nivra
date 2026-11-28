@@ -166,6 +166,33 @@ Passing quote coverage, paired after-cost P&L, existing acceptance thresholds
 and exact-source review permits direct paper registration. The decision lane
 still chooses which registered version runs.
 
+**Forward test.** Before the configured session open, the controller can
+start one reviewed candidate beside the strategy chosen for the paper book.
+It takes the newest eligible library entry that differs from that choice and
+has no previous forward window. Keep an existing strategy selected when you
+want a newly registered version to run in shadow first. The controller admits
+the candidate in the last 30 seconds before the configured open. It pins the
+candidate source, params, execution versions, prospect cutoff, fees, and
+cash sleeve policy before the first scan. `forward_sessions_paper` sets the
+number of exchange sessions. The default is one.
+
+The shadow gets the controller's frozen prospects and original quote receipts.
+It uses an independent virtual book funded by the configured cash sleeve and
+its own quote depth. Its worker runs at lower priority. Busy workers skip
+scans. A restart during a session, a disabled candidate, or a receipt gap
+leaves an inconclusive result. The research store retains each session's
+virtual book, action counts, recent action details, coverage, latency, and
+failures.
+
+Use `shadow_status` with a candidate's strategy ID, or pass null to see the
+current or latest window. During the window the tool shows coverage and
+failures. After the window, the decision brief and dashboard can show the
+paper and shadow results side by side. A comparable result requires at least
+95% coverage, matched scans, equal cash capital, and both books flat in the
+one-session window. The decision lane uses the report as evidence and
+selects with `strategy_select`. `forward_sessions_live` documents a separate
+live policy. Nivra trades on paper.
+
 **Cost.** The owner measured about USD 0.08 for a six-call research turn on
 the paper host, so the default day of 60 turns and 200 calls stays inside
 USD 8. Each turn still reserves its configured worst case first.

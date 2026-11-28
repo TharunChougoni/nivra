@@ -66,3 +66,20 @@ accepted version in the library.
 - End with the strategies that passed, the one you would run today and why,
   and what is still uncertain. The decision lane selects the strategy. You
   do not.
+
+
+## Use a forward test
+
+A passed quote replay registers a paper strategy immediately. The controller
+can run one eligible version beside the selected paper strategy before the
+next window opens. It uses the same prospects and quote receipts with a
+separate cash book. Use `shadow_status` with the strategy ID to read coverage,
+failures, and the scheduled end. Use a completed comparable result as
+evidence for `strategy_select`. Prefer matched scans and compare profit after
+fees. A one-session result describes that session.
+
+A position stays attributed to the strategy that opened it. The replacement
+strategy cannot trade it or revise its exit while it remains open. Existing
+protection keeps running. The decision lane can repair the exit or close the
+position through its regular plan tools, including when the old strategy left
+an exit that needs review.
