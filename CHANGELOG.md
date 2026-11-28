@@ -8,6 +8,8 @@
   strategy is idle despite fresh prospects, losing, lagging replay, failing,
   or often refused. The lane can also recheck a blocked executor or fallback
   when an eligible strategy exists.
+- Capture the verified Nifty option master, spot, chain touches and gate
+  verdicts in the market archive.
 
 ### Fixed
 
@@ -30,17 +32,26 @@
 
 ### Upgrade an installed paper host
 
-Install the matching binary and agent prompts, then restart
-`nivra-research-loop.timer` (or `nivra-paper.service` when running) with the
-fresh-book config. Health triggers use defaults when
-`strategy_execution.enabled` and the decision lane are configured. For custom
-thresholds, keep a `*.pre-strategy-health` copy of the planner, edit
-`agent.triggers.decision.strategy_health` in a new file, and run
-`nivra planner config-check --planner NEW_PLANNER --session SESSION`. Apply it
-using [the open-book procedure](docs/OPERATIONS.md#change-the-planner-policy)
-or let the next rollover bind it for a closed book. After a threshold is
-reached during the session, check for `strategy_health` in the dashboard's
-lane history or in `model/agent/triggers.ndjson`.
+1. Install a build that includes these changes and refresh the agent prompts.
+   During an off-hours window, run `nivra archive init --config PAPER_CONFIG`
+   to upgrade TimescaleDB to schema 2, then run
+   `nivra archive check --config PAPER_CONFIG`.
+2. Confirm the effective paper config has `nifty_options.enabled`,
+   `market_archive`, `sleeves.options`, and `paper_costs_by_segment.NSE_FO`.
+   Confirm the planner configures the gate lane if you need gate coverage.
+3. Health triggers use defaults when `strategy_execution.enabled` and the
+   decision lane are configured. For custom thresholds, or any other planner
+   edit, keep a `*.pre-<reason>` copy of the planner, edit
+   `agent.triggers.decision.strategy_health` in a new file, run
+   `nivra planner config-check --planner NEW_PLANNER --session SESSION`, and
+   apply it using
+   [the open-book procedure](docs/OPERATIONS.md#change-the-planner-policy) or
+   let the next rollover bind it for a closed book.
+4. Restart the `nivra-research-loop.timer` and paper service with the
+   fresh-book config. During the session, check for `strategy_health` in the
+   dashboard's lane history or in `model/agent/triggers.ndjson`. After the
+   session, run
+   `nivra archive option-coverage --config PAPER_CONFIG --session YYYY-MM-DD`.
 
 ## 0.20.1 — 2026-11-28
 

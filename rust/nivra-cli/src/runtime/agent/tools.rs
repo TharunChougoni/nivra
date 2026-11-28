@@ -276,6 +276,8 @@ pub(crate) struct Verdict {
     /// Validated prospects, best first; empty unless `escalate`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prospects: Vec<Prospect>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dropped: Vec<Value>,
 }
 
 /// Prospects one escalation may carry.
@@ -366,11 +368,18 @@ pub(crate) fn validate_prospects(
                 }
             },
         };
-        dropped.push(
-            json!({"instrument_key":key.chars().take(64).collect::<String>(),"reason":reason}),
-        );
+        dropped.push(dropped_prospect(key, reason));
     }
     (kept, dropped)
+}
+
+fn dropped_prospect(key: &str, reason: &str) -> Value {
+    let key = key
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(64)
+        .collect::<String>();
+    json!({"instrument_key":crate::runtime::transcript::redact(&json!(key)), "reason":reason})
 }
 
 impl LaneHost<'_> {
@@ -392,7 +401,17 @@ impl LaneHost<'_> {
         let (prospects, dropped) = if args.escalate {
             validate_prospects(&args.prospects, self.options)
         } else {
-            (Vec::new(), Vec::new())
+            let dropped = args
+                .prospects
+                .iter()
+                .map(|entry| {
+                    dropped_prospect(
+                        entry["instrument_key"].as_str().unwrap_or_default(),
+                        "gate_declined",
+                    )
+                })
+                .collect();
+            (Vec::new(), dropped)
         };
         let verdict = Verdict {
             escalate: args.escalate,
@@ -401,6 +420,7 @@ impl LaneHost<'_> {
                 .unwrap_or_default()
                 .to_owned(),
             prospects,
+            dropped: dropped.clone(),
         };
         self.verdict = Some(verdict.clone());
         let kept: Vec<&str> = verdict

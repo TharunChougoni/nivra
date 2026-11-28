@@ -316,3 +316,30 @@ nivra archive export-daily-history --config PAPER_CONFIG NEW_DIRECTORY \
 
 The export writes dated closes and an inventory of shard hashes. See
 [research](RESEARCH.md) for how the offline analysis runtime uses them.
+
+
+## Nifty option tape
+
+With `nifty_options.enabled`, the controller records the dated, bounded Nifty
+contract master and the two source hashes from the contract API and BOD join.
+Each chain poll records its original request and receipt times, the latest
+fresh Nifty spot with its own clock, and the bid, ask, depth, LTP, and open
+interest returned for each requested contract. Empty or invalid depth remains
+visible as a missing touch. The archive also records option reads for held
+positions when they supply the scanner.
+
+Each gate turn records the exact option chain and triggers, the screen
+thresholds, the original quotes for the displayed candidates, the ranked
+verdict, and the keys and reason codes for dropped prospects. A failed gate
+turn has no verdict. A completed gate turn's time identifies its input here.
+The decision lane's choices continue to appear in the paper decision journal.
+
+The controller puts structured evidence on a bounded queue. The existing
+archive worker encodes it and writes one row per poll, with one observation
+per requested contract inside the row. Failed option reads and queue overflow
+leave gap records. A process crash can lose queued option evidence. The
+research stage requires a continuous poll window around each simulated trade.
+
+Run `nivra archive option-coverage --config PAPER_CONFIG --session YYYY-MM-DD`
+to see master, poll, quote, missing touch, gate, and gap counts. Option evidence
+uses the archive's `option_evidence` table.

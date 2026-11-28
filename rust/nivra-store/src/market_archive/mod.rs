@@ -3,6 +3,7 @@
 mod backtest;
 mod history;
 pub use backtest::{Bar, BarUnit, BarWindow, ist_midnight, read_bar_batches};
+pub mod options;
 mod reader;
 mod writer;
 
@@ -29,7 +30,7 @@ use std::time::Duration;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 /// Advisory lock keys. Each guards one thing, so a long holder of one never
 /// blocks another: schema init, a history download pass, quote id ordering.
@@ -105,9 +106,14 @@ pub fn init(db: &mut Client) -> Result<()> {
     let version = tx.query_opt("SELECT version FROM schema_version WHERE singleton", &[])?;
     match version.as_ref().map(|row| row.get::<_, i32>(0)) {
         Some(SCHEMA_VERSION) => {}
+        Some(1) => {
+            tx.batch_execute(include_str!("options.sql"))?;
+            tx.execute("UPDATE schema_version SET version = $1", &[&SCHEMA_VERSION])?;
+        }
         Some(_) => return Err("archive_schema_version_unsupported".into()),
         None => {
             tx.batch_execute(include_str!("schema.sql"))?;
+            tx.batch_execute(include_str!("options.sql"))?;
             tx.execute(
                 "INSERT INTO schema_version (version) VALUES ($1)",
                 &[&SCHEMA_VERSION],

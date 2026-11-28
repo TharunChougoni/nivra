@@ -12,6 +12,7 @@ use super::triggers::{
     FoObservation, Observation, Phase, Ranked, Trigger, TriggerEngine, TriggerKind, ranker_registry,
 };
 use super::{AgentMode, AgentSettings, Lane};
+use crate::runtime::market_archive::options::{OptionWriter, spot as archive_spot};
 use crate::runtime::options::{SpotQuote, chain};
 use crate::runtime::planner::{self, Backend, PlannerConfig};
 use crate::runtime::wide::strategy_run::{self, SupervisionState};
@@ -20,6 +21,7 @@ use crate::runtime::{
 };
 use nivra_core::execution::{Instrument, Portfolio, Scanner};
 use nivra_core::feature_store::FeatureStore;
+use nivra_store::market_archive::options::{GateCandidate, GateObservation, OptionEvidence};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -109,6 +111,7 @@ pub(crate) struct Cycle<'a> {
     pub strategy_health: Option<&'a strategy_run::StrategyHealth>,
     /// Fresh Nifty spot when the option universe is enabled.
     pub spot: Option<SpotQuote>,
+    pub(in crate::runtime) option_archive: Option<&'a OptionWriter>,
 }
 
 /// F&O triggers the gate escalated, with its validated prospects; the next
@@ -138,6 +141,7 @@ struct Work {
     brief: Brief,
     context: TurnContext,
     paper_turn_id: Option<String>,
+    option_gate: Option<(i64, GateObservation)>,
     /// One research-loop step instead of a lane turn: today's calendar facts.
     research_loop: Option<(bool, bool, chrono::NaiveDate)>,
 }
@@ -152,6 +156,7 @@ struct Done {
     review: Option<String>,
     /// The gate's answer; `None` when the gate turn ended without one.
     verdict: Option<Verdict>,
+    option_gate: Option<(i64, GateObservation)>,
     error: Option<String>,
     /// The agent is restarting; the batch may run again from this time.
     retry_at_ms: Option<i64>,
@@ -263,6 +268,7 @@ fn run(runner: &mut LaneRunner<'_>, job: &mut Work) -> Done {
         paper_input: None,
         review: None,
         verdict: None,
+        option_gate: job.option_gate.take(),
         error: None,
         retry_at_ms: None,
         loop_report: None,
@@ -336,6 +342,9 @@ fn run(runner: &mut LaneRunner<'_>, job: &mut Work) -> Done {
             done.retry_at_ms = runner.agent.retry_at_ms();
         }
         done.error = Some(reason);
+    }
+    if let Some((_, observation)) = &mut done.option_gate {
+        observation.verdict = done.verdict.as_ref().map(|verdict| json!(verdict));
     }
     done
 }
@@ -630,6 +639,7 @@ impl LaneService {
                 brief: Brief::build(&facts, budget, Value::Null, &[]),
                 context,
                 paper_turn_id: None,
+                option_gate: None,
                 research_loop: Some(crate::runtime::autoresearch::cli::calendar(c, cycle.now)),
             },
         };
@@ -763,11 +773,20 @@ impl LaneService {
                 let Some((lane, triggers)) = self.engine.next() else {
                     return Ok(None);
                 };
-                (
-                    self.screen(c, lane, &triggers, spent)?,
-                    triggers,
-                    Vec::new(),
-                )
+                let screened = self.screen(c, lane, &triggers, spent)?;
+                if screened == Lane::Decision
+                    && triggers
+                        .iter()
+                        .all(|trigger| trigger.kind == TriggerKind::FoSignal)
+                    && let Some(writer) = cycle.option_archive
+                {
+                    writer.offer(
+                        c.session,
+                        cycle.now,
+                        crate::runtime::market_archive::options::gap("option_gate_bypassed"),
+                    );
+                }
+                (screened, triggers, Vec::new())
             }
         };
         if strategy_active && matches!(lane, Lane::Decision | Lane::Gate) {
@@ -947,6 +966,44 @@ impl LaneService {
         } else {
             None
         };
+        let option_gate = (lane == Lane::Gate).then(|| {
+            let settings = &self.engine.settings().fo;
+            let candidates = brief
+                .fo
+                .iter()
+                .flat_map(|chain| &chain.rows)
+                .filter_map(|row| {
+                    let quote = cycle
+                        .scanner
+                        .samples
+                        .get(&row.instrument_key)?
+                        .executable
+                        .clone()?;
+                    Some(GateCandidate {
+                        instrument_key: row.instrument_key.clone(),
+                        quote,
+                        offset: row.offset,
+                        spread_ticks: row.spread_ticks,
+                        depth_lots: row.depth_lots,
+                        round_trip_cost_bps: row.round_trip_cost_bps,
+                        tradable: settings.tradable(row),
+                    })
+                })
+                .collect();
+            let decision_spent = self.fraction(Lane::Decision, spent);
+            (
+                cycle.now,
+                GateObservation {
+                    spot: cycle.spot.as_ref().map(archive_spot),
+                    candidates,
+                    input: json!({
+                        "chain":brief.fo,"triggers":triggers,"settings":settings,
+                        "decision_spent":decision_spent,"thresholds":settings.bar(decision_spent),
+                    }),
+                    verdict: None,
+                },
+            )
+        });
         Ok(Some(Prepared {
             job: Job {
                 c: c.clone(),
@@ -957,6 +1014,7 @@ impl LaneService {
                     brief,
                     context,
                     paper_turn_id: claim.as_ref().map(paper::turn_id),
+                    option_gate,
                     research_loop: None,
                 },
             },
@@ -1028,10 +1086,15 @@ impl LaneService {
         })
     }
 
-    fn settle(&mut self, cycle: &Cycle<'_>, db: &mut Connection, done: Done) -> Result<()> {
+    fn settle(&mut self, cycle: &Cycle<'_>, db: &mut Connection, mut done: Done) -> Result<()> {
         let c = cycle.c;
         self.busy = None;
         self.preempt.store(false, Ordering::Release);
+        if let Some((at_ms, observation)) = done.option_gate.take()
+            && let Some(writer) = cycle.option_archive
+        {
+            writer.offer(c.session, at_ms, OptionEvidence::Gate(observation));
+        }
         if done.loop_report.is_some() || (done.triggers.is_empty() && done.error.is_some()) {
             // Back to back while it progresses; otherwise wait as it asked.
             let next = done
@@ -1206,6 +1269,7 @@ mod tests {
             regime: None,
             strategy_health: None,
             spot: None,
+            option_archive: None,
         };
 
         let mut db = Connection::open_in_memory().unwrap();
@@ -1255,6 +1319,7 @@ mod tests {
             regime: None,
             strategy_health: None,
             spot: None,
+            option_archive: None,
         };
         let mut db = crate::runtime::open_book(&c).unwrap();
         // History not yet prepared: nothing fires, even at nine.
@@ -1366,6 +1431,7 @@ mod tests {
             index: None,
             regime: None,
             strategy_health: None,
+            option_archive: None,
             spot: Some(spot("26040", now - 50)),
         };
         let mut db = Connection::open_in_memory().unwrap();
@@ -1403,6 +1469,13 @@ mod tests {
         let clock = move || now;
         let mut runner = LaneRunner::new(&mut fixture, &settings, &c, &cfg, &clock);
         let done = run(&mut runner, &mut work);
+        let (seen_at, observed) = done.option_gate.as_ref().unwrap();
+        assert_eq!(*seen_at, now);
+        assert_eq!(observed.candidates[0].quote.receipt, now - 100);
+        assert_eq!(observed.spot.as_ref().unwrap().receipt_ms, now - 50);
+        let verdict = observed.verdict.as_ref().unwrap();
+        assert_eq!(verdict["prospects"][0]["instrument_key"], "NSE_FO|26000CE");
+        assert_eq!(verdict["dropped"].as_array().unwrap().len(), 3);
         drop(runner);
         let reply = peer.join().unwrap();
         assert_eq!(reply["output"]["prospects"], json!(["NSE_FO|26000CE"]));
@@ -1449,6 +1522,7 @@ mod tests {
             paper_input: None,
             review: None,
             verdict,
+            option_gate: None,
             error: error.map(str::to_owned),
             retry_at_ms: None,
             loop_report: None,
@@ -1457,6 +1531,7 @@ mod tests {
             escalate: false,
             reason: "wide".into(),
             prospects: Vec::new(),
+            dropped: Vec::new(),
         };
         service
             .settle(&cycle, &mut db, gated(Some(declined), None))
@@ -1538,6 +1613,7 @@ mod tests {
                     regime: None,
                     strategy_health: None,
                     spot: Some(spot(index, now - 50)),
+                    option_archive: None,
                 };
                 service.tick(&cycle, &mut db).unwrap();
                 inbox.try_recv().ok().map(|job| job.work)
@@ -1551,6 +1627,7 @@ mod tests {
                 paper_input: None,
                 review: None,
                 verdict,
+                option_gate: None,
                 error: None,
                 retry_at_ms: None,
                 loop_report: None,
@@ -1602,6 +1679,7 @@ mod tests {
                 escalate: true,
                 reason: "ATM call premium jumped".into(),
                 prospects,
+                dropped: Vec::new(),
             }),
         );
 

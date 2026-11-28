@@ -678,6 +678,7 @@ impl Controller {
                 .then(|| self.index_context.json()),
             regime,
             strategy_health: strategy_health.as_ref(),
+            option_archive: self.archive.as_ref().map(|writer| &writer.options),
             spot: super::super::options::spot_quote(&self.index_context, &self.config, t.now),
         };
         match agent.tick(&cycle, &mut self.db) {

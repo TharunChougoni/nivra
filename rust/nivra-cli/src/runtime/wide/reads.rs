@@ -107,9 +107,17 @@ pub(super) fn stage_quote(
 }
 
 pub(super) enum QuoteReadTarget<'a> {
-    Held { depth_sink: Option<&'a mut Scanner> },
+    Held {
+        depth_sink: Option<&'a mut Scanner>,
+    },
     Plan,
-    Depth { scan: &'a mut Scanner },
+    Options {
+        scan: &'a mut Scanner,
+        spot: Option<super::super::options::SpotQuote>,
+    },
+    Depth {
+        scan: &'a mut Scanner,
+    },
     Scan(&'a mut Scanner),
 }
 
@@ -374,6 +382,15 @@ pub(super) fn apply_executable_quotes(
             continue;
         };
         if !duplicate.insert(i.key.clone()) {
+            if matches!(target, QuoteReadTarget::Options { .. })
+                && let Some(writer) = writer
+            {
+                writer.options.offer(
+                    c.session,
+                    receipt,
+                    crate::runtime::market_archive::options::gap("option_duplicate_quote"),
+                );
+            }
             if event_config.is_some() {
                 block_data_failure(db, c, p);
             }
@@ -384,11 +401,48 @@ pub(super) fn apply_executable_quotes(
             quotes.insert(i.key.clone(), q);
         }
     }
+    use crate::runtime::market_archive::options as evidence;
+    use nivra_store::market_archive::options::{OptionEvidence, OptionPoll};
+    let option_poll = matches!(target, QuoteReadTarget::Options { .. });
+    let held_depth = matches!(
+        target,
+        QuoteReadTarget::Held {
+            depth_sink: Some(_)
+        }
+    );
+    if let Some(writer) = writer.filter(|_| option_poll || held_depth) {
+        let observations = instruments
+            .iter()
+            .filter(|i| crate::runtime::options::is_option_key(&i.key))
+            .map(|i| {
+                let row = rows.values().find(|row| row["instrument_token"] == i.key);
+                evidence::observation(&i.key, row, quotes.get(&i.key))
+            })
+            .collect::<Vec<_>>();
+        if !observations.is_empty() {
+            let spot = match &target {
+                QuoteReadTarget::Options { spot, .. } => spot.as_ref().map(evidence::spot),
+                _ => None,
+            };
+            let poll = OptionPoll {
+                requested_ms: requested,
+                spot,
+                rows: observations,
+            };
+            let event = if option_poll {
+                OptionEvidence::Poll(poll)
+            } else {
+                OptionEvidence::Held(poll)
+            };
+            writer.options.offer(c.session, receipt, event);
+        }
+    }
     // A depth read attaches the executable quote to the sample it read (#38).
     match &mut target {
         QuoteReadTarget::Held {
             depth_sink: Some(scan),
         }
+        | QuoteReadTarget::Options { scan, .. }
         | QuoteReadTarget::Depth { scan, .. } => attach_depth(scan, &quotes, &rows),
         QuoteReadTarget::Scan(scan) => {
             let mut store = feature_store

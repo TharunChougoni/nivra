@@ -1,3 +1,4 @@
+use super::options::{OptionQueue, OptionWriter};
 use super::{ArchiveClient, MarketArchiveSettings, Result, connect, normalize};
 use crate::runtime::millis;
 use chrono::NaiveDate;
@@ -24,6 +25,7 @@ pub(in crate::runtime) struct Writer {
     worker: Option<JoinHandle<()>>,
     dropped: Arc<AtomicU64>,
     prior_gaps: Receiver<NaiveDate>,
+    pub(in crate::runtime) options: OptionWriter,
 }
 
 impl Writer {
@@ -39,6 +41,7 @@ impl Writer {
         fs::File::open(directory)?.sync_all()?;
         let worker_spool = spool.clone();
         let (notify, notified) = mpsc::sync_channel(1);
+        let (options, mut option_queue) = OptionQueue::channel(notify.clone());
         let (report_prior, prior_gaps) = mpsc::channel();
         let dropped = Arc::new(AtomicU64::new(0));
         let worker_dropped = dropped.clone();
@@ -56,12 +59,16 @@ impl Writer {
                 };
                 loop {
                     let now = start.elapsed().as_millis() as i64;
+                    let option_progress = option_queue.flush(&mut sink, now);
                     if now >= retry_at {
                         match capture.replay(&mut sink, &worker_dropped) {
                             Ok(Replay::Progress) => continue,
                             Ok(Replay::Empty) => {}
                             Ok(Replay::Unavailable) | Err(_) => retry_at = now + RETRY_MS,
                         }
+                    }
+                    if option_progress {
+                        continue;
                     }
                     if let Err(mpsc::RecvTimeoutError::Disconnected) =
                         notified.recv_timeout(Duration::from_millis(250))
@@ -76,6 +83,7 @@ impl Writer {
             worker: Some(worker),
             dropped,
             prior_gaps,
+            options,
         })
     }
 
@@ -112,6 +120,7 @@ impl Writer {
     }
 
     pub(in crate::runtime) fn stop(&mut self) {
+        self.options.stop();
         self.notify.take();
         if let Some(worker) = self.worker.take()
             && worker.join().is_err()
@@ -203,9 +212,22 @@ trait Sink {
     fn write(&mut self, raw: &str) -> WriteResult;
 }
 
-struct ArchiveSink {
+pub(super) struct ArchiveSink {
     settings: MarketArchiveSettings,
     db: Option<ArchiveClient>,
+}
+
+impl ArchiveSink {
+    pub(super) fn connection(&mut self) -> Result<&mut ArchiveClient> {
+        if self.db.is_none() {
+            self.db = Some(connect(&self.settings)?);
+        }
+        Ok(self.db.as_mut().expect("archive connection"))
+    }
+
+    pub(super) fn disconnect(&mut self) {
+        self.db = None;
+    }
 }
 
 impl Sink for ArchiveSink {
@@ -213,13 +235,9 @@ impl Sink for ArchiveSink {
         let Ok(batch) = normalize::capture_quotes(raw) else {
             return WriteResult::Invalid;
         };
-        if self.db.is_none() {
-            let Ok(db) = connect(&self.settings) else {
-                return WriteResult::Unavailable;
-            };
-            self.db = Some(db);
-        }
-        let db = self.db.as_mut().expect("archive connection");
+        let Ok(db) = self.connection() else {
+            return WriteResult::Unavailable;
+        };
         match write_quotes(db, &batch) {
             Ok(_) => WriteResult::Stored,
             Err(error) if nivra_store::market_archive::invalid_quote_write(error.as_ref()) => {

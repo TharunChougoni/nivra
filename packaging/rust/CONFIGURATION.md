@@ -256,6 +256,11 @@ the role lacks permission to create it. Run
 `nivra archive check --config PAPER_JSON` to print the schema version and
 counts of instruments, receipts, observations, bars, and coverage.
 
+Archive schema 2 adds Nifty option evidence. Run `archive init` when
+upgrading an existing archive. Capturing this evidence uses the existing
+`nifty_options.enabled` and `market_archive` settings. Gate coverage also
+requires the configured gate lane and its existing budget.
+
 ## Compatibility
 
 Remove `history_directory`, `dashboard.retention.keep_full_quote_bodies`, and

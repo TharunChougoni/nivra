@@ -15,6 +15,7 @@ mod history;
 pub(super) use history::{ImportSummary, import};
 
 pub(super) mod normalize;
+pub(super) mod options;
 
 #[derive(Args)]
 pub(crate) struct Options {
@@ -29,6 +30,13 @@ pub(crate) enum Command {
     Init(Options),
     /// Print the schema version and table counts.
     Check(Options),
+    /// Print dated Nifty option tape coverage.
+    OptionCoverage {
+        #[command(flatten)]
+        options: Options,
+        #[arg(long)]
+        session: chrono::NaiveDate,
+    },
     /// Load legacy history receipts and HTTP 400 exclusions.
     ImportHistory {
         #[command(flatten)]
@@ -89,6 +97,15 @@ fn run(command: Command) -> Result<()> {
             println!(
                 "{}",
                 serde_json::to_string(&market_archive::check(&mut db)?)?
+            );
+        }
+        Command::OptionCoverage { options, session } => {
+            let mut db = connect_from_config(&options.config)?;
+            println!(
+                "{}",
+                serde_json::to_string(&market_archive::options::option_coverage(
+                    &mut db, session
+                )?,)?
             );
         }
         Command::ImportHistory { options, directory } => {

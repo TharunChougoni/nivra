@@ -111,6 +111,26 @@ impl Controller {
                 Ok(prepared) => {
                     let catalog = prepared.catalog()?;
                     let instruments = prepared.instruments()?;
+                    if let Some(writer) = &self.archive {
+                        use nivra_store::market_archive::options::{
+                            ContractMaster, OptionEvidence, OptionSpot,
+                        };
+                        writer.options.offer(
+                            c.session,
+                            prepared.received_ms,
+                            OptionEvidence::Master(ContractMaster {
+                                contracts: prepared.contracts.clone(),
+                                spot: OptionSpot {
+                                    key: prepared.underlying_key.clone(),
+                                    price: prepared.spot,
+                                    source_ms: prepared.spot_source_at,
+                                    receipt_ms: prepared.spot_received_at,
+                                },
+                                contract_sha256: prepared.contract_sha256.clone(),
+                                bod_sha256: prepared.bod_sha256.clone(),
+                            }),
+                        );
+                    }
                     self.p.options = Some(catalog);
                     self.p.fee_schedule = Some(c.fee_schedule()?);
                     self.tradable.extend(instruments.iter().cloned());
@@ -137,6 +157,13 @@ impl Controller {
                     }
                 }
                 Err(reason) => {
+                    if let Some(writer) = &self.archive {
+                        writer.options.offer(
+                            c.session,
+                            now,
+                            crate::runtime::market_archive::options::gap(&reason),
+                        );
+                    }
                     self.option_status =
                         serde_json::json!({"status":"unavailable","reason":reason});
                 }

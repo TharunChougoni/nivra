@@ -130,13 +130,24 @@ impl Controller {
         self.quote_reads.pending[kind.slot()] = false;
         let cfg = self.event_config.as_ref();
         self.read_failure = match completed.rows {
-            Err(error) => Some(record_read_failure(
-                error,
-                &mut self.db,
-                &self.config,
-                &mut self.p,
-                cfg.is_some(),
-            )?),
+            Err(error) => {
+                if matches!(kind, ReadKind::Options)
+                    && let Some(writer) = &self.archive
+                {
+                    writer.options.offer(
+                        self.config.session,
+                        millis(),
+                        crate::runtime::market_archive::options::gap("option_read_unavailable"),
+                    );
+                }
+                Some(record_read_failure(
+                    error,
+                    &mut self.db,
+                    &self.config,
+                    &mut self.p,
+                    cfg.is_some(),
+                )?)
+            }
             Ok(rows) => match kind {
                 ReadKind::Scanner {
                     metadata_only: true,
@@ -157,7 +168,15 @@ impl Controller {
                             depth_sink: self.strategy.is_some().then_some(&mut self.scan),
                         },
                         ReadKind::Plan => QuoteReadTarget::Plan,
-                        ReadKind::Options | ReadKind::Depth => QuoteReadTarget::Depth {
+                        ReadKind::Options => QuoteReadTarget::Options {
+                            scan: &mut self.scan,
+                            spot: crate::runtime::options::spot_quote(
+                                &self.index_context,
+                                &self.config,
+                                millis(),
+                            ),
+                        },
+                        ReadKind::Depth => QuoteReadTarget::Depth {
                             scan: &mut self.scan,
                         },
                         ReadKind::Scanner { .. } => QuoteReadTarget::Scan(&mut self.scan),

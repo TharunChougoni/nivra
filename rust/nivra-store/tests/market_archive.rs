@@ -83,7 +83,7 @@ fn timescale_archive_round_trip() -> Result<(), Box<dyn std::error::Error>> {
     assert!(write_quotes(&mut db, &batch)?);
     let elapsed = start.elapsed();
     let after = check(&mut db)?;
-    assert_eq!(after.schema_version, 1);
+    assert_eq!(after.schema_version, 2);
     assert_eq!(after.receipts - before.receipts, 2);
     assert_eq!(after.instruments - before.instruments, 200);
     assert_eq!(after.quote_obs - before.quote_obs, 201);

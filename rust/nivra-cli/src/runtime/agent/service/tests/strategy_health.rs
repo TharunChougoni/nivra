@@ -57,6 +57,7 @@ fn strategy_health_dispatches_without_a_ranking_and_reaches_the_rendered_brief()
         regime: None,
         strategy_health: Some(&health),
         spot: None,
+        option_archive: None,
     };
     service.tick(&cycle, &mut db).unwrap();
     let work = inbox.try_recv().unwrap().work;
