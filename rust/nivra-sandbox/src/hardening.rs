@@ -55,6 +55,16 @@ struct LandlockPathBeneathAttr {
     parent_fd: i32,
 }
 
+/// Lower the calling Linux thread's scheduling priority. Children inherit it.
+pub fn lower_worker_priority() -> std::io::Result<()> {
+    // SAFETY: zero targets the calling thread and setpriority takes no pointers.
+    if unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, 10) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
 /// Probe the host kernel's Landlock ABI version, if supported.
 pub fn probe_landlock_abi() -> Option<u32> {
     // SAFETY: syscall with null attr and LANDLOCK_CREATE_RULESET_VERSION only
