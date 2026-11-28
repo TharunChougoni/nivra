@@ -143,11 +143,14 @@ pub(crate) fn registered_run(
     })
 }
 
+/// Drive one task to a terminal state. `stop` asks the worker to terminate,
+/// as an expired deadline does; the job then ends as terminated.
 pub(crate) fn drive_task(
     settings: ResearchSettings,
     authority: PathBuf,
     task_id: String,
     revision: u32,
+    stop: &dyn Fn() -> bool,
 ) -> std::result::Result<(), &'static str> {
     let result = (|| -> Result<()> {
         let mut db = open_queue(&settings, &authority, false)?;
@@ -216,7 +219,12 @@ pub(crate) fn drive_task(
         loop {
             let now = millis();
             match active
-                .poll(&mut db, &mut runner, millis, now >= task.spec.expires_at_ms)
+                .poll(
+                    &mut db,
+                    &mut runner,
+                    millis,
+                    now >= task.spec.expires_at_ms || stop(),
+                )
                 .map_err(|_| "research_worker_poll_failed")?
             {
                 Outcome::Running => thread::sleep(Duration::from_millis(50)),
@@ -357,7 +365,7 @@ pub(crate) fn tick_tasks(
     thread::Builder::new()
         .name("nivra-research-owner".into())
         .spawn(move || {
-            let result = drive_task(settings, authority, task_id, revision);
+            let result = drive_task(settings, authority, task_id, revision, &|| false);
             let _ = sender.send(result);
         })
         .map_err(|_| "research_worker_unavailable")?;

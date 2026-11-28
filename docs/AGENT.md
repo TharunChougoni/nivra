@@ -356,7 +356,7 @@ Build and test the agent with the [pi agent gate](../AGENTS.md). Then:
 
 To register a ranker that a research turn wrote, take the source hash from the
 sandbox run and use `nivra planner register-ranker` with `--planner`,
-`--session`, `--book`, `--script`, `--expected-sha256` and `--author-model`.
+`--session`, `--sessions-root`, `--script`, `--expected-sha256` and `--author-model`.
 See [STRATEGY](STRATEGY.md) and [RESEARCH](RESEARCH.md).
 
 ## Files in the book's `model/agent/` directory

@@ -74,7 +74,14 @@ fn scored(net: i64, blob: &str) -> Outcome {
         open_positions: 0,
     };
     Outcome::Scored {
-        decision: keep(&score, &[Comparator::Cash], 300),
+        decision: keep(
+            &score,
+            &[Comparator::Cash],
+            nivra_core::autoresearch::Rule {
+                max_drawdown_bps: 300,
+                require_flat: false,
+            },
+        ),
         score,
         report_blob: blob.to_owned(),
     }

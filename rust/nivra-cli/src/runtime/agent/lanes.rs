@@ -3,13 +3,14 @@ use super::brief::Brief;
 use super::client::{Agent, Allowance, TurnOutcome, TurnRequest};
 use super::protocol::{SessionRef, TurnStatus, Usage};
 use super::requests::Requests;
-use super::tools::{LaneHost, PlanAttempt, Verdict, lane_definitions};
+use super::tools::{LaneHost, PlanAttempt, Verdict, autonomous_definitions, lane_definitions};
 use super::{AgentSettings, Lane, ModelSpec};
+use crate::runtime::autoresearch::coordinator::{SkillVerdict, TurnPlan};
 use crate::runtime::harness::{Bridge, LaneGrant};
 use crate::runtime::lane_queue::{LaneMessage, MessageBody, TransitionReason};
 use crate::runtime::planner::{Backend, CallGuard, PlannerConfig};
 use crate::runtime::web_tools::Transport;
-use crate::runtime::workspace::WorkspaceScope;
+use crate::runtime::workspace::{WorkspaceRoot, WorkspaceScope};
 use crate::runtime::{Config, Result, digest, rollover};
 use chrono::NaiveDate;
 use nivra_core::execution::{Instrument, Portfolio};
@@ -149,6 +150,8 @@ pub(crate) struct LaneTurn {
     pub outcome: TurnOutcome,
     pub plan: Option<PlanAttempt>,
     pub verdict: Option<Verdict>,
+    /// A skill review turn's typed answers.
+    pub skill_verdicts: Vec<SkillVerdict>,
 }
 
 pub(crate) struct LaneRunner<'a> {
@@ -330,6 +333,23 @@ impl<'a> LaneRunner<'a> {
         root(self.c)
     }
 
+    /// The workspace `skills/` pi discovers for a lane: research reads the
+    /// persistent research workspace, every other lane its book's.
+    fn skills_dir(&self, lane: Lane) -> Result<Option<String>> {
+        let Some(settings) = self.cfg.workspace.as_ref().filter(|w| w.enabled) else {
+            return Ok(None);
+        };
+        let root = match lane {
+            Lane::Research => WorkspaceRoot::research(self.c)?,
+            Lane::Decision | Lane::Review | Lane::Gate => {
+                WorkspaceRoot::book(&self.c.directory, settings)?
+            }
+        };
+        Ok(Some(
+            root.path().join("skills").to_string_lossy().into_owned(),
+        ))
+    }
+
     fn journal(&self, line: &Value) -> Result<()> {
         private_dir(&self.root())?;
         let mut file = std::fs::OpenOptions::new()
@@ -369,9 +389,24 @@ impl<'a> LaneRunner<'a> {
         context: &mut TurnContext,
     ) -> Result<LaneTurn> {
         let id = self.next_id(lane);
-        self.turn_as(id, lane, trigger, brief, context, None)
+        self.turn_as(id, lane, trigger, brief, context, None, None)
     }
 
+    /// One autonomous research-loop turn: only the step's tools, the step's
+    /// per-turn allowance, a pi session per research day under the research
+    /// root. The lane's own daily allowance still caps it on the book's day.
+    pub(crate) fn autonomous_turn(
+        &mut self,
+        plan: &TurnPlan,
+        context: &mut TurnContext,
+    ) -> Result<LaneTurn> {
+        let id = format!("auto-{}", self.next_id(plan.lane));
+        let trigger = json!({"kind":"autoresearch","step":plan.kind});
+        let brief = json!(serde_json::to_string(&plan.brief)?);
+        self.turn_as(id, plan.lane, trigger, brief, context, None, Some(plan))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn turn_as(
         &mut self,
         id: String,
@@ -380,12 +415,43 @@ impl<'a> LaneRunner<'a> {
         brief: Value,
         context: &mut TurnContext,
         research_request: Option<&LaneMessage>,
+        auto: Option<&TurnPlan>,
     ) -> Result<LaneTurn> {
         let now = (self.clock)();
         let lane_settings = self.settings.lane(lane)?.clone();
         let ledger = Ledger::new(self.c);
-        let spent = ledger.spent(lane)?;
+        let lane_spent = ledger.spent(lane)?;
         let model = self.model(lane)?;
+        let mut allowance = Allowance {
+            calls: lane_settings.daily_calls,
+            cost_usd: lane_settings.daily_cost_usd,
+            max_tool_calls: lane_settings.max_tool_calls,
+            timeout: Duration::from_millis(lane_settings.turn_timeout_ms),
+        };
+        let spent = match auto {
+            None => lane_spent,
+            Some(plan) => {
+                // The book's lane ceiling binds only on the book's own day.
+                let same_day = nivra_core::autoresearch::ist_day(now) == self.c.session;
+                let (calls_left, usd_left) = if same_day {
+                    (
+                        lane_settings.daily_calls.saturating_sub(lane_spent.calls),
+                        (lane_settings.daily_cost_usd - lane_spent.cost_usd).max(0.0),
+                    )
+                } else {
+                    (u64::MAX, f64::INFINITY)
+                };
+                allowance = Allowance {
+                    calls: plan.calls.min(calls_left),
+                    cost_usd: plan.cost_usd.min(usd_left),
+                    max_tool_calls: plan.max_tool_calls.min(lane_settings.max_tool_calls),
+                    timeout: Duration::from_millis(
+                        plan.timeout_ms.min(lane_settings.turn_timeout_ms),
+                    ),
+                };
+                Usage::default()
+            }
+        };
         let guard = CallGuard {
             book: self.c,
             policy: self.cfg,
@@ -415,6 +481,7 @@ impl<'a> LaneRunner<'a> {
                     model_id: &model_id,
                     requests: &self.requests,
                     preempt: &self.preempt,
+                    autoresearch: auto.map(|plan| plan.grant),
                 },
                 context.web.as_mut(),
             )?,
@@ -422,6 +489,8 @@ impl<'a> LaneRunner<'a> {
                 .then_some((&context.portfolio, context.instruments.as_slice())),
             plan: None,
             verdict: None,
+            autonomous: auto.map(|plan| plan.kind),
+            skill_verdicts: Vec::new(),
             options: (lane == Lane::Gate)
                 .then_some(context.portfolio.options.as_ref())
                 .flatten(),
@@ -431,17 +500,28 @@ impl<'a> LaneRunner<'a> {
                 let _ = checkpoints.checkpoint(&turn_id, lane, usage);
             })),
         };
+        let session = match auto {
+            // One pi session per research day, outside every book.
+            Some(_) => {
+                let day = nivra_core::autoresearch::ist_day(now).to_string();
+                let dir = crate::runtime::autoresearch::research_root(self.c)?
+                    .join("pi")
+                    .join(lane.as_str())
+                    .join(&day);
+                (day, dir)
+            }
+            None => (
+                self.c.session.to_string(),
+                self.root().join("pi").join(lane.as_str()),
+            ),
+        };
         let request = TurnRequest {
             id: id.clone(),
             lane,
             session: SessionRef {
-                date: self.c.session.to_string(),
-                dir: self
-                    .root()
-                    .join("pi")
-                    .join(lane.as_str())
-                    .to_string_lossy()
-                    .into_owned(),
+                date: session.0,
+                dir: session.1.to_string_lossy().into_owned(),
+                skills_dir: self.skills_dir(lane)?,
             },
             model,
             // The offline fake answers every turn; it never needs a fallback.
@@ -451,14 +531,11 @@ impl<'a> LaneRunner<'a> {
             },
             trigger: trigger.clone(),
             brief,
-            tools: lane_definitions(self.cfg, lane, requests_served)?,
+            tools: match auto {
+                Some(plan) => autonomous_definitions(self.cfg, plan.kind)?,
+                None => lane_definitions(self.cfg, lane, requests_served)?,
+            },
             compact_at_tokens: lane_settings.compact_at_tokens,
-        };
-        let allowance = Allowance {
-            calls: lane_settings.daily_calls,
-            cost_usd: lane_settings.daily_cost_usd,
-            max_tool_calls: lane_settings.max_tool_calls,
-            timeout: Duration::from_millis(lane_settings.turn_timeout_ms),
         };
         let preempt = self.preempt.clone();
         let result = self
@@ -468,6 +545,7 @@ impl<'a> LaneRunner<'a> {
             });
         let plan = host.plan.take();
         let verdict = host.verdict.take();
+        let skill_verdicts = std::mem::take(&mut host.skill_verdicts);
         drop(host);
         let mut outcome = match result {
             Ok(outcome) => outcome,
@@ -540,6 +618,7 @@ impl<'a> LaneRunner<'a> {
             outcome,
             plan,
             verdict,
+            skill_verdicts,
         })
     }
 
@@ -578,6 +657,7 @@ impl<'a> LaneRunner<'a> {
             trigger,
             json!(brief.render()?),
             context,
+            None,
             None,
         )?;
         if turn.outcome.status == TurnStatus::Ok {
@@ -624,6 +704,7 @@ impl<'a> LaneRunner<'a> {
                     json!(text),
                     context,
                     Some(&request),
+                    None,
                 )
             });
             let at = (self.clock)();

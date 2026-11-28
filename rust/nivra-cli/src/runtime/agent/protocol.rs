@@ -9,6 +9,9 @@ pub(crate) const VERSION: u32 = 1;
 pub(crate) struct SessionRef {
     pub date: String,
     pub dir: String,
+    /// The workspace `skills/` directory pi discovers learned skills in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skills_dir: Option<String>,
 }
 
 #[derive(Serialize)]

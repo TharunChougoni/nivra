@@ -339,6 +339,7 @@ pub(super) enum Tool {
     Session,
     Workspace(super::super::workspace::WorkspaceOp),
     Web(super::super::web_tools::WebToolOp),
+    Memory(super::super::autoresearch::MemoryOp),
 }
 
 #[derive(Clone, Deserialize)]
@@ -379,6 +380,8 @@ pub(super) fn checked_call_with(
     }
     let max_args = if name.starts_with("workspace_") {
         65_536
+    } else if name == "experiment_submit" {
+        140_000
     } else if name == "candidate_submit" {
         1_000_000
     } else {
@@ -533,6 +536,9 @@ pub(super) fn checked_call_with(
         "web_search" | "web_fetch" | "news_lookup" => {
             Tool::Web(super::super::web_tools::parse_tool(name, args)?)
         }
+        "research_history" | "idea_record" | "finding_record" | "experiment_submit" => {
+            Tool::Memory(super::super::autoresearch::parse_tool(name, args)?)
+        }
         _ => return Err("harness_tool_not_allowed".into()),
     };
     Ok((id, tool))
@@ -569,6 +575,10 @@ pub(crate) fn bridge_definitions(cfg: &PlannerConfig, lane_requests: bool) -> Re
     tools.retain(|tool| analysis || tool["name"] != "research_task_enqueue");
     if let Some(backtest) = enabled_backtest(cfg) {
         tools.extend(backtest_tool_definitions(backtest));
+    }
+    // The research record needs the loop's switch and the research workspace.
+    if super::super::autoresearch::enabled(cfg).is_some() && owner.workspace {
+        tools.extend(super::super::autoresearch::tool_definitions());
     }
     Ok(tools)
 }

@@ -6,6 +6,7 @@ use super::tools::{TOOLS, lane_definitions};
 use super::*;
 use crate::runtime::lane_queue::{self, MessageKind, MessageState};
 use crate::runtime::web_tools::{HttpResponse, Transport};
+use crate::runtime::workspace::WorkspaceScope;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::sync::atomic::Ordering;
@@ -13,7 +14,7 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 /// The agent's side of the pipe, scripted per test. No process, no socket.
-pub(super) struct Peer {
+pub(crate) struct Peer {
     reader: BufReader<std::io::PipeReader>,
     writer: std::io::PipeWriter,
     calls: usize,
@@ -31,13 +32,13 @@ impl Peer {
         self.reader.read_line(&mut line).unwrap();
         serde_json::from_str(&line).unwrap()
     }
-    pub(super) fn turn(&mut self) -> (String, Value) {
+    pub(crate) fn turn(&mut self) -> (String, Value) {
         let turn = self.recv();
         assert_eq!(turn["type"], "turn");
         self.model = turn["model"].clone();
         (turn["id"].as_str().unwrap().to_owned(), turn)
     }
-    pub(super) fn call(&mut self, turn: &str, name: &str, args: Value) -> Value {
+    pub(crate) fn call(&mut self, turn: &str, name: &str, args: Value) -> Value {
         self.calls += 1;
         let call_id = format!("call-{}", self.calls);
         self.send(
@@ -50,7 +51,7 @@ impl Peer {
     fn message(&mut self, turn: &str, cost_usd: f64) {
         self.send(json!({"type":"event","turn_id":turn,"event":{"kind":"message","stop_reason":"toolUse","usage":{"input":100,"output":10,"cost_usd":cost_usd}}}));
     }
-    pub(super) fn finish(
+    pub(crate) fn finish(
         &mut self,
         turn: &str,
         status: &str,
@@ -64,7 +65,7 @@ impl Peer {
     }
 }
 
-pub(super) fn connect<T: Send + 'static>(
+pub(crate) fn connect<T: Send + 'static>(
     script: impl FnOnce(&mut Peer) -> T + Send + 'static,
 ) -> (AgentClient, JoinHandle<T>) {
     let (from_rust, to_agent) = std::io::pipe().unwrap();
@@ -127,7 +128,7 @@ fn lane_settings(daily_calls: u64, daily_cost_usd: f64) -> LaneSettings {
     }
 }
 
-pub(super) fn settings(daily_calls: u64, daily_cost_usd: f64) -> AgentSettings {
+pub(crate) fn settings(daily_calls: u64, daily_cost_usd: f64) -> AgentSettings {
     AgentSettings {
         node: "/usr/bin/node".into(),
         entry: "/opt/nivra/agent/dist/src/main.js".into(),
@@ -144,7 +145,7 @@ pub(super) fn settings(daily_calls: u64, daily_cost_usd: f64) -> AgentSettings {
 }
 
 /// Every reviewed capability on, so every bridged tool is published.
-fn all_tools(dir: &std::path::Path) -> (Config, planner::PlannerConfig) {
+pub(crate) fn all_tools(dir: &std::path::Path) -> (Config, planner::PlannerConfig) {
     use crate::runtime::harness::research::{
         CandidateComputeSettings, CandidateDataset, CandidateDatasetKind, ResearchSettings,
     };
@@ -221,6 +222,10 @@ fn all_tools(dir: &std::path::Path) -> (Config, planner::PlannerConfig) {
         enabled: true,
         ..Default::default()
     });
+    cfg.autoresearch = Some(crate::runtime::autoresearch::AutoresearchSettings {
+        enabled: true,
+        ..Default::default()
+    });
     // The turn guard refuses a policy that differs from the reviewed file.
     std::fs::write(
         c.planner_config.as_ref().unwrap(),
@@ -234,7 +239,7 @@ fn instrument(key: &str) -> Value {
     json!({"key":key,"symbol":key.rsplit('|').next().unwrap(),"series":"EQ","tick":"0.05"})
 }
 
-fn context(cash: &str) -> TurnContext {
+pub(crate) fn context(cash: &str) -> TurnContext {
     let bundle = json!({
         "session":"2026-10-16",
         "allowlist":[instrument("NSE_EQ|A"),instrument("NSE_EQ|B")],
@@ -259,7 +264,7 @@ fn context(cash: &str) -> TurnContext {
     }
 }
 
-pub(super) fn fixture_agent(client: AgentClient) -> Agent {
+pub(crate) fn fixture_agent(client: AgentClient) -> Agent {
     let mut client = Some(client);
     Agent::new(Box::new(move || {
         client.take().ok_or_else(|| "fixture_agent_exited".into())
@@ -325,6 +330,16 @@ fn args(name: &str) -> Value {
         "search" => json!({"query":"RELIANCE results"}),
         "fetch" => json!({"url":"https://news.example.test/a"}),
         "news" => json!({"query":null}),
+        "research_history" => {
+            json!({"family":null,"mechanism":null,"parent_experiment_id":null,"before_id":null,"limit":null})
+        }
+        "idea_record" => json!({"family":"breakout","regime":"trend","mechanism":"volume breakout",
+            "hypothesis":"Breakouts on volume continue","falsifier":"No gain over cash","comparator":"cash",
+            "parent_experiment_id":null}),
+        "finding_record" => {
+            json!({"experiment_id":1,"kind":"negative","observation":"lost to cash",
+            "scope":"daily bars","limitation":"one window","next_test":"tighter exit"})
+        }
         _ => panic!("no fixture args for {name}"),
     }
 }
@@ -362,16 +377,23 @@ fn every_lane_tool_round_trips_through_the_bridge() {
             | "backtest_result" | "backtest_cancel" => Err("research_queue_unavailable"),
             "run" => Err("workspace_run_not_allowlisted"),
             "quotes" => Err("scorer_snapshots_unavailable"),
+            // No campaign exists before the loop's first step.
+            "idea_record" => Err("research_campaign_unavailable"),
+            "finding_record" => Err("research_experiment_unknown"),
             _ => Ok(()),
         }
     };
     let workspace = cfg.workspace.as_ref().unwrap();
-    crate::runtime::workspace::execute(
-        &c.directory,
-        workspace,
-        crate::runtime::workspace::parse_tool("workspace_write", args("write")).unwrap(),
-    )
-    .unwrap();
+    // The book's workspace and the persistent research workspace both hold the note.
+    for scope in [WorkspaceScope::Decision, WorkspaceScope::ResearchSandbox] {
+        crate::runtime::workspace::execute_scoped(
+            &c.directory,
+            workspace,
+            scope,
+            crate::runtime::workspace::parse_tool("workspace_write", args("write")).unwrap(),
+        )
+        .unwrap();
+    }
     let mut mismatches = Vec::new();
     for lane in Lane::ALL {
         let published: Vec<String> = lane_definitions(&cfg, lane, true)
@@ -458,7 +480,11 @@ fn research_lane_writes_and_runs_a_scores_only_ranker() {
     .unwrap();
     let workspace = cfg.workspace.as_ref().unwrap();
     let script = "scripts/net_edge.py";
-    let root = workspace::ensure(&c.directory, workspace).unwrap();
+    let root = workspace::ensure(
+        &workspace::test_root(&c.directory, workspace, WorkspaceScope::ResearchSandbox),
+        workspace,
+    )
+    .unwrap();
     let canary = c.directory.join("ranker-fixture.py");
     std::fs::write(&canary, "print('{}')\n").unwrap();
 
@@ -980,6 +1006,7 @@ fn budgets_preemption_and_agent_exit_stop_turns() {
         session: super::protocol::SessionRef {
             date: c.session.to_string(),
             dir: c.directory.display().to_string(),
+            skills_dir: None,
         },
         model: settings.lane(Lane::Research).unwrap().model.clone(),
         fallback: None,

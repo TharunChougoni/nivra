@@ -147,6 +147,9 @@ pub(crate) struct PlannerConfig {
     /// Omitted when absent so existing policy bytes and stdlib-only behaviour are unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub research_env: Option<super::research_env::ResearchEnvSettings>,
+    /// The autonomous research loop. Operational: it never enters the policy bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autoresearch: Option<super::autoresearch::AutoresearchSettings>,
 }
 const DEFAULT_STRATEGY_CALL_DEADLINE_MS: u64 = 250;
 fn default_strategy_call_deadline_ms() -> u64 {
@@ -228,6 +231,7 @@ impl StrategyExecution {
 /// selector diagnostics remain excluded; live ranking participates in the policy.
 pub(super) fn policy_bytes(cfg: &PlannerConfig) -> Result<Vec<u8>> {
     let mut cfg = cfg.clone();
+    cfg.autoresearch = None;
     if let Some(discovery) = &mut cfg.discovery
         && discovery
             .strategy_selection
@@ -259,6 +263,7 @@ impl Default for PlannerConfig {
             strategy_execution: None,
             strategy_review: None,
             research_env: None,
+            autoresearch: None,
         }
     }
 }
@@ -434,6 +439,18 @@ impl PlannerConfig {
         }
         if let Some(env) = &c.research_env {
             env.validate()?;
+        }
+        if let Some(loop_settings) = &c.autoresearch {
+            loop_settings.validate()?;
+            if loop_settings.enabled
+                && (c.workspace.as_ref().is_none_or(|w| !w.enabled)
+                    || c.research_tools
+                        .as_ref()
+                        .and_then(|r| r.candidate_compute.as_ref())
+                        .is_none_or(|candidate| !candidate.enabled))
+            {
+                return Err("autoresearch_requires_workspace_and_candidate_compute".into());
+            }
         }
         Ok(c)
     }
@@ -660,8 +677,9 @@ pub enum Command {
         planner: PathBuf,
         #[arg(long)]
         session: NaiveDate,
+        /// The sessions root; the script resolves in its research workspace.
         #[arg(long)]
-        book: PathBuf,
+        sessions_root: PathBuf,
         #[arg(long)]
         script: String,
         #[arg(long)]
@@ -697,7 +715,7 @@ pub fn entry(cmd: Command) -> ExitCode {
         Command::RegisterRanker {
             planner,
             session,
-            book,
+            sessions_root,
             script,
             expected_sha256,
             author_model,
@@ -712,7 +730,7 @@ pub fn entry(cmd: Command) -> ExitCode {
                     .filter(|selection| selection.enabled)
                     .ok_or("strategy_selection_library_required")?;
                 super::workspace::register_ranker(
-                    &book,
+                    &sessions_root.join("research").join("workspace"),
                     workspace,
                     &script,
                     &expected_sha256,

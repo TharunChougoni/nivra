@@ -15,7 +15,9 @@ use super::{AgentMode, AgentSettings, Lane};
 use crate::runtime::options::{SpotQuote, chain};
 use crate::runtime::planner::{self, Backend, PlannerConfig};
 use crate::runtime::wide::strategy_run::{self, SupervisionState};
-use crate::runtime::{Config, Connection, Result, decision, decision_evidence, redecision};
+use crate::runtime::{
+    Config, Connection, Result, autoresearch, decision, decision_evidence, redecision,
+};
 use nivra_core::execution::{Instrument, Portfolio, Scanner};
 use nivra_core::feature_store::FeatureStore;
 use serde_json::{Value, json};
@@ -135,6 +137,8 @@ struct Work {
     brief: Brief,
     context: TurnContext,
     paper_turn_id: Option<String>,
+    /// One research-loop step instead of a lane turn: today's calendar facts.
+    research_loop: Option<(bool, bool, chrono::NaiveDate)>,
 }
 
 /// One finished job, as the controller settles it.
@@ -150,6 +154,39 @@ struct Done {
     error: Option<String>,
     /// The agent is restarting; the batch may run again from this time.
     retry_at_ms: Option<i64>,
+    /// What a research-loop step did.
+    loop_report: Option<autoresearch::StepReport>,
+}
+
+/// One research-loop step on the lane worker, which owns the agent.
+fn loop_step(
+    runner: &mut LaneRunner<'_>,
+    job: &mut Work,
+    (trading_today, sealed_today, last_sealed): (bool, bool, chrono::NaiveDate),
+) -> Result<autoresearch::StepReport> {
+    let (c, cfg) = (runner.c, runner.cfg);
+    let mut jobs = autoresearch::QueueJobs::new(c, cfg)?;
+    let preempt = runner.preempt.clone();
+    let stop = move || preempt.load(Ordering::Acquire) || autoresearch::cli::host_pressure();
+    let owner = format!("controller:{}", std::process::id());
+    let mut tape = |day| autoresearch::cli::archive_covers(c, day);
+    let clock = crate::runtime::millis;
+    autoresearch::step(&mut autoresearch::Step {
+        c,
+        cfg,
+        owner: &owner,
+        clock: &clock,
+        turns: &mut autoresearch::cli::RunnerTurns {
+            runner,
+            context: &mut job.context,
+        },
+        jobs: &mut jobs,
+        stop: &stop,
+        tape: &mut tape,
+        trading_today,
+        sealed_today,
+        last_sealed,
+    })
 }
 
 pub(crate) struct LaneService {
@@ -172,6 +209,10 @@ pub(crate) struct LaneService {
     /// This process claimed the after-close marker, so a requeued batch may
     /// still run its turn.
     after_close_claimed: bool,
+    /// When the research loop may step next.
+    loop_next_ms: i64,
+    /// The loop state the dashboard reads, refreshed every few seconds.
+    loop_status: (i64, Value),
     status: Value,
 }
 
@@ -223,8 +264,13 @@ fn run(runner: &mut LaneRunner<'_>, job: &mut Work) -> Done {
         verdict: None,
         error: None,
         retry_at_ms: None,
+        loop_report: None,
     };
     let result = (|| -> Result<()> {
+        if let Some(calendar) = job.research_loop {
+            done.loop_report = Some(loop_step(runner, job, calendar)?);
+            return Ok(());
+        }
         match job.lane {
             Lane::Decision => {
                 let brief = job.brief.clone();
@@ -344,8 +390,15 @@ impl LaneService {
             chain: None,
             chain_failure: None,
             after_close_claimed: false,
+            loop_next_ms: 0,
+            loop_status: (i64::MIN, Value::Null),
             status: json!({"status":"idle"}),
         })
+    }
+
+    /// The research loop: its last step, budget left and latest verdict.
+    pub(crate) fn research_loop_status(&self) -> Value {
+        self.loop_status.1.clone()
     }
 
     pub(crate) fn status(&self) -> Value {
@@ -399,6 +452,9 @@ impl LaneService {
                 self.status = json!({"status":"unavailable","reason":"agent_worker_exited"});
             }
             Err(_) => {}
+        }
+        if cycle.now.saturating_sub(self.loop_status.0) >= 15_000 {
+            self.loop_status = (cycle.now, autoresearch::status(c, cycle.cfg, cycle.now));
         }
         let spent = self.spent(c);
         let mut held = brief::held(cycle.portfolio);
@@ -513,6 +569,73 @@ impl LaneService {
         if self.busy.is_none() && cycle.now >= self.hold_until_ms {
             self.dispatch(cycle, db, &held, phase, &spent, &supervision)?;
         }
+        // Lane turns go first; the loop takes the worker only when it is idle
+        // and the book is not trading.
+        if self.busy.is_none()
+            && cycle.now >= self.hold_until_ms.max(self.loop_next_ms)
+            && !phase.trading()
+            && phase != Phase::PreOpen
+            && self.settings.lanes.contains_key(&Lane::Research)
+            && crate::runtime::autoresearch::enabled(cycle.cfg).is_some()
+        {
+            self.dispatch_loop(cycle, phase)?;
+        }
+        Ok(())
+    }
+
+    /// Hand the worker one research-loop step.
+    fn dispatch_loop(&mut self, cycle: &Cycle<'_>, phase: Phase) -> Result<()> {
+        let c = cycle.c;
+        let context = match self.context(cycle) {
+            Ok(context) => context,
+            Err(_) => {
+                self.loop_next_ms = cycle.now.saturating_add(CONTEXT_RETRY_MS);
+                return Ok(());
+            }
+        };
+        let facts = Facts {
+            session: SessionFacts {
+                date: c.session.to_string(),
+                phase,
+                minute: cycle.minute,
+                now_ms: cycle.now,
+            },
+            portfolio: cycle.portfolio,
+            ranking: cycle.ranking,
+            memory: None,
+            execution: "shadow_never_executed",
+            regime: cycle.regime.as_ref(),
+        };
+        let settings = self.settings.lane(Lane::Research)?;
+        let budget = brief::budget(
+            Lane::Research,
+            &Usage::default(),
+            settings.daily_calls,
+            settings.daily_cost_usd,
+            (0.0, 0),
+        );
+        let job = Job {
+            c: c.clone(),
+            cfg: cycle.cfg.clone(),
+            work: Work {
+                lane: Lane::Research,
+                triggers: Vec::new(),
+                brief: Brief::build(&facts, budget, Value::Null, &[]),
+                context,
+                paper_turn_id: None,
+                research_loop: Some(crate::runtime::autoresearch::cli::calendar(c, cycle.now)),
+            },
+        };
+        let Some(jobs) = self.jobs.as_ref() else {
+            return Ok(());
+        };
+        self.preempt.store(false, Ordering::Release);
+        if jobs.try_send(job).is_err() {
+            self.loop_next_ms = cycle.now.saturating_add(CONTEXT_RETRY_MS);
+            return Ok(());
+        }
+        self.busy = Some(Lane::Research);
+        self.status = json!({"status":"running","lane":Lane::Research,"since_ms":cycle.now,"research_loop":true,"mode":self.mode});
         Ok(())
     }
 
@@ -821,6 +944,7 @@ impl LaneService {
                     brief,
                     context,
                     paper_turn_id: claim.as_ref().map(paper::turn_id),
+                    research_loop: None,
                 },
             },
             claim,
@@ -895,6 +1019,19 @@ impl LaneService {
         let c = cycle.c;
         self.busy = None;
         self.preempt.store(false, Ordering::Release);
+        if done.loop_report.is_some() || (done.triggers.is_empty() && done.error.is_some()) {
+            // Back to back while it progresses; otherwise wait as it asked.
+            let next = done
+                .loop_report
+                .as_ref()
+                .map_or(cycle.now.saturating_add(CONTEXT_RETRY_MS), |report| {
+                    report.next_wake_ms
+                });
+            self.loop_next_ms = next.max(cycle.now.saturating_add(1_000));
+            self.status = json!({"status":"idle","last":{"lane":done.lane,"research_loop":done.loop_report,
+                "error":done.error,"settled_ms":cycle.now},"mode":self.mode});
+            return Ok(());
+        }
         let paper_decision = done.lane == Lane::Decision && self.mode == AgentMode::Paper;
         if let Some(retry_at) = done.retry_at_ms {
             self.hold_until_ms = retry_at;
@@ -1296,6 +1433,7 @@ mod tests {
             verdict,
             error: error.map(str::to_owned),
             retry_at_ms: None,
+            loop_report: None,
         };
         let declined = Verdict {
             escalate: false,
@@ -1396,6 +1534,7 @@ mod tests {
                 verdict,
                 error: None,
                 retry_at_ms: None,
+                loop_report: None,
             })
             .unwrap();
         };

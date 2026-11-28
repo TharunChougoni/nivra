@@ -27,6 +27,8 @@ pub(crate) struct LaneGrant<'a> {
     pub requests: &'a dyn LaneRequests,
     /// Set when a higher-priority turn waits; long tools stop on it.
     pub preempt: &'a std::sync::atomic::AtomicBool,
+    /// Held by an autonomous research-loop turn; it alone may submit experiments.
+    pub autoresearch: Option<super::autoresearch::AutoGrant>,
 }
 
 /// One lane turn's tool executor.
@@ -197,13 +199,22 @@ impl<'a> Bridge<'a> {
             Tool::QuoteCapture(keys, from_ms, to_ms) => {
                 research_quote_capture(c, cfg, keys, from_ms, to_ms, now)?
             }
-            Tool::Workspace(op) => super::workspace::execute_scoped_with_env(
-                &c.directory,
-                cfg.workspace.as_ref().ok_or("harness_workspace_disabled")?,
-                self.grant.workspace,
-                cfg.research_env.as_ref(),
-                op,
-            )?,
+            Tool::Workspace(op) => {
+                let settings = cfg.workspace.as_ref().ok_or("harness_workspace_disabled")?;
+                super::workspace::execute_scoped_with_env(
+                    &super::workspace::WorkspaceRoot::for_scope(c, settings, self.grant.workspace)?,
+                    settings,
+                    self.grant.workspace,
+                    cfg.research_env.as_ref(),
+                    op,
+                )?
+            }
+            Tool::Memory(op) => {
+                let preempt = self.grant.preempt;
+                super::autoresearch::execute(c, cfg, self.grant.autoresearch, op, now, &|| {
+                    preempt.load(std::sync::atomic::Ordering::Acquire)
+                })?
+            }
             Tool::Web(op) => {
                 let settings = cfg
                     .web_tools

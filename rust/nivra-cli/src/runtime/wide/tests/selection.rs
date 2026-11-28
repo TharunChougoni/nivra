@@ -265,7 +265,7 @@ fn reviewed_research_ranker_scores_from_the_registered_source() {
         planner::entry(planner::Command::RegisterRanker {
             planner: planner_path.clone(),
             session,
-            book: book.to_path_buf(),
+            sessions_root: book.join("sessions"),
             script: script.into(),
             expected_sha256,
             author_model: "fixture-model".into(),

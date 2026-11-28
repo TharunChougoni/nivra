@@ -1,6 +1,7 @@
 //! Paper-only runtime. No broker order APIs or model credentials exist here.
 pub mod activity_attribution;
 pub(crate) mod agent;
+pub(crate) mod autoresearch;
 pub mod closed_incident;
 mod controller_events;
 mod data;

@@ -717,11 +717,13 @@ script version by SHA-256.
 
    ```sh
    nivra planner register-ranker --planner PLANNER_CONFIG --session YYYY-MM-DD \
-     --book DATED_SOURCE_BOOK --script scripts/ranker.py \
+     --sessions-root SESSIONS_ROOT --script scripts/ranker.py \
      --expected-sha256 REVIEWED_SHA256 --author-model PROVIDER/MODEL
    ```
 
-The command reads the workspace settings from the planner config. It needs an
+The command reads the script from the research workspace under
+`SESSIONS_ROOT/research/workspace/` and the workspace settings from the
+planner config. It needs an
 enabled `discovery.strategy_selection` block, and it writes to that block's
 `library_path`, which should be a private path. It refuses a script outside
 `scripts/` or bytes whose hash differs from `--expected-sha256`. Success prints

@@ -39,6 +39,25 @@ skills and `scripts/<name>.py` and run its rankers with explicit inline features
 Its sandbox always disables network access. All scores are advisory.
 "#;
 
+const RESEARCH_README: &str = r#"# Research workspace
+
+This directory belongs to the pi research lane and persists across paper
+sessions. Files here are drafts and notes. They are untrusted evidence,
+never prices, quotes, fills or execution authority.
+
+Layout:
+
+- `scripts/` Python strategies and rankers the research lane writes and runs
+- `params/` JSON parameter files for those scripts
+- `notes/` short notes that link experiment and finding ids
+- `skills-proposed/<name>/SKILL.md` learned procedures waiting for review
+- `skills/` reviewed procedures, written only by the host from approved revisions
+- `reference/strategies/` shipped strategy sources, parameters and benchmark notes
+
+Experiments, verdicts and findings live in `../research.sqlite`; edits to a
+draft never change a recorded result.
+"#;
+
 fn default_root() -> PathBuf {
     PathBuf::from("workspace")
 }
@@ -338,9 +357,79 @@ pub(crate) fn parse_tool(name: &str, args: Value) -> Result<WorkspaceOp> {
     }
 }
 
+/// Where a lane's workspace lives. Decision, review and gate keep the book's
+/// own workspace. Research keeps one persistent workspace under the sessions
+/// root, so its scripts, notes and learned skills survive the daily book.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WorkspaceRoot {
+    /// The owned directory the root must stay private under.
+    base: PathBuf,
+    root: PathBuf,
+    research: bool,
+}
+
+impl WorkspaceRoot {
+    /// `<book>/<settings.root>`.
+    pub(crate) fn book(book: &Path, settings: &WorkspaceSettings) -> Result<Self> {
+        let rel = normalize_rel(&settings.root.to_string_lossy())?;
+        Ok(Self {
+            base: book.to_path_buf(),
+            root: book.join(rel),
+            research: false,
+        })
+    }
+
+    /// `<sessions_root>/research/workspace`.
+    pub(crate) fn research(c: &Config) -> Result<Self> {
+        let base = super::autoresearch::research_root(c)?;
+        Ok(Self {
+            root: base.join("workspace"),
+            base,
+            research: true,
+        })
+    }
+
+    /// The root a lane scope resolves to.
+    pub(crate) fn for_scope(
+        c: &Config,
+        settings: &WorkspaceSettings,
+        scope: WorkspaceScope,
+    ) -> Result<Self> {
+        match scope {
+            WorkspaceScope::Decision => Self::book(&c.directory, settings),
+            WorkspaceScope::Research | WorkspaceScope::ResearchSandbox => Self::research(c),
+        }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.root
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn execute(book: &Path, settings: &WorkspaceSettings, op: WorkspaceOp) -> Result<Value> {
     execute_scoped(book, settings, WorkspaceScope::Decision, op)
+}
+
+/// The root a scope resolves to for the test config, whose sessions root
+/// is `<book>/sessions`.
+#[cfg(test)]
+pub(crate) fn test_root(
+    book: &Path,
+    settings: &WorkspaceSettings,
+    scope: WorkspaceScope,
+) -> WorkspaceRoot {
+    match scope {
+        WorkspaceScope::Decision => WorkspaceRoot::book(book, settings).unwrap(),
+        WorkspaceScope::Research | WorkspaceScope::ResearchSandbox => {
+            let base = book.join("sessions").join("research");
+            WorkspaceRoot {
+                root: base.join("workspace"),
+                base,
+                research: true,
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -350,11 +439,11 @@ pub(crate) fn execute_scoped(
     scope: WorkspaceScope,
     op: WorkspaceOp,
 ) -> Result<Value> {
-    execute_scoped_with_env(book, settings, scope, None, op)
+    execute_scoped_with_env(&test_root(book, settings, scope), settings, scope, None, op)
 }
 
 pub(crate) fn execute_scoped_with_env(
-    book: &Path,
+    root: &WorkspaceRoot,
     settings: &WorkspaceSettings,
     scope: WorkspaceScope,
     env: Option<&super::research_env::ResearchEnvSettings>,
@@ -369,7 +458,7 @@ pub(crate) fn execute_scoped_with_env(
     {
         return Err("workspace_research_scope_invalid".into());
     }
-    let root = ensure(book, settings)?;
+    let root = ensure(root, settings)?;
     match op {
         WorkspaceOp::List(path) => list(&root, settings, path.as_deref()),
         WorkspaceOp::Read(path) => read_file(&root, settings, &path),
@@ -391,16 +480,37 @@ pub(crate) fn execute_scoped_with_env(
     }
 }
 
-pub(crate) fn ensure(book: &Path, settings: &WorkspaceSettings) -> Result<PathBuf> {
+/// The book layout, and the persistent research layout with its review
+/// staging area for learned skills.
+const BOOK_DIRS: &[&str] = &["notes", "skills", "tools", "data", "reports", "journal"];
+const RESEARCH_DIRS: &[&str] = &[
+    "scripts",
+    "params",
+    "notes",
+    "skills-proposed",
+    "skills",
+    "tools",
+];
+
+pub(crate) fn ensure(root: &WorkspaceRoot, settings: &WorkspaceSettings) -> Result<PathBuf> {
     settings.validate()?;
-    let root = root_dir(book, settings)?;
-    ensure_private_root(book, &root)?;
-    for name in ["notes", "skills", "tools", "data", "reports", "journal"] {
-        ensure_private_dir(&root, &root.join(name))?;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&root.base)
+        .map_err(|_| "workspace_create_failed")?;
+    ensure_private_root(&root.base, &root.root)?;
+    let (dirs, readme) = if root.research {
+        (RESEARCH_DIRS, RESEARCH_README)
+    } else {
+        (BOOK_DIRS, README)
+    };
+    for name in dirs {
+        ensure_private_dir(&root.root, &root.root.join(name))?;
     }
-    write_if_missing(&root, &root.join("README.md"), README.as_bytes())?;
-    seed_references(&root)?;
-    Ok(root)
+    write_if_missing(&root.root, &root.root.join("README.md"), readme.as_bytes())?;
+    seed_references(&root.root)?;
+    Ok(root.root.clone())
 }
 
 fn seed_references(root: &Path) -> Result<()> {
@@ -424,11 +534,6 @@ fn seed_references(root: &Path) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn root_dir(book: &Path, settings: &WorkspaceSettings) -> Result<PathBuf> {
-    let rel = normalize_rel(&settings.root.to_string_lossy())?;
-    Ok(book.join(rel))
 }
 
 fn list(root: &Path, settings: &WorkspaceSettings, path: Option<&str>) -> Result<Value> {
@@ -686,7 +791,7 @@ fn read_ranker(root: &Path, settings: &WorkspaceSettings, rel: &Path) -> Result<
 }
 
 pub(crate) fn register_ranker(
-    book: &Path,
+    root: &Path,
     settings: &WorkspaceSettings,
     script: &str,
     expected_sha256: &str,
@@ -698,8 +803,7 @@ pub(crate) fn register_ranker(
     if !settings.enabled || !ranker_script(&rel) || !hash_ok(expected_sha256) {
         return Err("workspace_ranker_registration_invalid".into());
     }
-    let root = root_dir(book, settings)?;
-    let source = read_ranker(&root, settings, &rel)?;
+    let source = read_ranker(root, settings, &rel)?;
     if digest(&source) != expected_sha256 {
         return Err("workspace_ranker_hash_mismatch".into());
     }
@@ -815,12 +919,20 @@ fn write_allowed(rel: &Path) -> bool {
     ) && components.next().is_some()
 }
 
+/// Research drafts: notes, parameter files and learned skill drafts for
+/// review. `skills/` is written only by Rust from approved revisions.
 fn research_write_allowed(rel: &Path) -> bool {
-    let mut components = rel.components();
-    let Some(Component::Normal(first)) = components.next() else {
+    let parts: Vec<_> = rel.components().collect();
+    let Some(Component::Normal(first)) = parts.first() else {
         return false;
     };
-    matches!(first.to_str(), Some("notes" | "skills")) && components.next().is_some()
+    let markdown = rel.extension().is_some_and(|ext| ext == "md");
+    match first.to_str() {
+        Some("notes") => parts.len() > 1,
+        Some("params") => parts.len() == 2 && rel.extension().is_some_and(|ext| ext == "json"),
+        Some("skills-proposed") => parts.len() == 3 && markdown,
+        _ => false,
+    }
 }
 
 fn ranker_script(rel: &Path) -> bool {

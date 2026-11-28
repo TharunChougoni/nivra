@@ -3,6 +3,8 @@ use super::Lane;
 use super::client::ToolHost;
 use super::protocol::Usage;
 use crate::runtime::Result;
+use crate::runtime::autoresearch::TurnKind;
+use crate::runtime::autoresearch::coordinator::SkillVerdict;
 use crate::runtime::harness::{Bridge, bridge_definitions, failure_reason};
 use crate::runtime::planner::{self, PlannerConfig};
 use nivra_core::execution::{Instrument, Portfolio};
@@ -79,7 +81,34 @@ pub(crate) const TOOLS: &[BridgeTool] = &[
     tool("search", "web_search", &[D, R]),
     tool("fetch", "web_fetch", &[D, R]),
     tool("news", "news_lookup", &[D, R]),
+    tool("research_history", "research_history", &[R]),
+    tool("idea_record", "idea_record", &[R]),
+    tool("finding_record", "finding_record", &[R]),
 ];
+
+/// The pi specs of an autonomous loop turn: exactly the step's tools, with
+/// `backtest` bound to the frozen experiment submit.
+pub(crate) fn autonomous_definitions(cfg: &PlannerConfig, kind: TurnKind) -> Result<Vec<Value>> {
+    let published = lane_definitions(cfg, Lane::Research, false)?;
+    let rust = bridge_definitions(cfg, false)?;
+    Ok(kind
+        .tools()
+        .iter()
+        .filter_map(|&(name, executor)| match executor {
+            None => Some(crate::runtime::autoresearch::skill_verdict_definition()),
+            Some("experiment_submit") => rust
+                .iter()
+                .find(|definition| definition["name"] == "experiment_submit")
+                .map(|definition| {
+                    json!({"name":name,"description":definition["description"],"parameters":definition["parameters"]})
+                }),
+            Some(_) => published
+                .iter()
+                .find(|definition| definition["name"] == name)
+                .cloned(),
+        })
+        .collect())
+}
 
 fn strategy_select_definition() -> Value {
     json!({
@@ -228,6 +257,11 @@ pub(crate) struct LaneHost<'a> {
     pub plan: Option<PlanAttempt>,
     /// The gate lane's last `verdict` this turn.
     pub verdict: Option<Verdict>,
+    /// The research-loop step an autonomous turn serves; it replaces the
+    /// lane's tool table with the step's own.
+    pub autonomous: Option<TurnKind>,
+    /// A skill review turn's answers.
+    pub skill_verdicts: Vec<SkillVerdict>,
     /// The option universe a gate prospect must name. Gate turns only.
     pub options: Option<&'a OptionCatalog>,
     /// Called with the turn's usage so far, so a crash still charges it.
@@ -489,6 +523,25 @@ impl LaneHost<'_> {
     }
 }
 
+impl LaneHost<'_> {
+    /// Record one skill review answer. Rust applies it after the turn.
+    fn skill_verdict(&mut self, args: &Value) -> std::result::Result<Value, String> {
+        let verdict: SkillVerdict =
+            serde_json::from_value(args.clone()).map_err(|_| "agent_skill_verdict_invalid")?;
+        let reason = verdict.reason.trim();
+        if reason.is_empty()
+            || reason.chars().count() > 400
+            || !nivra_core::autoresearch::sha256_ok(&verdict.digest)
+            || crate::runtime::transcript::redact(&json!(reason)).as_str() != Some(reason)
+        {
+            return Err("agent_skill_verdict_invalid".into());
+        }
+        self.skill_verdicts.retain(|v| v.digest != verdict.digest);
+        self.skill_verdicts.push(verdict.clone());
+        Ok(json!({"status":"recorded","name":verdict.name,"approve":verdict.approve}))
+    }
+}
+
 impl ToolHost for LaneHost<'_> {
     fn call(
         &mut self,
@@ -496,6 +549,13 @@ impl ToolHost for LaneHost<'_> {
         name: &str,
         args: &Value,
     ) -> std::result::Result<Value, String> {
+        if let Some(kind) = self.autonomous {
+            return match kind.tools().iter().find(|(tool, _)| *tool == name) {
+                Some((_, Some(rust))) => self.bridge.call(call_id, rust, args),
+                Some((_, None)) => self.skill_verdict(args),
+                None => Err("agent_tool_not_in_step".into()),
+            };
+        }
         let tool = TOOLS
             .iter()
             .find(|tool| tool.name == name && tool.lanes.contains(&self.lane))

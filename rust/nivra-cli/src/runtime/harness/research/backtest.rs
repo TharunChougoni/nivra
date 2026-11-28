@@ -11,7 +11,9 @@ mod action_bench;
 mod archive_bars;
 mod recent_archive;
 mod strategy_replay;
-pub(crate) use archive_bars::{ARCHIVE_BARS_DATASET_ID, bar_worker_run};
+pub(crate) use archive_bars::{
+    ARCHIVE_BARS_DATASET_ID, Admit, Admitted, admit, bar_request, bar_worker_run, runtime_sha256,
+};
 pub(crate) use recent_archive::{RECENT_ARCHIVE_DATASET_ID, RecentArchiveWindow};
 
 fn deserialize_params<'de, D>(deserializer: D) -> std::result::Result<Value, D::Error>

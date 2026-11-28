@@ -9,9 +9,9 @@ use std::collections::BTreeMap;
 mod brief;
 pub(crate) mod check;
 mod client;
-mod lanes;
+pub(crate) mod lanes;
 pub(crate) mod paper;
-mod protocol;
+pub(crate) mod protocol;
 mod requests;
 pub(crate) mod service;
 pub(crate) mod shadow_report;
@@ -197,4 +197,4 @@ impl AgentSettings {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

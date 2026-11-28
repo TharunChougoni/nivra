@@ -9,7 +9,7 @@ mod writer;
 pub use history::{
     ArchiveMinuteBar, CoverageWindow, CoveredDays, DailyBar, DailyCoverage, archive_daily_bars,
     archive_minute_bars, covered_days, daily_bars, daily_coverage, daily_instrument_keys,
-    latest_daily_bars, lock_history_download,
+    last_daily_bar_day, latest_daily_bars, lock_history_download,
 };
 pub use postgres::Client as ArchiveClient;
 pub use reader::{

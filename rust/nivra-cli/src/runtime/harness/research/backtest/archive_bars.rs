@@ -78,54 +78,134 @@ pub(super) fn enqueue(
         keys.sort_unstable();
         keys.dedup();
     }
-    let request = Request {
+    let Some(request) = bar_request(
+        archive,
         window,
-        splits: windows,
-        capital: c.allocation()?,
-        costs: costs.clone(),
-        params: args.params.clone(),
-        sandbox: candidate.sandbox.clone(),
-        archive_url: archive.url.clone(),
-        archive_password_file: archive.password_file.clone(),
-    };
-    if !request.valid() {
+        windows,
+        c.allocation()?,
+        costs.clone(),
+        args.params.clone(),
+        candidate,
+    ) else {
         return Ok(not_dispatched("candidate_archive_bars_invalid"));
-    }
+    };
     let input = serde_json::to_vec(&request)?;
     if input.len() as u64 > INPUT_LIMIT {
         return Ok(not_dispatched("candidate_archive_bars_input_limit"));
     }
-    let code = args.source.as_bytes();
     let authority = c.directory.join("model");
     let mut db = open_queue(settings, &authority, true)?;
-    let session = c.session.to_string();
-    let binding = book_binding(c)?;
-    let task_id = jobs::scoped_task_id(&binding, &session, &args.task_key);
+    let admitted = admit(&mut Admit {
+        settings,
+        candidate,
+        db: &mut db,
+        authority: &authority,
+        binding: book_binding(c)?,
+        session: c.session.to_string(),
+        task_key: &args.task_key,
+        parent_turn_id,
+        model_id,
+        goal: &args.hypothesis,
+        dataset_id: &args.dataset_id,
+        policy_sha256: digest(&super::super::super::super::planner::policy_bytes(cfg)?),
+        code: args.source.as_bytes(),
+        input: &input,
+        limits: settings.admission_limits.as_ref(),
+        now,
+    })?;
+    Ok(match admitted {
+        Admitted::Queued(record) => status(&record),
+        Admitted::Refused(value) => value,
+    })
+}
+
+/// One bar job to admit to a queue. The book lane and the autonomous loop
+/// share it; each brings its own queue, authority and binding.
+pub(crate) struct Admit<'a> {
+    pub settings: &'a ResearchSettings,
+    pub candidate: &'a CandidateComputeSettings,
+    pub db: &'a mut Connection,
+    pub authority: &'a Path,
+    pub binding: String,
+    pub session: String,
+    pub task_key: &'a str,
+    pub parent_turn_id: &'a str,
+    pub model_id: &'a str,
+    pub goal: &'a str,
+    pub dataset_id: &'a str,
+    pub policy_sha256: String,
+    pub code: &'a [u8],
+    pub input: &'a [u8],
+    pub limits: Option<&'a jobs::AdmissionLimits>,
+    pub now: i64,
+}
+
+pub(crate) enum Admitted {
+    Queued(Box<jobs::TaskRecord>),
+    /// Not dispatched; the value says why.
+    Refused(Value),
+}
+
+/// The archive bar request for a window, its splits and the sandbox, with
+/// the archive connection only the worker reads.
+pub(crate) fn bar_request(
+    archive: &crate::runtime::MarketArchiveSettings,
+    window: BarWindow,
+    splits: jobs::BacktestWindows,
+    capital: Amount,
+    costs: nivra_core::finance::FeeArithmetic,
+    params: Value,
+    candidate: &CandidateComputeSettings,
+) -> Option<Request> {
+    let request = Request {
+        window,
+        splits,
+        capital,
+        costs,
+        params,
+        sandbox: candidate.sandbox.clone(),
+        archive_url: archive.url.clone(),
+        archive_password_file: archive.password_file.clone(),
+    };
+    request.valid().then_some(request)
+}
+
+/// The SHA-256 of the analysis runner image every bar job executes.
+pub(crate) fn runtime_sha256() -> Result<String> {
+    Ok(digest(&runtime_image()?))
+}
+
+pub(crate) fn admit(q: &mut Admit<'_>) -> Result<Admitted> {
+    let (settings, candidate, now) = (q.settings, q.candidate, q.now);
+    let (parent_turn_id, model_id) = (q.parent_turn_id, q.model_id);
+    let task_id = jobs::scoped_task_id(&q.binding, &q.session, q.task_key);
     let previous =
-        jobs::latest_scoped(&mut db, &task_id).map_err(|_| "research_task_state_unavailable")?;
-    let code_sha256 = digest(code);
-    let input_sha256 = digest(&input);
-    let policy_sha256 = digest(&super::super::super::super::planner::policy_bytes(cfg)?);
+        jobs::latest_scoped(q.db, &task_id).map_err(|_| "research_task_state_unavailable")?;
+    let code_sha256 = digest(q.code);
+    let input_sha256 = digest(q.input);
+    let policy_sha256 = q.policy_sha256.clone();
     let runtime_sha256 = digest(&runtime_image()?);
 
     let revision = if let Some(prior) = previous {
         if prior.spec.capability != jobs::Capability::ArchiveBars {
-            return Ok(not_dispatched("research_task_key_conflict"));
+            return Ok(Admitted::Refused(not_dispatched(
+                "research_task_key_conflict",
+            )));
         }
         if !task_state_terminal(prior.status) {
             if prior.spec.parent_turn_id == parent_turn_id
                 && prior.spec.model_id == model_id
                 && prior.spec.owner_evidence.is_none()
                 && prior.spec.policy_sha256 == policy_sha256
-                && prior.spec.goal == args.hypothesis
-                && prior.spec.registered_analysis.dataset_id == args.dataset_id
+                && prior.spec.goal == q.goal
+                && prior.spec.registered_analysis.dataset_id == q.dataset_id
                 && prior.job.spec.script_hash == code_sha256
                 && prior.job.spec.input_hash == input_sha256
                 && prior.job.spec.runtime_hash == runtime_sha256
             {
-                return Ok(status(&prior));
+                return Ok(Admitted::Queued(Box::new(prior)));
             }
-            return Ok(not_dispatched("research_task_active"));
+            return Ok(Admitted::Refused(not_dispatched("research_task_active")));
         }
         prior
             .spec
@@ -173,19 +253,19 @@ pub(super) fn enqueue(
         version: 1,
         task_id,
         revision,
-        task_key: args.task_key.clone(),
+        task_key: q.task_key.to_owned(),
         job_id,
         parent_turn_id: parent_turn_id.to_owned(),
-        session,
-        book_binding: binding,
+        session: q.session.clone(),
+        book_binding: q.binding.clone(),
         policy_sha256,
         model_id: model_id.to_owned(),
         model_revision: 0,
-        goal: args.hypothesis.clone(),
+        goal: q.goal.to_owned(),
         owner_evidence: None,
         registered_analysis: jobs::RegisteredAnalysis {
             analysis_id: ABI.into(),
-            dataset_id: args.dataset_id.clone(),
+            dataset_id: q.dataset_id.to_owned(),
             code_sha256,
             runtime_sha256,
             input_sha256,
@@ -197,24 +277,18 @@ pub(super) fn enqueue(
             .checked_add(settings.task_ttl_ms as i64)
             .ok_or("research_task_ttl_invalid")?,
     };
-    let directory = inputs_dir(&authority);
+    let directory = inputs_dir(q.authority);
     ensure_private_dir(&directory)?;
-    crate::runtime::strategy_library::write_new(&directory, &job.script_hash, code)?;
-    crate::runtime::strategy_library::write_new(&directory, &job.input_hash, &input)?;
-    match jobs::enqueue_scoped_bounded(
-        &mut db,
-        &job,
-        &task,
-        now,
-        settings.admission_limits.as_ref(),
-    )
-    .map_err(|_| "research_task_enqueue_refused")?
+    crate::runtime::strategy_library::write_new(&directory, &job.script_hash, q.code)?;
+    crate::runtime::strategy_library::write_new(&directory, &job.input_hash, q.input)?;
+    match jobs::enqueue_scoped_bounded(q.db, &job, &task, now, q.limits)
+        .map_err(|_| "research_task_enqueue_refused")?
     {
-        jobs::Admission::Admitted(record) => Ok(status(&record)),
-        jobs::Admission::Deferred { reason, trials } => Ok(json!({
+        jobs::Admission::Admitted(record) => Ok(Admitted::Queued(record)),
+        jobs::Admission::Deferred { reason, trials } => Ok(Admitted::Refused(json!({
             "status":"not_dispatched", "reason":reason, "trials":trials,
             "task_id":task.task_id, "revision":task.revision,
-        })),
+        }))),
     }
 }
 

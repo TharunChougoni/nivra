@@ -773,6 +773,7 @@ def on_bars(at, split, bars, params, state):
             c.directory.join("model"),
             task.into(),
             revision,
+            &|| false,
         )?;
         let result = backtest_result(&c, &cfg, task, revision)?;
         assert_eq!(result["result_status"], "verified", "{result}");

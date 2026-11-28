@@ -158,6 +158,12 @@ impl DailyBar {
     }
 }
 
+/// The newest session with any archived daily bar, the archive's bar
+/// watermark. `None` for an empty archive.
+pub fn last_daily_bar_day(db: &mut Client) -> Result<Option<NaiveDate>> {
+    Ok(db.query_one("SELECT max(day) FROM daily_bars", &[])?.get(0))
+}
+
 pub fn latest_daily_bars(
     db: &mut Client,
     keys: &[&str],

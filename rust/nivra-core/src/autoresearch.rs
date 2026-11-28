@@ -178,10 +178,19 @@ pub struct Decision {
     pub delta: Amount,
 }
 
+/// The limits a keep must stay inside.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Rule {
+    pub max_drawdown_bps: i64,
+    /// A quote replay must end flat. A bar run marks what it still holds at
+    /// the last close, so its P&L already prices the open position.
+    pub require_flat: bool,
+}
+
 /// The keep rule. Keep only a strictly positive improvement over every
-/// comparator, a positive net P&L, a drawdown inside the limit and a flat
-/// book at the end. Ties retain the incumbent.
-pub fn keep(candidate: &Score, comparators: &[Comparator], max_drawdown_bps: i64) -> Decision {
+/// comparator, a positive net P&L and a drawdown inside the limit. Ties
+/// retain the incumbent.
+pub fn keep(candidate: &Score, comparators: &[Comparator], rule: Rule) -> Decision {
     let best = comparators
         .iter()
         .map(|comparator| match comparator {
@@ -200,9 +209,9 @@ pub fn keep(candidate: &Score, comparators: &[Comparator], max_drawdown_bps: i64
         reject("net_pnl_not_positive")
     } else if delta <= Amount::ZERO {
         reject("not_better_than_comparator")
-    } else if candidate.max_drawdown_bps > max_drawdown_bps {
+    } else if candidate.max_drawdown_bps > rule.max_drawdown_bps {
         reject("drawdown_over_limit")
-    } else if candidate.open_positions > 0 {
+    } else if rule.require_flat && candidate.open_positions > 0 {
         reject("positions_open_at_end")
     } else {
         Decision {
@@ -323,6 +332,11 @@ pub fn slot(ordinal: u64, has_incumbent: bool, has_failure: bool) -> Slot {
 mod tests {
     use super::*;
 
+    const RULE: Rule = Rule {
+        max_drawdown_bps: 300,
+        require_flat: true,
+    };
+
     fn score(net: i64, drawdown: i64) -> Score {
         Score {
             net_pnl: Amount::from_integer(net),
@@ -354,11 +368,11 @@ mod tests {
             (score(50, 301), vec![Comparator::Cash], Verdict::Reject),
         ];
         for (candidate, comparators, expected) in cases {
-            assert_eq!(keep(&candidate, &comparators, 300).verdict, expected);
+            assert_eq!(keep(&candidate, &comparators, RULE).verdict, expected);
         }
         let mut open = score(50, 10);
         open.open_positions = 1;
-        assert_eq!(keep(&open, &[], 300).reason, "positions_open_at_end");
+        assert_eq!(keep(&open, &[], RULE).reason, "positions_open_at_end");
     }
 
     #[test]

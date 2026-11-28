@@ -140,6 +140,11 @@ struct Summary {
     fees: Amount,
     realized_net_pnl: Amount,
     mark_to_market_pnl: Amount,
+    /// Largest fall of end-of-date marked equity from its running peak
+    /// (starting at capital), in bps of capital.
+    max_drawdown_bps: i64,
+    /// Change in marked equity per IST date, flat dates included.
+    daily_net_pnl: Vec<(chrono::NaiveDate, Amount)>,
     fill_sample: Vec<Fill>,
 }
 
@@ -188,6 +193,8 @@ impl<'a> Book<'a> {
                 fees: Amount::ZERO,
                 realized_net_pnl: Amount::ZERO,
                 mark_to_market_pnl: Amount::ZERO,
+                max_drawdown_bps: 0,
+                daily_net_pnl: Vec::new(),
                 fill_sample: Vec::new(),
             },
             trace: Trace {
@@ -339,6 +346,22 @@ impl<'a> Book<'a> {
         self.summary.unfilled_signals = self.pending.len();
         self.summary.open_positions = self.held.len();
         self.summary.mark_to_market_pnl = self.equity()?.checked_sub(self.capital)?;
+        let (mut peak, mut previous) = (self.capital, self.capital);
+        for &(day, equity) in &self.trace.daily_equity {
+            peak = peak.max(equity);
+            let fall = peak
+                .checked_sub(equity)?
+                .checked_mul(Amount::from_integer(10_000))?
+                .checked_floor_ratio(self.capital)?;
+            self.summary.max_drawdown_bps = self
+                .summary
+                .max_drawdown_bps
+                .max(i64::try_from(fall).unwrap_or(i64::MAX));
+            self.summary
+                .daily_net_pnl
+                .push((day, equity.checked_sub(previous)?));
+            previous = equity;
+        }
         Ok((self.summary, self.trace))
     }
 }
@@ -554,6 +577,13 @@ mod tests {
         assert_eq!(summary.closed_trades, 1);
         assert_eq!(summary.fees, Amount::from_integer(4));
         assert_eq!(summary.realized_net_pnl, Amount::parse("13.8")?);
+        // One IST date: its net change is the whole book's change.
+        let net: Amount = summary
+            .daily_net_pnl
+            .iter()
+            .try_fold(Amount::ZERO, |sum, (_, pnl)| sum.checked_add(*pnl))?;
+        assert_eq!(net, summary.mark_to_market_pnl);
+        assert_eq!(summary.daily_net_pnl.len(), 1);
         assert_eq!(
             summary.fill_sample[0].price.amount(),
             Amount::from_integer(101)

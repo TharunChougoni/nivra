@@ -12,7 +12,11 @@ fn enabled_book() -> (tempfile::TempDir, PathBuf, WorkspaceSettings) {
     fs::write(dir.path().join("paper.sqlite"), b"BOOK").unwrap();
     fs::write(dir.path().join("book-identity.json"), b"{}").unwrap();
     let settings = settings();
-    let root = ensure(dir.path(), &settings).unwrap();
+    let root = ensure(
+        &WorkspaceRoot::book(dir.path(), &settings).unwrap(),
+        &settings,
+    )
+    .unwrap();
     (dir, root, settings)
 }
 
@@ -51,7 +55,11 @@ fn workspace_seeds_layout_without_touching_the_book() {
         assert!(root.join(name).exists(), "{name}");
     }
     fs::write(root.join("README.md"), "operator note").unwrap();
-    ensure(dir.path(), &settings).unwrap();
+    ensure(
+        &WorkspaceRoot::book(dir.path(), &settings).unwrap(),
+        &settings,
+    )
+    .unwrap();
     assert_eq!(
         fs::read_to_string(root.join("README.md")).unwrap(),
         "operator note"
@@ -110,7 +118,7 @@ fn workspace_installs_and_refreshes_read_only_strategy_references() {
         execute_scoped(
             dir.path(),
             &settings,
-            WorkspaceScope::ResearchSandbox,
+            WorkspaceScope::Decision,
             WorkspaceOp::Write {
                 path: path.into(),
                 text: "lane edit".into()
@@ -124,7 +132,7 @@ fn workspace_installs_and_refreshes_read_only_strategy_references() {
     let result = execute_scoped(
         dir.path(),
         &settings,
-        WorkspaceScope::ResearchSandbox,
+        WorkspaceScope::Decision,
         WorkspaceOp::Read(path.into()),
     )
     .unwrap();
@@ -324,7 +332,7 @@ print(json.dumps({k: numpy.score(v["move_bps"]) for k, v in rows.items()}))
     // Even if workspace.network is true, ResearchSandbox keeps network disabled for rankers.
     settings.network = true;
     let scored = execute_scoped_with_env(
-        book,
+        &test_root(book, &settings, WorkspaceScope::ResearchSandbox),
         &settings,
         WorkspaceScope::ResearchSandbox,
         Some(&env),
@@ -352,7 +360,7 @@ print(json.dumps({k: numpy.score(v["move_bps"]) for k, v in rows.items()}))
     .unwrap();
     assert_eq!(
         execute_scoped_with_env(
-            book,
+            &test_root(book, &settings, WorkspaceScope::ResearchSandbox),
             &settings,
             WorkspaceScope::ResearchSandbox,
             Some(&env),

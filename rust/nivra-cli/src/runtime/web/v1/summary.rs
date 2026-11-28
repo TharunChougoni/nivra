@@ -305,6 +305,9 @@ pub(crate) fn build_summary_envelope(view: &serde_json::Value) -> serde_json::Va
     if let Some(value) = view.get("research_tasks") {
         body["research_tasks"] = value.clone();
     }
+    if let Some(value) = view.get("research_loop").filter(|value| !value.is_null()) {
+        body["research_loop"] = value.clone();
+    }
     if let Some(operational) = view.get("operational_health") {
         body["operational_health"] = operational.clone();
     }

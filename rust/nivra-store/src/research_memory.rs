@@ -1041,12 +1041,13 @@ impl Store {
         Ok(())
     }
 
-    /// Failed attempts since the last attempt that ran to an end.
-    pub fn consecutive_failures(&self) -> Result<u32> {
+    /// Failed attempts since `since_ms` and since the last attempt that ran
+    /// to an end.
+    pub fn consecutive_failures(&self, since_ms: i64) -> Result<u32> {
         let mut statement = self
             .db
-            .prepare("SELECT state FROM attempt WHERE state NOT IN ('reserved','running','preempted') ORDER BY updated_at_ms DESC, id DESC LIMIT 16")?;
-        let states = statement.query_map([], |row| row.get::<_, String>(0))?;
+            .prepare("SELECT state FROM attempt WHERE state NOT IN ('reserved','running','preempted') AND updated_at_ms >= ?1 ORDER BY updated_at_ms DESC, id DESC LIMIT 16")?;
+        let states = statement.query_map([since_ms], |row| row.get::<_, String>(0))?;
         let mut count = 0;
         for state in states {
             if state? != "failed" {
@@ -1349,7 +1350,7 @@ impl Store {
             None => 1,
             Some((held, _, generation, _)) if held == owner => generation,
             Some((_, held_pid, generation, expires))
-                if now >= expires && (held_pid != pid && !alive(held_pid)) =>
+                if held_pid == 0 || (now >= expires && held_pid != pid && !alive(held_pid)) =>
             {
                 generation + 1
             }
@@ -1369,10 +1370,11 @@ impl Store {
         }))
     }
 
-    /// Give the lease back early so the other entry point can take it.
+    /// Give the lease back between steps so the other entry point can take
+    /// it. The next holder gets a new generation.
     pub fn release_lease(&mut self, name: &str, owner: &str) -> Result<()> {
         self.db.execute(
-            "UPDATE lease SET expires_at_ms=0 WHERE name=?1 AND owner=?2",
+            "UPDATE lease SET expires_at_ms=0, pid=0 WHERE name=?1 AND owner=?2",
             params![name, owner],
         )?;
         Ok(())
