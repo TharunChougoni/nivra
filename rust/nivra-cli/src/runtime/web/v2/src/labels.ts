@@ -193,6 +193,36 @@ export const REFERENCE_STRATEGY_LABELS: Record<string, string> = {
   vwap_trend: "VWAP trend",
 };
 
+export const SHADOW_LABELS = {
+  title: "Forward test",
+  paper: "Active paper strategy",
+  shadow: "Shadow strategy",
+  coverage: "Scans evaluated",
+  scheduledEnd: "Scheduled end",
+  workerFailures: "Worker failures",
+  markedPnl: "Marked profit after costs",
+  fees: "Fees",
+  fills: "Fills",
+  open: "Open positions",
+  refusals: "Refused actions",
+  comparable: "Both books covered the same scans.",
+  insufficient: "The results have limited comparability.",
+  idle: "Waiting for a candidate",
+  running: "Collecting evidence",
+  between_sessions: "Waiting for the next session",
+  completed: "Session complete",
+  inconclusive: "Inconclusive",
+  unavailable: "Forward test unavailable",
+  strategy_shadow_disabled: "The operator disabled the forward test.",
+  strategy_shadow_restarted: "The controller restarted during the window.",
+  strategy_shadow_stopped: "The controller stopped during the window.",
+  strategy_shadow_receipt_gap: "The shadow missed market data.",
+  strategy_shadow_no_coverage: "The shadow evaluated no scans.",
+  strategy_shadow_session_missed: "The shadow missed a scheduled session.",
+  strategy_shadow_build_changed: "The strategy execution build changed.",
+  strategy_shadow_priority_failed: "The worker could not lower its scheduling priority.",
+};
+
 /** The strategy executor's states, reasons and action outcomes. */
 export const STRATEGY_LABELS: Record<string, string> = {
   ready: "Running on each scan",
@@ -223,6 +253,7 @@ export const STRATEGY_LABELS: Record<string, string> = {
   quote_unavailable: "Refused: no fresh quote",
   price_above_max: "Refused: the price was above the strategy's limit",
   action_cash: "Refused: not enough cash",
+  strategy_position_inherited: "Refused: an earlier strategy opened this position",
   action_sell_unheld: "Refused: nothing held to sell",
   action_sell_units: "Refused: more units than held",
   action_allowlist: "Refused: instrument not allowed",

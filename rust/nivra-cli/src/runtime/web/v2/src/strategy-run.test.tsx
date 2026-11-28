@@ -149,3 +149,41 @@ test("a fallback reads as a shipped strategy that has not passed acceptance, and
   ])
     assert.ok(none.includes(phrase), phrase);
 });
+
+test("the forward test compares the paper and shadow books", () => {
+  const outcomes = {
+    fills: 4,
+    open_positions: 0,
+    fees: "3.82",
+    outcomes: { filled: 2, stale_quote: 1 },
+  };
+  const shown = text(
+    <StrategyRun
+      run={{
+        enabled: true,
+        forward_shadow: {
+          state: "completed",
+          strategy_id: "a".repeat(64),
+          comparator_id: "b".repeat(64),
+          summary: {
+            eligible_scans: 6,
+            evaluated_scans: 6,
+            comparable: true,
+            live: { ...outcomes, marked_pnl: "-4.27" },
+            shadow: { ...outcomes, marked_pnl: "2.49" },
+          },
+        },
+      }}
+    />,
+  );
+  for (const label of [
+    "Forward test",
+    "Active paper strategy",
+    "Shadow strategy",
+    "6 of 6",
+    "Both books covered the same scans.",
+    "2.49",
+  ]) {
+    assert.ok(shown.includes(label), shown);
+  }
+});

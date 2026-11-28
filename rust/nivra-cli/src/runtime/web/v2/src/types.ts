@@ -280,6 +280,32 @@ export interface StrategyRefusal {
   reason?: string;
   reason_text?: string;
 }
+export interface ShadowOutcome {
+  fills: number;
+  marked_pnl: Decimal | null;
+  fees: Decimal | null;
+  open_positions: number | null;
+  outcomes: Record<string, number>;
+}
+
+export interface ForwardShadow {
+  state: "idle" | "running" | "between_sessions" | "completed" | "inconclusive" | "unavailable";
+  strategy_id?: string;
+  comparator_id?: string | null;
+  scheduled_end_ms?: number;
+  reason?: string | null;
+  summary?: {
+    eligible_scans?: number;
+    evaluated_scans?: number;
+    skipped_scans?: number;
+    coverage_bps?: number;
+    failures?: Record<string, number>;
+    comparable?: boolean;
+    live?: ShadowOutcome | null;
+    shadow?: ShadowOutcome | null;
+  };
+}
+
 /** The paper controller's strategy executor. Absent on older controllers. */
 export interface StrategyExecution {
   enabled?: boolean;
@@ -309,6 +335,7 @@ export interface StrategyExecution {
   actions?: StrategyAction[];
   refusals?: StrategyRefusal[];
   fills?: Fill[];
+  forward_shadow?: ForwardShadow | null;
 }
 export interface SummaryResponse extends Envelope {
   revisions?: Revisions;

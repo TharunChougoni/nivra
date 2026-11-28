@@ -6,15 +6,62 @@ import { amount, count, datetime } from "./data";
 import {
   REFERENCE_STRATEGY_LABELS,
   STRATEGY_LABELS,
+  SHADOW_LABELS,
   instrumentName,
   plain,
   sentenceCase,
   strategyOutcome,
 } from "./labels";
-import type { StrategyExecution } from "./types";
+import type { ForwardShadow, ShadowOutcome, StrategyExecution } from "./types";
 import { Empty, Facts, Panel, ShortId, Status, Table } from "./ui";
 
 type Fact = [string, React.ReactNode];
+
+function ForwardTest({ report }: { report: ForwardShadow }) {
+  const labels = SHADOW_LABELS;
+  const summary = report.summary;
+  const rows = [
+    { label: labels.paper, id: report.comparator_id, outcome: summary?.live },
+    { label: labels.shadow, id: report.strategy_id, outcome: summary?.shadow },
+  ];
+  const refusals = (outcome?: ShadowOutcome | null) =>
+    outcome
+      ? count(Object.entries(outcome.outcomes)
+          .filter(([code]) => code !== "filled" && code !== "exit_revised")
+          .reduce((total, [, value]) => total + value, 0))
+      : "—";
+  return (
+    <section aria-label={labels.title}>
+      <h3>{labels.title}</h3>
+      <Status value={report.state}>{labels[report.state]}</Status>
+      {report.reason && <p>{plain(report.reason, labels)}</p>}
+      <Facts
+        items={[
+          [labels.coverage, summary?.eligible_scans === undefined
+            ? "—"
+            : `${count(summary.evaluated_scans)} of ${count(summary.eligible_scans)}`],
+          [labels.scheduledEnd, report.scheduled_end_ms ? datetime(report.scheduled_end_ms) : "—"],
+          [labels.workerFailures, count(Object.values(summary?.failures ?? {}).reduce((a, b) => a + b, 0))],
+        ]}
+      />
+      {report.strategy_id && (
+        <Table
+          compact
+          rows={rows}
+          columns={[
+            { key: "label", label: "Strategy", render: (row) => <>{row.label} <ShortId value={row.id ?? undefined} /></> },
+            { key: "pnl", label: labels.markedPnl, num: true, render: (row) => amount(row.outcome?.marked_pnl) },
+            { key: "fees", label: labels.fees, num: true, render: (row) => amount(row.outcome?.fees) },
+            { key: "fills", label: labels.fills, num: true, render: (row) => row.outcome ? count(row.outcome.fills) : "—" },
+            { key: "open", label: labels.open, num: true, render: (row) => row.outcome ? count(row.outcome.open_positions) : "—" },
+            { key: "refusals", label: labels.refusals, num: true, render: (row) => refusals(row.outcome) },
+          ]}
+        />
+      )}
+      {summary?.shadow && <p>{summary.comparable ? labels.comparable : labels.insufficient}</p>}
+    </section>
+  );
+}
 
 export function StrategyRun({ run }: { run?: StrategyExecution | null }) {
   if (!run?.enabled)
@@ -94,6 +141,7 @@ export function StrategyRun({ run }: { run?: StrategyExecution | null }) {
           ],
         ]}
       />
+      {run.forward_shadow?.state && <ForwardTest report={run.forward_shadow} />}
       <h3>Recent actions</h3>
       <Table
         compact
