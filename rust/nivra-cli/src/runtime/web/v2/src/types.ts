@@ -216,6 +216,8 @@ export interface ResearchLoopStatus {
   enabled?: boolean;
   state?: string | null;
   reason?: string | null;
+  tape_state?: string | null;
+  tape_session?: string | null;
   next_step_ms?: number | null;
   last_step_ms?: number | null;
   budget?: {

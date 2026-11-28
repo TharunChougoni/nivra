@@ -223,6 +223,14 @@ export function ResearchLoopPanel({
     loop.state === "waiting" && loop.reason
       ? label(loop.reason)
       : label(loop.state);
+  const tape = loop.tape_state
+    ? [
+        label(loop.tape_state),
+        loop.tape_session ? exchangeDate(loop.tape_session) : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : null;
   const budget = loop.budget;
   const campaign = loop.campaign;
   const latest = loop.latest;
@@ -249,6 +257,7 @@ export function ResearchLoopPanel({
       <Facts
         items={[
           ["Now", now],
+          ...(tape ? [["Tape", tape] as [string, string]] : []),
           ["Next step", next],
           [
             "Left today",

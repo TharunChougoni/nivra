@@ -27,6 +27,7 @@ export const LABELS: Record<string, string> = {
   insufficient_evidence: "Not enough evidence",
   gate_escalated: "Escalated",
   gate_declined: "Declined",
+  pending_fresh_book: "Pending fresh book",
 };
 
 /** Capital sleeves, in the owner's words. */
@@ -137,6 +138,7 @@ export const RESEARCH_LOOP_LABELS: Record<string, string> = {
   proposal_turn_failed: "Idea turn failed",
   unavailable: "Status unavailable",
   waiting_for_tape: "Waiting for tape",
+  using_previous_tape: "Using previous tape",
   waiting_for_seal: "Waiting for the session to close",
   day_variants_exhausted: "Today's new ideas are used up",
   day_turns_exhausted: "Today's research turns are used up",

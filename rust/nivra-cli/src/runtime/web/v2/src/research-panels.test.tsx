@@ -132,5 +132,9 @@ test("the research loop says it waits for tape and shows today's allowance and i
   assert.match(waiting, /Idea 1 · Breakout · Kept · ₹120\.00 after costs/);
   assert.doesNotMatch(waiting, /waiting_for_tape|day_usd/);
   assert.match(loop({ reason: "day_usd_exhausted" }), /Today's research spend is used up/);
+  assert.match(
+    loop({ state: "proposed", reason: null, tape_state: "using_previous_tape", tape_session: "2026-11-26" }),
+    /Using previous tape · 2026-11-26 IST/,
+  );
   assert.match(loop({ enabled: false }), /The research loop is off/);
 });
