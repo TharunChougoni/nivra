@@ -96,7 +96,8 @@ impl Store {
              UNION SELECT manifest_digest FROM campaign
              UNION SELECT report_blob FROM holdout_report WHERE report_blob IS NOT NULL
              UNION SELECT digest FROM skill_revision
-             UNION SELECT evidence_digest FROM finding WHERE evidence_digest IS NOT NULL",
+             UNION SELECT evidence_digest FROM finding WHERE evidence_digest IS NOT NULL
+             UNION SELECT json_extract(plan, '$.source_blob') FROM strategy_shadow_window",
         )?;
         let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
         let mut digests = Vec::new();

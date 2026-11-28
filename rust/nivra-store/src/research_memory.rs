@@ -17,12 +17,14 @@ pub use options::OptionStage;
 mod qualification;
 pub use qualification::Holdout;
 mod records;
+mod shadow;
 pub use objects::{BackupReport, verify};
 pub use records::*;
 use records::{
     ATTEMPT, CAMPAIGN, EXPERIMENT, FINDING, SKILL, attempt_row, campaign_row, experiment_row,
     finding_row, idea_row, skill_row,
 };
+pub use shadow::{ShadowPlan, ShadowState, ShadowWindow};
 #[cfg(test)]
 mod tests;
 

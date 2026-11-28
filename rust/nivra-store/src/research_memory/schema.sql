@@ -189,3 +189,22 @@ CREATE TABLE IF NOT EXISTS quote_draft(
   params_blob TEXT NOT NULL,
   frozen_at_ms INTEGER NOT NULL
 );
+
+-- Independent evidence for any reviewed library entry. A promotion links to
+-- one experiment, but a paper library entry need not belong to a campaign.
+CREATE TABLE IF NOT EXISTS strategy_shadow_window(
+  id INTEGER PRIMARY KEY,
+  strategy_id TEXT NOT NULL UNIQUE,
+  plan TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('running','between_sessions','completed','inconclusive')),
+  reason TEXT,
+  summary TEXT NOT NULL DEFAULT '{}'
+);
+CREATE UNIQUE INDEX IF NOT EXISTS strategy_shadow_one_window
+  ON strategy_shadow_window((1)) WHERE state IN ('running','between_sessions');
+CREATE TABLE IF NOT EXISTS strategy_shadow_session(
+  window_id INTEGER NOT NULL REFERENCES strategy_shadow_window(id),
+  session TEXT NOT NULL,
+  ledger BLOB,
+  PRIMARY KEY(window_id, session)
+);
