@@ -162,7 +162,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         ),
         function(
             "experiment_submit",
-            "Submit one recorded idea for evaluation. Give the idea id, the workspace script path, its params and the stage. The host freezes the campaign's dates, universe, ₹5,000 capital, costs and comparator, reserves one trial and returns the experiment id. stage=bars queues one bounded archive job whose verdict reaches the next turn; stage=quote_replay replays recorded quotes inside this call and returns the verdict. An identical submission returns its earlier record and spends nothing.",
+            "Submit one recorded idea for evaluation. Give the idea id, the workspace script path, its params and the stage. The host freezes the campaign's dates, universe, cash-sleeve capital, costs and comparator, reserves one trial and returns the experiment id. stage=bars queues one bounded archive job whose verdict reaches the next turn; stage=quote_replay replays recorded quotes inside this call and returns the verdict. An identical submission returns its earlier record and spends nothing.",
             json!({"idea_id":{"type":"integer","minimum":1},
                 "source_path":{"type":"string","minLength":1,"maxLength":256,"description":"scripts/<name>.py in the research workspace."},
                 "params":{"type":"string","minLength":2,"maxLength":65536,"description":"A JSON object encoded as a string."},

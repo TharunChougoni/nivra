@@ -12,9 +12,9 @@ good outcome.
 
 ## What the host freezes
 
-The campaign in the brief fixes the dates, the universe, the ₹5,000 research
-capital, the paper costs, the training and scored (selection) split and the
-comparator. You cannot change them. `backtest` in an autonomous turn takes
+The campaign in the brief fixes the dates, the universe, the cash sleeve's
+capital, the paper costs, the chronological folds and the comparator. You
+cannot change them. `backtest` in an autonomous turn takes
 only the idea id, the workspace script path, its params and the stage.
 
 ## A proposal turn
@@ -46,14 +46,17 @@ only the idea id, the workspace script path, its params and the stage.
 The host keeps an experiment only when, on identical dates, universe, costs
 and capital:
 
-- its net P&L after costs on the scored split is strictly positive,
-- it beats uninvested cash, its pinned parent and the cell incumbent by a
-  strictly positive margin (ties keep the incumbent),
+- its pooled net P&L after costs across three chronological folds is strictly
+  positive,
+- its median paired difference beats cash, its pinned parent and the cell
+  incumbent, with wins on at least two folds (ties keep the incumbent),
 - its drawdown stays within the acceptance limit, and
-- a quote replay ends flat. A bar run marks open holdings at the last close.
+- a quote replay ends flat. A bar run marks open holdings at the last close
+  and reports the open count.
 
 A keep replaces the cell incumbent. Everything else is recorded and stays
-searchable.
+searchable. As the campaign nears its trial cap, the host freezes at most one
+finalist and reads two unseen months once before any translation.
 
 ## The trial allowance
 

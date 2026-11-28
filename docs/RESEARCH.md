@@ -117,7 +117,9 @@ publish a result.
 
 **The keep rule.** Each fold starts with independent cash and fills whole
 shares at the next observed open in that fold. Pending orders expire at its
-boundary. An open terminal position blocks qualification. Net P&L must be
+boundary. A bar book marks an open terminal position at the last observed
+close and keeps the count in its report; there is no executable exit to
+charge at that close. A quote replay must still end flat. Net P&L must be
 positive across the three folds. The candidate must beat cash and each
 available required comparator on at least two folds, with a positive median
 paired after-cost difference and drawdown inside the configured limit. Ties
