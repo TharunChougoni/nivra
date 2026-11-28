@@ -21,7 +21,9 @@ mod bars;
 mod quotes;
 #[cfg(test)]
 pub(super) use bars::campaign_manifest;
-pub(super) use bars::{BarManifest, admit_bar, bar_outcome, ensure_campaign, read_snapshot};
+pub(super) use bars::{
+    BarManifest, admit_bar, bar_outcome, complete_month_end, ensure_campaign, read_snapshot,
+};
 pub(super) use quotes::run_quote;
 use quotes::{QuoteManifest, Translation};
 

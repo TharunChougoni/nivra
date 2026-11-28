@@ -32,6 +32,7 @@ fn option_stage_compares_archive_observations_without_opening_a_paper_book() -> 
             "slippage_bps":"0","rounding_increment":null,
         }))?,
     );
+    c.sleeves.options.capital = Amount::from_integer(5_000);
     c.sleeves.options.risk_per_trade_bps = 3000;
     c.sleeves.options.max_position_bps = 10000;
     c.execution.session_start_minute = 555;

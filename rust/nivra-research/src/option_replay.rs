@@ -2,7 +2,7 @@
 //! observations and option touches. The only ledger is a fresh virtual book.
 use chrono::NaiveDate;
 use nivra_core::{
-    autoresearch::{RESEARCH_CAPITAL_RUPEES, ist_minute},
+    autoresearch::ist_minute,
     execution::{ExitIntent, Instrument, Portfolio, Quote},
     finance::{Amount, FeeArithmetic, FeeSchedule, Price},
     market::{MAX_FINANCIAL_AGE_MS, OptionCatalog, OptionContract, Segment},
@@ -41,6 +41,7 @@ pub enum Ranking {
 pub struct Policy {
     pub fees: FeeArithmetic,
     pub sizing: SizingPolicy,
+    pub capital: Amount,
     pub session_start_minute: u32,
     pub session_end_minute: u32,
 }
@@ -181,15 +182,11 @@ pub struct Comparison {
     pub execution_authorized: bool,
 }
 
-fn capital() -> Amount {
-    Amount::from_integer(RESEARCH_CAPITAL_RUPEES)
-}
-
 fn virtual_book(policy: &Policy) -> Portfolio {
     let mut book = Portfolio::with_allocations(vec![Allocation {
         at_ms: 0,
         sleeve: Sleeve::Options,
-        amount: capital(),
+        amount: policy.capital,
         reason: ABI.into(),
     }]);
     book.fee_schedule = Some(
@@ -412,7 +409,10 @@ fn arm(policy: &Policy, cohort: &Cohort, ranking: Ranking) -> Result<Arm> {
             )
         });
     Ok(Arm {
-        net_pnl: complete.then_some(book.sleeve_cash(Sleeve::Options)?.checked_sub(capital())?),
+        net_pnl: complete.then_some(
+            book.sleeve_cash(Sleeve::Options)?
+                .checked_sub(policy.capital)?,
+        ),
         trades: book.fills.len() / 2,
         equity_sleeve_cash: book.sleeve_cash(Sleeve::Cash)?,
         outcomes,
@@ -422,6 +422,9 @@ fn arm(policy: &Policy, cohort: &Cohort, ranking: Ranking) -> Result<Arm> {
 pub fn compare(policy: &Policy, cohort: &Cohort, ranking: Ranking) -> Result<Comparison> {
     policy.fees.validate()?;
     policy.sizing.validate()?;
+    if policy.capital <= Amount::ZERO {
+        return Err("option_sleeve_capital_required".into());
+    }
     let mut frozen_gate = arm(policy, cohort, Ranking::Gate)?;
     let mut proposed = arm(policy, cohort, ranking)?;
     let hypothetical_difference = proposed
@@ -449,7 +452,7 @@ pub fn compare(policy: &Policy, cohort: &Cohort, ranking: Ranking) -> Result<Com
         ranking,
         reason,
         observations: cohort.observations(),
-        starting_options_cash: capital(),
+        starting_options_cash: policy.capital,
         proposed,
         frozen_gate,
         hypothetical_difference,

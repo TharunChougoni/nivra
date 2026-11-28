@@ -176,7 +176,7 @@ fn leased(
 
 /// Resolve the newest trading session (within `MAX_TAPE_LOOKBACK_SESSIONS` of
 /// `last_sealed`) whose daily bars are archived.
-fn resolve_tape(
+pub(super) fn resolve_tape(
     c: &Config,
     last_sealed: NaiveDate,
     tape: &mut dyn FnMut(NaiveDate) -> Result<bool>,
@@ -277,15 +277,23 @@ fn advance(
             ));
         }
     }
-    let campaign = match store.campaign(&settings.campaign.name)? {
-        Some(campaign) => campaign,
+    let (campaign, resolved_tape) = match store.campaign(&settings.campaign.name)? {
+        Some(campaign) => (campaign, None),
         None => match resolve_tape(s.c, s.last_sealed, s.tape)? {
-            Some(tape_day) => jobs::ensure_campaign(store, s.c, s.cfg, settings, tape_day, now)?,
+            Some(tape_day) => (
+                jobs::ensure_campaign(store, s.c, s.cfg, settings, tape_day, now)?,
+                Some(tape_day),
+            ),
             None => return Ok(wait_with("waiting_for_tape", None)),
         },
     };
-    let previous_tape =
-        (campaign.development_to < s.last_sealed).then_some(campaign.development_to);
+    let previous_tape = resolved_tape
+        .filter(|tape_day| *tape_day < s.last_sealed)
+        .or_else(|| {
+            jobs::complete_month_end(s.last_sealed)
+                .filter(|expected_to| campaign.development_to < *expected_to)
+                .map(|_| campaign.development_to)
+        });
     let wait = |reason: &str| wait_with(reason, previous_tape);
     let done = |state: &'static str, experiment_id: Option<i64>| {
         done_with(state, experiment_id, previous_tape)
@@ -740,7 +748,10 @@ pub(crate) fn status(c: &Config, cfg: &PlannerConfig, now: i64) -> Value {
         let last_sealed = super::cli::calendar(c, now).2;
         let previous_tape = campaign
             .as_ref()
-            .filter(|campaign| campaign.development_to < last_sealed)
+            .filter(|campaign| {
+                jobs::complete_month_end(last_sealed)
+                    .is_some_and(|expected_to| campaign.development_to < expected_to)
+            })
             .map(|campaign| campaign.development_to);
         let tape_state = previous_tape
             .map(|_| Value::String("using_previous_tape".into()))

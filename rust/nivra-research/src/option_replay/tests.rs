@@ -66,6 +66,7 @@ fn fixture(ask: &str, age: i64, expiry: &str) -> (Policy, Cohort) {
             max_positions: 1,
             min_order_rupees: Amount::from_integer(200),
         },
+        capital: Amount::from_integer(5_000),
         session_start_minute: 555,
         session_end_minute: 930,
     };

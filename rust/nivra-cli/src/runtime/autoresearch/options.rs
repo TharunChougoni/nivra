@@ -17,6 +17,9 @@ pub(crate) struct CompareArgs {
 }
 
 fn policy(c: &Config) -> Result<Policy> {
+    if c.sleeves.options.capital <= nivra_core::finance::Amount::ZERO {
+        return Err("option_sleeve_capital_required".into());
+    }
     Ok(Policy {
         fees: c
             .paper_costs_by_segment
@@ -24,6 +27,7 @@ fn policy(c: &Config) -> Result<Policy> {
             .ok_or("option_replay_costs_unavailable")?
             .clone(),
         sizing: c.sleeves.options.policy(),
+        capital: c.sleeves.options.capital,
         session_start_minute: c.execution.session_start_minute,
         session_end_minute: c.execution.session_end_minute,
     })

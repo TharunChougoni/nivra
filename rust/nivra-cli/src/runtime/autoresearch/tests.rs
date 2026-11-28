@@ -752,7 +752,6 @@ fn after_the_seal_one_idea_runs_one_job_to_a_verdict_under_budget_and_restart() 
 }
 
 #[test]
-<<<<<<< HEAD
 fn previous_tape_fallback_is_bounded_and_reported() {
     let dir = tempfile::tempdir().unwrap();
     let (c, cfg) = loop_config(dir.path(), |_| {});
@@ -788,31 +787,65 @@ fn previous_tape_fallback_is_bounded_and_reported() {
         .unwrap();
         assert_eq!(report.state, "waiting");
         assert_eq!(report.reason.as_deref(), Some("waiting_for_tape"));
-        assert!(open(&c).unwrap().campaign("bars-v1").unwrap().is_none());
+        let name = &cfg.autoresearch.as_ref().unwrap().campaign.name;
+        assert!(open(&c).unwrap().campaign(name).unwrap().is_none());
     }
     peer.join().unwrap();
 
-    // Case 2: 2026-11-27 is missing, 2026-11-26 is covered -> freezes on
-    // 2026-11-26, runs proposal, and reports using_previous_tape + session.
+    // Case 2: resolve_tape skips missing 2026-11-27 (and holiday 2026-11-24)
+    // within 5 trading sessions to return 2026-11-26, and stops at 6 sessions.
+    let last_sealed: NaiveDate = "2026-11-27".parse().unwrap();
+    let mut only_old = |day: NaiveDate| Ok(day <= "2026-11-18".parse::<NaiveDate>().unwrap());
+    assert_eq!(
+        super::coordinator::resolve_tape(&c, last_sealed, &mut only_old).unwrap(),
+        None
+    );
+    let mut prev_ok = |day: NaiveDate| Ok(day <= "2026-11-26".parse::<NaiveDate>().unwrap());
+    assert_eq!(
+        super::coordinator::resolve_tape(&c, last_sealed, &mut prev_ok).unwrap(),
+        Some("2026-11-26".parse().unwrap())
+    );
+
+    // Case 3: A campaign frozen on 2026-10-31 is current while last_sealed is
+    // 2026-11-27, and reports using_previous_tape once last_sealed enters Dec.
+    let loop_settings = cfg.autoresearch.as_ref().unwrap();
+    let manifest =
+        super::jobs::campaign_manifest(&c, &cfg, loop_settings, "2026-11-26".parse().unwrap())
+            .unwrap();
+    open(&c)
+        .unwrap()
+        .ensure_campaign(&nivra_store::research_memory::NewCampaign {
+            name: &loop_settings.campaign.name,
+            segment: super::SEGMENT,
+            manifest: &serde_json::to_vec(&manifest).unwrap(),
+            development_from: manifest.window.from,
+            development_to: manifest.window.to,
+            selection_from: "2026-08-01".parse().unwrap(),
+            trial_cap: loop_settings.campaign.trial_cap,
+            now: ist("2026-11-26", 16, 0),
+        })
+        .unwrap();
+
+    let dec_clock = || ist("2026-12-02", 12, 0);
     let (client, peer) = connect(|peer| {
         let (id, turn) = peer.turn();
         assert_eq!(
             brief(&turn)["campaign"]["development_to"],
-            json!("2026-11-26")
+            json!("2026-10-31")
         );
         peer.finish(&id, "ok", "done", 1, 0.01);
     });
     let mut agent = fixture_agent(client);
     let mut jobs = ScriptedJobs(Vec::new());
     {
-        let mut runner = LaneRunner::new(&mut agent, &agent_settings, &c, &cfg, &clock);
+        let mut runner = LaneRunner::new(&mut agent, &agent_settings, &c, &cfg, &dec_clock);
         let mut ctx = context("5000");
-        let mut covers = |day: NaiveDate| Ok(day <= "2026-11-26".parse::<NaiveDate>().unwrap());
+        let mut covers = |_: NaiveDate| Ok(true);
         let report = step(&mut Step {
             c: &c,
             cfg: &cfg,
             owner: "test:1",
-            clock: &clock,
+            clock: &dec_clock,
             turns: &mut RunnerTurns {
                 runner: &mut runner,
                 context: &mut ctx,
@@ -822,19 +855,19 @@ fn previous_tape_fallback_is_bounded_and_reported() {
             tape: &mut covers,
             trading_today: false,
             sealed_today: false,
-            last_sealed: "2026-11-27".parse().unwrap(),
+            last_sealed: "2026-12-01".parse().unwrap(),
         })
         .unwrap();
         assert_eq!(report.state, "proposed");
         let report_json = serde_json::to_value(&report).unwrap();
         assert_eq!(report_json["tape_state"], json!("using_previous_tape"));
-        assert_eq!(report_json["tape_session"], json!("2026-11-26"));
-        let status_json = super::status(&c, &cfg, clock());
+        assert_eq!(report_json["tape_session"], json!("2026-10-31"));
+        let status_json = super::status(&c, &cfg, dec_clock());
         assert_eq!(status_json["tape_state"], json!("using_previous_tape"));
-        assert_eq!(status_json["tape_session"], json!("2026-11-26"));
+        assert_eq!(status_json["tape_session"], json!("2026-10-31"));
         assert_eq!(
             status_json["campaign"]["development_to"],
-            json!("2026-11-26")
+            json!("2026-10-31")
         );
     }
     peer.join().unwrap();
@@ -950,5 +983,4 @@ fn confirmation_reads_real_bars_once_and_keeps_only_the_sealed_verdict()
     assert_eq!(store.holdout(campaign.id)?, Some(sealed));
     assert!(!crate::runtime::strategy_library::root(&c)?.exists());
     Ok(())
->>>>>>> 60a2d75 (wip(research): offline qualification in progress (Sol stopped at usage limit))
 }

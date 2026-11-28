@@ -28,6 +28,11 @@ pub(in crate::runtime::autoresearch) struct BarManifest {
     pub sandbox: nivra_sandbox::SandboxConfig,
 }
 
+/// The last calendar day of the last complete month on or before `to`.
+pub(in crate::runtime::autoresearch) fn complete_month_end(to: NaiveDate) -> Option<NaiveDate> {
+    to.succ_opt()?.with_day(1)?.pred_opt()
+}
+
 /// The bar manifest a campaign ending on `to` freezes.
 pub(in crate::runtime::autoresearch) fn campaign_manifest(
     c: &Config,
@@ -36,9 +41,9 @@ pub(in crate::runtime::autoresearch) fn campaign_manifest(
     to: NaiveDate,
 ) -> Result<BarManifest> {
     let campaign = &settings.campaign;
-    let next_month = to.succ_opt().ok_or("autoresearch_campaign_invalid")?;
-    let end = next_month
-        .with_day(1)
+    let month_end = complete_month_end(to).ok_or("autoresearch_campaign_invalid")?;
+    let end = month_end
+        .succ_opt()
         .ok_or("autoresearch_campaign_invalid")?;
     let month_before = |months| {
         end.checked_sub_months(Months::new(months))
