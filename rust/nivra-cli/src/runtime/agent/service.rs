@@ -1025,7 +1025,7 @@ impl LaneService {
                 .loop_report
                 .as_ref()
                 .map_or(cycle.now.saturating_add(CONTEXT_RETRY_MS), |report| {
-                    report.next_wake_ms
+                    report.next_step_ms
                 });
             self.loop_next_ms = next.max(cycle.now.saturating_add(1_000));
             self.status = json!({"status":"idle","last":{"lane":done.lane,"research_loop":done.loop_report,

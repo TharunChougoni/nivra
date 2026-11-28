@@ -1,5 +1,68 @@
 # Source snapshot
 
+## Unreleased
+
+The research lane remembers across daily books and runs a bounded
+autonomous research loop overnight: one idea, one strategy, one frozen
+evaluation, then a recorded verdict.
+
+### Upgrade an installed paper host
+
+1. Install the release. The first research-loop step creates
+   `SESSIONS_ROOT/research/` (`research.sqlite`, `objects/`, `jobs.sqlite`,
+   `workspace/`) and copies every dated book's workspace scripts, notes and
+   skills into it once. Book skills become proposed drafts. Old books stay
+   unchanged.
+2. Write a new planner file with the `autoresearch` block from
+   `packaging/rust/autoresearch.fragment.json`. It needs the `workspace` block
+   enabled, `research_tools.candidate_compute` enabled, `market_archive` in
+   the paper config and a `review` lane. Optionally set the research lane
+   model to `openai-codex/gpt-6.2-sol` as in `agent-settings.example.json`.
+   Keep the old file as `*.pre-autoresearch`, run
+   `nivra planner config-check --planner NEW_PLANNER --session SESSION`, then
+   apply it with `config-apply`. The block does not change the policy hash.
+3. Install the timer for the hours the controller is down:
+   `cp packaging/rust/nivra-research-loop.{service,timer} ~/.config/systemd/user/`,
+   `systemctl --user daemon-reload` and
+   `systemctl --user enable --now nivra-research-loop.timer`.
+4. After the next seal, check `research_loop` in `/api/v1/summary` or run
+   `nivra research-loop --config PAPER_CONFIG status`. Expect
+   `waiting_for_tape` until the archive holds the sealed session's daily bars,
+   then proposals and verdicts.
+5. `nivra planner register-ranker` now takes `--sessions-root` instead of
+   `--book`; the script resolves in the research workspace.
+
+### Changed
+
+- The research lane's workspace moved from `<book>/workspace/` to the
+  persistent `<sessions_root>/research/workspace/` with `scripts/`,
+  `params/`, `notes/`, `skills-proposed/`, `skills/` and
+  `reference/strategies/`. The decision, review and gate lanes keep the
+  book's workspace. Rust names each lane's skills directory in the turn, so
+  pi discovers reviewed research skills; drafts stay out of discovery until a
+  review-lane turn approves them and Rust installs them.
+- New research tools `research_history`, `idea_record` and `finding_record`
+  read and write `research.sqlite`: ideas, experiments with every loser,
+  findings, cell incumbents and approved procedures.
+- The research loop runs from the seal until 08:30 IST and all day without a
+  session, one job at a time, yielding to decision work and memory pressure.
+  It freezes a campaign (365 days of daily bars ending on the last sealed
+  session, the last 90 scored, ₹5,000 capital, paper costs, cash as the
+  comparator), reserves each trial, its day slot and its submission key in
+  one transaction, keeps only what beats its parent, the cell incumbent and
+  cash after costs, and counts every trial against a cap of 60. Day ceilings:
+  30 variants, 60 turns, 200 calls and USD 8. A quote-replay experiment that
+  passes acceptance still registers in the library directly.
+- `nivra research-loop` steps the loop off-hours (`tick`), prints its state
+  (`status`), and backs up (`backup --to`) or checks (`verify --root`) the
+  record.
+- Bar reports carry the scored split's daily net P&L and its maximum
+  drawdown in bps.
+- The dashboard's operations page shows the research loop: what it does or
+  why it waits, today's allowance, trials used and the latest verdict.
+- The research prompt no longer says every backtest is asynchronous: quote
+  replays answer inside the call and only `archive_bars` runs are jobs.
+
 ## 0.19.0 — 2026-11-28
 
 The book splits its capital into a cash sleeve for the stock strategies and

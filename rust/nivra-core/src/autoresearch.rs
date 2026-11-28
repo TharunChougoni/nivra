@@ -1,5 +1,5 @@
 //! The autonomous research protocol: experiment identity, the keep rule, the
-//! IST research-day budget and the loop's wake window. Pure functions only;
+//! IST research-day budget and the loop's working window. Pure functions only;
 //! the record lives in `nivra-store::research_memory`.
 use crate::finance::Amount;
 use crate::replay::digest;

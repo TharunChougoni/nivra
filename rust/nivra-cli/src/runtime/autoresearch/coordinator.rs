@@ -84,7 +84,7 @@ pub(crate) struct StepReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub experiment_id: Option<i64>,
     /// When the caller should step again.
-    pub next_wake_ms: i64,
+    pub next_step_ms: i64,
 }
 
 impl StepReport {
@@ -105,7 +105,7 @@ pub(crate) fn step(s: &mut Step<'_>) -> Result<StepReport> {
             state: "disabled",
             reason: None,
             experiment_id: None,
-            next_wake_ms: i64::MAX,
+            next_step_ms: i64::MAX,
         });
     };
     settings.validate()?;
@@ -116,7 +116,7 @@ pub(crate) fn step(s: &mut Step<'_>) -> Result<StepReport> {
             state: "waiting",
             reason: Some(crate::runtime::harness::failure_reason(error.as_ref())),
             experiment_id: None,
-            next_wake_ms: now.saturating_add(settings.idle_poll_ms),
+            next_step_ms: now.saturating_add(settings.idle_poll_ms),
         },
     };
     store.set_loop_state(&json!({"at_ms":now,"owner":s.owner,"report":report}))?;
@@ -133,7 +133,7 @@ fn leased(
         state: "waiting",
         reason: Some(reason.to_owned()),
         experiment_id: None,
-        next_wake_ms: now.saturating_add(settings.idle_poll_ms),
+        next_step_ms: now.saturating_add(settings.idle_poll_ms),
     };
     if let Err(reason) = window(
         s.trading_today,
@@ -172,13 +172,13 @@ fn advance(
         state: "waiting",
         reason: Some(reason.to_owned()),
         experiment_id: None,
-        next_wake_ms: now.saturating_add(settings.idle_poll_ms),
+        next_step_ms: now.saturating_add(settings.idle_poll_ms),
     };
     let done = |state: &'static str, experiment_id: Option<i64>| StepReport {
         state,
         reason: None,
         experiment_id,
-        next_wake_ms: now,
+        next_step_ms: now,
     };
     let workspace_settings = s
         .cfg
@@ -600,7 +600,7 @@ pub(crate) fn status(c: &Config, cfg: &PlannerConfig, now: i64) -> Value {
         Ok(json!({
             "enabled":true,
             "state":report["state"],"reason":report["reason"],
-            "next_wake_ms":report["next_wake_ms"],
+            "next_step_ms":report["next_step_ms"],
             "last_step_ms":state.as_ref().map(|s| s["at_ms"].clone()),
             "budget":{
                 "variants_left":limits.variants.saturating_sub(spent.variants),

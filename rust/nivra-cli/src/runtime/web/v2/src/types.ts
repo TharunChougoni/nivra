@@ -216,7 +216,7 @@ export interface ResearchLoopStatus {
   enabled?: boolean;
   state?: string | null;
   reason?: string | null;
-  next_wake_ms?: number | null;
+  next_step_ms?: number | null;
   last_step_ms?: number | null;
   budget?: {
     variants_left?: number;

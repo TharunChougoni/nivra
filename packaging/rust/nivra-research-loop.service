@@ -1,0 +1,21 @@
+[Unit]
+Description=Nivra PAPER ONLY research loop steps while the controller is down
+After=network-online.target
+Wants=network-online.target
+# The controller runs the loop itself while it is up; this run then exits
+# with controller_running and changes nothing.
+[Service]
+Type=oneshot
+ExecStart=%h/nivra-current/nivra research-loop --config %h/.config/nivra/rust-paper.json tick --max-minutes 25
+TimeoutStartSec=30min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/nivra-data %h/.local/state/nivra
+ReadWritePaths=-/var/lib/nivra-research
+MemoryHigh=768M
+MemoryMax=1G
+TasksMax=32
+LimitNOFILE=256

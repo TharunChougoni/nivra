@@ -169,6 +169,49 @@ the open.
 empty fallback list. A fallback name that is not a shipped
 `strategy_actions_v1` script refuses with `strategy_fallback_invalid`.
 
+## Autonomous research loop
+
+The planner key `autoresearch` runs the research loop described in
+[research](../../docs/RESEARCH.md#the-autonomous-research-loop).
+[`autoresearch.fragment.json`](autoresearch.fragment.json) turns it on with
+the defaults below. It needs an enabled `workspace` block and
+`research_tools.candidate_compute`, refusing with
+`autoresearch_requires_workspace_and_candidate_compute` otherwise, plus a
+`market_archive` in the paper config for bar jobs and a `review` lane for skill
+review. The block is operational: it never enters the planner policy hash.
+
+| Key | Default | Range | Meaning |
+| --- | --- | --- | --- |
+| `enabled` | `false` | | Run the loop |
+| `campaign.name` | `bars-v1` | slug | A new name starts a new campaign with fresh frozen dates and a fresh trial count |
+| `campaign.unit` | `day` | `day`, `minute` | Bar unit of the campaign window |
+| `campaign.lookback_days` | 365 | 30 to 3650 | Calendar days of history ending on the last sealed session |
+| `campaign.selection_days` | 90 | 5 to below lookback | Trailing days that are scored |
+| `campaign.instruments` | absent | up to 500 `NSE_EQ` keys | Universe; absent uses the archived cash universe |
+| `campaign.trial_cap` | 60 | 1 to 10000 | Scored variants the campaign may spend, every trial counted |
+| `day.variants` | 30 | 1 to 1000 | New variants per IST research day |
+| `day.turns` | 60 | 1 to 1000 | Autonomous turns per IST day, reviews included |
+| `day.calls` | 200 | 1 to 100000 | Billed model calls per IST day |
+| `day.usd` | 8.0 | above 0 to 1000 | Model cost per IST day in USD |
+| `turn.calls` | 8 | 1 to 200 | Worst-case calls reserved before each turn |
+| `turn.usd` | 0.4 | above 0 to `day.usd` | Worst-case cost reserved before each turn |
+| `turn.max_tool_calls` | 8 | 1 to 40 | Tool calls per autonomous turn |
+| `turn.timeout_ms` | 120000 | 10000 to 900000 | Wall time per autonomous turn |
+| `stop_minute` | 510 (08:30 IST) | 0 to 1439 | On a trading day the loop stops here and waits for the seal |
+| `max_drawdown_bps` | absent | 1 to 10000 | Keep-rule drawdown limit; absent uses `strategy_acceptance.max_drawdown_bps` |
+| `max_consecutive_failures` | 2 | 1 to 10 | Infrastructure failures in an IST day that pause the loop |
+| `max_attempts` | 3 | 1 to 10 | Attempts of one frozen experiment before it is abandoned |
+| `family_stall` | 3 | 1 to 20 | Scored non-improvements that close a family |
+| `idle_poll_ms` | 300000 | 10000 to 3600000 | How long the controller waits before asking a waiting loop again |
+| `skill_review` | `true` | | Review learned skill drafts with a review-lane turn |
+| `forward_sessions_paper` | 1 | 1 to 60 | Forward shadow sessions a paper candidate will need (forward stage) |
+| `forward_sessions_live` | 10 | 1 to 60 | Forward shadow sessions a live candidate would need; live needs a separate owner mandate |
+
+The research lane's own `daily_calls` and `daily_cost_usd` also cap each
+autonomous turn on the book's day. Install `nivra-research-loop.service` and
+`nivra-research-loop.timer` from this directory so the loop also runs when the
+controller is stopped.
+
 ## Market archive
 
 Set this block before starting the paper controller or running archive-backed

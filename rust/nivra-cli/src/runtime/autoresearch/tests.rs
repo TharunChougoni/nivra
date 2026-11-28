@@ -34,10 +34,21 @@ fn loop_config(
     edit: impl FnOnce(&mut AutoresearchSettings),
 ) -> (Config, PlannerConfig) {
     let (mut c, mut cfg) = all_tools(dir);
-    let mut loop_settings = AutoresearchSettings {
-        enabled: true,
-        ..Default::default()
-    };
+    // The shipped fragment turns the loop on with exactly the code defaults.
+    let fragment: Value = serde_json::from_str(include_str!(
+        "../../../../../packaging/rust/autoresearch.fragment.json"
+    ))
+    .unwrap();
+    let mut loop_settings: AutoresearchSettings =
+        serde_json::from_value(fragment["autoresearch"].clone()).unwrap();
+    assert_eq!(
+        loop_settings,
+        AutoresearchSettings {
+            enabled: true,
+            ..Default::default()
+        }
+    );
+    loop_settings.validate().unwrap();
     edit(&mut loop_settings);
     cfg.autoresearch = Some(loop_settings);
     std::fs::write(

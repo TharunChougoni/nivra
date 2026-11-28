@@ -1,0 +1,32 @@
+{
+	"autoresearch": {
+		"enabled": true,
+		"campaign": {
+			"name": "bars-v1",
+			"unit": "day",
+			"lookback_days": 365,
+			"selection_days": 90,
+			"trial_cap": 60
+		},
+		"day": {
+			"variants": 30,
+			"turns": 60,
+			"calls": 200,
+			"usd": 8.0
+		},
+		"turn": {
+			"calls": 8,
+			"usd": 0.4,
+			"max_tool_calls": 8,
+			"timeout_ms": 120000
+		},
+		"stop_minute": 510,
+		"max_consecutive_failures": 2,
+		"max_attempts": 3,
+		"family_stall": 3,
+		"idle_poll_ms": 300000,
+		"skill_review": true,
+		"forward_sessions_paper": 1,
+		"forward_sessions_live": 10
+	}
+}

@@ -178,9 +178,15 @@ config enables. A call to a tool outside the lane fails with
 | `research` | Decision | Queue a research request with up to eight `refs` |
 | `verdict` | Gate | Escalate the F&O batch with up to five ranked prospects, or drop it |
 | `write`, `install`, `run` | Research | Write workspace files, install an allowlisted, hash-matched file into `tools/`, run a `scripts/<name>.py` ranker in the no-network sandbox |
-| `backtest`, `backtest_status`, `backtest_result`, `backtest_cancel` | Research | Ranker backtests on configured datasets |
+| `backtest`, `backtest_status`, `backtest_result`, `backtest_cancel` | Research | Strategy backtests: a quote-tape replay answers inside the call, an `archive_bars` run is a queued job |
+| `research_history`, `idea_record`, `finding_record` | Research | Read the persistent research record, record an idea, record a finding; only with `planner.autoresearch.enabled` |
 | `quotes`, `research_cancel` | Research | Archived quote receipts, cancel a request |
 | `search`, `fetch`, `news` | Decision, research | Opt-in web tools under `planner.web_tools`; each call is logged in `model/web-tools.ndjson` |
+
+An autonomous research-loop turn publishes only the tools of its step (see
+[the research loop](RESEARCH.md#the-autonomous-research-loop)). Its `backtest`
+takes an idea id, a workspace script, params and a stage; the host freezes
+everything else. A skill review turn on the review lane gets `skill_verdict`.
 
 Per-tool row limits live under `planner.tools`. A `plan` action is `buy`,
 `sell` or `revise_exit`. A buy's time exit is a future Unix epoch millisecond.
@@ -189,16 +195,23 @@ Research results are advisory and never place, size or promote a trade.
 ### Skills
 
 The agent loads pi `SKILL.md` procedures from two locations: committed defaults
-under `agent/skills/` and learned procedures in the paper book's workspace
-`skills/` directory (`<book>/workspace/skills/`). Each skill uses YAML
-frontmatter with a lowercase-hyphen `name` and a non-empty `description`.
+under `agent/skills/` and the workspace `skills/` directory Rust names in each
+turn's `session.skills_dir`. Research reads the persistent research workspace
+(`<sessions_root>/research/workspace/skills/`); the other lanes read their
+book's workspace (`<book>/workspace/skills/`). Shipped skills win a name
+collision. Each skill uses YAML frontmatter with a lowercase-hyphen `name` and
+a non-empty `description`.
 
 - Lanes that have the `read` tool (`decision`, `research`, `review`) receive
   `<available_skills>` in their system prompt and load matching skills with
-  `read` when needed. Default skills cover `strategy-abi`,
-  `backtest-methodology`, `regime-check`, and `strategy-review`.
-- The research lane can write new standing procedures to `skills/<name>/SKILL.md`
-  in the workspace; the agent reloads skills at the start of each turn.
+  `read` when needed. Default skills cover `autoresearch`, `strategy-abi`,
+  `backtest-methodology`, `regime-check`, `strategy-library` and
+  `strategy-review`.
+- The research lane drafts learned procedures at
+  `skills-proposed/<name>/SKILL.md`. A draft never reaches discovery on its
+  own: a review-lane turn approves or rejects it and Rust writes approved
+  revisions into `skills/`. The agent reloads skills at the start of each
+  turn.
 - Invalid or colliding skill files emit `skill_diagnostic` turn events and
   stderr warnings and never abort or block a turn.
 

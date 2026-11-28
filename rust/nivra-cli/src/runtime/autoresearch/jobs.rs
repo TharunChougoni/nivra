@@ -1,6 +1,6 @@
 //! Frozen manifests, submission and the loop's own bounded job queue. The
 //! model names an idea, a workspace script and params; everything else that
-//! decides a score comes from the frozen campaign.
+//! sets a score comes from the frozen campaign.
 use super::{AutoGrant, AutoresearchSettings, SubmitArgs, research_root};
 use crate::runtime::harness::research::{
     self as harness, Admit, Admitted, BacktestArgs, CandidateComputeSettings, ResearchSettings,
@@ -208,7 +208,7 @@ fn rule(cfg: &PlannerConfig, settings: &AutoresearchSettings, stage: Stage) -> R
 
 /// Compare a score with cash, the pinned parent and the cell incumbent,
 /// each only when it was scored on the same frozen manifest.
-pub(super) fn decide(
+pub(super) fn judge(
     store: &Store,
     cfg: &PlannerConfig,
     settings: &AutoresearchSettings,
@@ -285,7 +285,7 @@ pub(super) fn bar_outcome(
             });
         }
     };
-    let decision = decide(store, cfg, settings, experiment, &score)?;
+    let decision = judge(store, cfg, settings, experiment, &score)?;
     Ok(Outcome::Scored {
         report_blob: store.put_object(report)?,
         score,
@@ -443,7 +443,7 @@ pub(super) fn run_quote(
         closed_trades: summary.trades,
         open_positions: summary.open_positions,
     };
-    let decision = decide(store, cfg, settings, experiment, &score)?;
+    let decision = judge(store, cfg, settings, experiment, &score)?;
     Ok((
         Outcome::Scored {
             report_blob: store.put_object(&bytes)?,

@@ -29,6 +29,8 @@ Every command that changes a book needs `--confirm-paper-review`.
 | --- | --- |
 | `nivra-paper.service` | Runs `nivra preflight`, then `nivra paper --config PAPER_CONFIG` |
 | `nivra-update.timer` | Starts `nivra-update.service` (`nivra update`) at :00 and :30 |
+| `nivra-research-loop.timer` | Starts `nivra-research-loop.service` (`nivra research-loop tick`) at :05 and :35; it exits while the controller runs the loop |
+| `SESSIONS_ROOT/research/` | Research record (`research.sqlite`, `objects/`), the loop's job queue and the persistent research workspace |
 | `nivra-dashboard.service` | Optional research-only dashboard for when the paper service is stopped |
 | `~/nivra-current` | Symlink to the installed release; only the updater moves it |
 | `SESSIONS_ROOT/current.json` | Pointer to the current dated session |

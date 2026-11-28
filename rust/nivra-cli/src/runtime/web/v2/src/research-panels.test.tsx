@@ -107,7 +107,7 @@ test("the research loop says it waits for tape and shows today's allowance and i
             enabled: true,
             state: "waiting",
             reason: "waiting_for_tape",
-            next_wake_ms: now + 300_000,
+            next_step_ms: now + 300_000,
             budget: { variants_left: 29, turns_left: 58, calls_left: 190, usd_left: 7.85 },
             campaign: { name: "bars-v1", trials_used: 1, trial_cap: 60 },
             latest: {

@@ -227,10 +227,10 @@ export function ResearchLoopPanel({
   const campaign = loop.campaign;
   const latest = loop.latest;
   const next =
-    typeof loop.next_wake_ms === "number" &&
-    loop.next_wake_ms > Date.now() &&
-    loop.next_wake_ms < Date.now() + 7 * 86_400_000
-      ? datetime(loop.next_wake_ms)
+    typeof loop.next_step_ms === "number" &&
+    loop.next_step_ms > Date.now() &&
+    loop.next_step_ms < Date.now() + 7 * 86_400_000
+      ? datetime(loop.next_step_ms)
       : "As soon as it can";
   const result = latest
     ? [

@@ -25,24 +25,39 @@ A strategy is one of two kinds of Python script:
 
 ## Workspace
 
-The planner config's `workspace` block enables a private directory inside the
-paper book (`root`, default `workspace`). Files in it are untrusted evidence.
-They are never prices, quotes, fills or trade authority. The trading book and
-its journal are outside the workspace.
+The planner config's `workspace` block enables two private workspaces. Files
+in them are untrusted evidence. They are never prices, quotes, fills or trade
+authority. The trading book and its journal are outside both.
+
+The research lane works in one persistent workspace under the sessions root,
+`<sessions_root>/research/workspace/`, so its scripts, notes and learned skills
+survive the daily book:
 
 | Directory | Contents |
 | --- | --- |
-| `scripts/` | Python rankers written by the research lane |
-| `notes/`, `skills/` | Notes and standing procedures the lanes keep across turns |
-| `data/`, `reports/`, `journal/` | Inputs and kept output |
-| `tools/` | Files installed only when name and SHA-256 match `install_allowlist` |
+| `scripts/` | Python strategies and rankers the research lane writes and runs |
+| `params/` | JSON parameter files |
+| `notes/` | Short notes that cite experiment and finding ids; `notes/imported/<date>/` holds notes copied from old books |
+| `skills-proposed/<name>/SKILL.md` | Learned procedures waiting for review |
+| `skills/` | Reviewed procedures, written only by Rust |
+| `reference/strategies/` | Shipped strategies, read-only, refreshed on upgrade |
+
+The decision, review and gate lanes keep the book's own workspace
+(`<book>/<root>`, default `workspace`) with `notes/`, `skills/`, `data/`,
+`reports/`, `journal/` and `tools/` (files installed only when name and SHA-256
+match `install_allowlist`).
+
+On its first step the research loop copies every dated book's
+`workspace/scripts/`, `workspace/notes/` and `workspace/skills/` once into the
+research workspace, deduplicated by SHA-256. Book skills become proposed
+drafts. Old books are never changed.
 
 The pi lanes use these workspace tools:
 
 | Tool | Lanes | Effect |
 | --- | --- | --- |
-| `list`, `read` | decision, research, review | Read workspace files |
-| `write` | research | Write under `notes/`, `skills/` or `scripts/<name>.py` |
+| `list`, `read` | decision, research, review | Read the lane's workspace |
+| `write` | research | Write under `notes/`, `params/<name>.json`, `skills-proposed/<name>/SKILL.md` or `scripts/<name>.py` |
 | `run` | research | Run a ranker in the sandbox |
 | `install` | research | Install an allowlisted file into `tools/` |
 
@@ -53,6 +68,79 @@ starts empty.
 Defaults: `max_write_bytes` 65,536, `max_file_bytes` 1 MiB, `cpu_seconds` 30,
 `memory_mb` 512 (256 for `scripts/` rankers without `research_env`, 512 when
 `research_env` or `ranker_memory_mb` is configured) and `wall_ms` 30,000.
+
+## The autonomous research loop
+
+With `planner.autoresearch.enabled`, Rust runs a bounded research loop. Rust
+keeps the experiment log and the clock; pi gets one falsifiable hypothesis and
+one editable strategy per turn. A recorded rejection is a good outcome.
+
+The record lives in `<sessions_root>/research/research.sqlite` (WAL, foreign
+keys) beside immutable blobs in `research/objects/sha256/<digest>`: campaigns,
+ideas, experiments with their attempts, findings, skill revisions, cell
+incumbents, leases and IST-day budget reservations. Promotion and shadow
+tables exist for the forward stage and stay empty for now. Bar jobs run in the
+loop's own queue, `research/jobs.sqlite`.
+
+**When it runs.** From the seal until 08:30 IST (`stop_minute`), and all day on
+weekends and exchange holidays, one step after another while there is work.
+The paper controller steps it on its lane worker after lane turns, and yields
+to decision work and memory pressure. When no controller runs,
+`nivra-research-loop.timer` starts `nivra research-loop tick` every 30 minutes;
+it exits with `controller_running` while the controller is up. Both entry
+points take the same SQLite lease, and only the lease's current generation may
+publish a result.
+
+**One step.** Each step makes one durable transition:
+
+1. A new campaign freezes its bar window once the archive's daily bars reach
+   the last sealed session (otherwise the loop reports `waiting_for_tape`):
+   `lookback_days` of history ending on that session, the last
+   `selection_days` scored, ₹5,000 research capital, the paper costs and cash
+   as the comparator.
+2. An unfinished experiment runs its frozen job. A restart adopts the job the
+   queue already holds; a preemption or an infrastructure failure starts a new
+   attempt of the same frozen experiment without spending another trial.
+3. A verified report is scored and the verdict is committed before any model
+   reads it.
+4. An interpretation turn records findings. An invalid source gets one repair.
+5. Proposed skill drafts go to a review-lane turn.
+6. Otherwise a proposal turn records one idea, writes one strategy and submits
+   it. The slot cycles through mutating an incumbent, revisiting a failure and
+   a new family.
+
+**The keep rule.** On the frozen manifest, keep an experiment only when its net
+P&L after costs on the scored split is strictly positive, it beats cash, its
+pinned parent and the cell incumbent by a strictly positive margin, its
+drawdown is within the acceptance limit and, for a quote replay, it ends flat.
+A keep replaces the cell incumbent (segment, family, regime, campaign). Ties
+keep the incumbent.
+
+**Counting.** The experiment key hashes the protocol, evaluator, stage, ABI,
+exact source, canonical params, frozen manifest and runner image. A duplicate
+submission returns the earlier record and spends nothing. Every reserved
+experiment counts as a trial against the campaign's `trial_cap` (60), failed
+and abandoned ones included, and the count never resets when a book rolls
+over. Each turn reserves its worst case (`turn.calls`, `turn.usd`) against the
+IST day's ceilings before the provider is asked and settles to the reported
+usage once. A turn that fails keeps its worst case. On the book's own day the
+research lane's daily limits also cap each turn.
+
+**Registration.** Bar evidence never registers a strategy. A quote-replay
+experiment that passes acceptance registers in the library as any replay
+does; the decision lane still chooses what runs. `forward_sessions_paper`
+(1) and `forward_sessions_live` (10) set the forward shadow window a later
+release adds; live trading needs the separate owner mandate.
+
+**Cost.** The owner measured about USD 0.08 for a six-call research turn on
+the paper host, so the default day of 60 turns and 200 calls stays inside
+USD 8. Each turn still reserves its configured worst case first.
+
+Inspect the loop with `nivra research-loop --config PAPER_CONFIG status`, or in
+`/api/v1/summary` under `research_loop`. Back up the record with
+`nivra research-loop --config PAPER_CONFIG backup --to NEW_DIR`; it takes a
+consistent SQLite copy, copies every referenced object and verifies them.
+`verify --root DIR` checks a backup or the live research root.
 
 ## Rankers
 
