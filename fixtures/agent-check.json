@@ -12,12 +12,22 @@
     "read_journal_device": 0,
     "read_journal_inode": 0,
     "strategy": "model_planner_v1",
-    "capital": "100000",
+    "capital": "105000",
     "sleeves": {
-      "cash": {"capital": "100000", "risk_per_trade_bps": 50, "max_position_bps": 4000,
-               "max_positions": 3, "min_order_rupees": "200"},
-      "options": {"capital": "0", "risk_per_trade_bps": 3000, "max_position_bps": 10000,
-                  "max_positions": 1, "min_order_rupees": "200"}
+      "cash": {
+        "capital": "100000",
+        "risk_per_trade_bps": 50,
+        "max_position_bps": 4000,
+        "max_positions": 3,
+        "min_order_rupees": "200"
+      },
+      "options": {
+        "capital": "5000",
+        "risk_per_trade_bps": 3000,
+        "max_position_bps": 10000,
+        "max_positions": 1,
+        "min_order_rupees": "200"
+      }
     },
     "paper_costs": {
       "per_order": "0.01",
@@ -25,6 +35,15 @@
       "sell_bps": "7",
       "slippage_bps": "5",
       "rounding_increment": "0.01"
+    },
+    "paper_costs_by_segment": {
+      "NSE_FO": {
+        "per_order": "23.60",
+        "buy_bps": "4.50434",
+        "sell_bps": "19.20434",
+        "slippage_bps": "5",
+        "rounding_increment": "0.01"
+      }
     }
   },
   "planner": {
@@ -82,6 +101,12 @@
         "key": "NSE_EQ|INE040A01034",
         "symbol": "HDFCBANK",
         "series": "EQ",
+        "tick": "0.05"
+      },
+      {
+        "key": "NSE_FO|26000CE",
+        "symbol": "NIFTY 26000 CE 20 OCT 26",
+        "series": "CE",
         "tick": "0.05"
       }
     ],
@@ -160,7 +185,6 @@
       "observed_ms": 1760586000000
     }
   },
-  "cash": "100000",
   "facts": "Synthetic agent-check fixture. Session open; two allowlisted instruments; no holdings.",
   "script": {
     "turns": [
@@ -223,8 +247,8 @@
                     {
                       "instrument_key": "NSE_EQ|INE002A01018",
                       "side": "buy",
-                      "rupees": "10000",
                       "units": null,
+                      "conviction": null,
                       "max_price": "2481.00",
                       "rationale": "Opening strength with liquidity; small paper size while research checks persistence.",
                       "exit_intent": {
@@ -232,10 +256,23 @@
                         "stop": "2440.00",
                         "time": null
                       }
+                    },
+                    {
+                      "instrument_key": "NSE_FO|26000CE",
+                      "side": "buy",
+                      "units": null,
+                      "conviction": null,
+                      "max_price": "70.00",
+                      "rationale": "Call on a firm open; the host sizes it to whole lots from the options sleeve.",
+                      "exit_intent": {
+                        "target": "100.00",
+                        "stop": "49.00",
+                        "time": null
+                      }
                     }
                   ],
                   "stance": "selective",
-                  "notes": "Waiting on research for follow-through."
+                  "notes": "Waiting on research for follow-through; one option lot from the options sleeve."
                 }
               }
             ]
@@ -298,6 +335,28 @@
             "text": "Read the research update; holding."
           }
         ]
+      }
+    ]
+  },
+  "options": {
+    "session": "2026-10-16",
+    "underlying_key": "NSE_INDEX|Nifty 50",
+    "underlying_symbol": "NIFTY",
+    "expiry": "2026-10-20",
+    "spot": "26010",
+    "contracts": [
+      {
+        "key": "NSE_FO|26000CE",
+        "symbol": "NIFTY 26000 CE 20 OCT 26",
+        "underlying_key": "NSE_INDEX|Nifty 50",
+        "underlying_symbol": "NIFTY",
+        "expiry": "2026-10-20",
+        "strike": "26000",
+        "option": "call",
+        "lot_size": 65,
+        "tick": "0.05",
+        "freeze_quantity": 1800,
+        "weekly": true
       }
     ]
   }

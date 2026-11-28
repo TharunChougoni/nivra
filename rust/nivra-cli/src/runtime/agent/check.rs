@@ -10,7 +10,6 @@ use crate::runtime::planner::{Backend, PlannerConfig};
 use crate::runtime::web_tools::{HttpResponse, Transport};
 use crate::runtime::{Config, Result, millis};
 use nivra_core::execution::{Instrument, Portfolio};
-use nivra_core::finance::Amount;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -33,7 +32,6 @@ struct Fixture {
     paper: Value,
     planner: Value,
     bundle: Value,
-    cash: String,
     facts: Value,
     /// The agent's `--fake` script: scripted model responses per lane turn.
     script: Value,
@@ -41,6 +39,34 @@ struct Fixture {
     snapshot: Option<Value>,
     #[serde(default)]
     intraday: Option<Value>,
+    /// A bounded Nifty option catalog, so the decision lane can plan options.
+    #[serde(default)]
+    options: Option<OptionsFixture>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OptionsFixture {
+    session: String,
+    underlying_key: String,
+    underlying_symbol: String,
+    expiry: String,
+    spot: nivra_core::finance::Price,
+    contracts: Vec<nivra_core::market::OptionContract>,
+}
+
+impl OptionsFixture {
+    fn catalog(self) -> Result<nivra_core::market::OptionCatalog> {
+        use nivra_core::time::ExchangeDate;
+        Ok(nivra_core::market::OptionCatalog::try_new(
+            ExchangeDate::parse(&self.session)?,
+            &self.underlying_key,
+            &self.underlying_symbol,
+            ExchangeDate::parse(&self.expiry)?,
+            self.spot,
+            self.contracts,
+        )?)
+    }
 }
 
 /// Serves only the fixture's frozen quote snapshot and intraday context;
@@ -154,9 +180,12 @@ fn check(args: &Args) -> Result<(bool, Value)> {
     let ready = agent.client(millis())?.ready.clone();
     let pid = agent.pid().ok_or("agent_spawn_failed")?;
     let idle = memory_kb(pid);
-    let mut portfolio = Portfolio::new();
+    // A fresh book funded by the fixture config's sleeves, as a paper start opens one.
+    let mut portfolio = Portfolio::with_allocations(c.sleeves.allocations(millis()));
     portfolio.costs = c.paper_costs.clone();
-    portfolio.cash = Amount::parse(&fixture.cash)?;
+    portfolio.fee_schedule = Some(c.fee_schedule()?);
+    portfolio.sizing = Some(c.sleeves.policies());
+    portfolio.options = fixture.options.map(OptionsFixture::catalog).transpose()?;
     let instruments: Vec<Instrument> = serde_json::from_value(fixture.bundle["allowlist"].clone())?;
     let mut context = TurnContext {
         bundle: fixture.bundle,

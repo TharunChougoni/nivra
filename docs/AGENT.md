@@ -348,7 +348,7 @@ Build and test the agent with the [pi agent gate](../AGENTS.md). Then:
 | Command | What it does |
 | --- | --- |
 | `nivra preflight --config PAPER_CONFIG` | Checks node, entry, modules, prompts and the agent directory, and that pi knows every lane model and fallback and has a credential for each. It does not read credentials. |
-| `nivra agent-check --config AGENT_SETTINGS --fixture fixtures/agent-check.json` | Runs a decision turn, its research request and the next decision turn through the real agent against pi's scripted fake provider. No network, no book. |
+| `nivra agent-check --config AGENT_SETTINGS --fixture fixtures/agent-check.json` | Runs a decision turn, its research request and the next decision turn through the real agent against pi's scripted fake provider. The fixture's sleeves fund a scratch book and its optional `options` catalog lets the plan buy a Nifty option; the report shows the units the host sized for each buy. No network, no stored book. |
 | `nivra agent-turn --config PAPER_CONFIG --lane decision --dry` | Prints the brief and published tools. Starts no agent. |
 | `nivra agent-turn --config PAPER_CONFIG --lane research --research-question 'QUESTION'` | Runs one real research turn on that question against the current book. Needs the controller stopped. Uses the lane budget. Without `--dry`, a decision turn prints its plan and never executes it. |
 | `nivra agent-shadow-report --config PAPER_CONFIG` | Reports trigger coverage and gaps from the journals. |
