@@ -1167,5 +1167,8 @@ pub(super) fn stopped_book_safe(path: &Path) -> Result<bool> {
     Ok(update_book(path)?.stopped_safe)
 }
 
+mod fresh;
+pub use fresh::open_fresh_entry;
+
 #[cfg(test)]
 mod tests;

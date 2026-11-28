@@ -1,5 +1,95 @@
 # Source snapshot
 
+## Unreleased
+
+The book splits its capital into a cash sleeve for the stock strategies and
+an options sleeve for Nifty options, and the runtime sizes every buy from its
+sleeve and the live book instead of a fixed `order_rupees`.
+
+### Upgrade an installed paper host (breaking)
+
+The book format, the paper config and the strategy action ABI change. A book
+of the old format cannot be carried, so the next session opens a fresh book in
+the same sessions root. The closed book and the strategy library stay. The
+source book must be closed, flat and not halted.
+
+1. Stop the paper service and the update timer, and check the closed book:
+
+	```sh
+	systemctl --user stop nivra-paper.service nivra-update.timer
+	sqlite3 "$SESSIONS_ROOT/$(jq -r .session "$SESSIONS_ROOT/current.json")/paper.sqlite" \
+	  "SELECT json_extract(body,'$.closed'),json_extract(body,'$.halted'),json_extract(body,'$.positions'),json_extract(body,'$.cash') FROM state WHERE id=1"
+	```
+
+	Expect `1|0|{}|CASH`. Anything else needs review before you go on.
+2. With the current paper config unchanged, install the release with
+   `nivra update --tag vX.Y.Z --operator-stopped --confirm-paper-review --config UPDATER_CONFIG`.
+   The installed updater reads that config, and the new binary refuses it
+   (`config_invalid`) until step 3. The service stays stopped.
+3. Copy the paper config to `PAPER_CONFIG.pre-sleeves`. In a new file, set
+   `session` and `previous_session` to the next trading session and the
+   closed one, `directory` to `SESSIONS_ROOT/SESSION`, `capital` to `"10000"`,
+   and add `sleeves` and the `NSE_FO` costs from
+   `packaging/rust/paper-current.example.json`
+   ([capital sleeves](packaging/rust/CONFIGURATION.md#capital-sleeves-and-sizing),
+   [F&O paper costs](docs/reference/NSE_FO_PAPER_COSTS.md)). Keep
+   `nifty_options.enabled: true`. Move the new file into place and check it
+   with `nivra readiness --config PAPER_CONFIG`.
+4. Open the fresh book:
+   `nivra rollover --config PAPER_CONFIG --open-fresh-book --confirm-paper-review`.
+   It writes `fresh-book.json` in the new session directory and renames
+   `current.json` to `current.before-SESSION.json`.
+   [Fresh book](docs/OPERATIONS.md#open-a-fresh-book-beside-a-closed-one)
+5. Refresh the pi agent runtime (`npm run build --prefix agent`) so the
+   decision lane gets the new `plan` schema and the `strategy-abi` skill.
+6. Start `nivra-paper.service` and `nivra-update.timer`. In
+   `/api/v1/summary`, `capital` is `10000` and `sleeves` lists `cash` and
+   `options` with `5000` each. The dashboard's Paper account panel shows
+   Stock strategies and Nifty options.
+7. Re-backtest library strategies. The adapter digest changed, so entries
+   report `strategy_adapter_changed` until a new replay accepts them.
+   Configured fallbacks run meanwhile. Record the changed keys in `.vm/`.
+
+To roll back, stop the service, restore `PAPER_CONFIG.pre-sleeves`, rename
+`current.before-SESSION.json` back to `current.json`, move the new session
+directory aside and roll back the release with `nivra update --tag`.
+
+### Changed
+
+- **Capital sleeves.** `Portfolio.initial_allocation` becomes an
+  append-only `allocations` ledger. Each sleeve's cash is its allocation plus
+  its sells, minus its buys and fees. A buy spends only its own sleeve's cash
+  (`insufficient_cash`), and reconciliation refuses a buy that overdrew it
+  (`sleeve_cash_overdrawn`). Drawdown halts stay book-level.
+- **Config.** The paper config needs `sleeves`, each with `capital`,
+  `risk_per_trade_bps`, `max_position_bps`, `max_positions` and
+  `min_order_rupees`. Their capitals must add up to `capital`
+  (`sleeve_capital_sum_mismatch`). `nivra setup` takes `--cash-capital` and
+  `--options-capital` instead of `--capital`.
+- **Sizing.** Every buy needs a stop below its `max_price`. The runtime buys
+  the most whole lots whose loss to the stop, with fees and exit slippage,
+  fits the sleeve's risk budget, within the position cap, the sleeve's cash
+  and, for strategies, the displayed depth. Options size to the contract lot.
+  Refusals: `sleeve_positions_full`, `size_below_lot`,
+  `sleeve_cash_insufficient`, `size_below_min_order`,
+  `size_stop_not_below_price`, `sizing_policy_exceeded`,
+  `action_stop_required`.
+- **Action ABI.** Actions lose `rupees` and gain an optional `conviction` in
+  (0, 1]. A strategy buy never names units (`action_strategy_buy_units`). A
+  decision-lane buy may, capped by the policy. The strategy observation
+  replaces `cash` with `book` and `sizing`. The eight action strategies,
+  `check_actions.py` and the replay fixture follow, and `order_rupees` and
+  `max_positions` leave the params files. Replays take an optional `sizing`
+  policy; research replays use the config's cash sleeve and its capital.
+- **F&O costs.** The example config models an Upstox Nifty option order:
+  ₹23.60 per order, 4.50434 bps on a buy, 19.20434 bps on a sell (0.15% STT),
+  5 bps slippage. See [F&O paper costs](docs/reference/NSE_FO_PAPER_COSTS.md).
+- **Decision brief and dashboard.** The brief, `/api/v1/summary` and
+  `/api/v1/portfolio` report each sleeve's capital, cash, equity, P&L and open
+  positions. `nivra agent-check` sizes a cash and an option buy.
+- **Fresh book.** `nivra rollover --open-fresh-book` opens a new session's
+  book beside a closed, flat predecessor in the same sessions root.
+
 ## 0.18.0 — 2026-11-27
 
 Strategies react to fresh pushed quotes for candidates they nominate, and a

@@ -175,7 +175,7 @@ enum Command {
     },
     /// Offline rollover preview, reviewed advance or explicit human acknowledgment; never starts trading.
     #[command(group(clap::ArgGroup::new("timed_rollover").args(["dry_run", "advance"])))]
-    #[command(group(clap::ArgGroup::new("reviewed_rollover").args(["acknowledge_closed_book", "accept_stopped_carry", "accept_halted_carry", "advance"])))]
+    #[command(group(clap::ArgGroup::new("reviewed_rollover").args(["acknowledge_closed_book", "accept_stopped_carry", "accept_halted_carry", "advance", "open_fresh_book"])))]
     Rollover {
         #[arg(long)]
         config: PathBuf,
@@ -183,9 +183,9 @@ enum Command {
         now: Option<chrono::DateTime<chrono::FixedOffset>>,
         #[arg(
             long,
-            required_unless_present_any = ["acknowledge_closed_book", "accept_stopped_carry", "accept_halted_carry", "advance"],
+            required_unless_present_any = ["acknowledge_closed_book", "accept_stopped_carry", "accept_halted_carry", "advance", "open_fresh_book"],
             requires = "now",
-            conflicts_with_all = ["acknowledge_closed_book", "accept_stopped_carry", "accept_halted_carry"]
+            conflicts_with_all = ["acknowledge_closed_book", "accept_stopped_carry", "accept_halted_carry", "open_fresh_book"]
         )]
         dry_run: bool,
         /// Seal a matching closed flat book after human inspection; preserves its stop.
@@ -200,6 +200,10 @@ enum Command {
         /// Advance one already-validated rollover while the controller is stopped.
         #[arg(long, requires_all = ["now", "confirm_paper_review"])]
         advance: bool,
+        /// Open CONFIG's session as a fresh book funded by its sleeves, beside a
+        /// closed, flat predecessor. Moves only the session pointer aside.
+        #[arg(long, requires = "confirm_paper_review")]
+        open_fresh_book: bool,
         #[arg(long, requires = "reviewed_rollover")]
         confirm_paper_review: bool,
     },
@@ -411,9 +415,12 @@ fn main() -> ExitCode {
             accept_stopped_carry,
             accept_halted_carry,
             advance,
+            open_fresh_book,
             confirm_paper_review,
         } => {
-            if acknowledge_closed_book {
+            if open_fresh_book {
+                runtime::rollover::open_fresh_entry(&config, confirm_paper_review)
+            } else if acknowledge_closed_book {
                 runtime::rollover::acknowledge_entry(&config, confirm_paper_review)
             } else if accept_stopped_carry {
                 runtime::rollover::accept_stopped_carry_entry(&config, confirm_paper_review)

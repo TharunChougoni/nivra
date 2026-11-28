@@ -339,6 +339,29 @@ blocked and exits protected. A multi-day halted hold needs a new acceptance
 for each closed session. If you start the controller instead of advancing, it
 performs the same rollover.
 
+### Open a fresh book beside a closed one
+
+A change that the next session's book cannot carry, such as a new capital
+split, starts a fresh book in the same sessions root. The closed book, its
+report and the strategy library stay where they are. The source book must be
+closed, flat and not halted. With the controller stopped, write a paper config
+for the new session: `session`, `previous_session`, a `directory` of
+`SESSIONS_ROOT/SESSION`, and the new `capital` and `sleeves`. Then run:
+
+```sh
+nivra rollover --config NEW_PAPER_CONFIG --open-fresh-book --confirm-paper-review
+```
+
+The command checks the book that `current.json` names, creates the empty
+session directory, and writes an append-only `fresh-book.json` receipt there
+with the predecessor's state hash, cash and fill count. It then renames
+`current.json` to `current.before-SESSION.json`. A repeat returns the same
+receipt. It refuses an open, holding or halted predecessor
+(`fresh_book_requires_closed_flat_unhalted_predecessor`) and a session
+directory that already holds a book (`fresh_book_target_not_empty`). The next
+start opens a new book funded by the config's sleeves. Later rollovers carry it
+as usual.
+
 ## Recover from a halt
 
 A halt blocks new entries. Stop and inspect the book first. `planner-recover`
