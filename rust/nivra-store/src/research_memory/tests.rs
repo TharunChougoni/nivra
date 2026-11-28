@@ -250,6 +250,50 @@ fn trial_sixty_one_is_refused_and_confirmation_opens_once_across_restarts() {
 }
 
 #[test]
+fn a_revised_archive_removes_old_authority_but_keeps_the_trial_and_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path()).unwrap();
+    let campaign = campaign(&mut store, 60);
+    let lease = store
+        .acquire_lease("coordinator", "test", 1, 0, 1_000, &|_| true)
+        .unwrap()
+        .unwrap();
+    let old_manifest = store.put_object(b"{\"snapshot\":\"old\"}").unwrap();
+    let new_manifest = store.put_object(b"{\"snapshot\":\"new\"}").unwrap();
+    let report = store.put_object(b"old report").unwrap();
+    let mut kept = Vec::new();
+    for (index, manifest) in [&old_manifest, &old_manifest].into_iter().enumerate() {
+        let proposal = idea(&mut store, campaign.id, &format!("hypothesis {index}"));
+        let key = format!("{:064x}", index + 1);
+        let mut submission = submit(proposal.id, &key, &report, lease.generation);
+        submission.manifest_blob = manifest;
+        let Reserved::New(experiment, attempt) = store.reserve(&submission).unwrap() else {
+            panic!("reserve")
+        };
+        store
+            .finish(attempt.id, lease.generation, &scored(10, &report), 4)
+            .unwrap();
+        kept.push(experiment.id);
+    }
+    assert_eq!(store.cells(campaign.id).unwrap().len(), 1);
+    store
+        .invalidate_old_bar_scores(campaign.id, &new_manifest, 5)
+        .unwrap();
+    let old = store.experiment(kept[0]).unwrap().unwrap();
+    assert_eq!(
+        (old.status.as_str(), old.reason.as_deref()),
+        ("failed", Some("archive_bars_snapshot_changed"))
+    );
+    assert_eq!(old.report_blob.as_deref(), Some(report.as_str()));
+    assert!(store.cells(campaign.id).unwrap().is_empty());
+    assert_eq!(
+        store.trials(campaign.id).unwrap(),
+        2,
+        "a spent trial stays counted"
+    );
+}
+
+#[test]
 fn leases_survive_expiry_while_their_holder_lives_and_budgets_settle_once() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(dir.path()).unwrap();

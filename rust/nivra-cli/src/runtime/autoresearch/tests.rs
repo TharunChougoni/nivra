@@ -150,6 +150,7 @@ fn revised_archive_changes_identity_and_future_only_signal_cannot_fill()
 -> crate::runtime::Result<()> {
     use nivra_core::autoresearch::{ExperimentIdentity, qualification};
     use nivra_store::market_archive::ist_midnight;
+    use sha2::{Digest, Sha256};
     let dir = tempfile::tempdir()?;
     let (mut c, cfg) = loop_config(dir.path(), |_| {});
     let archive = crate::runtime::market_archive::test_settings(dir.path())?;
@@ -214,10 +215,21 @@ fn revised_archive_changes_identity_and_future_only_signal_cannot_fill()
             .as_str(),
         "reject"
     );
+    // The archive is append-only, so a correction is a new observation row.
+    // A later backfill inside the frozen window changes the input digest.
+    let key = window.instruments.as_ref().unwrap()[0].clone();
+    let receipt: i64 = db
+        .query_one(
+            "INSERT INTO receipts(kind, requested_ms, received_ms, sha256, body)
+             VALUES(2, 1, 1, $1, $1) RETURNING id",
+            &[&Sha256::digest(format!("{key}-backfill").as_bytes()).as_slice()],
+        )?
+        .get(0);
     db.execute(
-        "UPDATE daily_bars SET volume=volume+1
-        WHERE day=$1 AND instrument_id=(SELECT id FROM instruments WHERE key=$2)",
-        &[&window.from, &window.instruments.as_ref().unwrap()[0]],
+        "INSERT INTO daily_bars(instrument_id, day, o, h, l, c, volume, oi, receipt_id)
+         SELECT id, '2025-12-15', 10000, 20000, 10000, 18000, 10000, 0, $2
+         FROM instruments WHERE key=$1",
+        &[&key, &receipt],
     )?;
     let revised = super::jobs::read_snapshot(&c, &window)?;
     let identity = |digest: &str| {
@@ -554,6 +566,24 @@ fn two_dated_books_share_scripts_reviewed_skills_and_losing_experiments() {
 }
 
 #[test]
+fn a_loop_job_yields_to_any_other_holder_of_the_shared_compute_slot() {
+    let dir = tempfile::tempdir().unwrap();
+    let (c, cfg) = loop_config(dir.path(), |_| {});
+    let held = crate::runtime::harness::research::compute_slot(&c)
+        .unwrap()
+        .expect("first slot holder");
+    let mut jobs = super::jobs::QueueJobs::new(&c, &cfg).unwrap();
+    assert_eq!(jobs.run("unused-task", 1, &|| false).unwrap(), JobEnd::Busy);
+    drop(held);
+    let mut jobs = super::jobs::QueueJobs::new(&c, &cfg).unwrap();
+    // The slot is free now; the queue itself has no such task.
+    assert!(matches!(
+        jobs.run("unused-task", 1, &|| false).unwrap(),
+        JobEnd::Failed(_)
+    ));
+}
+
+#[test]
 #[ignore = "requires NIVRA_ARCHIVE_TEST_URL for frozen bar identity"]
 fn after_the_seal_one_idea_runs_one_job_to_a_verdict_under_budget_and_restart() {
     let dir = tempfile::tempdir().unwrap();
@@ -568,7 +598,12 @@ fn after_the_seal_one_idea_runs_one_job_to_a_verdict_under_budget_and_restart() 
     let now = Arc::new(AtomicI64::new(ist("2026-11-27", 23, 40)));
     let clock_now = now.clone();
     let clock = move || clock_now.load(Ordering::SeqCst);
-    let agent_settings = settings(100, 10.0);
+    // Debug builds hash the worker image on each admission; the loop's own
+    // 120 s turn ceiling is the bound this test exercises, not the fixture's.
+    let mut agent_settings = settings(100, 10.0);
+    for lane in agent_settings.lanes.values_mut() {
+        lane.turn_timeout_ms = 120_000;
+    }
     let source = "def on_bars(at_ms, split, bars, params, state):\n    return []\n";
     let (client, peer) = connect(move |peer| {
         let (id, turn) = peer.turn();

@@ -195,7 +195,8 @@ pub(in crate::runtime::autoresearch) fn bar_outcome(
     let moments = qualification::daily_moments(&folds, manifest.capital);
     let mut sharpes: Vec<_> = moments.iter().map(|m| m.sharpe).collect();
     for other in store.recent_experiments(experiment.campaign_id, trial_count as usize)? {
-        if other.status == "scored"
+        if other.id != experiment.id
+            && other.status == "scored"
             && other.manifest_blob == experiment.manifest_blob
             && let Some(blob) = other.report_blob
         {

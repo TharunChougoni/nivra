@@ -98,9 +98,7 @@ pub fn paired(
 
 pub fn verdict(score: &Score, comparison: Option<&Comparison>, max_drawdown_bps: i64) -> Decision {
     let delta = comparison.map_or(Amount::ZERO, |c| c.median_delta);
-    let reason = if score.open_positions != 0 {
-        "bar_positions_open"
-    } else if score.max_drawdown_bps > max_drawdown_bps {
+    let reason = if score.max_drawdown_bps > max_drawdown_bps {
         "drawdown_exceeded"
     } else if score.net_pnl <= Amount::ZERO {
         "net_not_positive"
@@ -275,4 +273,165 @@ fn quantile(p: f64) -> f64 {
         }
     }
     (lo + hi) / 2.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rupees(value: i64) -> Amount {
+        Amount::from_integer(value)
+    }
+
+    /// One independent fold book: its net and one daily row per date.
+    fn fold(net: i64, daily: &[(&str, i64)]) -> Fold {
+        Fold {
+            qualification_net_pnl: Some(rupees(net)),
+            max_drawdown_bps: 40,
+            closed_trades: daily.len() as u64,
+            open_positions: 0,
+            daily_net_pnl: daily
+                .iter()
+                .map(|(day, value)| (day.parse().expect("test date"), rupees(*value)))
+                .collect(),
+        }
+    }
+
+    fn folds(_prefix: &str, nets: &[i64]) -> Vec<Fold> {
+        nets.iter()
+            .enumerate()
+            .map(|(index, net)| fold(*net, &[(&format!("2026-01-{:02}", index + 5), *net)]))
+            .collect()
+    }
+
+    fn judge(folds: &[Fold], parent: Option<&[Fold]>, limit: i64) -> Decision {
+        let score = pooled(folds).expect("pooled");
+        let comparison = paired(folds, parent, rupees(5_000)).expect("paired");
+        verdict(&score, comparison.as_ref(), limit)
+    }
+
+    #[test]
+    fn walk_forward_keep_needs_two_of_three_folds_and_a_positive_pooled_net() {
+        let two_wins = judge(&folds("d", &[10, 10, -5]), None, 300);
+        assert_eq!(two_wins.verdict, Verdict::Keep, "{two_wins:?}");
+        assert_eq!(two_wins.reason, "paired_folds_improved");
+        assert_eq!(two_wins.delta, rupees(10));
+        assert_eq!(
+            judge(&folds("d", &[-20, 10, 30]), None, 300).verdict,
+            Verdict::Keep
+        );
+        // A negative pooled net rejects before the paired comparison is read.
+        assert_eq!(
+            judge(&folds("d", &[10, -10, -10]), None, 300).reason,
+            "net_not_positive"
+        );
+        // Positive pooled net but a losing median fold difference rejects.
+        let losing_median = judge(&folds("d", &[-5, -10, 30]), None, 300);
+        assert_eq!(losing_median.verdict, Verdict::Reject);
+        assert_eq!(losing_median.reason, "paired_folds_not_improved");
+        // A positive median cannot rescue a negative pooled net.
+        let dragged = [fold(10, &[]), fold(10, &[]), fold(-50, &[])];
+        assert_eq!(judge(&dragged, None, 300).reason, "net_not_positive");
+        // Two wins and a positive median still obey the drawdown limit.
+        let mut drawn = folds("d", &[10, 10, -5]);
+        drawn[2].max_drawdown_bps = 301;
+        assert_eq!(judge(&drawn, None, 300).reason, "drawdown_exceeded");
+    }
+
+    #[test]
+    fn a_parent_comparison_is_paired_on_identical_dates_and_ties_retain_it() {
+        let candidate = folds("c", &[10, 10, -5]);
+        let identical = judge(&candidate, Some(&candidate), 300);
+        assert_eq!(identical.verdict, Verdict::Reject);
+        assert_eq!(identical.reason, "paired_folds_not_improved");
+        let worse_parent = folds("c", &[0, 0, 0]);
+        assert_eq!(
+            judge(&candidate, Some(&worse_parent), 300).verdict,
+            Verdict::Keep
+        );
+        let mut shifted = folds("c", &[10, 10, -5]);
+        shifted[0].daily_net_pnl[0].0 = shifted[0].daily_net_pnl[0].0.succ_opt().expect("date");
+        assert!(
+            paired(&candidate, Some(&shifted), rupees(5_000))
+                .unwrap()
+                .is_none(),
+            "different dates cannot be paired"
+        );
+        assert!(
+            paired(&candidate[..2], None, rupees(5_000))
+                .unwrap()
+                .is_none(),
+            "only a one-fold holdout or three declared folds carry a verdict"
+        );
+    }
+
+    #[test]
+    fn a_single_holdout_fold_keeps_only_a_strictly_positive_difference() {
+        assert_eq!(judge(&folds("h", &[25]), None, 300).verdict, Verdict::Keep);
+        assert_eq!(
+            judge(&folds("h", &[0]), None, 300).reason,
+            "net_not_positive"
+        );
+    }
+
+    #[test]
+    fn deflated_sharpe_reports_unavailable_until_every_floor_is_met() {
+        let moments = DailyMoments {
+            dates: 60,
+            sharpe: 0.2,
+            skewness: 0.1,
+            kurtosis: 3.0,
+        };
+        let below = deflated_sharpe(
+            Some(DailyMoments {
+                dates: 59,
+                ..moments
+            }),
+            &[0.1, 0.2],
+            3,
+            false,
+        );
+        assert_eq!(below.unavailable_reason, Some("fewer_than_60_scored_dates"));
+        let missing = deflated_sharpe(Some(moments), &[0.1, 0.2], 3, true);
+        assert_eq!(missing.unavailable_reason, Some("missing_trials"));
+        let one = deflated_sharpe(Some(moments), &[0.1], 1, false);
+        assert_eq!(
+            one.unavailable_reason,
+            Some("fewer_than_two_comparable_variants")
+        );
+        let none = deflated_sharpe(None, &[0.1, 0.2], 3, false);
+        assert_eq!(
+            none.unavailable_reason,
+            Some("zero_variance_or_incomplete_returns")
+        );
+        let flat = deflated_sharpe(
+            Some(DailyMoments {
+                sharpe: 0.0,
+                ..moments
+            }),
+            &[0.0, 0.0],
+            3,
+            false,
+        );
+        assert_eq!(flat.unavailable_reason, Some("zero_variance"));
+        let ready = deflated_sharpe(Some(moments), &[0.1, 0.2], 3, false);
+        assert_eq!(ready.unavailable_reason, None);
+        assert!(
+            ready
+                .probability
+                .is_some_and(|p| p.is_finite() && (0.0..=1.0).contains(&p))
+        );
+        assert_eq!(ready.raw_trials, 3);
+        assert!(ready.assumptions.contains("independent"));
+    }
+
+    #[test]
+    fn daily_moments_use_one_equity_return_per_listed_date() {
+        let two_days = fold(10, &[("2026-01-05", 5), ("2026-01-06", 5)]);
+        let moments = daily_moments(&[two_days], rupees(5_000)).expect("two dates");
+        assert_eq!(moments.dates, 2);
+        assert!(moments.sharpe.is_finite());
+        let single = fold(10, &[("2026-01-05", 10)]);
+        assert!(daily_moments(&[single], rupees(5_000)).is_none());
+    }
 }

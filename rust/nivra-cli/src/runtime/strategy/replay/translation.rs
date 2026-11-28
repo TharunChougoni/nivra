@@ -96,3 +96,121 @@ impl TranslationParity {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::strategy::Prospect;
+    use nivra_core::strategy::Feature;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    fn at(day: &str, minute: u32) -> i64 {
+        let date: NaiveDate = day.parse().expect("date");
+        (date
+            .and_hms_opt(10, minute, 0)
+            .expect("time")
+            .and_utc()
+            .timestamp_millis())
+            - 19_800_000
+    }
+
+    fn probe(at: i64, close: i64, decisions: &[(&str, bool)]) -> Probe {
+        Probe {
+            bar_closed_at_ms: at,
+            prices_paise: [("NSE_EQ|A".to_owned(), close)].into(),
+            decisions: decisions
+                .iter()
+                .map(|(key, buy)| ((*key).to_owned(), *buy))
+                .collect(),
+        }
+    }
+
+    fn prospects(close: i64) -> Vec<Prospect> {
+        vec![Prospect {
+            key: "NSE_EQ|A".into(),
+            rank: 1,
+            score: 1.0,
+            features: [(
+                Feature::Price,
+                // The action adapter carries rupees; the bar probe is paise.
+                close as f64 / 100.0,
+            )]
+            .into_iter()
+            .collect::<BTreeMap<_, _>>(),
+        }]
+    }
+
+    fn actions(side: &str) -> Vec<Value> {
+        vec![json!({"side":side,"instrument_key":"NSE_EQ|A"})]
+    }
+
+    fn twelve() -> Vec<Probe> {
+        let mut probes = Vec::new();
+        for (day, minute) in [
+            ("2026-01-05", 1),
+            ("2026-01-05", 2),
+            ("2026-01-05", 3),
+            ("2026-01-05", 4),
+            ("2026-01-06", 1),
+            ("2026-01-06", 2),
+            ("2026-01-06", 3),
+            ("2026-01-06", 4),
+            ("2026-01-07", 1),
+            ("2026-01-07", 2),
+            ("2026-01-07", 3),
+            ("2026-01-07", 4),
+        ] {
+            probes.push(probe(at(day, minute), 10_000, &[("NSE_EQ|A", true)]));
+        }
+        probes
+    }
+
+    #[test]
+    fn matching_feature_and_decision_parity_passes_on_three_dates() {
+        let probes = twelve();
+        let mut parity = TranslationParity::new(probes.clone());
+        for probe in &probes {
+            parity.observe(
+                probe.bar_closed_at_ms,
+                &prospects(10_000),
+                Some(&actions("buy")),
+            );
+        }
+        let (reason, evidence) = parity.verdict();
+        assert_eq!(reason, None, "{evidence}");
+        assert_eq!(evidence["matched_observations"], 12);
+        assert_eq!(evidence["matched_dates"], 3);
+        assert_eq!(evidence["bar_signal_batches"], 12);
+    }
+
+    #[test]
+    fn a_wrong_side_or_price_breaks_parity() {
+        let probes = twelve();
+        let mut parity = TranslationParity::new(probes.clone());
+        for (index, probe) in probes.iter().enumerate() {
+            let side = if index == 0 { "sell" } else { "buy" };
+            parity.observe(
+                probe.bar_closed_at_ms,
+                &prospects(10_000),
+                Some(&actions(side)),
+            );
+        }
+        assert_eq!(
+            parity.verdict().0,
+            Some("translation_decision_parity_failed")
+        );
+
+        let mut parity = TranslationParity::new(probes.clone());
+        for probe in &probes {
+            parity.observe(
+                probe.bar_closed_at_ms,
+                &prospects(9_999),
+                Some(&actions("buy")),
+            );
+        }
+        let (reason, evidence) = parity.verdict();
+        assert_eq!(reason, Some("translation_parity_unavailable"), "{evidence}");
+        assert_eq!(evidence["matched_observations"], 0);
+    }
+}
