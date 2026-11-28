@@ -41,6 +41,15 @@
     "slippage_bps": "5",
     "rounding_increment": "0.01"
   },
+  "paper_costs_by_segment": {
+    "NSE_FO": {
+      "per_order": "23.60",
+      "buy_bps": "4.50434",
+      "sell_bps": "19.20434",
+      "slippage_bps": "5",
+      "rounding_increment": "0.01"
+    }
+  },
   "market_archive": {
     "url": "${MARKET_ARCHIVE_URL}",
     "password_file": "${MARKET_ARCHIVE_PASSWORD_FILE}"

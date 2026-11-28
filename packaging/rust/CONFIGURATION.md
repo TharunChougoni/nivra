@@ -6,7 +6,7 @@ never in a template.
 
 | File | Contents |
 | --- | --- |
-| `paper-current.example.json` | Runtime paper config: account, session, paths, quota journal, capital, `sleeves` and `paper_costs` |
+| `paper-current.example.json` | Runtime paper config: account, session, paths, quota journal, capital, `sleeves`, `paper_costs` and the `NSE_FO` costs from [F&O paper costs](../../docs/reference/NSE_FO_PAPER_COSTS.md) |
 | `agent-settings.example.json` | The pi `agent` block: `node`, `entry`, `agent_dir` and one model and budget per lane |
 | `updater.example.json` | Updater remote and paper config path |
 | `*.fragment.json` | Optional blocks to merge into a reviewed config |

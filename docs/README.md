@@ -19,6 +19,7 @@ These guides describe the code on `main`. The design and its rationale are in
 | [Testing](TESTING.md) | Follow the test rules and the test budget |
 
 Reference notes: [fees](reference/KOTAK_FEE_REVIEW.md),
+[F&O paper costs](reference/NSE_FO_PAPER_COSTS.md),
 [market sources](reference/MARKET_SOURCE_REVIEW.md),
 [feed review](reference/FEED_REVIEW.md),
 [native strategy rules](reference/NATIVE_STRATEGY_RULES.md),

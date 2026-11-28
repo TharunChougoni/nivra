@@ -60,8 +60,8 @@ Enabling options needs an `NSE_FO` fee entry and an `NSE_FO|` quote-key prefix.
 The option universe prepares from the Nifty spot on the index feed
 (`index_feeds` must include the underlying key). The spot must be no more than
 two seconds old by its original receipt. Until a fresh point arrives, the status
-stays `waiting_for_spot`. One lot is the premium times the contract lot size, so
-a small book can afford only low premiums.
+stays `waiting_for_spot`. One lot is the premium times the contract lot size (65 for Nifty), so
+a ₹5,000 options sleeve can afford only premiums below about ₹76.
 
 ## Fees
 
@@ -85,9 +85,14 @@ Values are non-negative exact decimals. Prices round adversely to the tick.
 These are simulation assumptions, not broker charges. See
 [fee research](reference/KOTAK_FEE_REVIEW.md).
 
-Options use a separate `paper_costs_by_segment` entry for `NSE_FO`, for example
-₹0.01 per order, 0 bps turnover, 10 bps slippage and a ₹0.05 rounding step. A
-long option spends `premium × units` plus the F&O fee. There is no margin ledger.
+Options use a separate `paper_costs_by_segment` entry for `NSE_FO`. The
+example config models an Upstox index option order: ₹23.60 per order
+(₹20 brokerage with GST), 4.50434 bps on a buy, 19.20434 bps on a sell (0.15%
+STT, exchange charge, SEBI fee, GST and stamp duty), 5 bps slippage and a
+₹0.01 rounding step. The derivation and its dated sources are in
+[F&O paper costs](reference/NSE_FO_PAPER_COSTS.md). A long option spends
+`premium × units` plus the F&O fee from the options sleeve. There is no
+margin ledger.
 
 Resume refuses a changed policy with `paper_cost_policy_changed`. A new
 session may choose new costs. A legacy book without a stored policy needs a

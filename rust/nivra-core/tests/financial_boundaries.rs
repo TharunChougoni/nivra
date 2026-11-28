@@ -268,3 +268,25 @@ fn model_led_cash_has_no_archived_entry_caps_and_keeps_freshness_and_cash_integr
     assert!(large.exposure().unwrap() > a("10000"));
     large.reconcile().unwrap();
 }
+
+/// The shipped F&O costs reproduce the worked example in
+/// docs/reference/NSE_FO_PAPER_COSTS.md: one 65-unit Nifty lot bought at 100
+/// and sold at 130.
+#[test]
+fn shipped_option_costs_match_the_reference_example() {
+    let example: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../packaging/rust/paper-current.example.json"
+    ))
+    .unwrap();
+    let fo: FeeArithmetic =
+        serde_json::from_value(example["paper_costs_by_segment"]["NSE_FO"].clone()).unwrap();
+    assert_eq!(
+        fo.charge(Side::Buy, Money::parse("6500").unwrap()).unwrap(),
+        Money::parse("26.53").unwrap()
+    );
+    assert_eq!(
+        fo.charge(Side::Sell, Money::parse("8450").unwrap())
+            .unwrap(),
+        Money::parse("39.83").unwrap()
+    );
+}
