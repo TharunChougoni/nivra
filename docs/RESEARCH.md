@@ -93,8 +93,11 @@ publish a result.
 
 **One step.** Each step makes one durable transition:
 
-1. A new campaign freezes its bar window once the archive's daily bars reach
-   the last sealed session (otherwise the loop reports `waiting_for_tape`):
+1. A new campaign freezes its bar window once the archive's daily bars cover
+   the last sealed session, or else the newest trading session within the last
+   five sessions that has full daily-bar coverage (reported as
+   `using_previous_tape` with `tape_session`; if none within five sessions
+   qualifies, the loop reports `waiting_for_tape`):
    `lookback_days` of history ending on that session, the last
    `selection_days` scored, ₹5,000 research capital, the paper costs and cash
    as the comparator.

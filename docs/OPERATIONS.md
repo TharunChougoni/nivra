@@ -360,9 +360,14 @@ with the predecessor's state hash, cash and fill count. It then renames
 `current.json` to `current.before-SESSION.json`. A repeat returns the same
 receipt. It refuses an open, holding or halted predecessor
 (`fresh_book_requires_closed_flat_unhalted_predecessor`) and a session
-directory that already holds a book (`fresh_book_target_not_empty`). The next
-start opens a new book funded by the config's sleeves. Later rollovers carry it
-as usual.
+directory that already holds a book (`fresh_book_target_not_empty`). While the
+new book is waiting for its first start, `history-backfill`, `readiness` and
+`research-loop` with `NEW_PAPER_CONFIG` resolve the pending session and the
+predecessor's cached universe from `fresh-book.json` (`readiness` reports
+`lifecycle.status: "pending_fresh_book"`), and an older config pointing at a
+prior session fails explicitly with `session_pointer_pending_fresh_book`. The
+next start opens a new book funded by the config's sleeves. Later rollovers
+carry it as usual.
 
 ## Recover from a halt
 

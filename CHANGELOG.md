@@ -9,11 +9,32 @@
   or often refused. The lane can also recheck a blocked executor or fallback
   when an eligible strategy exists.
 
+### Fixed
+
+- The autonomous research loop no longer stays blocked on `waiting_for_tape`
+  over a weekend when the latest sealed session's daily bars will not be
+  archived until the next pre-open window. When `last_sealed` is not covered
+  yet, it walks back up to 5 trading sessions to freeze the campaign on the
+  newest session with archived daily-bar coverage, reports
+  `tape_state: "using_previous_tape"` and `tape_session` in `research_loop`
+  status and the Operations dashboard panel, and falls back to
+  `waiting_for_tape` only when nothing within 5 sessions qualifies.
+- After `nivra rollover --open-fresh-book` moves `current.json` to
+  `current.before-SESSION.json`, `history-backfill`, `readiness` and
+  `research-loop tick` resolve the pending session and its predecessor's cached
+  universe from `fresh-book.json` (reporting `lifecycle.status:
+  "pending_fresh_book"` in `readiness`), and outdated configs or missing files
+  return specific snake_case codes (`session_pointer_pending_fresh_book`,
+  `paper_book_missing`, `history_universe_unavailable`) instead of the masked
+  `paper_runtime_unavailable`.
+
 ### Upgrade an installed paper host
 
-Install the matching binary and agent prompts. Health triggers use defaults
-when `strategy_execution.enabled` and the decision lane are configured. For
-custom thresholds, keep a `*.pre-strategy-health` copy of the planner, edit
+Install the matching binary and agent prompts, then restart
+`nivra-research-loop.timer` (or `nivra-paper.service` when running) with the
+fresh-book config. Health triggers use defaults when
+`strategy_execution.enabled` and the decision lane are configured. For custom
+thresholds, keep a `*.pre-strategy-health` copy of the planner, edit
 `agent.triggers.decision.strategy_health` in a new file, and run
 `nivra planner config-check --planner NEW_PLANNER --session SESSION`. Apply it
 using [the open-book procedure](docs/OPERATIONS.md#change-the-planner-policy)
