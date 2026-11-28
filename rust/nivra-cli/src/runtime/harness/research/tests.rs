@@ -623,27 +623,13 @@ fn archive_strategy_replay_pins_quotes_across_sessions() -> Result<()> {
 fn archive_bar_job_replays_closed_splits() -> Result<()> {
     use nivra_core::finance::Amount;
     use nivra_store::market_archive::{BarUnit, BarWindow, init, ist_midnight};
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     use std::time::Instant;
 
-    let url = std::env::var("NIVRA_ARCHIVE_TEST_URL")?;
-    let (scheme, auth_host) = url.split_once("://").ok_or("fixture_url")?;
-    let (auth, host) = auth_host.rsplit_once('@').ok_or("fixture_url")?;
-    let (user, password) = auth.split_once(':').ok_or("fixture_url")?;
+    // A fresh database per run: concurrent archive schema work must never
+    // change the version this replay is built against.
     let tmp = tempfile::tempdir()?;
     let dir = tmp.path();
-    let password_file = dir.join("archive-password");
-    fs::OpenOptions::new()
-        .create_new(true)
-        .mode(0o600)
-        .write(true)
-        .open(&password_file)?
-        .write_all(password.as_bytes())?;
-    let archive = crate::runtime::MarketArchiveSettings {
-        url: format!("{scheme}://{user}@{host}"),
-        password_file,
-    };
+    let archive = crate::runtime::market_archive::test_settings(dir)?;
     let perf = std::env::var_os("NIVRA_ARCHIVE_BAR_PERF");
     let (unit, counts, from, to, split) = match perf.as_deref().and_then(|v| v.to_str()) {
         Some("day") => (BarUnit::Day, 2760, "2020-01-01", "2024-12-31", "2024-01-01"),

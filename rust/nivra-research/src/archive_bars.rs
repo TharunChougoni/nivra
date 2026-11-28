@@ -419,10 +419,10 @@ impl<'a> Book<'a> {
                 .push((day, equity.checked_sub(previous)?));
             previous = equity;
         }
-        self.summary.qualification_net_pnl = self
-            .held
-            .is_empty()
-            .then_some(self.summary.realized_net_pnl);
+        // A bar book has no executable exit at the last observed close. Value
+        // the remaining holdings there, keep the open count in the report and
+        // score the marked change, as the design's terminal policy allows.
+        self.summary.qualification_net_pnl = Some(self.summary.mark_to_market_pnl);
         self.summary
             .daily_equity
             .clone_from(&self.trace.daily_equity);
@@ -679,7 +679,7 @@ fn run_with_trace(
         params_sha256: sha256(&serde_json::to_vec(&request.params)?),
         input_bars_sha256: snapshot.ordered_sha256.clone(),
         bar_snapshot: snapshot,
-        terminal_policy: "require_flat_for_qualification_discard_cross_boundary_orders",
+        terminal_policy: "mark_open_positions_at_final_close_discard_cross_boundary_orders",
         folds,
         adverse_slippage_folds,
         adverse_slippage_bps: boundaries.map(|_| stress_costs.slippage_bps.amount()),
@@ -748,7 +748,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_open_terminal_position_cannot_qualify_on_its_unrealized_gain() -> Result<()> {
+    fn an_open_terminal_position_is_marked_at_its_last_close() -> Result<()> {
         let costs = serde_json::from_value(json!({
             "per_order":"2","buy_bps":"0","sell_bps":"0",
             "slippage_bps":"0","rounding_increment":"0.01"
@@ -769,7 +769,11 @@ mod tests {
         let (summary, _) = book.finish()?;
         assert!(summary.mark_to_market_pnl > Amount::ZERO);
         assert!(summary.realized_net_pnl < Amount::ZERO || summary.open_positions > 0);
-        assert_eq!(summary.qualification_net_pnl, None);
+        assert_eq!(summary.open_positions, 1);
+        assert_eq!(
+            summary.qualification_net_pnl,
+            Some(summary.mark_to_market_pnl)
+        );
         Ok(())
     }
 

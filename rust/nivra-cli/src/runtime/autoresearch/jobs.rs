@@ -111,7 +111,7 @@ fn rule(cfg: &PlannerConfig, settings: &AutoresearchSettings, stage: Stage) -> R
                     .max_drawdown_bps,
             )
         }),
-        require_flat: matches!(stage, Stage::Bars | Stage::QuoteReplay),
+        require_flat: matches!(stage, Stage::QuoteReplay),
     }
 }
 
