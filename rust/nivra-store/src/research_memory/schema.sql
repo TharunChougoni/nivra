@@ -155,3 +155,18 @@ CREATE TABLE IF NOT EXISTS loop_state(
   id INTEGER PRIMARY KEY CHECK(id = 1),
   body TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS option_research_stage(
+  session TEXT PRIMARY KEY,
+  checked_ms INTEGER NOT NULL,
+  proposed_ms INTEGER,
+  cohort_digest TEXT,
+  body TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS option_research_comparison(
+  session TEXT NOT NULL REFERENCES option_research_stage(session),
+  ranking TEXT NOT NULL,
+  hypothesis TEXT NOT NULL,
+  body TEXT,
+  PRIMARY KEY(session, ranking)
+);

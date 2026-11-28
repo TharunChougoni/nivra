@@ -145,6 +145,35 @@ Inspect the loop with `nivra research-loop --config PAPER_CONFIG status`, or in
 consistent SQLite copy, copies every referenced object and verifies them.
 `verify --root DIR` checks a backup or the live research root.
 
+### Compare option prospect rankings
+
+The research loop checks the newest sealed session for option evidence under
+`research_loop.options`. It reports `option_tape_unavailable` until the
+archive contains the dated master, gate inputs and verdicts, and the option
+touches needed for replay. Once ready, the loop freezes the archive watermark,
+the cohort digest, and the fee and sizing policies. It schedules one ranking
+proposal turn per sealed session within the existing research turn budget.
+
+The research-only `option_compare` tool takes a hypothesis and a ranking.
+Choose `tightest_spread`, `lowest_cost`, or `deepest_touch` to rank candidates
+that passed the frozen screen, or `gate` to repeat the control. The host stores
+a pending hypothesis when the tape is unavailable. Repeat the call for the
+same session and ranking to retrieve its recorded comparison. Each comparison
+reports hypothetical proposed and frozen-gate arms, their individual
+refusals, and their paired difference after costs if the tape supports one.
+
+Each arm starts with virtual options cash of ₹5,000. At each non-overlapping
+gate observation, take the first candidate from the arm's ranking. Size whole
+lots with `sleeves.options` using a stop at 80% of the observed ask rounded
+down to the tick. Enter against the archived ask. Exit against the first
+scheduled poll whose bid reaches the stop or whose receipt reaches ten seconds
+after entry. The replay applies `paper_costs_by_segment.NSE_FO` fees,
+slippage, tick rounding, original quote freshness of at most two seconds,
+and displayed depth on each leg. Expiry-day and expired entries are refused.
+Both legs must fit in the exchange session. Missing, stale, or shallow exit
+touches withhold the paired score. The report carries no paper authority.
+Actual decision-lane choices and equity cash stay in the paper book.
+
 ## Rankers
 
 A ranker reads one JSON object from the file named by `sys.argv[1]`. Each key is

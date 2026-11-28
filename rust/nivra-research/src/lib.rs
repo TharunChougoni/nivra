@@ -198,3 +198,5 @@ impl PortableTool for AnalysisTool {
         self.enqueue(args)
     }
 }
+
+pub mod option_replay;

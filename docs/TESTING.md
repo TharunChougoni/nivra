@@ -96,3 +96,13 @@ and counts each time either thread returns from its wait. It runs the
 protobuf decoder, screening snapshot, selection, and observation encoder
 with 2,000 keys, 20 in full mode. The Python worker, book transaction, and
 network are outside this probe.
+
+
+The ignored option archive fixture measures table and index growth and
+exercises the options stage from TimescaleDB through the stored comparison.
+Run it against the disposable archive and print its measurements.
+
+```sh
+NIVRA_ARCHIVE_TEST_URL=postgresql://postgres:test@127.0.0.1:55432/postgres \
+  TMPDIR=/tmp cargo test -p nivra-cli --locked option_stage_compares -- --ignored --nocapture
+```

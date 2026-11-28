@@ -23,6 +23,8 @@ pub enum Stage {
     Bars,
     /// A recorded quote tape, replayed inside the tool call.
     QuoteReplay,
+    /// A hypothetical ranking on a sealed option gate cohort.
+    OptionReplay,
 }
 
 impl Stage {
@@ -30,12 +32,14 @@ impl Stage {
         match self {
             Self::Bars => "bars",
             Self::QuoteReplay => "quote_replay",
+            Self::OptionReplay => "option_replay",
         }
     }
     pub fn parse(text: &str) -> Option<Self> {
         match text {
             "bars" => Some(Self::Bars),
             "quote_replay" => Some(Self::QuoteReplay),
+            "option_replay" => Some(Self::OptionReplay),
             _ => None,
         }
     }

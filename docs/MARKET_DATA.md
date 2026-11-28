@@ -342,4 +342,5 @@ research stage requires a continuous poll window around each simulated trade.
 
 Run `nivra archive option-coverage --config PAPER_CONFIG --session YYYY-MM-DD`
 to see master, poll, quote, missing touch, gate, and gap counts. Option evidence
-uses the archive's `option_evidence` table.
+uses the archive's `option_evidence` table. See the replay policy in
+[Research](RESEARCH.md#compare-option-prospect-rankings).

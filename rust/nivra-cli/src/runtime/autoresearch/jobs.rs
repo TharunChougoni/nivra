@@ -473,6 +473,9 @@ pub(super) fn submit(
     preempted: &dyn Fn() -> bool,
 ) -> Result<Value> {
     let stage = Stage::parse(&args.stage).ok_or("research_memory_args_invalid")?;
+    if stage == Stage::OptionReplay {
+        return Err("option_compare_required".into());
+    }
     let campaign = store
         .campaign(&settings.campaign.name)?
         .filter(|campaign| campaign.status == "active")
@@ -494,6 +497,7 @@ pub(super) fn submit(
         return Ok(json!({"status":"not_dispatched","reason":"candidate_params_invalid"}));
     }
     let (manifest, runner, abi) = match stage {
+        Stage::OptionReplay => unreachable!("option rankings use option_compare"),
         Stage::Bars => (
             store.object(&campaign.manifest_digest)?,
             harness::runtime_sha256()?,
@@ -570,6 +574,7 @@ pub(super) fn submit(
         Reserved::New(experiment, attempt) => (experiment, attempt),
     };
     match stage {
+        Stage::OptionReplay => unreachable!("option rankings use option_compare"),
         Stage::Bars => match admit_bar(c, cfg, store, &experiment, &idea.hypothesis, now)? {
             Ok((task_id, revision)) => {
                 store.bind_job(attempt.id, &task_id, revision, grant.generation, now)?;

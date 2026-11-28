@@ -83,6 +83,7 @@ pub(crate) const TOOLS: &[BridgeTool] = &[
     tool("news", "news_lookup", &[D, R]),
     tool("research_history", "research_history", &[R]),
     tool("idea_record", "idea_record", &[R]),
+    tool("option_compare", "option_compare", &[R]),
     tool("finding_record", "finding_record", &[R]),
 ];
 

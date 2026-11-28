@@ -10,6 +10,8 @@
   when an eligible strategy exists.
 - Capture the verified Nifty option master, spot, chain touches and gate
   verdicts in the market archive.
+- Compare prospect rankings with the frozen gate in a separate virtual
+  ₹5,000 options sleeve after an exchange session seals.
 
 ### Fixed
 
@@ -38,7 +40,8 @@
    `nivra archive check --config PAPER_CONFIG`.
 2. Confirm the effective paper config has `nifty_options.enabled`,
    `market_archive`, `sleeves.options`, and `paper_costs_by_segment.NSE_FO`.
-   Confirm the planner configures the gate lane if you need gate coverage.
+   Confirm the planner enables the research loop and configures the gate and
+   research lanes.
 3. Health triggers use defaults when `strategy_execution.enabled` and the
    decision lane are configured. For custom thresholds, or any other planner
    edit, keep a `*.pre-<reason>` copy of the planner, edit
@@ -52,6 +55,9 @@
    dashboard's lane history or in `model/agent/triggers.ndjson`. After the
    session, run
    `nivra archive option-coverage --config PAPER_CONFIG --session YYYY-MM-DD`.
+   Check `research_loop.options` in `/api/v1/summary` or
+   `nivra research-loop --config PAPER_CONFIG status`. The options stage
+   reports `option_tape_unavailable` until the captured evidence supports replay.
 
 ## 0.20.1 — 2026-11-28
 

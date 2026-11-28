@@ -336,6 +336,9 @@ fn args(name: &str) -> Value {
         "idea_record" => json!({"family":"breakout","regime":"trend","mechanism":"volume breakout",
             "hypothesis":"Breakouts on volume continue","falsifier":"No gain over cash","comparator":"cash",
             "parent_experiment_id":null}),
+        "option_compare" => {
+            json!({"ranking":"gate","hypothesis":"The frozen gate reproduces the control."})
+        }
         "finding_record" => {
             json!({"experiment_id":1,"kind":"negative","observation":"lost to cash",
             "scope":"daily bars","limitation":"one window","next_test":"tighter exit"})

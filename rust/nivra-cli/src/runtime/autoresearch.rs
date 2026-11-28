@@ -13,6 +13,7 @@ use std::path::PathBuf;
 pub(crate) mod cli;
 pub(crate) mod coordinator;
 pub(crate) mod jobs;
+mod options;
 mod settings;
 mod skills;
 #[cfg(test)]
@@ -49,6 +50,8 @@ pub(crate) fn enabled(cfg: &PlannerConfig) -> Option<&AutoresearchSettings> {
 pub(crate) enum TurnKind {
     /// Record one idea, write one strategy, submit it.
     Proposal,
+    /// Compare one proposed option ranking with the frozen gate.
+    OptionProposal,
     /// Read one verdict, record findings, repair an invalid source once.
     Interpretation,
     /// Approve or reject learned skill drafts. Runs on the review lane.
@@ -69,6 +72,7 @@ impl TurnKind {
                 ("run", Some("workspace_run")),
                 ("backtest", Some("experiment_submit")),
             ],
+            Self::OptionProposal => &[("option_compare", Some("option_compare"))],
             Self::Interpretation => &[
                 ("research_history", Some("research_history")),
                 ("finding_record", Some("finding_record")),
@@ -149,6 +153,13 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
             ]),
         ),
         function(
+            "option_compare",
+            "Record a falsifiable F&O ranking hypothesis and compare it with the frozen gate on the latest sealed option cohort. Reports hypothetical research only. If option tape is unavailable, the hypothesis is recorded and no performance is scored.",
+            json!({"ranking":{"type":"string","enum":["gate","tightest_spread","lowest_cost","deepest_touch"]},
+                "hypothesis":text(500)}),
+            json!(["ranking", "hypothesis"]),
+        ),
+        function(
             "experiment_submit",
             "Submit one recorded idea for evaluation. Give the idea id, the workspace script path, its params and the stage. The host freezes the campaign's dates, universe, ₹5,000 capital, costs and comparator, reserves one trial and returns the experiment id. stage=bars queues one bounded archive job whose verdict reaches the next turn; stage=quote_replay replays recorded quotes inside this call and returns the verdict. An identical submission returns its earlier record and spends nothing.",
             json!({"idea_id":{"type":"integer","minimum":1},
@@ -182,6 +193,7 @@ pub(crate) enum MemoryOp {
     Idea(IdeaArgs),
     Finding(FindingArgs),
     Submit(SubmitArgs),
+    OptionCompare(options::CompareArgs),
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -278,9 +290,19 @@ pub(crate) fn parse_tool(name: &str, args: Value) -> Result<MemoryOp> {
             }
             MemoryOp::Finding(a)
         }
+        "option_compare" => {
+            let args: options::CompareArgs = serde_json::from_value(args).map_err(|_| invalid())?;
+            if !text_ok(&args.hypothesis, 500) {
+                return Err(invalid());
+            }
+            MemoryOp::OptionCompare(args)
+        }
         "experiment_submit" => {
             let a: SubmitArgs = serde_json::from_value(args).map_err(|_| invalid())?;
-            if Stage::parse(&a.stage).is_none() {
+            if !matches!(
+                Stage::parse(&a.stage),
+                Some(Stage::Bars | Stage::QuoteReplay)
+            ) {
                 return Err(invalid());
             }
             MemoryOp::Submit(a)
@@ -388,9 +410,15 @@ pub(crate) fn execute(
             })?;
             Ok(json!({"finding_id":finding.id,"evidence_digest":finding.evidence_digest}))
         }
+        MemoryOp::OptionCompare(args) => {
+            if preempted() {
+                return Err("decision_preempted".into());
+            }
+            options::compare(c, &store, &args, now, preempted)
+        }
         MemoryOp::Submit(a) => {
             let grant = grant
-                .filter(|g| g.kind != TurnKind::SkillReview)
+                .filter(|g| matches!(g.kind, TurnKind::Proposal | TurnKind::Interpretation))
                 .ok_or("research_autonomous_turn_required")?;
             jobs::submit(c, cfg, settings, &mut store, grant, &a, now, preempted)
         }

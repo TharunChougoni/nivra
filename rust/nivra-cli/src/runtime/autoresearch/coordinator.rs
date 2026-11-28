@@ -246,6 +246,37 @@ fn advance(
     skills::materialize(&root, store)?;
     // Only the lease holder runs turns, so an open reservation is a dead turn's.
     store.settle_abandoned_turns(None)?;
+    super::options::refresh(s.c, store, s.last_sealed, now, s.stop)?;
+    if s.c.nifty_options.enabled
+        && let Some(stage) = store.option_stage(s.last_sealed)?
+        && stage.cohort_digest.is_some()
+        && stage.proposed_ms.is_none()
+    {
+        let brief = json!({
+            "kind":"option_ranking_proposal",
+            "evidence":super::options::status(s.c, store)?,
+            "instructions":"Propose one falsifiable prospect-ranking hypothesis. Call option_compare once with tightest_spread, lowest_cost or deepest_touch. The host compares that ranking with the recorded gate on the same sealed observations using a separate virtual options sleeve. End the turn after the result.",
+        });
+        let plan = plan(
+            settings,
+            Lane::Research,
+            TurnKind::OptionProposal,
+            brief,
+            generation,
+        );
+        if let Ok(end) = gated_turn(s, settings, store, &plan, now)? {
+            store.mark_option_proposed(s.last_sealed, now)?;
+            return Ok(done_with(
+                if end.ok {
+                    "options_turn_finished"
+                } else {
+                    "options_turn_failed"
+                },
+                None,
+                None,
+            ));
+        }
+    }
     let campaign = match store.campaign(&settings.campaign.name)? {
         Some(campaign) => campaign,
         None => match resolve_tape(s.c, s.last_sealed, s.tape)? {
@@ -356,7 +387,13 @@ fn advance(
     {
         return Ok(wait(reason));
     }
-    let brief = proposal_brief(store, settings, &campaign, now)?;
+    let mut brief = proposal_brief(store, settings, &campaign, now)?;
+    if s.c.nifty_options.enabled {
+        brief["options"] = super::options::status(s.c, store)?;
+        brief["options_instructions"] = json!(
+            "For a prospect-ranking hypothesis, call option_compare with the hypothesis and gate, tightest_spread, lowest_cost or deepest_touch. The result compares hypothetical selection with the frozen gate. A result is research evidence for the gate and decision lanes."
+        );
+    }
     let plan = plan(
         settings,
         Lane::Research,
@@ -688,6 +725,7 @@ pub(crate) fn status(c: &Config, cfg: &PlannerConfig, now: i64) -> Value {
                 "trials_used":trials,"trial_cap":campaign.trial_cap,
                 "development_from":campaign.development_from,"development_to":campaign.development_to})),
             "latest":latest,
+            "options":super::options::status(c, &store)?,
             "incumbents":kept,
         }))
     };

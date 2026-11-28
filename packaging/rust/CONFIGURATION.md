@@ -259,7 +259,9 @@ counts of instruments, receipts, observations, bars, and coverage.
 Archive schema 2 adds Nifty option evidence. Run `archive init` when
 upgrading an existing archive. Capturing this evidence uses the existing
 `nifty_options.enabled` and `market_archive` settings. Gate coverage also
-requires the configured gate lane and its existing budget.
+requires the configured gate lane and its existing budget. The research loop
+uses `autoresearch.enabled`, the research workspace and lane,
+`sleeves.options` sizing, and `paper_costs_by_segment.NSE_FO`.
 
 ## Compatibility
 

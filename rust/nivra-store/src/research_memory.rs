@@ -12,6 +12,8 @@ use std::time::Duration;
 
 mod control;
 mod objects;
+mod options;
+pub use options::OptionStage;
 mod records;
 pub use objects::{BackupReport, verify};
 pub use records::*;
@@ -22,7 +24,7 @@ use records::{
 #[cfg(test)]
 mod tests;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// A bounded snake_case failure code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
