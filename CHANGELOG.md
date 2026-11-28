@@ -1,6 +1,6 @@
 # Source snapshot
 
-## Unreleased
+## 0.20.0 — 2026-11-28
 
 The research lane remembers across daily books and runs a bounded
 autonomous research loop overnight: one idea, one strategy, one frozen
