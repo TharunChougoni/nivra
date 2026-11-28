@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import {
   type JsonObject,
 } from "./protocol.js";
@@ -34,20 +34,6 @@ function skillSignature(skills: Skill[]): string {
   return skills
     .map((skill) => `${skill.name}\0${skill.description}\0${skill.filePath}\0${skill.disableModelInvocation}`)
     .join("\n");
-}
-
-/**
- * Infer `<book>/workspace/skills` when `session.dir` has the Rust controller's
- * `<book>/model/agent/pi/<lane>` layout.
- */
-export function inferWorkspaceSkillsDir(sessionDir: string): string | undefined {
-  const piDir = dirname(sessionDir);
-  const agentDir = dirname(piDir);
-  const modelDir = dirname(agentDir);
-  if (basename(piDir) === "pi" && basename(agentDir) === "agent" && basename(modelDir) === "model") {
-    return join(dirname(modelDir), "workspace", "skills");
-  }
-  return undefined;
 }
 
 /**

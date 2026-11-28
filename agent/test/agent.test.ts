@@ -351,10 +351,11 @@ test("a lane compaction threshold becomes a per-model reserve for the primary an
   });
 });
 
-test("skills load from default repo skills and the book workspace, and read resolves both", async () => {
+test("skills load from default repo skills and the workspace skills dir Rust names, and read resolves both", async () => {
   const defaultAbiPath = join(defaultSkills, "strategy-abi", "SKILL.md");
   const bookDir = mkdtempSync(join(tmpdir(), "nivra-agent-skills-book-"));
-  const workspaceSkills = join(bookDir, "workspace", "skills");
+  // The research workspace lives outside the dated book, under the sessions root.
+  const workspaceSkills = join(bookDir, "research", "workspace", "skills");
   mkdirSync(join(workspaceSkills, "custom-gap-fade"), { recursive: true });
   const workspaceSkillPath = join(workspaceSkills, "custom-gap-fade", "SKILL.md");
   writeFileSync(workspaceSkillPath, "---\nname: custom-gap-fade\ndescription: Procedure for testing gap-fade setups.\n---\n\n# Gap Fade\nTest on 3+ dates.\n");
@@ -391,11 +392,11 @@ test("skills load from default repo skills and the book workspace, and read reso
 
   const sessionDir = join(bookDir, "model", "agent", "pi", "research");
   const researchTools = [tool("read", { path: { type: "string" } }), tool("portfolio")];
-  const r1 = await run({ ...turn("s1", "research", bookDir, "2026-11-26", researchTools), session: { date: "2026-11-26", dir: sessionDir } });
+  const r1 = await run({ ...turn("s1", "research", bookDir, "2026-11-26", researchTools), session: { date: "2026-11-26", dir: sessionDir, skills_dir: workspaceSkills } });
   assert.equal(r1.status, "ok", r1.error);
   assert.deepEqual(agent.skillDiagnostics("research"), []);
   const names = agent.loadedSkills("research").map((s) => s.name).sort();
-  assert.deepEqual(names, ["backtest-methodology", "custom-gap-fade", "regime-check", "strategy-abi", "strategy-library", "strategy-review"]);
+  assert.deepEqual(names, ["autoresearch", "backtest-methodology", "custom-gap-fade", "regime-check", "strategy-abi", "strategy-library", "strategy-review"]);
 
   const sysPrompt = agent.systemPrompt("research") ?? "";
   assert.ok(sysPrompt.includes("<available_skills>"));
@@ -410,7 +411,7 @@ test("skills load from default repo skills and the book workspace, and read reso
   // Adding a new workspace skill mid-session reloads on the next turn.
   mkdirSync(join(workspaceSkills, "post-close-sweep"), { recursive: true });
   writeFileSync(join(workspaceSkills, "post-close-sweep", "SKILL.md"), "---\nname: post-close-sweep\ndescription: Sweep discipline.\n---\n");
-  const r2 = await run({ ...turn("s2", "research", bookDir, "2026-11-26", researchTools), session: { date: "2026-11-26", dir: sessionDir } });
+  const r2 = await run({ ...turn("s2", "research", bookDir, "2026-11-26", researchTools), session: { date: "2026-11-26", dir: sessionDir, skills_dir: workspaceSkills } });
   assert.equal(r2.status, "ok", r2.error);
   assert.ok(agent.loadedSkills("research").some((s) => s.name === "post-close-sweep"));
   assert.ok((agent.systemPrompt("research") ?? "").includes("post-close-sweep"));
@@ -450,7 +451,7 @@ test("malformed and colliding skills produce diagnostics without failing the tur
   const emitted = sent.filter((m): m is Extract<Outbound, { type: "event" }> => m.type === "event" && m.event.kind === "skill_diagnostic");
   assert.equal(emitted.length, diagnostics.length);
   // Default skills still loaded cleanly.
-  assert.equal(agent.loadedSkills("review").length, 5);
+  assert.equal(agent.loadedSkills("review").length, 6);
   agent.dispose();
 });
 

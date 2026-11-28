@@ -27,8 +27,11 @@ export interface TurnRequest {
   type: "turn";
   id: string;
   lane: Lane;
-  /** The lane's pi session: one per session date, stored under `dir`. */
-  session: { date: string; dir: string };
+  /**
+   * The lane's pi session: one per session date, stored under `dir`.
+   * `skills_dir` is the workspace `skills/` directory the lane discovers.
+   */
+  session: { date: string; dir: string; skills_dir?: string };
   model: ModelSpec;
   /** Used only when the primary fails before any output for a reason `fallbackReason` accepts. */
   fallback?: ModelSpec;
@@ -177,7 +180,11 @@ export function parseInbound(line: string): Inbound {
         type: "turn",
         id: str(value.id, "id"),
         lane: lane as Lane,
-        session: { date: str(session.date, "session.date"), dir: str(session.dir, "session.dir") },
+        session: {
+          date: str(session.date, "session.date"),
+          dir: str(session.dir, "session.dir"),
+          ...(session.skills_dir == null ? {} : { skills_dir: str(session.skills_dir, "session.skills_dir") }),
+        },
         model: modelSpec(value.model, "model"),
         ...(value.fallback == null ? {} : { fallback: modelSpec(value.fallback, "fallback") }),
         trigger: value.trigger as JsonObject,

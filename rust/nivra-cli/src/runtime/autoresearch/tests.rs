@@ -331,6 +331,14 @@ fn two_dated_books_share_scripts_reviewed_skills_and_losing_experiments() {
             .any(|e| e["verdict"] == "reject")
     );
     assert_eq!(script["output"]["text"], "print('{}')\n");
+    // Shipped skill names keep precedence: the reserved list is the shipped set.
+    let mut shipped: Vec<String> =
+        std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../agent/skills"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+    shipped.sort();
+    assert_eq!(shipped, skills::SHIPPED);
     // The old book is untouched and its note was imported once.
     assert!(old.join("notes/legacy.md").is_file());
     assert!(

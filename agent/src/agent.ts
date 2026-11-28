@@ -32,7 +32,7 @@ import {
   type TurnStatus,
   type Usage,
 } from "./protocol.js";
-import { inferWorkspaceSkillsDir, type LoadedLaneSkills, loadLaneSkills, resolveSkillRead } from "./skills.js";
+import { type LoadedLaneSkills, loadLaneSkills, resolveSkillRead } from "./skills.js";
 
 export interface AgentOptions {
   runtime: ModelRuntime;
@@ -367,7 +367,9 @@ export class LaneAgent {
       : current
         ? SessionManager.create(turn.session.dir, turn.session.dir)
         : SessionManager.continueRecent(turn.session.dir, turn.session.dir);
-    const workspaceSkillsDir = this.options.workspaceSkillsDir ?? inferWorkspaceSkillsDir(turn.session.dir);
+    // Rust names the lane's workspace skills: the persistent research workspace
+    // for research, the book's workspace for every other lane.
+    const workspaceSkillsDir = turn.session.skills_dir ?? this.options.workspaceSkillsDir;
     const reloadSkills = () =>
       loadLaneSkills({
         ...(this.options.skillsDir ? { defaultSkillsDir: this.options.skillsDir } : {}),
