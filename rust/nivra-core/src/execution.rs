@@ -217,6 +217,9 @@ pub struct Position {
     pub exit_intent: Option<ExitIntent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision_id: Option<String>,
+    /// Run that opened the position. Exit revisions and add-ons preserve it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy_origin: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Fill {
@@ -570,6 +573,23 @@ impl Portfolio {
         }
         Ok(())
     }
+    /// For a book written before position origins were persisted, recover
+    /// the decision on the buy that opened the current lot.
+    pub fn opening_decision(&self, key: &str) -> Option<&str> {
+        let mut units = self.positions.get(key)?.units;
+        for fill in self.fills.iter().rev().filter(|f| f.instrument.key == key) {
+            units = if fill.buy {
+                units.checked_sub(fill.units)?
+            } else {
+                units.checked_add(fill.units)?
+            };
+            if units == 0 {
+                return fill.decision_id.as_deref();
+            }
+        }
+        None
+    }
+
     pub fn equity(&self) -> Result<Amount> {
         self.positions.values().try_fold(self.cash, |v, p| {
             Ok(v.checked_add(
@@ -645,15 +665,21 @@ impl Portfolio {
             self.cash.checked_add(n.checked_sub(fee)?)?
         };
         if buy {
-            let (units, price, exit_intent, decision_id) =
+            let (units, price, exit_intent, decision_id, strategy_origin) =
                 if let Some(p) = self.positions.get(&i.key) {
                     if p.instrument != *i {
                         return Err("buy_identity_changed".into());
                     }
                     let (units, price) = combined_entry(p.units, p.entry, units, price)?;
-                    (units, price, p.exit_intent.clone(), p.decision_id.clone())
+                    (
+                        units,
+                        price,
+                        p.exit_intent.clone(),
+                        p.decision_id.clone(),
+                        p.strategy_origin.clone(),
+                    )
                 } else {
-                    (units, price, None, None)
+                    (units, price, None, None, None)
                 };
             self.positions.insert(
                 i.key.clone(),
@@ -665,6 +691,7 @@ impl Portfolio {
                     marked_at: q.source.min(q.receipt),
                     exit_intent,
                     decision_id,
+                    strategy_origin,
                 },
             );
         } else {
@@ -1677,6 +1704,7 @@ mod execution_settings_tests {
                     time: None,
                 }),
                 decision_id: Some("d1".into()),
+                strategy_origin: None,
             },
         );
         let quotes = BTreeMap::from([(instrument.key.clone(), quote("120"))]);
@@ -1708,6 +1736,7 @@ mod execution_settings_tests {
                         time: None,
                     }),
                     decision_id: None,
+                    strategy_origin: None,
                 },
             );
             assert!(

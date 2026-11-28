@@ -1321,6 +1321,7 @@ fn decision_lane_supervises_strategies_and_refuses_cash_buys_while_active() {
                 time: None,
             }),
             decision_id: Some(s2.clone()),
+            strategy_origin: None,
         },
     );
     let contract = OptionContract {
