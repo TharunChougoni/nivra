@@ -517,3 +517,91 @@ fn after_the_seal_one_idea_runs_one_job_to_a_verdict_under_budget_and_restart() 
         .join("strategy-library/entries");
     assert!(std::fs::read_dir(&entries).map_or(true, |mut dir| dir.next().is_none()));
 }
+
+#[test]
+fn previous_tape_fallback_is_bounded_and_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let (c, cfg) = loop_config(dir.path(), |_| {});
+    let clock = || ist("2026-11-28", 12, 0);
+    let agent_settings = settings(100, 10.0);
+
+    // Case 1: Nothing archived within 5 trading sessions before 2026-11-27
+    // (2026-11-24 is an NSE holiday, so 2026-11-18 is 6 trading sessions back)
+    // -> stays waiting_for_tape.
+    let (client, peer) = connect(|_| {});
+    let mut agent = fixture_agent(client);
+    let mut jobs = ScriptedJobs(Vec::new());
+    {
+        let mut runner = LaneRunner::new(&mut agent, &agent_settings, &c, &cfg, &clock);
+        let mut ctx = context("5000");
+        let mut covers = |day: NaiveDate| Ok(day <= "2026-11-18".parse::<NaiveDate>().unwrap());
+        let report = step(&mut Step {
+            c: &c,
+            cfg: &cfg,
+            owner: "test:1",
+            clock: &clock,
+            turns: &mut RunnerTurns {
+                runner: &mut runner,
+                context: &mut ctx,
+            },
+            jobs: &mut jobs,
+            stop: &|| false,
+            tape: &mut covers,
+            trading_today: false,
+            sealed_today: false,
+            last_sealed: "2026-11-27".parse().unwrap(),
+        })
+        .unwrap();
+        assert_eq!(report.state, "waiting");
+        assert_eq!(report.reason.as_deref(), Some("waiting_for_tape"));
+        assert!(open(&c).unwrap().campaign("bars-v1").unwrap().is_none());
+    }
+    peer.join().unwrap();
+
+    // Case 2: 2026-11-27 is missing, 2026-11-26 is covered -> freezes on
+    // 2026-11-26, runs proposal, and reports using_previous_tape + session.
+    let (client, peer) = connect(|peer| {
+        let (id, turn) = peer.turn();
+        assert_eq!(
+            brief(&turn)["campaign"]["development_to"],
+            json!("2026-11-26")
+        );
+        peer.finish(&id, "ok", "done", 1, 0.01);
+    });
+    let mut agent = fixture_agent(client);
+    let mut jobs = ScriptedJobs(Vec::new());
+    {
+        let mut runner = LaneRunner::new(&mut agent, &agent_settings, &c, &cfg, &clock);
+        let mut ctx = context("5000");
+        let mut covers = |day: NaiveDate| Ok(day <= "2026-11-26".parse::<NaiveDate>().unwrap());
+        let report = step(&mut Step {
+            c: &c,
+            cfg: &cfg,
+            owner: "test:1",
+            clock: &clock,
+            turns: &mut RunnerTurns {
+                runner: &mut runner,
+                context: &mut ctx,
+            },
+            jobs: &mut jobs,
+            stop: &|| false,
+            tape: &mut covers,
+            trading_today: false,
+            sealed_today: false,
+            last_sealed: "2026-11-27".parse().unwrap(),
+        })
+        .unwrap();
+        assert_eq!(report.state, "proposed");
+        let report_json = serde_json::to_value(&report).unwrap();
+        assert_eq!(report_json["tape_state"], json!("using_previous_tape"));
+        assert_eq!(report_json["tape_session"], json!("2026-11-26"));
+        let status_json = super::status(&c, &cfg, clock());
+        assert_eq!(status_json["tape_state"], json!("using_previous_tape"));
+        assert_eq!(status_json["tape_session"], json!("2026-11-26"));
+        assert_eq!(
+            status_json["campaign"]["development_to"],
+            json!("2026-11-26")
+        );
+    }
+    peer.join().unwrap();
+}

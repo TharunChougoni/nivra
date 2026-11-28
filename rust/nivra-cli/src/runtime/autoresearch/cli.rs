@@ -47,11 +47,34 @@ pub(crate) fn calendar(c: &Config, now: i64) -> (bool, bool, NaiveDate) {
     (trading_today, sealed_today, last_sealed)
 }
 
-/// Whether the archive's daily bars reach `day`.
+/// Whether the archive's daily bars cover `day` without retryable gaps across
+/// the active universe. Falls back to the archive's bar watermark when no
+/// cached universe is available yet.
 pub(crate) fn archive_covers(c: &Config, day: NaiveDate) -> Result<bool> {
     let archive = c.market_archive.as_ref().ok_or("archive_config_missing")?;
     let mut db = crate::runtime::market_archive::connect(archive)?;
-    Ok(nivra_store::market_archive::last_daily_bar_day(&mut db)?.is_some_and(|last| last >= day))
+    if nivra_store::market_archive::last_daily_bar_day(&mut db)?.is_none_or(|last| last < day) {
+        return Ok(false);
+    }
+    let Ok(instruments) = crate::runtime::wide::history_instruments(c) else {
+        return Ok(true);
+    };
+    if instruments.is_empty() {
+        return Ok(true);
+    }
+    let keys: Vec<&str> = instruments.iter().map(|i| i.key.as_str()).collect();
+    let rows = nivra_store::market_archive::daily_coverage(&mut db, &keys, &[day], true)?;
+    let mut observed = 0usize;
+    let mut retryable_missing = 0usize;
+    for row in rows {
+        observed += row.observed as usize;
+        let covered = row.covered_empty + row.excluded;
+        retryable_missing += row.missing.len().saturating_sub(covered);
+    }
+    let allowed_missing = c
+        .history_preparation_max_fetch_failures
+        .min(instruments.len() / 20);
+    Ok(observed > 0 && retryable_missing <= allowed_missing)
 }
 
 /// The host is short of memory: the loop yields before it starts work.
@@ -124,10 +147,18 @@ fn tick(c: &Config, cfg: &PlannerConfig, max_minutes: u64) -> Result<Vec<StepRep
     }
     let settings = cfg.agent.clone().ok_or("agent_settings_missing")?;
     settings.lane(Lane::Research)?;
-    let db = crate::runtime::open_book_current_read_only(&c.directory.join("paper.sqlite"))?;
-    let portfolio =
-        crate::runtime::wide::stored_portfolio(&db, c)?.ok_or("agent_turn_book_unavailable")?;
-    drop(db);
+    let book_path = c.directory.join("paper.sqlite");
+    let portfolio = if book_path.exists() {
+        let db = crate::runtime::open_book_current_read_only(&book_path)?;
+        let portfolio =
+            crate::runtime::wide::stored_portfolio(&db, c)?.ok_or("agent_turn_book_unavailable")?;
+        drop(db);
+        portfolio
+    } else if rollover::pending_fresh_book(c)?.is_some() {
+        crate::runtime::wide::pending_fresh_portfolio(c, millis())?
+    } else {
+        return Err("paper_book_missing".into());
+    };
     let mut context = TurnContext {
         bundle: json!({}),
         backend: Box::new(LaneBackend(None)),

@@ -19,6 +19,9 @@ use serde_json::{Value, json};
 const PROPOSAL_TASK: &str = "You run one step of Nivra's autonomous research loop. Follow the autoresearch skill. Propose exactly one falsifiable idea for the slot below: read research_history first, record the idea with idea_record (mechanism, falsifier, family, regime, comparator), write one strategy at scripts/<name>.py (archive_bars_v1 for stage bars), then call backtest once with the idea id, the script path, its params and the stage. The host freezes the dates, universe, ₹5,000 capital and costs and keeps only what beats its parent or cash. Change one thing from a parent. End the turn after the submission.";
 const INTERPRET_TASK: &str = "The host scored one experiment under its frozen evaluator; the verdict below is final. Record what it teaches with finding_record: the observation, where it holds, its limitation and the next test. A negative result is a good result. If the status is invalid and repair_allowed is true, fix the cause in a new script version and call backtest once more with the same idea id; otherwise do not submit. Keep a short note under notes/ that cites the experiment and finding ids.";
 const REVIEW_TASK: &str = "Review each learned skill draft below for the research lane. Approve a reproducible procedure supported by findings from at least two distinct experiments that uses only research tools. Reject a performance claim dressed as a procedure, a draft that conflicts with recorded evidence, or one that asks for tools research does not have. Call skill_verdict once per draft with its name and digest.";
+/// Maximum trading sessions before `last_sealed` to fall back when the latest
+/// sealed session's daily bars are not archived yet.
+pub(crate) const MAX_TAPE_LOOKBACK_SESSIONS: usize = 5;
 
 /// One turn the step asks for.
 pub(crate) struct TurnPlan {
@@ -82,6 +85,10 @@ pub(crate) struct StepReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub tape_state: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tape_session: Option<NaiveDate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub experiment_id: Option<i64>,
     /// When the caller should step again.
     pub next_step_ms: i64,
@@ -104,6 +111,8 @@ pub(crate) fn step(s: &mut Step<'_>) -> Result<StepReport> {
         return Ok(StepReport {
             state: "disabled",
             reason: None,
+            tape_state: None,
+            tape_session: None,
             experiment_id: None,
             next_step_ms: i64::MAX,
         });
@@ -115,6 +124,8 @@ pub(crate) fn step(s: &mut Step<'_>) -> Result<StepReport> {
         Err(error) => StepReport {
             state: "waiting",
             reason: Some(crate::runtime::harness::failure_reason(error.as_ref())),
+            tape_state: None,
+            tape_session: None,
             experiment_id: None,
             next_step_ms: now.saturating_add(settings.idle_poll_ms),
         },
@@ -132,6 +143,8 @@ fn leased(
     let wait = |reason: &str| StepReport {
         state: "waiting",
         reason: Some(reason.to_owned()),
+        tape_state: None,
+        tape_session: None,
         experiment_id: None,
         next_step_ms: now.saturating_add(settings.idle_poll_ms),
     };
@@ -161,6 +174,40 @@ fn leased(
     Ok(report)
 }
 
+/// Resolve the newest trading session (within `MAX_TAPE_LOOKBACK_SESSIONS` of
+/// `last_sealed`) whose daily bars are archived.
+fn resolve_tape(
+    c: &Config,
+    last_sealed: NaiveDate,
+    tape: &mut dyn FnMut(NaiveDate) -> Result<bool>,
+) -> Result<Option<NaiveDate>> {
+    if tape(last_sealed)? {
+        return Ok(Some(last_sealed));
+    }
+    let mut day = last_sealed;
+    let mut sessions_checked = 0usize;
+    for _ in 0..60 {
+        let Some(prev) = day.pred_opt() else {
+            break;
+        };
+        day = prev;
+        match c.is_trading_day(day) {
+            Ok(true) => {
+                sessions_checked += 1;
+                if tape(day)? {
+                    return Ok(Some(day));
+                }
+                if sessions_checked >= MAX_TAPE_LOOKBACK_SESSIONS {
+                    break;
+                }
+            }
+            Ok(false) => {}
+            Err(_) => break,
+        }
+    }
+    Ok(None)
+}
+
 fn advance(
     s: &mut Step<'_>,
     settings: &AutoresearchSettings,
@@ -168,18 +215,25 @@ fn advance(
     generation: i64,
     now: i64,
 ) -> Result<StepReport> {
-    let wait = |reason: &str| StepReport {
+    let wait_with = |reason: &str, previous_tape: Option<NaiveDate>| StepReport {
         state: "waiting",
         reason: Some(reason.to_owned()),
+        tape_state: previous_tape.map(|_| "using_previous_tape"),
+        tape_session: previous_tape,
         experiment_id: None,
         next_step_ms: now.saturating_add(settings.idle_poll_ms),
     };
-    let done = |state: &'static str, experiment_id: Option<i64>| StepReport {
-        state,
-        reason: None,
-        experiment_id,
-        next_step_ms: now,
-    };
+    let done_with =
+        |state: &'static str, experiment_id: Option<i64>, previous_tape: Option<NaiveDate>| {
+            StepReport {
+                state,
+                reason: None,
+                tape_state: previous_tape.map(|_| "using_previous_tape"),
+                tape_session: previous_tape,
+                experiment_id,
+                next_step_ms: now,
+            }
+        };
     let workspace_settings = s
         .cfg
         .workspace
@@ -194,8 +248,16 @@ fn advance(
     store.settle_abandoned_turns(None)?;
     let campaign = match store.campaign(&settings.campaign.name)? {
         Some(campaign) => campaign,
-        None if !(s.tape)(s.last_sealed)? => return Ok(wait("waiting_for_tape")),
-        None => jobs::ensure_campaign(store, s.c, s.cfg, settings, s.last_sealed, now)?,
+        None => match resolve_tape(s.c, s.last_sealed, s.tape)? {
+            Some(tape_day) => jobs::ensure_campaign(store, s.c, s.cfg, settings, tape_day, now)?,
+            None => return Ok(wait_with("waiting_for_tape", None)),
+        },
+    };
+    let previous_tape =
+        (campaign.development_to < s.last_sealed).then_some(campaign.development_to);
+    let wait = |reason: &str| wait_with(reason, previous_tape);
+    let done = |state: &'static str, experiment_id: Option<i64>| {
+        done_with(state, experiment_id, previous_tape)
     };
     if campaign.status != "active" {
         return Ok(wait("campaign_closed"));
@@ -597,9 +659,21 @@ pub(crate) fn status(c: &Config, cfg: &PlannerConfig, now: i64) -> Value {
             .as_ref()
             .map(|s| s["report"].clone())
             .unwrap_or(Value::Null);
+        let last_sealed = super::cli::calendar(c, now).2;
+        let previous_tape = campaign
+            .as_ref()
+            .filter(|campaign| campaign.development_to < last_sealed)
+            .map(|campaign| campaign.development_to);
+        let tape_state = previous_tape
+            .map(|_| Value::String("using_previous_tape".into()))
+            .unwrap_or_else(|| report["tape_state"].clone());
+        let tape_session = previous_tape
+            .map(|day| Value::String(day.to_string()))
+            .unwrap_or_else(|| report["tape_session"].clone());
         Ok(json!({
             "enabled":true,
             "state":report["state"],"reason":report["reason"],
+            "tape_state":tape_state,"tape_session":tape_session,
             "next_step_ms":report["next_step_ms"],
             "last_step_ms":state.as_ref().map(|s| s["at_ms"].clone()),
             "budget":{
