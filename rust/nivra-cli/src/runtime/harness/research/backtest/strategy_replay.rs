@@ -9,11 +9,24 @@ use std::os::unix::fs::DirBuilderExt;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
+/// Host-owned checks for a frozen autonomous replay and its action comparator.
+pub(crate) struct ReplayGate<'a> {
+    pub sessions: &'a [chrono::NaiveDate],
+    pub parent: Option<(&'a [u8], &'a Value)>,
+    pub max_drawdown_bps: i64,
+    pub sizing: &'a nivra_core::sleeve::SizingPolicy,
+    pub exit_policy: &'a Option<nivra_core::execution::ExitPolicy>,
+    pub worker: &'a strategy::WorkerConfig,
+    pub slot: &'a AdvisoryLock,
+    pub parity: Option<replay::TranslationParity>,
+}
+
 /// `backtest` over a quote tape: replay the source as a
 /// `strategy_actions_v1` strategy over a frozen quote tape with the book's
 /// capital, costs and exit policy. The
 /// report is kept by content hash under `model/strategy-replays/`.
-pub(super) fn strategy_backtest(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn strategy_backtest(
     c: &Config,
     cfg: &PlannerConfig,
     candidate: &CandidateComputeSettings,
@@ -21,6 +34,7 @@ pub(super) fn strategy_backtest(
     args: &BacktestArgs,
     now: i64,
     preempted: &dyn Fn() -> bool,
+    mut gate: Option<ReplayGate<'_>>,
 ) -> Result<Value> {
     let started = Instant::now();
     let Some(settings) = candidate.strategy.as_ref().filter(|s| s.enabled) else {
@@ -31,41 +45,66 @@ pub(super) fn strategy_backtest(
         .datasets
         .iter()
         .find(|d| d.dataset_id == args.dataset_id);
-    let bounds = match dataset.map(|d| &d.kind) {
-        None if args.dataset_id == RECENT_ARCHIVE_DATASET_ID => {
-            if args.selection_to_ms > now {
-                return Ok(not_dispatched("candidate_archive_window_in_future"));
+    let bounds = if let Some(gate) = &gate {
+        gate.sessions
+            .first()
+            .zip(gate.sessions.last())
+            .map(|(&from, &to)| (from, to))
+    } else {
+        match dataset.map(|d| &d.kind) {
+            None if args.dataset_id == RECENT_ARCHIVE_DATASET_ID => {
+                if args.selection_to_ms > now {
+                    return Ok(not_dispatched("candidate_archive_window_in_future"));
+                }
+                let recent = match RecentArchiveWindow::resolve(
+                    c,
+                    settings,
+                    args.selection_to_ms.saturating_add(1).min(now),
+                ) {
+                    Ok(recent) => recent,
+                    Err(reason) => return Ok(not_dispatched(reason)),
+                };
+                if args.selection_from_ms < recent.selection_from_ms
+                    || args.selection_to_ms > recent.selection_to_ms
+                {
+                    return Ok(not_dispatched(
+                        "candidate_recent_archive_selection_outside_window",
+                    ));
+                }
+                Some(recent.session_bounds())
             }
-            let recent = match RecentArchiveWindow::resolve(
-                c,
-                settings,
-                args.selection_to_ms.saturating_add(1).min(now),
-            ) {
-                Ok(recent) => recent,
-                Err(reason) => return Ok(not_dispatched(reason)),
-            };
-            if args.selection_from_ms < recent.selection_from_ms
-                || args.selection_to_ms > recent.selection_to_ms
+            Some(CandidateDatasetKind::ArchiveWindow {
+                from_session,
+                to_session,
+            }) => Some((*from_session, *to_session)),
+            Some(CandidateDatasetKind::CurrentSessionFeatures)
+                if args.archive_daily_window.is_none() && args.as_of_receipt_id.is_none() =>
             {
-                return Ok(not_dispatched(
-                    "candidate_recent_archive_selection_outside_window",
-                ));
+                None
             }
-            Some(recent.session_bounds())
+            _ => return Ok(not_dispatched("candidate_strategy_dataset_unsupported")),
         }
-        Some(CandidateDatasetKind::ArchiveWindow {
-            from_session,
-            to_session,
-        }) => Some((*from_session, *to_session)),
-        Some(CandidateDatasetKind::CurrentSessionFeatures)
-            if args.archive_daily_window.is_none() && args.as_of_receipt_id.is_none() =>
-        {
-            None
-        }
-        _ => return Ok(not_dispatched("candidate_strategy_dataset_unsupported")),
     };
     if bounds.is_some() && args.selection_to_ms > now {
         return Ok(not_dispatched("candidate_archive_window_in_future"));
+    }
+    let owned_slot = if gate.is_none() {
+        super::super::compute_slot(c)?
+    } else {
+        None
+    };
+    let Some(_slot) = gate.as_ref().map(|g| g.slot).or(owned_slot.as_ref()) else {
+        return Ok(not_dispatched("research_compute_busy"));
+    };
+    if gate.is_none()
+        && crate::runtime::autoresearch::enabled(cfg).is_some()
+        && let Some((from, to)) = bounds
+    {
+        let mut store = crate::runtime::autoresearch::open(c)?;
+        if store.holdout_overlaps(from, to)? {
+            return Ok(not_dispatched("research_holdout_sealed"));
+        }
+        store.record_replay_exposure(from, to)?;
     }
     let window = bounds.map(|(from_session, to_session)| ArchiveWindow {
         max_days: settings.max_archive_window_days,
@@ -123,14 +162,21 @@ pub(super) fn strategy_backtest(
         version: 1,
         capital: Some(capital),
         costs: Some(costs),
-        sizing: Some(c.sleeves.cash.policy()),
-        exit_policy: cfg.exit_policy.clone(),
+        sizing: Some(
+            gate.as_ref()
+                .map_or_else(|| c.sleeves.cash.policy(), |g| g.sizing.clone()),
+        ),
+        exit_policy: gate
+            .as_ref()
+            .map_or_else(|| cfg.exit_policy.clone(), |g| g.exit_policy.clone()),
         params: args.params.clone(),
         top_n: 20,
         from_ms: Some(args.selection_from_ms),
         to_ms: Some(args.selection_to_ms),
     };
-    let worker = cfg.effective_strategy_worker();
+    let worker = gate
+        .as_ref()
+        .map_or_else(|| cfg.effective_strategy_worker(), |g| g.worker.clone());
     if let Err(reasons) = review::static_check(
         &worker.python_path,
         args.source.as_bytes(),
@@ -142,13 +188,14 @@ pub(super) fn strategy_backtest(
             "reasons": reasons,
         }));
     }
-    let mut report = match replay::run(
+    let mut report = match replay::run_with_parity(
         &worker,
         args.source.as_bytes(),
         &parameters,
         &tape.manifest,
         &tape.events,
         &stop,
+        gate.as_mut().and_then(|g| g.parity.as_mut()),
     ) {
         Ok(Ok(report)) => report,
         // No report is kept for a partial replay.
@@ -164,6 +211,73 @@ pub(super) fn strategy_backtest(
                 error.as_ref(),
             )));
         }
+    };
+    let qualification = if let Some(gate) = &gate {
+        let summary = &report["summary"];
+        let net: Amount = serde_json::from_value(summary["net_pnl"].clone())?;
+        let worst: Amount = serde_json::from_value(summary["worst_drawdown"].clone())?;
+        let drawdown = worst
+            .checked_mul(Amount::from_integer(10_000))?
+            .checked_floor_ratio(capital)?;
+        let complete = report["tape"]["dates"] == json!(gate.sessions)
+            && archive
+                .as_ref()
+                .is_some_and(|info| info.missing_sessions.is_empty());
+        let mut reason = if !complete {
+            Some("quote_coverage_incomplete")
+        } else if summary["open_positions"] != 0 {
+            Some("quote_positions_open")
+        } else if net <= Amount::ZERO {
+            Some("quote_net_not_positive")
+        } else if drawdown > i128::from(gate.max_drawdown_bps) {
+            Some("drawdown_exceeded")
+        } else {
+            None
+        };
+        if let Some(parity) = &gate.parity {
+            let (failure, evidence) = parity.verdict();
+            report["translation_parity"] = evidence;
+            if let Some(failure) = failure {
+                reason.get_or_insert(failure);
+            }
+        }
+        let comparator = if let Some((source, params)) = gate.parent {
+            let mut options = parameters.clone();
+            options.params = params.clone();
+            match replay::run(
+                &worker,
+                source,
+                &options,
+                &tape.manifest,
+                &tape.events,
+                &stop,
+            )? {
+                Ok(baseline)
+                    if complete
+                        && baseline["tape"]["dates"] == report["tape"]["dates"]
+                        && baseline["summary"]["open_positions"] == 0 =>
+                {
+                    Some(serde_json::from_value::<Amount>(
+                        baseline["summary"]["net_pnl"].clone(),
+                    )?)
+                }
+                _ => {
+                    reason.get_or_insert("quote_parent_evidence_unavailable");
+                    None
+                }
+            }
+        } else {
+            Some(Amount::ZERO)
+        };
+        let delta = comparator.map(|pnl| net.checked_sub(pnl)).transpose()?;
+        if delta.is_some_and(|delta| delta <= Amount::ZERO) {
+            reason.get_or_insert("quote_parent_not_improved");
+        }
+        report["qualification"] = json!({"comparator_net_pnl":comparator,"paired_net_pnl":delta,
+            "complete":complete,"reason":reason});
+        reason
+    } else {
+        None
     };
     if let Some(archive) = archive {
         report["tape"]["archive_window"] = json!(archive);
@@ -182,15 +296,19 @@ pub(super) fn strategy_backtest(
     // Acceptance reads the stored bytes, so a damaged file cannot register.
     let stored = crate::read_bounded(&directory.join(&name), 32 * 1024 * 1024)
         .map_err(|_| "strategy_replay_report_unreadable")?;
-    let acceptance = accept_and_register(
-        c,
-        cfg,
-        &stored,
-        &report_sha256,
-        args.source.as_bytes(),
-        author,
-        now,
-    );
+    let acceptance = if let Some(reason) = qualification {
+        json!({"verdict":"rejected","reasons":[reason]})
+    } else {
+        accept_and_register(
+            c,
+            cfg,
+            &stored,
+            &report_sha256,
+            args.source.as_bytes(),
+            author,
+            now,
+        )
+    };
     Ok(json!({
         "status":"completed",
         "abi":strategy::ABI,

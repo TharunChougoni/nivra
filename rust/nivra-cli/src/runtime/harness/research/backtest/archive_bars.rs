@@ -158,6 +158,7 @@ pub(crate) fn bar_request(
     candidate: &CandidateComputeSettings,
 ) -> Option<Request> {
     let request = Request {
+        qualification: None,
         window,
         splits,
         capital,

@@ -14,6 +14,8 @@ mod control;
 mod objects;
 mod options;
 pub use options::OptionStage;
+mod qualification;
+pub use qualification::Holdout;
 mod records;
 pub use objects::{BackupReport, verify};
 pub use records::*;
@@ -226,6 +228,30 @@ impl Store {
             .optional()?)
     }
 
+    /// A revised archive preserves historical reports but removes their authority.
+    pub fn invalidate_old_bar_scores(
+        &mut self,
+        campaign: i64,
+        manifest: &str,
+        now: i64,
+    ) -> Result<()> {
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "UPDATE experiment SET status='failed', reason='archive_bars_snapshot_changed', interpreted=1, updated_at_ms=?3
+             WHERE campaign_id=?1 AND stage='bars' AND status='scored' AND manifest_blob<>?2",
+            params![campaign, manifest, now],
+        )?;
+        tx.execute(
+            "DELETE FROM cell WHERE campaign_id=?1 AND incumbent_experiment_id IN
+             (SELECT id FROM experiment WHERE reason='archive_bars_snapshot_changed')",
+            [campaign],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Scored trials in a campaign, abandoned and failed ones included.
     pub fn trials(&self, campaign_id: i64) -> Result<u32> {
         Ok(self.db.query_row(
@@ -279,6 +305,19 @@ impl Store {
         let spent = control::day_spend(&tx, s.day)?;
         if let Some(reason) = s.limits.variant_refusal(&spent) {
             return Ok(Reserved::Refused(reason));
+        }
+        if let Some((from, to)) = s.quote_window {
+            if tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM replay_exposure WHERE from_day<=?2 AND to_day>=?1)",
+                params![from.to_string(), to.to_string()],
+                |r| r.get::<_, bool>(0),
+            )? {
+                return Ok(Reserved::Refused("waiting_for_unseen_quote_tape"));
+            }
+            tx.execute(
+                "INSERT INTO replay_exposure(from_day,to_day) VALUES(?1,?2)",
+                params![from.to_string(), to.to_string()],
+            )?;
         }
         tx.execute(
             "INSERT INTO experiment(campaign_id,idea_id,parent_id,stage,source_path,source_blob,params_blob,manifest_blob,evaluator_digest,experiment_key,ordinal,status,created_at_ms,updated_at_ms)
@@ -456,7 +495,7 @@ impl Store {
                     "UPDATE idea SET status=?2 WHERE id=?1",
                     params![experiment.idea_id, if kept { "kept" } else { "rejected" }],
                 )?;
-                if kept {
+                if kept && experiment.stage.as_str() != "quote_replay" {
                     tx.execute(
                         "INSERT INTO cell(campaign_id,segment,family,regime,incumbent_experiment_id)
                          SELECT i.campaign_id, c.segment, i.family, i.regime, ?2 FROM idea i JOIN campaign c ON c.id=i.campaign_id WHERE i.id=?1
@@ -559,7 +598,7 @@ impl Store {
     pub fn family_stall(&self, campaign_id: i64, family: &str) -> Result<u32> {
         let mut statement = self.db.prepare(
             "SELECT e.verdict FROM experiment e JOIN idea i ON i.id=e.idea_id
-             WHERE e.campaign_id=?1 AND i.family=?2 AND e.status='scored' ORDER BY e.id DESC LIMIT 16",
+             WHERE e.campaign_id=?1 AND i.family=?2 AND e.status='scored' ORDER BY e.id DESC LIMIT 20",
         )?;
         let verdicts =
             statement.query_map(params![campaign_id, family], |row| row.get::<_, String>(0))?;

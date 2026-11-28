@@ -202,10 +202,9 @@ review. The block is operational: it never enters the planner policy hash.
 | Key | Default | Range | Meaning |
 | --- | --- | --- | --- |
 | `enabled` | `false` | | Run the loop |
-| `campaign.name` | `bars-v1` | slug | A new name starts a new campaign with fresh frozen dates and a fresh trial count |
+| `campaign.name` | `bars-v2` | slug | A new name starts a new campaign with fresh frozen dates and a fresh trial count |
 | `campaign.unit` | `day` | `day`, `minute` | Bar unit of the campaign window |
-| `campaign.lookback_days` | 365 | 30 to 3650 | Calendar days of history ending on the last sealed session |
-| `campaign.selection_days` | 90 | 5 to below lookback | Trailing days that are scored |
+| `campaign.embargo_sessions` | 1 | 0 to 20 | Exchange sessions withheld from the strategy before each scored fold. Declare an outcome horizon no longer than this value. |
 | `campaign.instruments` | absent | up to 500 `NSE_EQ` keys | Universe; absent uses the archived cash universe |
 | `campaign.trial_cap` | 60 | 1 to 10000 | Scored variants the campaign may spend, every trial counted |
 | `day.variants` | 30 | 1 to 1000 | New variants per IST research day |

@@ -2,10 +2,9 @@
 	"autoresearch": {
 		"enabled": true,
 		"campaign": {
-			"name": "bars-v1",
+			"name": "bars-v2",
 			"unit": "day",
-			"lookback_days": 365,
-			"selection_days": 90,
+			"embargo_sessions": 1,
 			"trial_cap": 60
 		},
 		"day": {

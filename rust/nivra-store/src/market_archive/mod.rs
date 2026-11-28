@@ -2,7 +2,10 @@
 
 mod backtest;
 mod history;
-pub use backtest::{Bar, BarUnit, BarWindow, ist_midnight, read_bar_batches};
+pub use backtest::{
+    Bar, BarSnapshot, BarSnapshotBuilder, BarUnit, BarWindow, bar_snapshot,
+    bar_snapshot_with_prefix, ist_midnight, read_bar_batches,
+};
 pub mod options;
 mod reader;
 mod writer;

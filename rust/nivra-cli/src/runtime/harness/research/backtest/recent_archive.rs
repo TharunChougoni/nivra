@@ -8,7 +8,7 @@ pub(crate) const RECENT_ARCHIVE_DATASET_ID: &str = "recent_archive";
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct RecentArchiveWindow {
     dataset_id: &'static str,
-    sessions: Vec<NaiveDate>,
+    pub(crate) sessions: Vec<NaiveDate>,
     pub selection_from_ms: i64,
     pub selection_to_ms: i64,
 }
@@ -55,6 +55,50 @@ impl RecentArchiveWindow {
             }
         }
         Err("candidate_recent_archive_sessions_unavailable")
+    }
+
+    /// First complete exchange sessions after an executable was frozen.
+    pub(crate) fn after(
+        c: &Config,
+        settings: &CandidateStrategySettings,
+        frozen: NaiveDate,
+        now: i64,
+    ) -> Result<Option<Self>> {
+        let today = nivra_core::autoresearch::ist_day(now);
+        let through = today.min(c.session);
+        let calendar = c
+            .calendar_at(through)
+            .map_err(|_| "candidate_archive_calendar_unavailable")?;
+        let mut sessions = Vec::new();
+        let mut first = None;
+        let epoch = |day, time: LocalTime| {
+            DateTime::parse_from_rfc3339(&format!("{day}T{time}+05:30"))
+                .map(|t| t.timestamp_millis())
+        };
+        for day in frozen.iter_days().skip(1).take_while(|day| *day <= through) {
+            let date = ExchangeDate::parse(&day.to_string())?;
+            let Some((open, close)) = calendar.hours(date)? else {
+                continue;
+            };
+            let close = epoch(day, close)?;
+            if close > now {
+                break;
+            }
+            let (first_day, from) = *first.get_or_insert((day, epoch(day, open)?));
+            if (day - first_day).num_days() >= settings.max_archive_window_days {
+                return Err("candidate_archive_window_invalid".into());
+            }
+            sessions.push(day);
+            if sessions.len() == settings.recent_archive_sessions {
+                return Ok(Some(Self {
+                    dataset_id: RECENT_ARCHIVE_DATASET_ID,
+                    sessions,
+                    selection_from_ms: from,
+                    selection_to_ms: close - 1,
+                }));
+            }
+        }
+        Ok(None)
     }
 
     pub(super) fn session_bounds(&self) -> (NaiveDate, NaiveDate) {

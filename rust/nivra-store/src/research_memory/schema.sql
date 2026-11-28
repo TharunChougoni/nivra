@@ -170,3 +170,22 @@ CREATE TABLE IF NOT EXISTS option_research_comparison(
   body TEXT,
   PRIMARY KEY(session, ranking)
 );
+
+CREATE TABLE IF NOT EXISTS holdout_report(
+  campaign_id INTEGER PRIMARY KEY REFERENCES campaign(id),
+  verdict TEXT NOT NULL CHECK(verdict IN ('keep','reject','inconclusive')),
+  report_blob TEXT
+);
+
+CREATE TABLE IF NOT EXISTS replay_exposure(
+  from_day TEXT NOT NULL,
+  to_day TEXT NOT NULL,
+  PRIMARY KEY(from_day,to_day)
+);
+
+CREATE TABLE IF NOT EXISTS quote_draft(
+  idea_id INTEGER PRIMARY KEY REFERENCES idea(id),
+  source_blob TEXT NOT NULL,
+  params_blob TEXT NOT NULL,
+  frozen_at_ms INTEGER NOT NULL
+);

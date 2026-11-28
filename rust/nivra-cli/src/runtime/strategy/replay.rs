@@ -201,10 +201,9 @@ pub(crate) struct Stopped {
     pub last_at_ms: Option<i64>,
 }
 
-/// Replay `source` over the tape on a persistent strategy worker. The report is
-/// deterministic for the same source, parameters, tape, engine and worker limits,
-/// holds no floats, and is hashed with the canonical artifact encoding. `stop`
-/// is asked before each strategy call; a reason ends the replay with no report.
+mod translation;
+pub(crate) use translation::TranslationParity;
+
 pub(crate) fn run(
     worker_config: &WorkerConfig,
     source: &[u8],
@@ -212,6 +211,30 @@ pub(crate) fn run(
     manifest: &[u8],
     events: &[u8],
     stop: &dyn Fn() -> Option<&'static str>,
+) -> Result<std::result::Result<Value, Stopped>> {
+    run_with_parity(
+        worker_config,
+        source,
+        parameters,
+        manifest,
+        events,
+        stop,
+        None,
+    )
+}
+
+/// Replay `source` over the tape on a persistent strategy worker. The report is
+/// deterministic for the same source, parameters, tape, engine and worker limits,
+/// holds no floats, and is hashed with the canonical artifact encoding. `stop`
+/// is asked before each strategy call; a reason ends the replay with no report.
+pub(crate) fn run_with_parity(
+    worker_config: &WorkerConfig,
+    source: &[u8],
+    parameters: &Parameters,
+    manifest: &[u8],
+    events: &[u8],
+    stop: &dyn Fn() -> Option<&'static str>,
+    mut parity: Option<&mut TranslationParity>,
 ) -> Result<std::result::Result<Value, Stopped>> {
     parameters.validate()?;
     let screen = Screen::parse(&parameters.params)?;
@@ -459,6 +482,9 @@ pub(crate) fn run(
                 .map_err(|_| "strategy_input_limit")
                 .and_then(|input| worker.call_sync(&input, now))
                 .and_then(|bytes| parse_output(&bytes, &observation));
+            if let Some(parity) = parity.as_deref_mut() {
+                parity.observe(now, &prospects, called.as_deref().ok());
+            }
             let instruments: Vec<Instrument> = observation
                 .instruments
                 .values()

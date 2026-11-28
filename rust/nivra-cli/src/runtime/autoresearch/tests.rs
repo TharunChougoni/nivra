@@ -80,14 +80,163 @@ impl Jobs for ScriptedJobs {
     }
 }
 
-fn report(net: &str) -> JobEnd {
-    let split = |net: &str| json!({"mark_to_market_pnl":net,"max_drawdown_bps":40,"closed_trades":12,"open_positions":0,"fill_sample":[]});
+fn report(net: &str, snapshot: &nivra_store::market_archive::BarSnapshot) -> JobEnd {
+    let fold = |day: &str| {
+        json!({"qualification_net_pnl":net,"max_drawdown_bps":40,
+        "closed_trades":12,"open_positions":0,"daily_net_pnl":[[day,net]]})
+    };
     JobEnd::Report(
-        serde_json::to_vec(
-            &json!({"abi":"archive_bars_v1","training":split("10"),"test":split(net)}),
-        )
+        serde_json::to_vec(&json!({"abi":"archive_bars_v1","bar_snapshot":snapshot,
+        "test":fold("2026-08-03"),"folds":[fold("2026-09-01"),fold("2026-10-01")]}))
         .unwrap(),
     )
+}
+
+fn seed_qualification_bars(
+    c: &Config,
+) -> crate::runtime::Result<nivra_store::market_archive::BarWindow> {
+    use nivra_store::market_archive::{BarUnit, BarWindow, init};
+    use sha2::{Digest, Sha256};
+    let archive = c.market_archive.as_ref().ok_or("archive_config_missing")?;
+    let mut db = crate::runtime::market_archive::connect(archive)?;
+    init(&mut db)?;
+    let mut tx = db.transaction()?;
+    let key = format!(
+        "NSE_EQ|QUAL-FIXTURE-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    );
+    let instrument: i32 = tx
+        .query_one(
+            "INSERT INTO instruments(key) VALUES($1)
+        ON CONFLICT(key) DO UPDATE SET key=EXCLUDED.key RETURNING id",
+            &[&key],
+        )?
+        .get(0);
+    let now = crate::runtime::millis();
+    let hash = Sha256::digest(format!("{key}-{now}").as_bytes());
+    let receipt: i64 = tx
+        .query_one(
+            "INSERT INTO receipts(kind, requested_ms, received_ms, sha256, body)
+        VALUES(2,$1,$1,$2,$2) RETURNING id",
+            &[&now, &hash.as_slice()],
+        )?
+        .get(0);
+    let mut days = vec!["2025-12-01".parse()?];
+    days.extend(super::qualification::exchange_dates(
+        c,
+        "2026-01-01".parse()?,
+        "2026-10-31".parse()?,
+    )?);
+    tx.execute(
+        "INSERT INTO daily_bars(instrument_id, day, o, h, l, c, volume, oi, receipt_id)
+        SELECT $1, day, 10000, 20000, 10000, 18000, 10000, 0, $3
+        FROM unnest($2::date[]) day
+        ON CONFLICT(instrument_id,day) DO UPDATE SET c=EXCLUDED.c, receipt_id=EXCLUDED.receipt_id",
+        &[&instrument, &days, &receipt],
+    )?;
+    tx.commit()?;
+    Ok(BarWindow {
+        unit: BarUnit::Day,
+        from: "2025-12-01".parse()?,
+        to: "2026-10-31".parse()?,
+        instruments: Some(vec![key]),
+    })
+}
+
+#[test]
+#[ignore = "requires NIVRA_ARCHIVE_TEST_URL and bubblewrap"]
+fn revised_archive_changes_identity_and_future_only_signal_cannot_fill()
+-> crate::runtime::Result<()> {
+    use nivra_core::autoresearch::{ExperimentIdentity, qualification};
+    use nivra_store::market_archive::ist_midnight;
+    let dir = tempfile::tempdir()?;
+    let (mut c, cfg) = loop_config(dir.path(), |_| {});
+    let archive = crate::runtime::market_archive::test_settings(dir.path())?;
+    c.market_archive = Some(archive.clone());
+    let window = seed_qualification_bars(&c)?;
+    let snapshot = super::jobs::read_snapshot(&c, &window)?;
+    let mut db = crate::runtime::market_archive::connect(&archive)?;
+    let (_, candidate) = super::jobs::loop_settings(&c, &cfg)?;
+    let date = |s: &str| ist_midnight(s.parse().unwrap());
+    let last = [date("2026-08-31"), date("2026-09-30"), date("2026-10-30")];
+    let mut request = crate::runtime::harness::research::bar_request(
+        &archive,
+        window.clone(),
+        nivra_store::research_jobs::BacktestWindows {
+            training_from_ms: date("2025-12-01"),
+            training_to_ms: date("2026-08-01") - 1,
+            selection_from_ms: date("2026-08-01"),
+            selection_to_ms: date("2026-11-01") - 1,
+        },
+        c.sleeves.cash.capital,
+        c.paper_costs.clone().unwrap(),
+        json!({"last":last}),
+        &candidate,
+    )
+    .unwrap();
+    request.qualification = Some(nivra_research::archive_bars::Qualification {
+        snapshot: snapshot.clone(),
+        fold_boundaries_ms: Some([date("2026-09-01"), date("2026-10-01")]),
+        embargo_sessions: 0,
+    });
+    // The terminal high looks profitable only if a fill can use the same
+    // bar or cross into the next fold. Both paths must leave zero fills.
+    let source = r#"def on_bars(at, split, rows, params, state):
+    return [[0, 1]] if at in params['last'] and rows[0][2] > rows[0][1] else []
+"#;
+    let run =
+        |db: &mut nivra_store::market_archive::ArchiveClient| -> crate::runtime::Result<Value> {
+            Ok(serde_json::from_slice(&nivra_research::archive_bars::run(
+                &request,
+                source,
+                db,
+                std::time::Duration::from_secs(30),
+            )?)?)
+        };
+    let result = run(&mut db)?;
+    let mut parts = vec![result["test"].clone()];
+    parts.extend(result["folds"].as_array().unwrap().clone());
+    assert!(
+        parts
+            .iter()
+            .all(|f| f["signals"] == 1 && f["fills"] == 0 && f["unfilled_signals"] == 1)
+    );
+    let folds: Vec<qualification::Fold> = parts
+        .into_iter()
+        .map(serde_json::from_value)
+        .collect::<std::result::Result<_, _>>()?;
+    let score = qualification::pooled(&folds)?;
+    let paired = qualification::paired(&folds, None, request.capital)?;
+    assert_eq!(
+        qualification::verdict(&score, paired.as_ref(), 300)
+            .verdict
+            .as_str(),
+        "reject"
+    );
+    db.execute(
+        "UPDATE daily_bars SET volume=volume+1
+        WHERE day=$1 AND instrument_id=(SELECT id FROM instruments WHERE key=$2)",
+        &[&window.from, &window.instruments.as_ref().unwrap()[0]],
+    )?;
+    let revised = super::jobs::read_snapshot(&c, &window)?;
+    let identity = |digest: &str| {
+        ExperimentIdentity {
+            stage: Stage::Bars,
+            abi: "archive_bars_v1",
+            source_sha256: "same-source",
+            params_sha256: "same-params",
+            manifest_sha256: digest,
+            runner_sha256: "same-runner",
+        }
+        .key()
+    };
+    assert_ne!(
+        identity(&snapshot.ordered_sha256),
+        identity(&revised.ordered_sha256)
+    );
+    assert_eq!(run(&mut db)?["reason"], "archive_bars_snapshot_changed");
+    Ok(())
 }
 
 struct Run<'a> {
@@ -138,6 +287,23 @@ fn names(turn: &Value) -> Vec<String> {
 fn two_dated_books_share_scripts_reviewed_skills_and_losing_experiments() {
     let dir = tempfile::tempdir().unwrap();
     let (c, cfg) = loop_config(dir.path(), |_| {});
+    let loop_settings = cfg.autoresearch.as_ref().unwrap();
+    let manifest =
+        super::jobs::campaign_manifest(&c, &cfg, loop_settings, "2026-11-26".parse().unwrap())
+            .unwrap();
+    open(&c)
+        .unwrap()
+        .ensure_campaign(&nivra_store::research_memory::NewCampaign {
+            name: &loop_settings.campaign.name,
+            segment: super::SEGMENT,
+            manifest: &serde_json::to_vec(&manifest).unwrap(),
+            development_from: manifest.window.from,
+            development_to: manifest.window.to,
+            selection_from: "2026-08-01".parse().unwrap(),
+            trial_cap: loop_settings.campaign.trial_cap,
+            now: ist("2026-11-26", 16, 0),
+        })
+        .unwrap();
     let day1 = book(&c, "2026-11-26");
     // Yesterday's book workspace: a script, a note and a skill written in-book.
     let old = day1.directory.join("workspace");
@@ -231,7 +397,7 @@ fn two_dated_books_share_scripts_reviewed_skills_and_losing_experiments() {
     assert!(!skills_dir.join("regime-gate").exists());
     assert_eq!(store.skills(Some("proposed")).unwrap().len(), 1);
     // Day 1 also records a losing experiment.
-    let campaign = store.campaign("bars-v1").unwrap().unwrap();
+    let campaign = store.campaign("bars-v2").unwrap().unwrap();
     let (idea, _) = store
         .record_idea(&NewIdea {
             campaign_id: campaign.id,
@@ -251,6 +417,7 @@ fn two_dated_books_share_scripts_reviewed_skills_and_losing_experiments() {
         .reserve(&Submission {
             idea_id: idea.id,
             stage: Stage::Bars,
+            quote_window: None,
             source_path: "scripts/gap_fade.py",
             source_blob: &blob,
             params_blob: &blob,
@@ -315,6 +482,32 @@ fn two_dated_books_share_scripts_reviewed_skills_and_losing_experiments() {
     .unwrap();
     assert_eq!(history["history"]["experiments"][0]["verdict"], "reject");
     assert_eq!(history["history"]["skills"][0]["name"], "fold-check");
+    let mut closed = cfg.clone();
+    closed.autoresearch.as_mut().unwrap().family_stall = 1;
+    let new_idea = super::parse_tool("idea_record", json!({"family":"reversal","regime":"range",
+        "mechanism":"gap fade with narrower stops","hypothesis":"Price returns to yesterday's close",
+        "falsifier":"Net after costs is negative","comparator":"cash","parent_experiment_id":null})).unwrap();
+    assert_eq!(
+        execute(&day2, &closed, None, new_idea, 5, &|| false)
+            .unwrap_err()
+            .to_string(),
+        "research_family_closed"
+    );
+
+    let slot = crate::runtime::harness::research::compute_slot(&day1)
+        .unwrap()
+        .unwrap();
+    assert!(
+        crate::runtime::harness::research::compute_slot(&day2)
+            .unwrap()
+            .is_none()
+    );
+    drop(slot);
+    assert!(
+        crate::runtime::harness::research::compute_slot(&day2)
+            .unwrap()
+            .is_some()
+    );
     now.store(ist("2026-11-27", 10, 0), Ordering::SeqCst);
     {
         let mut runner = LaneRunner::new(&mut agent, &agent_settings, &day2, &cfg, &clock);
@@ -361,12 +554,17 @@ fn two_dated_books_share_scripts_reviewed_skills_and_losing_experiments() {
 }
 
 #[test]
+#[ignore = "requires NIVRA_ARCHIVE_TEST_URL for frozen bar identity"]
 fn after_the_seal_one_idea_runs_one_job_to_a_verdict_under_budget_and_restart() {
     let dir = tempfile::tempdir().unwrap();
-    let (c, cfg) = loop_config(dir.path(), |s| {
+    let (mut c, mut cfg) = loop_config(dir.path(), |s| {
         s.day.usd = 1.0;
         s.turn.usd = 0.4;
     });
+    c.market_archive = Some(crate::runtime::market_archive::test_settings(dir.path()).unwrap());
+    let window = seed_qualification_bars(&c).unwrap();
+    let snapshot = super::jobs::read_snapshot(&c, &window).unwrap();
+    cfg.autoresearch.as_mut().unwrap().campaign.instruments = window.instruments;
     let now = Arc::new(AtomicI64::new(ist("2026-11-27", 23, 40)));
     let clock_now = now.clone();
     let clock = move || clock_now.load(Ordering::SeqCst);
@@ -420,7 +618,7 @@ fn after_the_seal_one_idea_runs_one_job_to_a_verdict_under_budget_and_restart() 
         (first, second, interpretation, finding, turn)
     });
     let mut agent = fixture_agent(client);
-    let mut jobs = ScriptedJobs(vec![JobEnd::Stopped, report("120")]);
+    let mut jobs = ScriptedJobs(vec![JobEnd::Stopped, report("120", &snapshot)]);
     let mut states = Vec::new();
     {
         let mut runner = LaneRunner::new(&mut agent, &agent_settings, &c, &cfg, &clock);
@@ -470,7 +668,7 @@ fn after_the_seal_one_idea_runs_one_job_to_a_verdict_under_budget_and_restart() 
     assert_eq!(next["slot"], "new_family");
 
     let store = open(&c).unwrap();
-    let campaign = store.campaign("bars-v1").unwrap().unwrap();
+    let campaign = store.campaign("bars-v2").unwrap().unwrap();
     assert_eq!(
         store.trials(campaign.id).unwrap(),
         1,
@@ -519,6 +717,7 @@ fn after_the_seal_one_idea_runs_one_job_to_a_verdict_under_budget_and_restart() 
 }
 
 #[test]
+<<<<<<< HEAD
 fn previous_tape_fallback_is_bounded_and_reported() {
     let dir = tempfile::tempdir().unwrap();
     let (c, cfg) = loop_config(dir.path(), |_| {});
@@ -604,4 +803,117 @@ fn previous_tape_fallback_is_bounded_and_reported() {
         );
     }
     peer.join().unwrap();
+}
+
+#[test]
+#[ignore = "requires NIVRA_ARCHIVE_TEST_URL and bubblewrap"]
+fn confirmation_reads_real_bars_once_and_keeps_only_the_sealed_verdict()
+-> crate::runtime::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (mut c, mut cfg) = loop_config(dir.path(), |_| {});
+    c.market_archive = Some(crate::runtime::market_archive::test_settings(dir.path())?);
+    let window = seed_qualification_bars(&c)?;
+    let settings = cfg.autoresearch.as_mut().unwrap();
+    settings.campaign.instruments = window.instruments;
+    let settings = settings.clone();
+    let mut store = open(&c)?;
+    let mut manifest = super::jobs::campaign_manifest(&c, &cfg, &settings, "2026-07-31".parse()?)?;
+    manifest.snapshot = Some(super::jobs::read_snapshot(&c, &manifest.window)?);
+    let campaign = store.ensure_campaign(&nivra_store::research_memory::NewCampaign {
+        name: &settings.campaign.name,
+        segment: super::SEGMENT,
+        manifest: &serde_json::to_vec(&manifest)?,
+        development_from: manifest.window.from,
+        development_to: manifest.window.to,
+        selection_from: "2026-05-01".parse()?,
+        trial_cap: settings.campaign.trial_cap,
+        now: 1,
+    })?;
+    let (idea, _) = store.record_idea(&NewIdea {
+        campaign_id: campaign.id,
+        origin_request_key: None,
+        family: "trend",
+        regime: Regime::Trend,
+        mechanism: "No orders during confirmation",
+        hypothesis: "A bad finalist cannot borrow its discovery result",
+        falsifier: "Confirmation must earn positive P&L",
+        comparator: "cash",
+        parent_experiment_id: None,
+        now: 2,
+    })?;
+    let source_blob =
+        store.put_object(b"def on_bars(at, split, rows, params, state): return []")?;
+    let params_blob = store.put_object(b"{}")?;
+    let generation = store
+        .acquire_lease(super::LEASE, "test", 1, 3, 1000, &|_| true)?
+        .unwrap()
+        .generation;
+    let Reserved::New(finalist, attempt) = store.reserve(&Submission {
+        idea_id: idea.id,
+        stage: Stage::Bars,
+        quote_window: None,
+        source_path: "scripts/finalist.py",
+        source_blob: &source_blob,
+        params_blob: &params_blob,
+        manifest_blob: &campaign.manifest_digest,
+        evaluator_digest: nivra_core::autoresearch::EVALUATOR,
+        experiment_key: &"a".repeat(64),
+        lease_generation: generation,
+        deadline_ms: 5000,
+        day: "2026-07-31".parse()?,
+        limits: settings.day_limits(),
+        now: 4,
+    })?
+    else {
+        panic!("finalist fixture did not reserve");
+    };
+    let score = Score {
+        net_pnl: Amount::from_integer(10),
+        max_drawdown_bps: 5,
+        closed_trades: 3,
+        open_positions: 0,
+    };
+    let decision = keep(
+        &score,
+        &[Comparator::Cash],
+        Rule {
+            max_drawdown_bps: 300,
+            require_flat: true,
+        },
+    );
+    store.finish(
+        attempt.id,
+        generation,
+        &Outcome::Scored {
+            score,
+            decision,
+            report_blob: source_blob.clone(),
+        },
+        5,
+    )?;
+    assert!(store.freeze_finalist(
+        campaign.id,
+        finalist.id,
+        "2026-08-01".parse()?,
+        "2026-09-30".parse()?
+    )?);
+    let now = ist("2026-10-01", 20, 0);
+    let through = "2026-10-01".parse()?;
+    let confirm = |c: &Config, store: &mut nivra_store::research_memory::Store| {
+        super::qualification::advance(c, &cfg, store, &campaign, through, now, &|| false)
+    };
+    assert_eq!(confirm(&c, &mut store)?, "holdout_finished");
+    let sealed = store.holdout(campaign.id)?.unwrap();
+    assert_eq!(sealed.verdict.as_deref(), Some("reject"), "{sealed:?}");
+    let report: Value = serde_json::from_slice(&store.object(sealed.evidence.as_ref().unwrap())?)?;
+    assert_eq!(report["reason"], "net_not_positive");
+    assert!(report["scored_dates"].as_u64().unwrap() > 30);
+    drop(store);
+    c.market_archive = None;
+    let mut store = open(&c)?;
+    assert_eq!(confirm(&c, &mut store)?, "holdout_finished");
+    assert_eq!(store.holdout(campaign.id)?, Some(sealed));
+    assert!(!crate::runtime::strategy_library::root(&c)?.exists());
+    Ok(())
+>>>>>>> 60a2d75 (wip(research): offline qualification in progress (Sol stopped at usage limit))
 }

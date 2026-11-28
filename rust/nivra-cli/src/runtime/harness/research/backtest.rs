@@ -15,6 +15,7 @@ pub(crate) use archive_bars::{
     ARCHIVE_BARS_DATASET_ID, Admit, Admitted, admit, bar_request, bar_worker_run, runtime_sha256,
 };
 pub(crate) use recent_archive::{RECENT_ARCHIVE_DATASET_ID, RecentArchiveWindow};
+pub(crate) use strategy_replay::{ReplayGate, strategy_backtest};
 
 fn deserialize_params<'de, D>(deserializer: D) -> std::result::Result<Value, D::Error>
 where
@@ -159,6 +160,12 @@ pub(crate) fn backtest_submit(
         (None, Some(CandidateDatasetKind::ArchiveBars(window))) => Some(window),
         _ => None,
     };
+    if let Some(window) = &bar_window
+        && crate::runtime::autoresearch::enabled(cfg).is_some()
+        && crate::runtime::autoresearch::open(c)?.holdout_overlaps(window.from, window.to)?
+    {
+        return Ok(not_dispatched("research_holdout_sealed"));
+    }
     match bar_window {
         Some(window) => archive_bars::enqueue(
             c,
@@ -172,7 +179,7 @@ pub(crate) fn backtest_submit(
             window.clone(),
             now,
         ),
-        None => strategy_replay::strategy_backtest(
+        None => strategy_backtest(
             c,
             cfg,
             backtest,
@@ -186,6 +193,7 @@ pub(crate) fn backtest_submit(
             &args,
             now,
             preempted,
+            None,
         ),
     }
 }

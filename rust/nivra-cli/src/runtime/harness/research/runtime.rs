@@ -143,6 +143,24 @@ pub(crate) fn registered_run(
     })
 }
 
+/// A process-wide and cross-process slot for regular and autonomous research.
+pub(crate) fn compute_slot(c: &Config) -> Result<Option<AdvisoryLock>> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let root = crate::runtime::rollover::root(c)?;
+    fs::create_dir_all(&root)?;
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(root.join("research-compute.lock"))?;
+    match fs2::FileExt::try_lock_exclusive(&file) {
+        Ok(()) => Ok(Some(AdvisoryLock::new(file))),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+        Err(_) => Err("research_compute_slot_unavailable".into()),
+    }
+}
+
 /// Drive one task to a terminal state. `stop` asks the worker to terminate,
 /// as an expired deadline does; the job then ends as terminated.
 pub(crate) fn drive_task(
@@ -357,6 +375,9 @@ pub(crate) fn tick_tasks(
     if task.status == jobs::TaskState::Pending && !launch.registered {
         return Ok(json!({"status":"deferred_owner_work","reason":launch.reason}));
     }
+    let Some(slot) = compute_slot(c)? else {
+        return Ok(json!({"status":"deferred_owner_work","reason":"research_compute_busy"}));
+    };
     let task_id = task.spec.task_id.clone();
     let revision = task.spec.revision;
     let (sender, receiver) = std::sync::mpsc::channel();
@@ -365,6 +386,7 @@ pub(crate) fn tick_tasks(
     thread::Builder::new()
         .name("nivra-research-owner".into())
         .spawn(move || {
+            let _slot = slot;
             let result = drive_task(settings, authority, task_id, revision, &|| false);
             let _ = sender.send(result);
         })

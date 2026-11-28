@@ -786,9 +786,10 @@ def on_bars(at, split, bars, params, state):
         assert_eq!(result["acceptance"]["verdict"], "research_only");
         let report = &result["report"];
         // The loop scores this exact report: daily net P&L and drawdown ride along.
-        let score = crate::runtime::autoresearch::jobs::bar_score(&serde_json::to_vec(report)?)?;
-        assert_eq!(score.closed_trades, 1);
-        assert!(score.max_drawdown_bps >= 0);
+        let fold: nivra_core::autoresearch::qualification::Fold =
+            serde_json::from_value(report["test"].clone())?;
+        assert_eq!(fold.closed_trades, 1);
+        assert!(fold.max_drawdown_bps >= 0);
         assert!(
             report["test"]["daily_net_pnl"]
                 .as_array()

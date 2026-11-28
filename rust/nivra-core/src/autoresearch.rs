@@ -6,13 +6,13 @@ use crate::replay::digest;
 use chrono::{DateTime, NaiveDate};
 use serde::{Deserialize, Serialize};
 
+pub mod qualification;
+
 /// Bumped when the experiment key encoding or the keep rule changes. Every
 /// experiment key includes it, so a new protocol never reuses an old score.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 /// The keep rule's identity, part of every experiment key.
-pub const EVALUATOR: &str = "keep_v1:median_paired_after_cost";
-/// Research capital per sleeve, in rupees. Every scored book starts here.
-pub const RESEARCH_CAPITAL_RUPEES: i64 = 5_000;
+pub const EVALUATOR: &str = "keep_v2:walk_forward_paired_after_cost";
 const IST_OFFSET_MS: i64 = 19_800_000;
 
 /// Which harness scores an experiment.

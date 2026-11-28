@@ -16,7 +16,7 @@ use nivra_store::research_memory::{Attempt, Campaign, Experiment, Outcome, Store
 use serde::Serialize;
 use serde_json::{Value, json};
 
-const PROPOSAL_TASK: &str = "You run one step of Nivra's autonomous research loop. Follow the autoresearch skill. Propose exactly one falsifiable idea for the slot below: read research_history first, record the idea with idea_record (mechanism, falsifier, family, regime, comparator), write one strategy at scripts/<name>.py (archive_bars_v1 for stage bars), then call backtest once with the idea id, the script path, its params and the stage. The host freezes the dates, universe, ₹5,000 capital and costs and keeps only what beats its parent or cash. Change one thing from a parent. End the turn after the submission.";
+const PROPOSAL_TASK: &str = "You run one step of Nivra's autonomous research loop. Follow the autoresearch skill. Propose exactly one falsifiable idea for the slot below: read research_history first, record the idea with idea_record (mechanism, falsifier, family, regime, comparator), write one strategy at scripts/<name>.py (archive_bars_v1 for stage bars), then call backtest once with the idea id, the script path, its params and the stage. The host freezes the dates, universe, cash-sleeve capital and costs and keeps only what beats cash and its pinned parent. Change one thing from a parent. End the turn after the submission.";
 const INTERPRET_TASK: &str = "The host scored one experiment under its frozen evaluator; the verdict below is final. Record what it teaches with finding_record: the observation, where it holds, its limitation and the next test. A negative result is a good result. If the status is invalid and repair_allowed is true, fix the cause in a new script version and call backtest once more with the same idea id; otherwise do not submit. Keep a short note under notes/ that cites the experiment and finding ids.";
 const REVIEW_TASK: &str = "Review each learned skill draft below for the research lane. Approve a reproducible procedure supported by findings from at least two distinct experiments that uses only research tools. Reject a performance claim dressed as a procedure, a draft that conflicts with recorded evidence, or one that asks for tools research does not have. Call skill_verdict once per draft with its name and digest.";
 /// Maximum trading sessions before `last_sealed` to fall back when the latest
@@ -302,7 +302,11 @@ fn advance(
             return Ok(wait("infrastructure_failures"));
         }
         let state = drive(s, settings, store, generation, &experiment, &attempt, now)?;
-        return Ok(done(state, Some(experiment.id)));
+        return Ok(if state == "research_compute_busy" {
+            wait(state)
+        } else {
+            done(state, Some(experiment.id))
+        });
     }
     if let Some(experiment) = store.awaiting_interpretation(campaign.id)? {
         let brief = interpretation_brief(store, &experiment)?;
@@ -375,8 +379,27 @@ fn advance(
             }
         });
     }
-    if store.trials(campaign.id)? >= campaign.trial_cap.min(settings.campaign.trial_cap) {
-        return Ok(wait("trial_allowance_spent"));
+    let trials = store.trials(campaign.id)?;
+    let cap = campaign.trial_cap.min(settings.campaign.trial_cap);
+    if trials >= cap.saturating_sub(1).max(1) {
+        let state = super::qualification::advance(
+            s.c,
+            s.cfg,
+            store,
+            &campaign,
+            s.last_sealed,
+            now,
+            s.stop,
+        )?;
+        if state != "holdout_passed" || trials >= cap {
+            return Ok(wait(
+                if state == "qualification_no_finalist" && trials >= cap {
+                    "trial_allowance_spent"
+                } else {
+                    state
+                },
+            ));
+        }
     }
     if store.consecutive_failures(day_start)? >= settings.max_consecutive_failures {
         return Ok(wait("infrastructure_failures"));
@@ -502,8 +525,7 @@ fn drive(
     let deadline = now.saturating_add(settings.turn.timeout_ms as i64);
     match attempt.state.as_str() {
         "reserved" if experiment.stage == Stage::QuoteReplay => {
-            let (outcome, _) =
-                jobs::run_quote(s.c, s.cfg, settings, store, experiment, now, s.stop)?;
+            let (outcome, _) = jobs::run_quote(s.c, s.cfg, store, experiment, now, s.stop)?;
             store.finish(attempt.id, generation, &outcome, now)?;
             Ok(outcome_state(&outcome))
         }
@@ -541,9 +563,8 @@ fn drive(
                 return Err("research_attempt_job_missing".into());
             };
             let outcome = match s.jobs.run(task_id, revision, s.stop)? {
-                JobEnd::Report(report) => {
-                    jobs::bar_outcome(store, s.cfg, settings, experiment, &report)?
-                }
+                JobEnd::Busy => return Ok("research_compute_busy"),
+                JobEnd::Report(report) => jobs::bar_outcome(store, experiment, &report)?,
                 JobEnd::Invalid(reason) => Outcome::Invalid { reason },
                 JobEnd::Failed(reason) => Outcome::Failed { reason },
                 JobEnd::Stopped => Outcome::Preempted {
@@ -580,6 +601,7 @@ fn experiment_fact(store: &Store, experiment: &Experiment) -> Result<Value> {
     Ok(json!({
         "experiment_id":experiment.id,"ordinal":experiment.ordinal,"stage":experiment.stage,
         "status":experiment.status,"verdict":experiment.verdict,"reason":experiment.reason,
+        "report_sha256":experiment.report_blob,
         "net_pnl":experiment.score.as_ref().map(|s| s.net_pnl),
         "max_drawdown_bps":experiment.score.as_ref().map(|s| s.max_drawdown_bps),
         "source_path":experiment.source_path,"source_sha256":experiment.source_blob,
@@ -594,6 +616,13 @@ fn proposal_brief(
     campaign: &Campaign,
     now: i64,
 ) -> Result<Value> {
+    let manifest: jobs::BarManifest =
+        serde_json::from_slice(&store.object(&campaign.manifest_digest)?)
+            .map_err(|_| "autoresearch_campaign_upgrade_required")?;
+    let holdout = store.holdout(campaign.id)?;
+    let confirmed = holdout
+        .as_ref()
+        .filter(|h| h.verdict.as_deref() == Some("keep"));
     let trials = store.trials(campaign.id)?;
     let recent = store.recent_experiments(campaign.id, 8)?;
     let cells = store.cells(campaign.id)?;
@@ -619,8 +648,9 @@ fn proposal_brief(
         "kind":"autoresearch_proposal",
         "campaign":{"name":campaign.name,"segment":campaign.segment,
             "development_from":campaign.development_from,"development_to":campaign.development_to,
-            "selection_from":campaign.selection_from,"capital_rupees":nivra_core::autoresearch::RESEARCH_CAPITAL_RUPEES,
+            "selection_from":campaign.selection_from,"capital_rupees":manifest.capital,
             "trials_used":trials,"trial_cap":campaign.trial_cap},
+        "confirmed_finalist":confirmed.map(|h| json!({"experiment_id":h.finalist,"evidence":h.evidence})),
         "slot":next,
         "slot_meaning":match next {
             Slot::MutateIncumbent => "Change one thing in an incumbent below and name it as the parent.",
@@ -633,7 +663,9 @@ fn proposal_brief(
         "allowance":{"day_variants_left":limits.variants.saturating_sub(spent.variants),
             "day_turns_left":limits.turns.saturating_sub(spent.turns),
             "trials_left":campaign.trial_cap.saturating_sub(trials)},
-        "instructions":PROPOSAL_TASK,
+        "instructions":if confirmed.is_some() {
+            "Confirmation is complete. Record a translation idea with the confirmed bar experiment as its parent, submit an action ABI source with stage quote_replay, and wait for unseen tape if needed."
+        } else { PROPOSAL_TASK },
     }))
 }
 
@@ -641,14 +673,23 @@ fn interpretation_brief(store: &Store, experiment: &Experiment) -> Result<Value>
     let report = match &experiment.report_blob {
         Some(blob) => {
             let mut report: Value = serde_json::from_slice(&store.object(blob)?)?;
-            for split in ["training", "test"] {
-                if let Some(summary) = report[split].as_object_mut() {
+            fn summarize(summary: &mut Value) {
+                if let Some(summary) = summary.as_object_mut() {
                     summary.remove("fill_sample");
                     summary.remove("daily_net_pnl");
+                    summary.remove("daily_equity");
+                }
+            }
+            for split in ["training", "test"] {
+                summarize(&mut report[split]);
+            }
+            if let Some(folds) = report["folds"].as_array_mut() {
+                for fold in folds {
+                    summarize(fold);
                 }
             }
             if let Some(object) = report.as_object_mut() {
-                for key in ["trades", "action_outcomes", "costs"] {
+                for key in ["trades", "action_outcomes", "costs", "bar_snapshot"] {
                     object.remove(key);
                 }
             }
@@ -707,6 +748,11 @@ pub(crate) fn status(c: &Config, cfg: &PlannerConfig, now: i64) -> Value {
         let tape_session = previous_tape
             .map(|day| Value::String(day.to_string()))
             .unwrap_or_else(|| report["tape_session"].clone());
+        let holdout = campaign
+            .as_ref()
+            .map(|campaign| store.holdout(campaign.id))
+            .transpose()?
+            .flatten();
         Ok(json!({
             "enabled":true,
             "state":report["state"],"reason":report["reason"],
@@ -724,6 +770,8 @@ pub(crate) fn status(c: &Config, cfg: &PlannerConfig, now: i64) -> Value {
             "campaign":campaign.as_ref().map(|campaign| json!({"name":campaign.name,
                 "trials_used":trials,"trial_cap":campaign.trial_cap,
                 "development_from":campaign.development_from,"development_to":campaign.development_to})),
+            "holdout":holdout.map(|h| json!({"finalist":h.finalist,"state":h.state,
+                "from":h.from,"to":h.to,"verdict":h.verdict,"evidence":h.evidence})),
             "latest":latest,
             "options":super::options::status(c, &store)?,
             "incumbents":kept,

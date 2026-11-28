@@ -126,6 +126,7 @@ pub struct Attempt {
 pub struct Submission<'a> {
     pub idea_id: i64,
     pub stage: Stage,
+    pub quote_window: Option<(NaiveDate, NaiveDate)>,
     pub source_path: &'a str,
     pub source_blob: &'a str,
     pub params_blob: &'a str,

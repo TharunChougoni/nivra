@@ -92,7 +92,9 @@ impl Store {
             "SELECT source_blob FROM experiment UNION SELECT params_blob FROM experiment
              UNION SELECT manifest_blob FROM experiment
              UNION SELECT report_blob FROM experiment WHERE report_blob IS NOT NULL
+             UNION SELECT source_blob FROM quote_draft UNION SELECT params_blob FROM quote_draft
              UNION SELECT manifest_digest FROM campaign
+             UNION SELECT report_blob FROM holdout_report WHERE report_blob IS NOT NULL
              UNION SELECT digest FROM skill_revision
              UNION SELECT evidence_digest FROM finding WHERE evidence_digest IS NOT NULL",
         )?;

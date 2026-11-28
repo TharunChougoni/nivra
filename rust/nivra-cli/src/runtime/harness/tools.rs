@@ -598,6 +598,15 @@ pub(super) fn research_quote_capture(
     now: i64,
 ) -> Result<Value> {
     let settings = quote_capture(cfg).ok_or("harness_quote_capture_disabled")?;
+    if crate::runtime::autoresearch::enabled(cfg).is_some() {
+        let from = nivra_core::autoresearch::ist_day(from_ms);
+        let to = nivra_core::autoresearch::ist_day(to_ms);
+        let mut store = crate::runtime::autoresearch::open(c)?;
+        if store.holdout_overlaps(from, to)? {
+            return Err("research_holdout_sealed".into());
+        }
+        store.record_replay_exposure(from, to)?;
+    }
     let keys = keys.into_iter().collect::<std::collections::BTreeSet<_>>();
     // The archive source is the book directory (universe and journal), as
     // for candidate maturity; never the journal file itself.

@@ -142,6 +142,7 @@ fn request(options: &Options, costs: &FeeArithmetic, params: Value) -> Result<Re
     let day = |date: NaiveDate| ist_midnight(date);
     let next = |date: NaiveDate| date.succ_opt().ok_or("bar_bench_date_invalid");
     let request = Request {
+        qualification: None,
         window: BarWindow {
             unit: options.unit,
             from: options.from,

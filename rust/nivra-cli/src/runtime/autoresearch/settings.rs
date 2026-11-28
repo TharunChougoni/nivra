@@ -40,10 +40,8 @@ pub(crate) struct CampaignSettings {
     /// A new name starts a new campaign with fresh frozen bounds.
     pub name: String,
     pub unit: BarUnit,
-    /// Closed exchange dates in the development window.
-    pub lookback_days: u32,
-    /// The trailing part of the window that is scored.
-    pub selection_days: u32,
+    /// Previous exchange sessions of outcomes embargoed before each scored fold.
+    pub embargo_sessions: u32,
     /// NSE_EQ keys; absent uses the archived cash universe.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instruments: Option<Vec<String>>,
@@ -94,10 +92,9 @@ impl Default for AutoresearchSettings {
 impl Default for CampaignSettings {
     fn default() -> Self {
         Self {
-            name: "bars-v1".into(),
+            name: "bars-v2".into(),
             unit: BarUnit::Day,
-            lookback_days: 365,
-            selection_days: 90,
+            embargo_sessions: 1,
             instruments: None,
             trial_cap: 60,
         }
@@ -130,8 +127,7 @@ impl AutoresearchSettings {
     pub(crate) fn validate(&self) -> Result<()> {
         let c = &self.campaign;
         let ok = slug_ok(&c.name, 48)
-            && (30..=3_650).contains(&c.lookback_days)
-            && (5..c.lookback_days).contains(&c.selection_days)
+            && c.embargo_sessions <= 20
             && (1..=10_000).contains(&c.trial_cap)
             && c.instruments.as_ref().is_none_or(|keys| {
                 !keys.is_empty()

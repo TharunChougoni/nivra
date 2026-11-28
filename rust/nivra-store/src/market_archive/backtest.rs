@@ -3,6 +3,7 @@ use super::{Client, Result};
 use chrono::NaiveDate;
 use postgres::IsolationLevel;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, time::Duration};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +55,84 @@ pub struct Bar {
     pub low: i64,
     pub close: i64,
     pub volume: i64,
+}
+
+/// Identity and observed dates of one ordered archive read. Identical content
+/// yields the same address across repeatable-read transactions.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BarSnapshot {
+    pub ordered_sha256: String,
+    pub dates: Vec<NaiveDate>,
+    pub bars: usize,
+}
+
+#[derive(Default)]
+pub struct BarSnapshotBuilder {
+    hash: Sha256,
+    dates: Vec<NaiveDate>,
+    bars: usize,
+}
+
+impl BarSnapshotBuilder {
+    pub fn push(&mut self, at: i64, keys: &[String], bars: &[Bar]) {
+        let day = nivra_core::autoresearch::ist_day(at);
+        if self.dates.last() != Some(&day) {
+            self.dates.push(day);
+        }
+        self.bars += bars.len();
+        self.hash.update(at.to_be_bytes());
+        self.hash.update((bars.len() as u64).to_be_bytes());
+        for bar in bars {
+            let key = &keys[bar.instrument];
+            self.hash.update((key.len() as u64).to_be_bytes());
+            self.hash.update(key.as_bytes());
+            for value in [bar.open, bar.high, bar.low, bar.close, bar.volume] {
+                self.hash.update(value.to_be_bytes());
+            }
+        }
+    }
+
+    pub fn finish(self) -> BarSnapshot {
+        BarSnapshot {
+            ordered_sha256: self
+                .hash
+                .finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+            dates: self.dates,
+            bars: self.bars,
+        }
+    }
+}
+
+pub fn bar_snapshot(db: &mut Client, window: &BarWindow, budget: Duration) -> Result<BarSnapshot> {
+    Ok(bar_snapshot_with_prefix(db, window, None, budget)?.0)
+}
+
+/// Read the expanded window and its discovery prefix from the same transaction.
+pub fn bar_snapshot_with_prefix(
+    db: &mut Client,
+    window: &BarWindow,
+    prefix_to: Option<NaiveDate>,
+    budget: Duration,
+) -> Result<(BarSnapshot, Option<BarSnapshot>)> {
+    let deadline = std::time::Instant::now() + budget;
+    let mut snapshot = BarSnapshotBuilder::default();
+    let mut prefix = prefix_to.map(|_| BarSnapshotBuilder::default());
+    read_bar_batches(db, window, budget, |at, keys, bars| {
+        if std::time::Instant::now() >= deadline {
+            return Err("archive_bars_wall_budget".into());
+        }
+        snapshot.push(at, keys, bars);
+        if let Some((to, prefix)) = prefix_to.zip(prefix.as_mut())
+            && nivra_core::autoresearch::ist_day(at) <= to
+        {
+            prefix.push(at, keys, bars);
+        }
+        Ok(())
+    })?;
+    Ok((snapshot.finish(), prefix.map(BarSnapshotBuilder::finish)))
 }
 
 pub fn read_bar_batches(

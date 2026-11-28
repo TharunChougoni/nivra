@@ -55,6 +55,7 @@ fn submit<'a>(idea: i64, key: &'a str, blob: &'a str, generation: i64) -> Submis
     Submission {
         idea_id: idea,
         stage: Stage::Bars,
+        quote_window: None,
         source_path: "scripts/breakout.py",
         source_blob: blob,
         params_blob: blob,
@@ -170,6 +171,82 @@ fn a_trial_is_reserved_once_per_key_and_counted_against_the_campaign() {
             .unwrap(),
         Reserved::Refused("trial_allowance_spent")
     );
+}
+
+#[test]
+fn trial_sixty_one_is_refused_and_confirmation_opens_once_across_restarts() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path()).unwrap();
+    let campaign = campaign(&mut store, 60);
+    let blob = store.put_object(b"frozen evidence").unwrap();
+    let lease = store
+        .acquire_lease("coordinator", "test", 1, 0, 1_000, &|_| true)
+        .unwrap()
+        .unwrap();
+    let mut finalist = None;
+    for trial in 1..=61 {
+        let proposal = idea(&mut store, campaign.id, &format!("hypothesis {trial}"));
+        let key = format!("{trial:064x}");
+        let mut submission = submit(proposal.id, &key, &blob, lease.generation);
+        submission.day = day()
+            .checked_add_days(chrono::Days::new(u64::from((trial - 1) / 30)))
+            .unwrap();
+        submission.limits = limits(30);
+        let reserved = store.reserve(&submission).unwrap();
+        if trial == 61 {
+            assert_eq!(reserved, Reserved::Refused("trial_allowance_spent"));
+            break;
+        }
+        let Reserved::New(experiment, attempt) = reserved else {
+            panic!("trial {trial}: {reserved:?}")
+        };
+        assert_eq!(experiment.ordinal, trial);
+        let outcome = scored(if trial == 1 { 10 } else { -10 }, &blob);
+        store
+            .finish(attempt.id, lease.generation, &outcome, 4)
+            .unwrap();
+        if trial == 1 {
+            finalist = Some(experiment.id);
+        }
+    }
+    assert_eq!(store.trials(campaign.id).unwrap(), 60);
+    let from = "2026-12-01".parse().unwrap();
+    let to = "2027-01-31".parse().unwrap();
+    let finalist = finalist.unwrap();
+    assert!(
+        store
+            .freeze_finalist(campaign.id, finalist, from, to)
+            .unwrap()
+    );
+    assert!(store.holdout_overlaps(from, to).unwrap());
+    assert!(store.open_holdout_once(campaign.id).unwrap());
+    assert!(
+        store
+            .finish_holdout(campaign.id, "reject", Some(&blob))
+            .unwrap()
+    );
+    drop(store);
+    let mut store = Store::open(dir.path()).unwrap();
+    assert!(!store.open_holdout_once(campaign.id).unwrap());
+    assert!(
+        !store
+            .freeze_finalist(campaign.id, finalist, from, to)
+            .unwrap()
+    );
+    let record = store.holdout(campaign.id).unwrap().unwrap();
+    assert_eq!(record.verdict.as_deref(), Some("reject"));
+    assert_eq!(record.evidence.as_deref(), Some(blob.as_str()));
+    let history = store
+        .history(&HistoryQuery {
+            campaign_id: Some(campaign.id),
+            family: None,
+            mechanism: Some("hypothesis 2"),
+            parent_experiment_id: None,
+            before_id: None,
+            limit: 20,
+        })
+        .unwrap();
+    assert_eq!(history.experiments[0].verdict.as_deref(), Some("reject"));
 }
 
 #[test]

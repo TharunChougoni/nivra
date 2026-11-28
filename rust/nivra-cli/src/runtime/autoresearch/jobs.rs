@@ -3,52 +3,27 @@
 //! sets a score comes from the frozen campaign.
 use super::{AutoGrant, AutoresearchSettings, SubmitArgs, research_root};
 use crate::runtime::harness::research::{
-    self as harness, Admit, Admitted, BacktestArgs, CandidateComputeSettings, ResearchSettings,
+    self as harness, CandidateComputeSettings, ResearchSettings,
 };
 use crate::runtime::planner::PlannerConfig;
 use crate::runtime::workspace::{self, WorkspaceOp, WorkspaceRoot, WorkspaceScope};
 use crate::runtime::{Config, Result, digest};
-use chrono::{Duration, NaiveDate};
-use nivra_core::autoresearch::{
-    Comparator, Decision, ExperimentIdentity, RESEARCH_CAPITAL_RUPEES, Rule, Score, Stage, keep,
-};
-use nivra_core::finance::{Amount, FeeArithmetic};
-use nivra_store::market_archive::{BarWindow, ist_midnight};
-use nivra_store::research_jobs::{self as queue, BacktestWindows};
-use nivra_store::research_memory::{
-    Campaign, Experiment, NewCampaign, Outcome, Reserved, Store, Submission,
-};
-use serde::{Deserialize, Serialize};
+use chrono::NaiveDate;
+use nivra_core::autoresearch::{ExperimentIdentity, Rule, Stage};
+
+use nivra_store::market_archive::{self, ist_midnight};
+use nivra_store::research_jobs as queue;
+use nivra_store::research_memory::{Experiment, Reserved, Store, Submission};
 use serde_json::{Value, json};
 use std::path::{Component, PathBuf};
 
-/// Every bar experiment of a campaign is scored on exactly these inputs.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct BarManifest {
-    pub protocol: u32,
-    pub abi: String,
-    pub window: BarWindow,
-    pub splits: BacktestWindows,
-    pub capital: Amount,
-    pub costs: FeeArithmetic,
-    pub comparator: String,
-    pub sandbox: nivra_sandbox::SandboxConfig,
-}
-
-/// A quote replay's frozen tape window, capital, costs and comparator.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct QuoteManifest {
-    pub protocol: u32,
-    pub abi: String,
-    pub dataset_id: String,
-    pub selection_from_ms: i64,
-    pub selection_to_ms: i64,
-    pub capital: Amount,
-    pub costs: FeeArithmetic,
-    pub comparator: String,
-}
+mod bars;
+mod quotes;
+#[cfg(test)]
+pub(super) use bars::campaign_manifest;
+pub(super) use bars::{BarManifest, admit_bar, bar_outcome, ensure_campaign, read_snapshot};
+pub(super) use quotes::run_quote;
+use quotes::{QuoteManifest, Translation};
 
 /// Canonical JSON for hashing: keys sorted, compact. Floats are kept as the
 /// evaluator receives them.
@@ -56,11 +31,6 @@ fn canonical(value: &Value) -> Result<Vec<u8>> {
     let mut value = value.clone();
     value.sort_all_objects();
     Ok(serde_json::to_vec(&value)?)
-}
-
-/// The research capital per sleeve.
-fn capital() -> Amount {
-    Amount::from_integer(RESEARCH_CAPITAL_RUPEES)
 }
 
 /// The research settings with the queue moved under the research root, so
@@ -80,67 +50,6 @@ pub(super) fn loop_settings(
         .ok_or("candidate_compute_disabled")?;
     research.queue = research_root(c)?.join("jobs.sqlite");
     Ok((research, candidate))
-}
-
-/// The bar manifest a campaign ending on `to` freezes.
-pub(super) fn campaign_manifest(
-    c: &Config,
-    cfg: &PlannerConfig,
-    settings: &AutoresearchSettings,
-    to: NaiveDate,
-) -> Result<BarManifest> {
-    let campaign = &settings.campaign;
-    let from = to - Duration::days(i64::from(campaign.lookback_days));
-    let selection_from = to - Duration::days(i64::from(campaign.selection_days));
-    let (_, candidate) = loop_settings(c, cfg)?;
-    let day_after = to.succ_opt().ok_or("autoresearch_campaign_invalid")?;
-    Ok(BarManifest {
-        protocol: nivra_core::autoresearch::PROTOCOL_VERSION,
-        abi: nivra_research::archive_bars::ABI.into(),
-        window: BarWindow {
-            unit: campaign.unit,
-            from,
-            to,
-            instruments: campaign.instruments.clone().map(|mut keys| {
-                keys.sort_unstable();
-                keys.dedup();
-                keys
-            }),
-        },
-        splits: BacktestWindows {
-            training_from_ms: ist_midnight(from),
-            training_to_ms: ist_midnight(selection_from) - 1,
-            selection_from_ms: ist_midnight(selection_from),
-            selection_to_ms: ist_midnight(day_after) - 1,
-        },
-        capital: capital(),
-        costs: c.paper_costs.clone().ok_or("paper_costs_required")?,
-        comparator: "cash".into(),
-        sandbox: candidate.sandbox,
-    })
-}
-
-/// The named campaign, created and frozen on first use.
-pub(super) fn ensure_campaign(
-    store: &mut Store,
-    c: &Config,
-    cfg: &PlannerConfig,
-    settings: &AutoresearchSettings,
-    to: NaiveDate,
-    now: i64,
-) -> Result<Campaign> {
-    let manifest = campaign_manifest(c, cfg, settings, to)?;
-    let bytes = canonical(&serde_json::to_value(&manifest)?)?;
-    Ok(store.ensure_campaign(&NewCampaign {
-        name: &settings.campaign.name,
-        segment: super::SEGMENT,
-        manifest: &bytes,
-        development_from: manifest.window.from,
-        development_to: manifest.window.to,
-        selection_from: to - Duration::days(i64::from(settings.campaign.selection_days)),
-        trial_cap: settings.campaign.trial_cap,
-        now,
-    })?)
 }
 
 /// The queue task key of an experiment: stable, so a restart finds its job.
@@ -202,256 +111,8 @@ fn rule(cfg: &PlannerConfig, settings: &AutoresearchSettings, stage: Stage) -> R
                     .max_drawdown_bps,
             )
         }),
-        require_flat: stage == Stage::QuoteReplay,
+        require_flat: matches!(stage, Stage::Bars | Stage::QuoteReplay),
     }
-}
-
-/// Compare a score with cash, the pinned parent and the cell incumbent,
-/// each only when it was scored on the same frozen manifest.
-pub(super) fn judge(
-    store: &Store,
-    cfg: &PlannerConfig,
-    settings: &AutoresearchSettings,
-    experiment: &Experiment,
-    score: &Score,
-) -> Result<Decision> {
-    let mut comparators = vec![Comparator::Cash];
-    let idea = store
-        .idea(experiment.idea_id)?
-        .ok_or("research_idea_unknown")?;
-    let incumbent = store
-        .cells(experiment.campaign_id)?
-        .into_iter()
-        .find(|cell| cell.family == idea.family && cell.regime == idea.regime.as_str())
-        .map(|cell| cell.incumbent_experiment_id);
-    for id in experiment.parent_id.into_iter().chain(incumbent) {
-        if let Some(other) = store.experiment(id)?
-            && other.id != experiment.id
-            && other.manifest_blob == experiment.manifest_blob
-            && let Some(score) = other.score
-            && !comparators
-                .iter()
-                .any(|c| matches!(c, Comparator::Experiment { id, .. } if *id == other.id))
-        {
-            comparators.push(Comparator::Experiment {
-                id: other.id,
-                score,
-            });
-        }
-    }
-    Ok(keep(
-        score,
-        &comparators,
-        rule(cfg, settings, experiment.stage),
-    ))
-}
-
-/// The test-split score of a verified bar report.
-pub(crate) fn bar_score(report: &[u8]) -> Result<Score> {
-    #[derive(Deserialize)]
-    struct Split {
-        mark_to_market_pnl: Amount,
-        max_drawdown_bps: i64,
-        closed_trades: u64,
-        open_positions: u64,
-    }
-    #[derive(Deserialize)]
-    struct Report {
-        test: Split,
-    }
-    let report: Report =
-        serde_json::from_slice(report).map_err(|_| "archive_bars_report_invalid")?;
-    Ok(Score {
-        net_pnl: report.test.mark_to_market_pnl,
-        max_drawdown_bps: report.test.max_drawdown_bps,
-        closed_trades: report.test.closed_trades,
-        open_positions: report.test.open_positions,
-    })
-}
-
-/// Score a verified bar report and build the outcome to commit.
-pub(super) fn bar_outcome(
-    store: &Store,
-    cfg: &PlannerConfig,
-    settings: &AutoresearchSettings,
-    experiment: &Experiment,
-    report: &[u8],
-) -> Result<Outcome> {
-    let score = match bar_score(report) {
-        Ok(score) => score,
-        Err(_) => {
-            return Ok(Outcome::Invalid {
-                reason: "archive_bars_report_invalid".into(),
-            });
-        }
-    };
-    let decision = judge(store, cfg, settings, experiment, &score)?;
-    Ok(Outcome::Scored {
-        report_blob: store.put_object(report)?,
-        score,
-        decision,
-    })
-}
-
-/// Admit an experiment's frozen bar job to the loop queue. Admitting the same
-/// experiment again returns its existing job.
-pub(super) fn admit_bar(
-    c: &Config,
-    cfg: &PlannerConfig,
-    store: &Store,
-    experiment: &Experiment,
-    goal: &str,
-    now: i64,
-) -> Result<std::result::Result<(String, u32), Value>> {
-    let code = store.object(&experiment.source_blob)?;
-    let params: Value = serde_json::from_slice(&store.object(&experiment.params_blob)?)?;
-    let manifest: BarManifest = serde_json::from_slice(&store.object(&experiment.manifest_blob)?)?;
-    let archive = c.market_archive.as_ref().ok_or("archive_config_missing")?;
-    let (research, mut candidate) = loop_settings(c, cfg)?;
-    candidate.sandbox = manifest.sandbox.clone();
-    let request = harness::bar_request(
-        archive,
-        manifest.window,
-        manifest.splits,
-        manifest.capital,
-        manifest.costs,
-        params,
-        &candidate,
-    )
-    .ok_or("candidate_archive_bars_invalid")?;
-    let input = serde_json::to_vec(&request)?;
-    let root = research_root(c)?;
-    let mut db = harness::open_queue(&research, &root, true)?;
-    let admitted = harness::admit(&mut Admit {
-        settings: &research,
-        candidate: &candidate,
-        db: &mut db,
-        authority: &root,
-        binding: loop_binding(),
-        session: loop_session(store, experiment)?,
-        task_key: &task_key(experiment),
-        parent_turn_id: "autoresearch",
-        model_id: "autoresearch",
-        goal,
-        dataset_id: harness::ARCHIVE_BARS_DATASET_ID,
-        policy_sha256: experiment.manifest_blob.clone(),
-        code: &code,
-        input: &input,
-        limits: None,
-        now,
-    })?;
-    Ok(match admitted {
-        Admitted::Queued(record) => Ok((record.spec.task_id, record.spec.revision)),
-        Admitted::Refused(value) => Err(value),
-    })
-}
-
-/// Replay a quote-stage experiment inside the call. An accepted replay
-/// registers in the library as every replay does.
-pub(super) fn run_quote(
-    c: &Config,
-    cfg: &PlannerConfig,
-    settings: &AutoresearchSettings,
-    store: &Store,
-    experiment: &Experiment,
-    now: i64,
-    preempted: &dyn Fn() -> bool,
-) -> Result<(Outcome, Value)> {
-    let manifest: QuoteManifest =
-        serde_json::from_slice(&store.object(&experiment.manifest_blob)?)?;
-    let idea = store
-        .idea(experiment.idea_id)?
-        .ok_or("research_idea_unknown")?;
-    let source = String::from_utf8(store.object(&experiment.source_blob)?)
-        .map_err(|_| "research_source_unreadable")?;
-    let params: Value = serde_json::from_slice(&store.object(&experiment.params_blob)?)?;
-    let mut book = c.clone();
-    book.capital = Some(manifest.capital);
-    let value = harness::backtest_submit(
-        &book,
-        cfg,
-        "autoresearch",
-        &format!("autoresearch-{}", experiment.id),
-        BacktestArgs {
-            task_key: task_key(experiment),
-            hypothesis: idea.hypothesis.chars().take(1000).collect(),
-            source,
-            params,
-            dataset_id: manifest.dataset_id.clone(),
-            training_from_ms: manifest.selection_from_ms - 2,
-            training_to_ms: manifest.selection_from_ms - 1,
-            selection_from_ms: manifest.selection_from_ms,
-            selection_to_ms: manifest.selection_to_ms,
-            archive_daily_window: None,
-            as_of_receipt_id: None,
-            archive_bars: None,
-        },
-        now,
-        preempted,
-    )?;
-    let reason = || {
-        value["reason"]
-            .as_str()
-            .unwrap_or("not_dispatched")
-            .to_owned()
-    };
-    if value["status"] != "completed" {
-        let reason = reason();
-        return Ok((
-            if reason == "strategy_replay_preempted" {
-                Outcome::Preempted { reason }
-            } else if reason.contains("unavailable") || reason.contains("calendar") {
-                Outcome::Failed { reason }
-            } else {
-                Outcome::Invalid { reason }
-            },
-            value,
-        ));
-    }
-    let sha = value["report_sha256"]
-        .as_str()
-        .filter(|sha| nivra_core::autoresearch::sha256_ok(sha))
-        .ok_or("strategy_replay_report_unreadable")?;
-    let bytes = crate::read_bounded(
-        &book
-            .directory
-            .join("model/strategy-replays")
-            .join(format!("{sha}.json")),
-        32 * 1024 * 1024,
-    )
-    .map_err(|_| "strategy_replay_report_unreadable")?;
-    if digest(&bytes) != sha {
-        return Err("strategy_replay_report_unreadable".into());
-    }
-    #[derive(Deserialize)]
-    struct Summary {
-        net_pnl: Amount,
-        worst_drawdown: Amount,
-        trades: u64,
-        open_positions: u64,
-    }
-    let summary: Summary = serde_json::from_value(value["summary"].clone())
-        .map_err(|_| "strategy_replay_report_unreadable")?;
-    let drawdown = summary
-        .worst_drawdown
-        .checked_mul(Amount::from_integer(10_000))
-        .and_then(|d| d.checked_floor_ratio(manifest.capital))
-        .map_err(|_| "strategy_replay_report_unreadable")?;
-    let score = Score {
-        net_pnl: summary.net_pnl,
-        max_drawdown_bps: i64::try_from(drawdown).unwrap_or(i64::MAX),
-        closed_trades: summary.trades,
-        open_positions: summary.open_positions,
-    };
-    let decision = judge(store, cfg, settings, experiment, &score)?;
-    Ok((
-        Outcome::Scored {
-            report_blob: store.put_object(&bytes)?,
-            score,
-            decision,
-        },
-        value,
-    ))
 }
 
 fn view(experiment: &Experiment) -> Value {
@@ -496,39 +157,232 @@ pub(super) fn submit(
     if !params.is_object() || args.params.len() > candidate.max_params_bytes as usize {
         return Ok(json!({"status":"not_dispatched","reason":"candidate_params_invalid"}));
     }
+    let source_blob = store.put_object(source.as_bytes())?;
+    let params_blob = store.put_object(&canonical(&params)?)?;
+    let mut exposure = None;
     let (manifest, runner, abi) = match stage {
         Stage::OptionReplay => unreachable!("option rankings use option_compare"),
-        Stage::Bars => (
-            store.object(&campaign.manifest_digest)?,
-            harness::runtime_sha256()?,
-            nivra_research::archive_bars::ABI,
-        ),
+        Stage::Bars => {
+            if store.holdout(campaign.id)?.is_some() {
+                return Ok(json!({"status":"not_dispatched","reason":"research_finalist_frozen"}));
+            }
+            let mut manifest: BarManifest =
+                serde_json::from_slice(&store.object(&campaign.manifest_digest)?)
+                    .map_err(|_| "autoresearch_campaign_upgrade_required")?;
+            if store.holdout_overlaps(manifest.window.from, manifest.window.to)? {
+                return Ok(json!({"status":"not_dispatched","reason":"research_holdout_sealed"}));
+            }
+            let runner = harness::runtime_sha256()?;
+            if manifest.runner_sha256.as_deref() != Some(runner.as_str()) {
+                return Ok(
+                    json!({"status":"not_dispatched","reason":"archive_bars_runner_changed"}),
+                );
+            }
+            let snapshot = read_snapshot(c, &manifest.window)?;
+            manifest.snapshot = Some(snapshot.clone());
+            let bytes = canonical(&serde_json::to_value(&manifest)?)?;
+            store.invalidate_old_bar_scores(campaign.id, &digest(&bytes), now)?;
+            if !bars::coverage_complete(c, &manifest, &snapshot)? {
+                return Ok(
+                    json!({"status":"not_dispatched","reason":"archive_bars_warmup_or_fold_missing"}),
+                );
+            }
+            let declared = |name: &str| {
+                params
+                    .get(name)
+                    .map_or(Some(0), Value::as_u64)
+                    .ok_or("archive_bars_horizon_invalid")
+            };
+            let warmup = snapshot
+                .dates
+                .partition_point(|day| ist_midnight(*day) < manifest.splits.selection_from_ms)
+                .saturating_sub(manifest.embargo_sessions as usize);
+            if declared("required_warmup_sessions")? > warmup as u64 {
+                return Ok(
+                    json!({"status":"not_dispatched","reason":"archive_bars_warmup_unavailable"}),
+                );
+            }
+            if declared("label_horizon_sessions")? > u64::from(manifest.embargo_sessions) {
+                return Ok(
+                    json!({"status":"not_dispatched","reason":"archive_bars_embargo_too_short"}),
+                );
+            }
+            (bytes, runner, nivra_research::archive_bars::ABI)
+        }
         Stage::QuoteReplay => {
+            if let Some(previous) = store
+                .recent_experiments(campaign.id, campaign.trial_cap as usize)?
+                .into_iter()
+                .find(|e| {
+                    e.stage == Stage::QuoteReplay
+                        && e.idea_id == idea.id
+                        && e.source_blob == source_blob
+                        && e.params_blob == params_blob
+                })
+            {
+                return Ok(json!({"status":"duplicate","experiment":view(&previous)}));
+            }
+            let parent = idea
+                .parent_experiment_id
+                .map(|id| store.experiment(id))
+                .transpose()?
+                .flatten();
+            let translation = parent.as_ref().filter(|e| e.stage == Stage::Bars);
+            if let Some(parent) = translation {
+                if parent.source_blob == source_blob {
+                    return Ok(
+                        json!({"status":"not_dispatched","reason":"translation_source_reused"}),
+                    );
+                }
+                if !store.holdout(campaign.id)?.is_some_and(|h| {
+                    h.finalist == parent.id && h.verdict.as_deref() == Some("keep")
+                }) {
+                    return Ok(
+                        json!({"status":"not_dispatched","reason":"translation_holdout_required"}),
+                    );
+                }
+            }
+            let Some(frozen_at) =
+                store.freeze_quote_draft(idea.id, &source_blob, &params_blob, now)?
+            else {
+                return Ok(json!({"status":"not_dispatched","reason":"quote_draft_frozen"}));
+            };
+            let frozen_at = nivra_core::autoresearch::ist_day(frozen_at);
             let strategy = candidate
                 .strategy
                 .as_ref()
                 .filter(|s| s.enabled)
                 .ok_or("candidate_strategy_disabled")?;
-            let window = harness::RecentArchiveWindow::resolve(c, strategy, now)?;
+            let window = match harness::RecentArchiveWindow::after(c, strategy, frozen_at, now)? {
+                Some(window) => window,
+                None => {
+                    return Ok(
+                        json!({"status":"not_dispatched","reason":"waiting_for_unseen_quote_tape"}),
+                    );
+                }
+            };
+            let from = window.sessions[0];
+            let to = *window
+                .sessions
+                .last()
+                .ok_or("candidate_archive_window_invalid")?;
+            if window.sessions.len() < 3
+                || from <= frozen_at
+                || store.replay_exposed(from, to)?
+                || store.holdout_overlaps(from, to)?
+            {
+                return Ok(
+                    json!({"status":"not_dispatched","reason":"waiting_for_unseen_quote_tape"}),
+                );
+            }
+            let archive = c.market_archive.as_ref().ok_or("archive_config_missing")?;
+            let mut db = crate::runtime::market_archive::connect(archive)
+                .map_err(|_| "archive_connection_failed")?;
+            let receipt_id = market_archive::quote_watermark(&mut db)
+                .map_err(|_| "archive_quote_read_failed")?;
+            if receipt_id == 0 {
+                return Ok(
+                    json!({"status":"not_dispatched","reason":"waiting_for_unseen_quote_tape"}),
+                );
+            }
+            let calendar = c
+                .calendar_at(from)
+                .map_err(|_| "candidate_archive_calendar_unavailable")?;
+            for day in &window.sessions {
+                let date = nivra_core::time::ExchangeDate::parse(&day.to_string())?;
+                let (open, close) = calendar
+                    .hours(date)?
+                    .ok_or("candidate_archive_calendar_unavailable")?;
+                let at = |time| {
+                    chrono::DateTime::parse_from_rfc3339(&format!("{day}T{time}+05:30"))
+                        .map(|t| t.timestamp_millis())
+                };
+                let (first, last) = (at(open)?, at(close)? - 1);
+                let edge_ms = 300_000;
+                let starts = market_archive::quote_receipt_ids(
+                    &mut db,
+                    first,
+                    first + edge_ms,
+                    receipt_id,
+                    1,
+                )?;
+                let ends = market_archive::quote_receipt_ids(
+                    &mut db,
+                    last - edge_ms,
+                    last,
+                    receipt_id,
+                    1,
+                )?;
+                if starts.is_empty() || ends.is_empty() {
+                    return Ok(
+                        json!({"status":"not_dispatched","reason":"waiting_for_complete_quote_tape"}),
+                    );
+                }
+            }
+            let worker = cfg.effective_strategy_worker();
+            let runner = digest(&canonical(&json!({
+                "worker":worker,
+                "runner":crate::runtime::strategy::runner_sha256(),
+                "adapter":crate::runtime::strategy::replay::adapter_sha256(),
+                "engine":nivra_core::replay::engine_fingerprint(),
+            }))?);
+            let comparator = if let Some(origin) = translation {
+                if let Some(parent_id) = origin.parent_id {
+                    let parent = store
+                        .experiment(parent_id)?
+                        .ok_or("research_parent_unavailable")?;
+                    let Some(action) =
+                        store.accepted_quote_child(&parent.source_blob, &parent.params_blob)?
+                    else {
+                        return Ok(
+                            json!({"status":"not_dispatched","reason":"quote_parent_version_unavailable"}),
+                        );
+                    };
+                    Some(action.id)
+                } else {
+                    None
+                }
+            } else {
+                parent
+                    .as_ref()
+                    .filter(|p| p.stage == Stage::QuoteReplay)
+                    .map(|p| p.id)
+            };
+            let translation = if let Some(parent) = translation {
+                let mut origin: BarManifest =
+                    serde_json::from_slice(&store.object(&parent.manifest_blob)?)?;
+                if origin.window.unit != market_archive::BarUnit::Minute {
+                    return Ok(
+                        json!({"status":"not_dispatched","reason":"translation_features_unavailable"}),
+                    );
+                }
+                origin.window.to = to;
+                Some(Translation {
+                    origin_id: parent.id,
+                    snapshot: read_snapshot(c, &origin.window)?,
+                })
+            } else {
+                None
+            };
             let manifest = QuoteManifest {
                 protocol: nivra_core::autoresearch::PROTOCOL_VERSION,
                 abi: crate::runtime::strategy::ABI.into(),
                 dataset_id: harness::RECENT_ARCHIVE_DATASET_ID.into(),
                 selection_from_ms: window.selection_from_ms,
                 selection_to_ms: window.selection_to_ms,
-                capital: capital(),
+                receipt_id,
+                sessions: window.sessions,
+                capital: c.sleeves.cash.capital,
+                sizing: c.sleeves.cash.policy(),
+                exit_policy: cfg.exit_policy.clone(),
+                worker,
                 costs: c.paper_costs.clone().ok_or("paper_costs_required")?,
-                comparator: "cash".into(),
+                max_drawdown_bps: rule(cfg, settings, Stage::QuoteReplay).max_drawdown_bps,
+                comparator: idea.comparator.clone(),
+                translation,
+                comparator_experiment_id: comparator,
             };
-            let worker = cfg.effective_strategy_worker();
-            let runner = digest(
-                format!(
-                    "{}\n{}",
-                    worker.python_path.display(),
-                    worker.env_sha256.as_deref().unwrap_or("stdlib")
-                )
-                .as_bytes(),
-            );
+            exposure = Some((from, to));
             (
                 canonical(&serde_json::to_value(&manifest)?)?,
                 runner,
@@ -536,8 +390,6 @@ pub(super) fn submit(
             )
         }
     };
-    let source_blob = store.put_object(source.as_bytes())?;
-    let params_blob = store.put_object(&canonical(&params)?)?;
     let manifest_blob = store.put_object(&manifest)?;
     let key = ExperimentIdentity {
         stage,
@@ -551,6 +403,7 @@ pub(super) fn submit(
     let reserved = store.reserve(&Submission {
         idea_id: idea.id,
         stage,
+        quote_window: exposure,
         source_path: &args.source_path,
         source_blob: &source_blob,
         params_blob: &params_blob,
@@ -585,8 +438,7 @@ pub(super) fn submit(
                 "queue":value,"next":"The host retries the frozen job. End the turn now."})),
         },
         Stage::QuoteReplay => {
-            let (outcome, replay) =
-                run_quote(c, cfg, settings, store, &experiment, now, preempted)?;
+            let (outcome, replay) = run_quote(c, cfg, store, &experiment, now, preempted)?;
             store.finish(attempt.id, grant.generation, &outcome, now)?;
             let done = store
                 .experiment(experiment.id)?
@@ -603,6 +455,7 @@ pub(super) fn submit(
 pub(crate) enum JobEnd {
     /// The verified report bytes.
     Report(Vec<u8>),
+    Busy,
     /// The strategy failed, overran its wall limit or broke the ABI.
     Invalid(String),
     /// The worker or queue failed; the frozen job may run again.
@@ -619,6 +472,7 @@ pub(crate) trait Jobs {
 
 /// The loop's job queue under the research root.
 pub(crate) struct QueueJobs {
+    config: Config,
     research: ResearchSettings,
     root: PathBuf,
 }
@@ -626,6 +480,7 @@ pub(crate) struct QueueJobs {
 impl QueueJobs {
     pub(crate) fn new(c: &Config, cfg: &PlannerConfig) -> Result<Self> {
         Ok(Self {
+            config: c.clone(),
             research: loop_settings(c, cfg)?.0,
             root: research_root(c)?,
         })
@@ -634,6 +489,9 @@ impl QueueJobs {
 
 impl Jobs for QueueJobs {
     fn run(&mut self, task_id: &str, revision: u32, stop: &dyn Fn() -> bool) -> Result<JobEnd> {
+        let Some(_slot) = harness::compute_slot(&self.config)? else {
+            return Ok(JobEnd::Busy);
+        };
         if let Err(code) = harness::drive_task(
             self.research.clone(),
             self.root.clone(),

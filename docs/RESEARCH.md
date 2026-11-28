@@ -93,14 +93,17 @@ publish a result.
 
 **One step.** Each step makes one durable transition:
 
-1. A new campaign freezes its bar window once the archive's daily bars cover
-   the last sealed session, or else the newest trading session within the last
-   five sessions that has full daily-bar coverage (reported as
-   `using_previous_tape` with `tape_session`; if none within five sessions
-   qualifies, the loop reports `waiting_for_tape`):
-   `lookback_days` of history ending on that session, the last
-   `selection_days` scored, ₹5,000 research capital, the paper costs and cash
-   as the comparator.
+1. A new campaign freezes the archive content, calendar, universe, costs and
+   `sleeves.cash.capital` once the archive's daily bars cover the last sealed
+   session, or else the newest trading session within the last five sessions
+   that has full daily-bar coverage (reported as `using_previous_tape` with
+   `tape_session`; if none within five sessions qualifies, the loop reports
+   `waiting_for_tape`). The most recent 11 complete calendar months contain
+   eight months of warm-up and three chronological monthly folds. Every
+   scheduled exchange date in the covered calendar must have bars. Full
+   historical membership and corporate-action adjustments are unavailable.
+   Revised inputs receive a new content address, and superseded scores stay
+   searchable as unreproducible.
 2. An unfinished experiment runs its frozen job. A restart adopts the job the
    queue already holds; a preemption or an infrastructure failure starts a new
    attempt of the same frozen experiment without spending another trial.
@@ -112,12 +115,29 @@ publish a result.
    it. The slot cycles through mutating an incumbent, revisiting a failure and
    a new family.
 
-**The keep rule.** On the frozen manifest, keep an experiment only when its net
-P&L after costs on the scored split is strictly positive, it beats cash, its
-pinned parent and the cell incumbent by a strictly positive margin, its
-drawdown is within the acceptance limit and, for a quote replay, it ends flat.
-A keep replaces the cell incumbent (segment, family, regime, campaign). Ties
-keep the incumbent.
+**The keep rule.** Each fold starts with independent cash and fills whole
+shares at the next observed open in that fold. Pending orders expire at its
+boundary. An open terminal position blocks qualification. Net P&L must be
+positive across the three folds. The candidate must beat cash and each
+available required comparator on at least two folds, with a positive median
+paired after-cost difference and drawdown inside the configured limit. Ties
+keep the incumbent. Each report includes daily equity, turnover, costs, worst
+paired date, and a stress run with up to 10 additional bps of slippage. For
+longer samples it also shows a weekly-block resampling interval. The daily
+Deflated Sharpe estimate uses the raw trial count and reports when its
+sample or comparability requirements are unmet.
+
+Declare `required_warmup_sessions` and `label_horizon_sessions` in the
+parameter object when the strategy requires them. The embargo withholds the
+configured number of exchange sessions of strategy inputs before each fold.
+The same compute lock covers both research lanes and quote replay.
+
+**Confirmation.** The loop reserves the last trial for quote replay when
+possible. It freezes at most one discovery finalist and its comparator, then
+waits for the first two full months after the freeze month. Only the host can
+open this window, once. The report records an aggregate verdict and evidence
+digest. An interrupted read retires the confirmation as inconclusive. A
+passing confirmation still requires separate action evidence.
 
 **Counting.** The experiment key hashes the protocol, evaluator, stage, ABI,
 exact source, canonical params, frozen manifest and runner image. A duplicate
@@ -129,11 +149,20 @@ IST day's ceilings before the provider is asked and settles to the reported
 usage once. A turn that fails keeps its worst case. On the book's own day the
 research lane's daily limits also cap each turn.
 
-**Registration.** Bar evidence never registers a strategy. A quote-replay
-experiment that passes acceptance registers in the library as any replay
-does; the decision lane still chooses what runs. `forward_sessions_paper`
-(1) and `forward_sessions_live` (10) set the forward shadow window a later
-release adds; live trading needs the separate owner mandate.
+**Registration.** A quote draft freezes the exact action source and
+parameters before its first eligible tape session. The host uses at least
+three unseen completed exchange sessions and pins the receipt high-water
+mark. The candidate and its action comparator share the same tape, sizing,
+costs and capital. A bar translation is a separate action experiment with
+its own source identity. The current adapter checks close-price feature
+and buy/sell decision parity on common completed minute bars and tape
+observations. Daily bars and strategies requiring OHLCV fields the action
+observation lacks need a different adapter. A mutation also needs a frozen
+action version of its parent for comparison.
+
+Passing quote coverage, paired after-cost P&L, existing acceptance thresholds
+and exact-source review permits direct paper registration. The decision lane
+still chooses which registered version runs.
 
 **Cost.** The owner measured about USD 0.08 for a six-call research turn on
 the paper host, so the default day of 60 turns and 200 calls stays inside

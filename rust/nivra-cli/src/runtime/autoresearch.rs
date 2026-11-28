@@ -14,6 +14,7 @@ pub(crate) mod cli;
 pub(crate) mod coordinator;
 pub(crate) mod jobs;
 mod options;
+mod qualification;
 mod settings;
 mod skills;
 #[cfg(test)]
@@ -359,6 +360,9 @@ pub(crate) fn execute(
             let campaign = campaign
                 .filter(|c| c.status == "active")
                 .ok_or("research_campaign_unavailable")?;
+            if store.family_stall(campaign.id, &a.family)? >= settings.family_stall {
+                return Err("research_family_closed".into());
+            }
             if let Some(parent) = a.parent_experiment_id
                 && store
                     .experiment(parent)?

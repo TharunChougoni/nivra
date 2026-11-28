@@ -6,7 +6,7 @@ use nivra_core::{
 };
 use nivra_sandbox::{SandboxConfig, stream::Stream};
 use nivra_store::{
-    market_archive::{self, ArchiveClient, Bar, BarWindow},
+    market_archive::{self, ArchiveClient, Bar, BarSnapshot, BarSnapshotBuilder, BarWindow},
     research_jobs::{BacktestWindows, SpecCapability},
 };
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+mod translation;
+pub use translation::{Probe, translation_probes};
+
 pub const ABI: &str = "archive_bars_v1";
 pub const EVIDENCE: &str = "bar_level";
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -30,12 +33,43 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub struct Request {
     pub window: BarWindow,
     pub splits: BacktestWindows,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification: Option<Qualification>,
     pub capital: Amount,
     pub costs: FeeArithmetic,
     pub params: Value,
     pub sandbox: SandboxConfig,
     pub archive_url: String,
     pub archive_password_file: PathBuf,
+}
+
+/// The first two fold boundaries in epoch milliseconds. A holdout uses no
+/// boundaries and starts one independent cash book after causal warm-up.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Qualification {
+    pub snapshot: BarSnapshot,
+    pub fold_boundaries_ms: Option<[i64; 2]>,
+    pub embargo_sessions: u32,
+}
+
+impl Qualification {
+    fn embargoed_dates(
+        &self,
+        splits: &BacktestWindows,
+    ) -> std::collections::BTreeSet<chrono::NaiveDate> {
+        let first = std::iter::once(splits.selection_from_ms);
+        first
+            .chain(self.fold_boundaries_ms.into_iter().flatten())
+            .flat_map(|boundary| {
+                let date = nivra_core::autoresearch::ist_day(boundary);
+                let end = self.snapshot.dates.partition_point(|day| *day < date);
+                self.snapshot.dates[end.saturating_sub(self.embargo_sessions as usize)..end]
+                    .iter()
+                    .copied()
+            })
+            .collect()
+    }
 }
 
 pub fn sha256(bytes: &[u8]) -> String {
@@ -60,6 +94,14 @@ impl Request {
             && self.splits.training_from_ms <= self.splits.training_to_ms
             && self.splits.training_to_ms < self.splits.selection_from_ms
             && self.splits.selection_from_ms <= self.splits.selection_to_ms
+            && self.qualification.as_ref().is_none_or(|q| {
+                q.embargo_sessions <= 20
+                    && q.fold_boundaries_ms.is_none_or(|[second, third]| {
+                        self.splits.selection_from_ms < second
+                            && second < third
+                            && third <= self.splits.selection_to_ms
+                    })
+            })
             && self.capital > Amount::ZERO
             && self.costs.validate().is_ok()
             && self.params.is_object()
@@ -137,12 +179,15 @@ struct Summary {
     fills: u64,
     closed_trades: u64,
     open_positions: usize,
+    qualification_net_pnl: Option<Amount>,
+    daily_equity: Vec<(chrono::NaiveDate, Amount)>,
+    traded_notional: Amount,
     fees: Amount,
     realized_net_pnl: Amount,
     mark_to_market_pnl: Amount,
-    /// Largest fall of end-of-date marked equity from its running peak
-    /// (starting at capital), in bps of capital.
+    /// Largest marked equity fall from the running peak at any batch.
     max_drawdown_bps: i64,
+    peak_exposure_bps: i64,
     /// Change in marked equity per IST date, flat dates included.
     daily_net_pnl: Vec<(chrono::NaiveDate, Amount)>,
     fill_sample: Vec<Fill>,
@@ -161,6 +206,7 @@ struct Book<'a> {
     costs: &'a FeeArithmetic,
     capital: Amount,
     cash: Amount,
+    peak_equity: Amount,
     pending: BTreeMap<usize, Pending>,
     held: BTreeMap<usize, Position>,
     summary: Summary,
@@ -177,6 +223,7 @@ impl<'a> Book<'a> {
             costs,
             capital,
             cash: capital,
+            peak_equity: capital,
             pending: BTreeMap::new(),
             held: BTreeMap::new(),
             summary: Summary {
@@ -190,10 +237,14 @@ impl<'a> Book<'a> {
                 fills: 0,
                 closed_trades: 0,
                 open_positions: 0,
+                qualification_net_pnl: None,
+                daily_equity: Vec::new(),
+                traded_notional: Amount::ZERO,
                 fees: Amount::ZERO,
                 realized_net_pnl: Amount::ZERO,
                 mark_to_market_pnl: Amount::ZERO,
                 max_drawdown_bps: 0,
+                peak_exposure_bps: 0,
                 daily_net_pnl: Vec::new(),
                 fill_sample: Vec::new(),
             },
@@ -319,6 +370,21 @@ impl<'a> Book<'a> {
             .ok_or("archive_bars_time_invalid")?
             .date_naive();
         let equity = self.equity()?;
+        let bps = |amount: Amount| -> Result<i64> {
+            let value = amount
+                .checked_mul(Amount::from_integer(10_000))?
+                .checked_floor_ratio(self.capital)?;
+            Ok(i64::try_from(value).unwrap_or(i64::MAX))
+        };
+        self.peak_equity = self.peak_equity.max(equity);
+        self.summary.max_drawdown_bps =
+            self.summary
+                .max_drawdown_bps
+                .max(bps(self.peak_equity.checked_sub(equity)?)?);
+        self.summary.peak_exposure_bps = self
+            .summary
+            .peak_exposure_bps
+            .max(bps(equity.checked_sub(self.cash)?)?);
         match self.trace.daily_equity.last_mut() {
             Some((last, value)) if *last == day => *value = equity,
             _ => self.trace.daily_equity.push((day, equity)),
@@ -346,22 +412,21 @@ impl<'a> Book<'a> {
         self.summary.unfilled_signals = self.pending.len();
         self.summary.open_positions = self.held.len();
         self.summary.mark_to_market_pnl = self.equity()?.checked_sub(self.capital)?;
-        let (mut peak, mut previous) = (self.capital, self.capital);
+        let mut previous = self.capital;
         for &(day, equity) in &self.trace.daily_equity {
-            peak = peak.max(equity);
-            let fall = peak
-                .checked_sub(equity)?
-                .checked_mul(Amount::from_integer(10_000))?
-                .checked_floor_ratio(self.capital)?;
-            self.summary.max_drawdown_bps = self
-                .summary
-                .max_drawdown_bps
-                .max(i64::try_from(fall).unwrap_or(i64::MAX));
             self.summary
                 .daily_net_pnl
                 .push((day, equity.checked_sub(previous)?));
             previous = equity;
         }
+        self.summary.qualification_net_pnl = self
+            .held
+            .is_empty()
+            .then_some(self.summary.realized_net_pnl);
+        self.summary
+            .daily_equity
+            .clone_from(&self.trace.daily_equity);
+        self.summary.traded_notional = self.trace.traded_notional;
         Ok((self.summary, self.trace))
     }
 }
@@ -381,10 +446,24 @@ struct Report<'a> {
     source_sha256: String,
     params_sha256: String,
     input_bars_sha256: String,
+    bar_snapshot: BarSnapshot,
+    terminal_policy: &'static str,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    folds: Vec<Summary>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    adverse_slippage_folds: Vec<StressFold>,
+    adverse_slippage_bps: Option<Amount>,
     capital: Amount,
     costs: &'a FeeArithmetic,
     training: Summary,
     test: Summary,
+}
+
+#[derive(Serialize)]
+struct StressFold {
+    net_pnl: Option<Amount>,
+    max_drawdown_bps: i64,
+    open_positions: usize,
 }
 
 pub fn run(
@@ -403,8 +482,31 @@ pub fn run_traced(
     db: &mut ArchiveClient,
     budget: Duration,
 ) -> Result<(Vec<u8>, [Trace; 2])> {
+    run_with_trace(request, source, db, budget, &|| false)
+}
+
+pub fn run_stoppable(
+    request: &Request,
+    source: &str,
+    db: &mut ArchiveClient,
+    budget: Duration,
+    stop: &dyn Fn() -> bool,
+) -> Result<Vec<u8>> {
+    Ok(run_with_trace(request, source, db, budget, stop)?.0)
+}
+
+fn run_with_trace(
+    request: &Request,
+    source: &str,
+    db: &mut ArchiveClient,
+    budget: Duration,
+    stop: &dyn Fn() -> bool,
+) -> Result<(Vec<u8>, [Trace; 2])> {
     if !request.valid() || budget.is_zero() || budget > Duration::from_secs(600) {
         return Err("archive_bars_request_invalid".into());
+    }
+    if stop() {
+        return Err("decision_preempted".into());
     }
     let started = Instant::now();
     let mut stream = Stream::start(
@@ -416,21 +518,66 @@ pub fn run_traced(
     .map_err(|_| "archive_bars_strategy_start_failed")?;
     let mut training = Book::new(request.capital, &request.costs);
     let mut test = Book::new(request.capital, &request.costs);
-    let mut hash = Sha256::new();
+    let mut extra_folds = [
+        Book::new(request.capital, &request.costs),
+        Book::new(request.capital, &request.costs),
+    ];
+    let boundaries = request
+        .qualification
+        .as_ref()
+        .and_then(|q| q.fold_boundaries_ms);
+    let embargoed = request
+        .qualification
+        .as_ref()
+        .map_or_else(std::collections::BTreeSet::new, |q| {
+            q.embargoed_dates(&request.splits)
+        });
+    let mut stress_costs = request.costs.clone();
+    stress_costs.slippage_bps = Money::try_from(
+        stress_costs
+            .slippage_bps
+            .amount()
+            .checked_add(Amount::from_integer(10))?
+            .min(Amount::parse("9999.99")?)
+            .max(request.costs.slippage_bps.amount()),
+    )?;
+    let mut stress = boundaries
+        .map(|_| std::array::from_fn::<_, 3, _>(|_| Book::new(request.capital, &stress_costs)));
+    let mut snapshot = BarSnapshotBuilder::default();
     let mut input = Vec::new();
     let mut response = Vec::new();
     market_archive::read_bar_batches(db, &request.window, budget, |at, keys, bars| {
+        if stop() {
+            return Err("decision_preempted".into());
+        }
         if started.elapsed() >= budget {
             return Err("archive_bars_wall_budget".into());
         }
+        snapshot.push(at, keys, bars);
         let Some(split) = request.split(at) else {
             return Ok(());
         };
+        let fold = match boundaries {
+            Some([_, third]) if at >= third => 2,
+            Some([second, _]) if at >= second => 1,
+            _ => 0,
+        };
         let book = match split {
             Split::Training => &mut training,
-            Split::Test => &mut test,
+            Split::Test if fold == 0 => &mut test,
+            Split::Test => &mut extra_folds[fold - 1],
         };
         book.on_open(at, keys, bars)?;
+        let mut stress = stress
+            .as_mut()
+            .filter(|_| split == Split::Test)
+            .map(|books| &mut books[fold]);
+        if let Some(book) = stress.as_mut() {
+            book.on_open(at, keys, bars)?;
+        }
+        if embargoed.contains(&nivra_core::autoresearch::ist_day(at)) {
+            return Ok(());
+        }
         input.clear();
         let batch: Vec<_> = bars
             .iter()
@@ -447,19 +594,48 @@ pub fn run_traced(
             .collect();
         serde_json::to_writer(&mut input, &(at, split, batch))?;
         input.push(b'\n');
-        hash.update(&input);
         stream
-            .exchange(&input, &mut response)
+            .exchange_within(
+                &input,
+                &mut response,
+                budget
+                    .saturating_sub(started.elapsed())
+                    .min(Duration::from_millis(request.sandbox.wall_ms)),
+            )
             .map_err(|_| "archive_bars_strategy_exchange_failed")?;
         let (reported_at, orders): (i64, Vec<(usize, u64)>) = serde_json::from_slice(&response)?;
         if reported_at != at {
             return Err("archive_bars_actions_invalid".into());
+        }
+        if let Some(book) = stress {
+            book.orders(at, bars, orders.clone())?;
         }
         book.orders(at, bars, orders)
     })?;
     stream
         .finish()
         .map_err(|_| "archive_bars_strategy_exit_failed")?;
+    let snapshot = snapshot.finish();
+    if request
+        .qualification
+        .as_ref()
+        .is_some_and(|q| q.snapshot != snapshot)
+    {
+        return Ok((
+            serde_json::to_vec(&json!({"status":"unreproducible",
+            "reason":"archive_bars_snapshot_changed","bar_snapshot":snapshot}))?,
+            [
+                Trace {
+                    daily_equity: Vec::new(),
+                    traded_notional: Amount::ZERO,
+                },
+                Trace {
+                    daily_equity: Vec::new(),
+                    traded_notional: Amount::ZERO,
+                },
+            ],
+        ));
+    }
     if training.summary.batches == 0 || test.summary.batches == 0 {
         return Err("archive_bars_split_empty".into());
     }
@@ -468,6 +644,26 @@ pub fn run_traced(
     }
     let (training, training_trace) = training.finish()?;
     let (test, test_trace) = test.finish()?;
+    let mut folds = Vec::new();
+    if boundaries.is_some() {
+        for fold in extra_folds {
+            if fold.summary.batches == 0 {
+                return Err("archive_bars_split_empty".into());
+            }
+            folds.push(fold.finish()?.0);
+        }
+    }
+    let mut adverse_slippage_folds = Vec::new();
+    if let Some(stress) = stress {
+        for book in stress {
+            let (fold, _) = book.finish()?;
+            adverse_slippage_folds.push(StressFold {
+                net_pnl: fold.qualification_net_pnl,
+                max_drawdown_bps: fold.max_drawdown_bps,
+                open_positions: fold.open_positions,
+            });
+        }
+    }
     let report = serde_json::to_vec(&Report {
         abi: ABI,
         evidence: EVIDENCE,
@@ -481,7 +677,12 @@ pub fn run_traced(
         splits: &request.splits,
         source_sha256: sha256(source.as_bytes()),
         params_sha256: sha256(&serde_json::to_vec(&request.params)?),
-        input_bars_sha256: hex(&hash.finalize()),
+        input_bars_sha256: snapshot.ordered_sha256.clone(),
+        bar_snapshot: snapshot,
+        terminal_policy: "require_flat_for_qualification_discard_cross_boundary_orders",
+        folds,
+        adverse_slippage_folds,
+        adverse_slippage_bps: boundaries.map(|_| stress_costs.slippage_bps.amount()),
         capital: request.capital,
         costs: &request.costs,
         training,
@@ -545,6 +746,32 @@ pub fn worker_entry(stage: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_open_terminal_position_cannot_qualify_on_its_unrealized_gain() -> Result<()> {
+        let costs = serde_json::from_value(json!({
+            "per_order":"2","buy_bps":"0","sell_bps":"0",
+            "slippage_bps":"0","rounding_increment":"0.01"
+        }))?;
+        let mut book = Book::new(Amount::from_integer(5000), &costs);
+        let keys = ["NSE_EQ|fixture".to_owned()];
+        let bar = Bar {
+            instrument: 0,
+            open: 10_000,
+            high: 30_000,
+            low: 10_000,
+            close: 29_000,
+            volume: 100,
+        };
+        book.on_open(1, &keys, &[bar])?;
+        book.orders(1, &[bar], vec![(0, 1)])?;
+        book.on_open(2, &keys, &[bar])?;
+        let (summary, _) = book.finish()?;
+        assert!(summary.mark_to_market_pnl > Amount::ZERO);
+        assert!(summary.realized_net_pnl < Amount::ZERO || summary.open_positions > 0);
+        assert_eq!(summary.qualification_net_pnl, None);
+        Ok(())
+    }
 
     #[test]
     fn bar_signal_fills_only_at_next_open_and_pays_both_legs() -> Result<()> {

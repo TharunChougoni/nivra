@@ -11,7 +11,11 @@
 - Capture the verified Nifty option master, spot, chain touches and gate
   verdicts in the market archive.
 - Compare prospect rankings with the frozen gate in a separate virtual
-  ₹5,000 options sleeve after an exchange session seals.
+  options sleeve after an exchange session seals.
+- Cash equity research uses content-addressed archive input, three monthly
+  folds and one sealed confirmation of a frozen finalist. The research and
+  ordinary compute lanes share a slot. Paper registration still follows
+  accepted, reviewed quote replay.
 
 ### Fixed
 
@@ -39,25 +43,29 @@
    to upgrade TimescaleDB to schema 2, then run
    `nivra archive check --config PAPER_CONFIG`.
 2. Confirm the effective paper config has `nifty_options.enabled`,
-   `market_archive`, `sleeves.options`, and `paper_costs_by_segment.NSE_FO`.
-   Confirm the planner enables the research loop and configures the gate and
-   research lanes.
-3. Health triggers use defaults when `strategy_execution.enabled` and the
-   decision lane are configured. For custom thresholds, or any other planner
-   edit, keep a `*.pre-<reason>` copy of the planner, edit
-   `agent.triggers.decision.strategy_health` in a new file, run
-   `nivra planner config-check --planner NEW_PLANNER --session SESSION`, and
+   `market_archive`, `sleeves.cash.capital`, `sleeves.options`, and
+   `paper_costs_by_segment.NSE_FO`.
+3. Keep a `*.pre-offline-qualification` copy of the planner file. Set
+   `autoresearch.campaign.name` to a fresh name such as `bars-v2`, remove the
+   two day-count settings from the old campaign block, set
+   `autoresearch.campaign.embargo_sessions` to 1 or to the declared label
+   horizon, and confirm the gate and research lanes are configured. Health
+   triggers use defaults when `strategy_execution.enabled` and the decision
+   lane are configured (`agent.triggers.decision.strategy_health` overrides).
+   Run `nivra planner config-check --planner NEW_PLANNER --session SESSION` and
    apply it using
    [the open-book procedure](docs/OPERATIONS.md#change-the-planner-policy) or
-   let the next rollover bind it for a closed book.
-4. Restart the `nivra-research-loop.timer` and paper service with the
+   `config-apply` for a closed book.
+4. Restart `nivra-research-loop.timer` and the paper service with the
    fresh-book config. During the session, check for `strategy_health` in the
    dashboard's lane history or in `model/agent/triggers.ndjson`. After the
    session, run
-   `nivra archive option-coverage --config PAPER_CONFIG --session YYYY-MM-DD`.
-   Check `research_loop.options` in `/api/v1/summary` or
-   `nivra research-loop --config PAPER_CONFIG status`. The options stage
-   reports `option_tape_unavailable` until the captured evidence supports replay.
+   `nivra archive option-coverage --config PAPER_CONFIG --session YYYY-MM-DD`,
+   and check `research_loop.campaign`, `research_loop.holdout`, and
+   `research_loop.options` in `/api/v1/summary` or
+   `nivra research-loop --config PAPER_CONFIG status`. Old `bars-v1` campaign
+   records remain in the research store, and the options stage reports
+   `option_tape_unavailable` until the captured evidence supports replay.
 
 ## 0.20.1 — 2026-11-28
 
