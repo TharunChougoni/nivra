@@ -208,44 +208,62 @@ fn models_ready(snapshot: &Value) -> bool {
     status == "model_roles_ready"
 }
 
+pub(super) fn snapshot_for_config(c: &Config, now_ms: i64) -> Result<Value> {
+    let current = rollover::current(c)?;
+    let pending_fresh = (!current.directory.join("paper.sqlite").exists())
+        .then(|| rollover::pending_fresh_book(&current))
+        .transpose()?
+        .flatten();
+    let models = report(&current, now_ms)?;
+    let history = (|| -> Result<Value> {
+        let target: NaiveDate = serde_json::from_value(models["target_session"].clone())?;
+        let (instruments, universe_session) = wide::history_instruments_with_session(&current)?;
+        let mut future = current.clone();
+        future.session = target;
+        future.previous_session = current.next_sessions(target)?.1;
+        let at =
+            DateTime::parse_from_rfc3339(&format!("{target}T08:30:00+05:30"))?.timestamp_millis();
+        let request = wide::preparation_request(
+            &future,
+            &instruments,
+            at,
+            preparation::PreparationWindow::PreOpen,
+        )?;
+        let coverage = preparation::coverage_report(
+            &request.config,
+            &instruments,
+            &request.required_sessions,
+            target,
+            request.previous_session,
+        );
+        let mut value = serde_json::to_value(coverage)?;
+        value["universe_session"] = json!(universe_session);
+        Ok(value)
+    })()
+    .unwrap_or_else(|_| json!({"status":"UNKNOWN","reason":"history_or_universe_unavailable"}));
+    let portfolio = match &pending_fresh {
+        Some(_) => wide::pending_fresh_portfolio(&current, now_ms)?,
+        None => {
+            let (_, body) = rollover::bound_state(&current)?;
+            serde_json::from_str(&body)?
+        }
+    };
+    Ok(wide::readiness_snapshot_for(
+        &current,
+        &portfolio,
+        now_ms,
+        &history,
+        pending_fresh.as_ref().map(|p| p.predecessor_session),
+    ))
+}
+
 /// CLI entry point for a read-only readiness preview with an injectable clock.
 pub fn entry(path: &Path, now_ms: i64) -> ExitCode {
     let result = (|| -> Result<Value> {
         let bytes = crate::read_bounded(path, 16384).map_err(|_| Fail::new("config_unreadable"))?;
         let c: Config = serde_json::from_slice(&bytes).map_err(|_| Fail::new("config_invalid"))?;
         c.validate()?;
-        let current = rollover::current(&c)?;
-        let models = report(&current, now_ms)?;
-        let history = (|| -> Result<Value> {
-            let target: NaiveDate = serde_json::from_value(models["target_session"].clone())?;
-            let instruments = wide::history_instruments(&current)?;
-            let mut future = current.clone();
-            future.session = target;
-            future.previous_session = current.next_sessions(target)?.1;
-            let at = DateTime::parse_from_rfc3339(&format!("{target}T08:30:00+05:30"))?
-                .timestamp_millis();
-            let request = wide::preparation_request(
-                &future,
-                &instruments,
-                at,
-                preparation::PreparationWindow::PreOpen,
-            )?;
-            let coverage = preparation::coverage_report(
-                &request.config,
-                &instruments,
-                &request.required_sessions,
-                target,
-                request.previous_session,
-            );
-            let mut value = serde_json::to_value(coverage)?;
-            value["universe_session"] = json!(current.session);
-            Ok(value)
-        })()
-        .unwrap_or_else(|_| json!({"status":"UNKNOWN","reason":"history_or_universe_unavailable"}));
-        let (_, body) = rollover::bound_state(&current)?;
-        let portfolio: nivra_core::execution::Portfolio = serde_json::from_str(&body)?;
-        let report = wide::readiness_snapshot(&current, &portfolio, now_ms, &history);
-        Ok(report)
+        snapshot_for_config(&c, now_ms)
     })();
     match result {
         Ok(value) => {

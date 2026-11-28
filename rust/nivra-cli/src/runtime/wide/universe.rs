@@ -9,7 +9,7 @@ pub(super) struct Universe {
     pub instruments: Vec<Instrument>,
     pub exclusions: BTreeMap<String, usize>,
     file_date: NaiveDate,
-    session: NaiveDate,
+    pub(super) session: NaiveDate,
     security_sha256: String,
     broker_sha256: String,
     suspended_sha256: String,
@@ -208,17 +208,27 @@ fn security_path(c: &Config) -> PathBuf {
     ))
 }
 pub(super) fn cached(c: &Config) -> Result<Universe> {
+    let bytes = match fs::read(c.directory.join("wide-universe.json")) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Fail::new("history_universe_unavailable").into());
+        }
+        Err(_) => return Err(Fail::new("history_universe_unreadable").into()),
+    };
     let manifest: Universe =
-        serde_json::from_slice(&fs::read(c.directory.join("wide-universe.json"))?)?;
+        serde_json::from_slice(&bytes).map_err(|_| Fail::new("history_universe_invalid"))?;
     if manifest.file_date != c.previous_session || manifest.session != c.session {
         return Err(Fail::new(
             "frozen_universe_session_mismatch_use_matching_metadata_in_new_session_directory",
         )
         .into());
     }
-    let security = fs::read(security_path(c))?;
-    let broker = fs::read(c.directory.join("upstox-NSE.json.gz"))?;
-    let suspended = fs::read(c.directory.join("upstox-suspended.json.gz"))?;
+    let security =
+        fs::read(security_path(c)).map_err(|_| Fail::new("history_universe_source_unavailable"))?;
+    let broker = fs::read(c.directory.join("upstox-NSE.json.gz"))
+        .map_err(|_| Fail::new("history_universe_source_unavailable"))?;
+    let suspended = fs::read(c.directory.join("upstox-suspended.json.gz"))
+        .map_err(|_| Fail::new("history_universe_source_unavailable"))?;
     if digest(&security) != manifest.security_sha256
         || digest(&broker) != manifest.broker_sha256
         || digest(&suspended) != manifest.suspended_sha256

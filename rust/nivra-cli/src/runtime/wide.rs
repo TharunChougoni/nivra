@@ -322,6 +322,23 @@ pub(super) fn stored_portfolio(db: &Connection, c: &Config) -> Result<Option<Por
     Ok(Some(p))
 }
 
+pub(super) fn pending_fresh_portfolio(c: &Config, now: i64) -> Result<Portfolio> {
+    c.sleeves.validate(c.allocation()?)?;
+    let mut p = Portfolio::with_allocations(c.sleeves.allocations(now));
+    let schedule = c.fee_schedule()?;
+    p.settings = c.execution.clone();
+    p.sizing = Some(c.sleeves.policies());
+    p.costs = Some(schedule.cash().clone());
+    // Runtime authority comes from the explicit selector, not the offline legacy constructor.
+    p.model_led = c.strategy == "model_planner_v1"
+        && c.planner_config
+            .as_deref()
+            .map(|path| planner::PlannerConfig::load_for_session(path, c.session))
+            .transpose()?
+            .is_none_or(|cfg| cfg.model_led != Some(false));
+    Ok(p)
+}
+
 pub(super) fn load_wide(db: &mut Connection, c: &Config) -> Result<Portfolio> {
     if let Some(p) = stored_portfolio(db, c)? {
         return Ok(p);
@@ -361,20 +378,7 @@ pub(super) fn load_wide(db: &mut Connection, c: &Config) -> Result<Portfolio> {
     if rollover::published_decision(c)["carry_required"] == true {
         return Err("carry_missing_no_capital_reset".into());
     }
-    c.sleeves.validate(c.allocation()?)?;
-    let mut p = Portfolio::with_allocations(c.sleeves.allocations(millis()));
-    let schedule = c.fee_schedule()?;
-    p.settings = c.execution.clone();
-    p.sizing = Some(c.sleeves.policies());
-    p.costs = Some(schedule.cash().clone());
-    // Runtime authority comes from the explicit selector, not the offline legacy constructor.
-    p.model_led = c.strategy == "model_planner_v1"
-        && c.planner_config
-            .as_deref()
-            .map(|path| planner::PlannerConfig::load_for_session(path, c.session))
-            .transpose()?
-            .is_none_or(|cfg| cfg.model_led != Some(false));
-    Ok(p)
+    pending_fresh_portfolio(c, millis())
 }
 use rusqlite::OptionalExtension;
 fn record_halt_transition(db: &Connection, p: &Portfolio, at: i64) -> Result<()> {
@@ -1100,11 +1104,23 @@ pub(super) fn readiness_snapshot(
     now: i64,
     history: &serde_json::Value,
 ) -> serde_json::Value {
+    readiness_snapshot_for(c, p, now, history, None)
+}
+
+pub(super) fn readiness_snapshot_for(
+    c: &Config,
+    p: &Portfolio,
+    now: i64,
+    history: &serde_json::Value,
+    pending_predecessor: Option<NaiveDate>,
+) -> serde_json::Value {
     let models=readiness::report(c,now).unwrap_or_else(|_|serde_json::json!({"status":"model_roles_blocked","reason":"model_readiness_unavailable"}));
     let target = models["target_session"]
         .as_str()
         .and_then(|s| s.parse::<NaiveDate>().ok());
-    let disposition = if let Some(day) = target.filter(|d| *d > c.session) {
+    let disposition = if let Some(predecessor) = pending_predecessor {
+        serde_json::json!({"status":"pending_fresh_book","predecessor_session":predecessor})
+    } else if let Some(day) = target.filter(|d| *d > c.session) {
         // Judge the next session at its pre-open, or now once that has passed,
         // so a late start reads ready and a passed late-start cutoff reads missed.
         let at = DateTime::parse_from_rfc3339(&format!("{day}T08:30:00+05:30"))
@@ -1118,10 +1134,11 @@ pub(super) fn readiness_snapshot(
     } else {
         serde_json::json!({"status":if p.halted||p.stopped||p.closed {"blocked"} else {"current_session"}})
     };
-    let lifecycle_ready = matches!(
+    let lifecycle_blocked = !matches!(
         disposition["status"].as_str(),
-        Some("rollover_ready" | "current_session")
+        Some("rollover_ready" | "current_session" | "pending_fresh_book")
     );
+    let pending_fresh = disposition["status"] == "pending_fresh_book";
     let history_matches = target.is_some_and(|d| {
         history["target_session"] == d.to_string()
             && history["universe_session"]
@@ -1132,12 +1149,15 @@ pub(super) fn readiness_snapshot(
     let history_partial = history_matches
         && history["status"] == "PARTIAL"
         && history["ready_instruments"].as_u64().is_some_and(|n| n > 0);
-    let state = if !lifecycle_ready
+    let state = if lifecycle_blocked
         || models["status"] == "model_roles_blocked"
         || (history_matches && history["status"] == "BLOCKED")
     {
         "blocked"
-    } else if models["status"] != "model_roles_ready" || (!history_ready && !history_partial) {
+    } else if pending_fresh
+        || models["status"] != "model_roles_ready"
+        || (!history_ready && !history_partial)
+    {
         "unknown"
     } else if history_partial {
         "partial"
@@ -1148,8 +1168,24 @@ pub(super) fn readiness_snapshot(
         "history":history,"history_preparation_enabled":c.history_preparation_enabled,"checked_at_ms":now})
 }
 
+pub(super) fn history_instruments_with_session(c: &Config) -> Result<(Vec<Instrument>, NaiveDate)> {
+    match universe::cached(c) {
+        Ok(universe) => Ok((universe.instruments, universe.session)),
+        Err(error) => {
+            if !c.directory.join("wide-universe.json").exists()
+                && !c.directory.join("paper.sqlite").exists()
+                && let Some(pending) = rollover::pending_fresh_book(c)?
+            {
+                let universe = universe::cached(&pending.predecessor_config)?;
+                return Ok((universe.instruments, universe.session));
+            }
+            Err(error)
+        }
+    }
+}
+
 pub(super) fn history_instruments(c: &Config) -> Result<Vec<Instrument>> {
-    Ok(universe::cached(c)?.instruments)
+    Ok(history_instruments_with_session(c)?.0)
 }
 
 pub(super) fn prepare_history_instruments(c: &Config) -> Result<Vec<Instrument>> {

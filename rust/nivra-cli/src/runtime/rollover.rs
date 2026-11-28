@@ -32,10 +32,19 @@ pub(super) fn atomic(path: &Path, value: &Value) -> Result<()> {
 pub(super) fn current(c: &Config) -> Result<Config> {
     let pointer = root(c)?.join("current.json");
     if !pointer.exists() {
+        if fresh::pending_for(c)?.is_some() {
+            return Ok(c.clone());
+        }
+        if fresh::pending_other_session(c)?.is_some() {
+            return Err(Fail::new("session_pointer_pending_fresh_book").into());
+        }
         return Ok(c.clone());
     }
-    let v: Value = serde_json::from_slice(&fs::read(pointer)?)?;
-    let date: NaiveDate = serde_json::from_value(v["session"].clone())?;
+    let bytes = fs::read(pointer).map_err(|_| Fail::new("session_pointer_unreadable"))?;
+    let v: Value =
+        serde_json::from_slice(&bytes).map_err(|_| Fail::new("session_pointer_invalid"))?;
+    let date: NaiveDate = serde_json::from_value(v["session"].clone())
+        .map_err(|_| Fail::new("session_pointer_invalid"))?;
     if v["account"] != c.account || date < c.session {
         return Err(Fail::new("session_pointer_identity").into());
     }
@@ -125,10 +134,29 @@ fn migration_evidence(c: &Config, day: NaiveDate) -> Result<Value> {
     });
     Ok(result)
 }
+fn book_metadata(path: &Path) -> Result<fs::Metadata> {
+    match fs::symlink_metadata(path) {
+        Ok(m) => Ok(m),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(Fail::new("paper_book_missing").into())
+        }
+        Err(_) => Err(Fail::new("paper_book_unreadable").into()),
+    }
+}
+fn book_anchor(c: &Config) -> Result<Value> {
+    let bytes = match fs::read(c.directory.join("book-identity.json")) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Fail::new("book_identity_missing").into());
+        }
+        Err(_) => return Err(Fail::new("book_identity_unreadable").into()),
+    };
+    serde_json::from_slice(&bytes).map_err(|_| Fail::new("book_identity_invalid").into())
+}
 pub(super) fn bound_state(c: &Config) -> Result<(Connection, String)> {
     let path = c.directory.join("paper.sqlite");
-    let m = fs::symlink_metadata(&path)?;
-    let anchor: Value = serde_json::from_slice(&fs::read(c.directory.join("book-identity.json"))?)?;
+    let m = book_metadata(&path)?;
+    let anchor = book_anchor(c)?;
     let original = original_config(c)?;
     let binding = digest(&serde_json::to_vec(&original)?);
     if !m.is_file()
@@ -153,8 +181,8 @@ pub(super) fn bound_state(c: &Config) -> Result<(Connection, String)> {
 /// sidecars. A non-empty WAL is refused by the immutable opener.
 pub(super) fn bound_state_immutable(c: &Config) -> Result<(Connection, String)> {
     let path = c.directory.join("paper.sqlite");
-    let m = fs::symlink_metadata(&path)?;
-    let anchor: Value = serde_json::from_slice(&fs::read(c.directory.join("book-identity.json"))?)?;
+    let m = book_metadata(&path)?;
+    let anchor = book_anchor(c)?;
     let original = original_config(c)?;
     let binding = digest(&serde_json::to_vec(&original)?);
     if !m.is_file()
@@ -1169,6 +1197,7 @@ pub(super) fn stopped_book_safe(path: &Path) -> Result<bool> {
 
 mod fresh;
 pub use fresh::open_fresh_entry;
+pub(super) use fresh::pending_for as pending_fresh_book;
 
 #[cfg(test)]
 mod tests;
