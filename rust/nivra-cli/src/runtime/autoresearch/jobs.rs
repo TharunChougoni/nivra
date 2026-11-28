@@ -247,7 +247,7 @@ pub(super) fn judge(
 }
 
 /// The test-split score of a verified bar report.
-pub(super) fn bar_score(report: &[u8]) -> Result<Score> {
+pub(crate) fn bar_score(report: &[u8]) -> Result<Score> {
     #[derive(Deserialize)]
     struct Split {
         mark_to_market_pnl: Amount,
@@ -410,7 +410,7 @@ pub(super) fn run_quote(
     }
     let sha = value["report_sha256"]
         .as_str()
-        .filter(|sha| super::digest_ok(sha))
+        .filter(|sha| nivra_core::autoresearch::sha256_ok(sha))
         .ok_or("strategy_replay_report_unreadable")?;
     let bytes = crate::read_bounded(
         &book

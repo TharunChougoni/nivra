@@ -706,6 +706,11 @@ fn archive_bar_job_replays_closed_splits() -> Result<()> {
         tx.commit()?;
         assert_eq!(inserted, expected_bar_fixture_rows(&window, counts));
     }
+    // The research loop's tape check reads the archive's daily-bar watermark.
+    if unit == BarUnit::Day {
+        let last = nivra_store::market_archive::last_daily_bar_day(&mut db)?;
+        assert!(last.is_some_and(|last| last >= window.to), "{last:?}");
+    }
     let mut window = window;
     window.instruments = Some(keys);
     let base = settings(dir, &dir.join("unused-runtime"));
@@ -780,6 +785,16 @@ def on_bars(at, split, bars, params, state):
         assert_eq!(result["report"]["evidence"], "bar_level");
         assert_eq!(result["acceptance"]["verdict"], "research_only");
         let report = &result["report"];
+        // The loop scores this exact report: daily net P&L and drawdown ride along.
+        let score = crate::runtime::autoresearch::jobs::bar_score(&serde_json::to_vec(report)?)?;
+        assert_eq!(score.closed_trades, 1);
+        assert!(score.max_drawdown_bps >= 0);
+        assert!(
+            report["test"]["daily_net_pnl"]
+                .as_array()
+                .is_some_and(|days| !days.is_empty()),
+            "{report}"
+        );
         let total =
             report["training"]["bars"].as_u64().unwrap() + report["test"]["bars"].as_u64().unwrap();
         assert_eq!(total, expected_bar_fixture_rows(&window, counts));

@@ -1,6 +1,9 @@
 use super::*;
+use chrono::NaiveDate;
 use nivra_core::autoresearch::{Comparator, Verdict, keep, usd_micros};
+use nivra_core::autoresearch::{Regime, Score, Stage};
 use nivra_core::finance::Amount;
+use std::os::unix::fs::PermissionsExt;
 
 fn day() -> NaiveDate {
     "2026-11-27".parse().unwrap()

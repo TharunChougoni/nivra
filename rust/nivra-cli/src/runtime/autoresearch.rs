@@ -4,7 +4,7 @@
 //! drafts in `<sessions_root>/research/workspace/`, both outside every book.
 use super::planner::PlannerConfig;
 use super::{Config, Result, rollover};
-use nivra_core::autoresearch::{Regime, Stage, sha256_ok, slug_ok};
+use nivra_core::autoresearch::{Regime, Stage, slug_ok};
 use nivra_store::research_memory::{HistoryQuery, NewFinding, NewIdea, Store};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 pub(crate) mod cli;
 pub(crate) mod coordinator;
-mod jobs;
+pub(crate) mod jobs;
 mod settings;
 mod skills;
 #[cfg(test)]
@@ -290,14 +290,13 @@ pub(crate) fn parse_tool(name: &str, args: Value) -> Result<MemoryOp> {
 }
 
 /// The bounded allowance a turn sees beside every memory read.
-fn allowance(c: &Config, cfg: &PlannerConfig, store: &Store, now: i64) -> Result<Value> {
+fn allowance(cfg: &PlannerConfig, store: &Store, now: i64) -> Result<Value> {
     let Some(settings) = enabled(cfg) else {
         return Ok(Value::Null);
     };
     let campaign = store.campaign(&settings.campaign.name)?;
     let spent = store.day_spend(nivra_core::autoresearch::ist_day(now))?;
     let limits = settings.day_limits();
-    let _ = c;
     Ok(json!({
         "campaign":campaign.as_ref().map(|c| &c.name),
         "trials_used":campaign.as_ref().map(|c| store.trials(c.id)).transpose()?,
@@ -330,7 +329,7 @@ pub(crate) fn execute(
                 limit: a.limit.unwrap_or(10).min(20),
             })?;
             Ok(
-                json!({"history":history,"allowance":allowance(c, cfg, &store, now)?,
+                json!({"history":history,"allowance":allowance(cfg, &store, now)?,
                 "evidence_only":true,"execution_authorized":false}),
             )
         }
@@ -368,7 +367,7 @@ pub(crate) fn execute(
             Ok(
                 json!({"idea_id":idea.id,"existing":existing,"status":idea.status,
                 "similar":{"ideas":similar.ideas,"experiments":similar.experiments},
-                "allowance":allowance(c, cfg, &store, now)?}),
+                "allowance":allowance(cfg, &store, now)?}),
             )
         }
         MemoryOp::Finding(a) => {
@@ -396,10 +395,4 @@ pub(crate) fn execute(
             jobs::submit(c, cfg, settings, &mut store, grant, &a, now, preempted)
         }
     }
-}
-
-/// Is `digest` a plausible object id? Used before reading objects named in
-/// model input.
-pub(crate) fn digest_ok(digest: &str) -> bool {
-    sha256_ok(digest)
 }
